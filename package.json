@@ -1,0 +1,39 @@
+{
+  "name": "forgedesk",
+  "version": "0.1.0",
+  "description": "Local-first project management console for repositories, environments, deployments, and AI reports.",
+  "main": "out/main/index.js",
+  "type": "module",
+  "scripts": {
+    "rebuild:native": "node scripts/rebuild-native.mjs",
+    "dev": "node scripts/rebuild-native.mjs && electron-vite dev",
+    "build": "node scripts/rebuild-native.mjs && tsc --noEmit && electron-vite build",
+    "package:mac": "node scripts/package-mac.mjs",
+    "preview": "node scripts/rebuild-native.mjs && electron-vite preview",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.6.1",
+    "antd": "^5.22.5",
+    "better-sqlite3": "^11.7.0",
+    "chokidar": "^4.0.3",
+    "echarts": "^5.5.1",
+    "echarts-for-react": "^3.0.2",
+    "node-pty": "^1.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "simple-git": "^3.27.0",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  }
+}
