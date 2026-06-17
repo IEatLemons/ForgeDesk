@@ -29,6 +29,89 @@ type GitRemote = {
   pushUrl: string
 }
 
+type RepositoryRemoteInput = {
+  repositoryId: string
+  currentName?: string
+  name: string
+  fetchUrl: string
+  pushUrl?: string
+}
+
+type GitCommandRequest = {
+  repositoryId: string
+  command: string
+}
+
+type GitCommandResult = {
+  ok: boolean
+  command: string
+  args: string[]
+  stdout: string
+  stderr: string
+  exitCode: number | null
+}
+
+type GitAddInput = {
+  mode: 'all' | 'paths'
+  paths: string[]
+}
+
+type GitCommitInput = {
+  message: string
+}
+
+type GitPushInput = {
+  remote: string
+  branch: string
+}
+
+type GitMergeInput = {
+  source: string
+}
+
+type GitStatusFile = {
+  path: string
+  oldPath: string
+  indexStatus: string
+  worktreeStatus: string
+  conflict: boolean
+}
+
+type ConflictSection = {
+  index: number
+  currentLabel: string
+  incomingLabel: string
+  currentContent: string
+  incomingContent: string
+  rawContent: string
+}
+
+type GitConflictFile = {
+  path: string
+  sections: ConflictSection[]
+  content: string
+}
+
+type GitWorkspaceStatus = {
+  repositoryId: string
+  branch: string
+  files: GitStatusFile[]
+  conflicts: GitConflictFile[]
+}
+
+type GitOperationResult = {
+  ok: boolean
+  repository: RepositoryRecord
+  status: GitWorkspaceStatus
+  stdout: string
+  stderr: string
+}
+
+type AiConflictSuggestion = {
+  filePath: string
+  suggestedContent: string
+}
+
 type RemoteAlignmentStatus = 'aligned' | 'diverged' | 'missing-remote' | 'missing-branch' | 'unknown'
 
 type RemoteAlignmentBranchStatus = 'aligned' | 'diverged' | 'missing-branch' | 'unknown'
@@ -187,11 +270,62 @@ type GitSetupStatus = {
   gitVersion: string
   userName: string
   userEmail: string
-  sshPublicKeys: Array<{
-    fileName: string
-    path: string
-    fingerprint: string
-  }>
+  sshPublicKeys: SshPublicKeyRecord[]
+  sshPrivateKeys: SshPrivateKeyRecord[]
+}
+
+type SshKeyKind = 'private' | 'public'
+
+type SshPublicKeyRecord = {
+  fileName: string
+  path: string
+  fingerprint: string
+  pairedPrivateKeyPath: string
+}
+
+type SshPrivateKeyRecord = {
+  fileName: string
+  path: string
+  fingerprint: string
+  publicKeyPath: string
+  hasPublicKey: boolean
+  mode: string
+  needsPermissionFix: boolean
+}
+
+type SshKeyGenerationInput = {
+  keyName?: string
+  email: string
+}
+
+type SshKeyImportInput = {
+  kind: SshKeyKind
+  sourcePath: string
+  fileName: string
+}
+
+type SshConfigFile = {
+  path: string
+  content: string
+  exists: boolean
+}
+
+type AiSettingsInput = {
+  enabled: boolean
+  provider?: 'openai-compatible'
+  baseUrl: string
+  apiKey?: string
+  model: string
+  temperature: number
+}
+
+type AiSettingsView = {
+  enabled: boolean
+  provider: 'openai-compatible'
+  baseUrl: string
+  apiKeyConfigured: boolean
+  model: string
+  temperature: number
 }
 
 interface Window {
@@ -204,6 +338,17 @@ interface Window {
     listRepositoryCommits: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) => Promise<GitCommitRecord[]>
     getRepositoryCommitGraph: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) => Promise<GitCommitRecord[]>
     syncRepositoryRemote: (repositoryId: string) => Promise<RepositoryRecord>
+    saveRepositoryRemote: (input: RepositoryRemoteInput) => Promise<RepositoryRecord>
+    deleteRepositoryRemote: (repositoryId: string, remoteName: string) => Promise<RepositoryRecord>
+    fetchRepositoryRemote: (repositoryId: string, remoteName?: string) => Promise<RepositoryRecord>
+    runRepositoryGitCommand: (input: GitCommandRequest) => Promise<GitCommandResult>
+    getRepositoryWorkspaceStatus: (repositoryId: string) => Promise<GitWorkspaceStatus>
+    gitAdd: (repositoryId: string, input: GitAddInput) => Promise<GitOperationResult>
+    gitCommit: (repositoryId: string, input: GitCommitInput) => Promise<GitOperationResult>
+    gitPush: (repositoryId: string, input: GitPushInput) => Promise<GitOperationResult>
+    gitMerge: (repositoryId: string, input: GitMergeInput) => Promise<GitOperationResult>
+    suggestConflictResolution: (repositoryId: string, filePath: string) => Promise<AiConflictSuggestion>
+    applyConflictResolution: (repositoryId: string, filePath: string, content: string) => Promise<GitOperationResult>
     listRepositoryCommitFiles: (repositoryId: string, commitHash: string) => Promise<GitCommitFileChange[]>
     getRepositoryCommitDiff: (repositoryId: string, commitHash: string, filePath: string, oldPath?: string, status?: string) => Promise<GitCommitDiff>
     getProjectSummary: (projectId: string, range?: { startDate?: string; endDate?: string }) => Promise<ProjectGitSummary>
@@ -217,10 +362,20 @@ interface Window {
     configureRepositoryIdentity: (localPath: string, identity: { userName: string; userEmail: string }) => Promise<ScannedRepository>
     clearRepositoryIdentity: (localPath: string) => Promise<ScannedRepository>
     selectDirectory: () => Promise<string | null>
+    selectFile: () => Promise<string | null>
     getGitSetupStatus: () => Promise<GitSetupStatus>
     configureGitIdentity: (identity: { userName: string; userEmail: string }) => Promise<GitSetupStatus>
-    generateSshKey: (email: string) => Promise<GitSetupStatus['sshPublicKeys'][number]>
+    getAiSettings: () => Promise<AiSettingsView>
+    saveAiSettings: (input: AiSettingsInput) => Promise<AiSettingsView>
+    generateSshKey: (input: string | SshKeyGenerationInput) => Promise<GitSetupStatus['sshPublicKeys'][number]>
     copySshPublicKey: (publicKeyPath: string) => Promise<void>
+    copySshKeyPath: (path: string, kind: SshKeyKind) => Promise<void>
+    importSshKey: (input: SshKeyImportInput) => Promise<GitSetupStatus>
+    deleteSshKey: (path: string, kind: SshKeyKind) => Promise<GitSetupStatus>
+    fixSshPrivateKeyPermissions: (path: string) => Promise<GitSetupStatus>
+    deriveSshPublicKey: (privateKeyPath: string) => Promise<GitSetupStatus>
+    readSshConfig: () => Promise<SshConfigFile>
+    writeSshConfig: (content: string) => Promise<SshConfigFile>
     openSshDirectory: () => Promise<void>
     openGitDownload: () => Promise<void>
   }

@@ -40,6 +40,89 @@ export type GitRemote = {
   pushUrl: string
 }
 
+export type RepositoryRemoteInput = {
+  repositoryId: string
+  currentName?: string
+  name: string
+  fetchUrl: string
+  pushUrl?: string
+}
+
+export type GitCommandRequest = {
+  repositoryId: string
+  command: string
+}
+
+export type GitCommandResult = {
+  ok: boolean
+  command: string
+  args: string[]
+  stdout: string
+  stderr: string
+  exitCode: number | null
+}
+
+export type GitAddInput = {
+  mode: 'all' | 'paths'
+  paths: string[]
+}
+
+export type GitCommitInput = {
+  message: string
+}
+
+export type GitPushInput = {
+  remote: string
+  branch: string
+}
+
+export type GitMergeInput = {
+  source: string
+}
+
+export type GitStatusFile = {
+  path: string
+  oldPath: string
+  indexStatus: string
+  worktreeStatus: string
+  conflict: boolean
+}
+
+export type ConflictSection = {
+  index: number
+  currentLabel: string
+  incomingLabel: string
+  currentContent: string
+  incomingContent: string
+  rawContent: string
+}
+
+export type GitConflictFile = {
+  path: string
+  sections: ConflictSection[]
+  content: string
+}
+
+export type GitWorkspaceStatus = {
+  repositoryId: string
+  branch: string
+  files: GitStatusFile[]
+  conflicts: GitConflictFile[]
+}
+
+export type GitOperationResult = {
+  ok: boolean
+  repository: Repository
+  status: GitWorkspaceStatus
+  stdout: string
+  stderr: string
+}
+
+export type AiConflictSuggestion = {
+  filePath: string
+  suggestedContent: string
+}
+
 export type RemoteAlignmentStatus = 'aligned' | 'diverged' | 'missing-remote' | 'missing-branch' | 'unknown'
 
 export type RemoteAlignmentBranchStatus = 'aligned' | 'diverged' | 'missing-branch' | 'unknown'
@@ -197,6 +280,24 @@ export type ProjectGitSummary = {
   dailyMetrics: DailyGitMetric[]
   contributors: ContributorSummary[]
   repositories: RepositoryContribution[]
+}
+
+export type AiSettingsInput = {
+  enabled: boolean
+  provider?: 'openai-compatible'
+  baseUrl: string
+  apiKey?: string
+  model: string
+  temperature: number
+}
+
+export type AiSettingsView = {
+  enabled: boolean
+  provider: 'openai-compatible'
+  baseUrl: string
+  apiKeyConfigured: boolean
+  model: string
+  temperature: number
 }
 
 export const projects: Project[] = []

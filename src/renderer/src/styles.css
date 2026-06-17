@@ -70,11 +70,13 @@ body {
 .content {
   padding: 28px;
   position: relative;
+  min-width: 0;
 }
 
 .workspace-section {
   max-width: 1240px;
   margin: 0 auto 28px;
+  min-width: 0;
 }
 
 .section-heading {
@@ -148,7 +150,9 @@ body {
 
 .project-detail-panel {
   min-width: 0;
+  max-width: 100%;
   padding: 20px;
+  overflow: hidden;
 }
 
 .project-list-heading {
@@ -175,6 +179,11 @@ body {
 
 .project-detail-page {
   min-width: 0;
+  max-width: 100%;
+}
+
+.project-back-row {
+  margin-bottom: 12px;
 }
 
 .project-title-stack {
@@ -275,6 +284,7 @@ body {
 }
 
 .trend-toolbar {
+  margin-top: 16px;
   margin-bottom: 16px;
 }
 
@@ -288,15 +298,32 @@ body {
   width: 100%;
 }
 
-.repository-browser-header {
+.repository-summary-strip {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
-  align-items: start;
+  align-items: center;
   padding: 14px;
   border: 1px solid #e6eaf1;
   border-radius: 8px;
   background: #fbfcfe;
+}
+
+.repository-summary-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.6fr) minmax(120px, 0.8fr) minmax(220px, 1.4fr) minmax(100px, 0.6fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.repository-summary-item {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.repository-summary-item .ant-typography {
+  min-width: 0;
 }
 
 .remote-alignment-panel {
@@ -323,19 +350,9 @@ body {
   max-width: 430px;
 }
 
-.branch-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-height: 40px;
-  padding: 10px;
-  border: 1px solid #edf0f5;
-  border-radius: 8px;
-  background: #fbfcfe;
-}
-
 .git-browser {
   width: 100%;
+  min-width: 0;
 }
 
 .git-filter {
@@ -354,6 +371,54 @@ body {
   min-width: 0;
 }
 
+.source-tree-table {
+  overflow: hidden;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.source-tree-table .ant-table {
+  background: transparent;
+}
+
+.source-tree-table .ant-table-container {
+  border-start-start-radius: 8px;
+  border-start-end-radius: 8px;
+}
+
+.source-tree-table .ant-table-thead > tr > th {
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+  border-bottom: 1px solid #e6eaf1 !important;
+  background: #fbfcfe !important;
+}
+
+.source-tree-table .ant-table-tbody > tr.ant-table-row > td {
+  height: 46px;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  border-bottom: 0 !important;
+}
+
+.source-tree-table .ant-table-tbody > tr.ant-table-row > td:first-child {
+  padding-inline: 8px 4px !important;
+}
+
+.source-tree-table .ant-table-tbody > tr.ant-table-row > td:not(:first-child) {
+  border-bottom: 1px solid #f0f2f5 !important;
+}
+
+.source-tree-table .ant-table-tbody > tr.ant-table-row.selected-row > td {
+  border-bottom-color: #d9ebff !important;
+}
+
+.source-tree-table .ant-table-tbody > tr.commit-expanded-row > td {
+  padding: 0 0 12px 116px !important;
+  border-bottom: 1px solid #e6eaf1 !important;
+  background: #f7fbff !important;
+}
+
 .commit-detail-panel {
   min-height: 420px;
   padding: 14px;
@@ -363,8 +428,12 @@ body {
 }
 
 .commit-detail-content,
-.commit-message-cell {
+.source-tree-commit-message {
   width: 100%;
+}
+
+.source-tree-toolbar h4 {
+  margin: 0 !important;
 }
 
 .commit-meta,
@@ -391,57 +460,225 @@ body {
 
 .commit-graph-cell {
   position: relative;
-  display: inline-grid;
-  justify-items: center;
-  align-items: center;
-  min-width: 34px;
-  max-width: 112px;
-  height: 34px;
+  display: flex;
+  align-items: stretch;
+  min-width: 42px;
+  max-width: 116px;
+  height: 46px;
+  padding-left: 2px;
   overflow: hidden;
 }
 
-.commit-rail {
-  position: relative;
-  z-index: 0;
-  grid-row: 1;
-  align-self: stretch;
-  top: -9px;
-  bottom: -9px;
-  width: 2px;
-  background: #b8c2d6;
+.commit-graph-svg {
+  display: block;
+  flex: 0 0 auto;
+  overflow: visible;
 }
 
-.commit-connector {
-  position: relative;
-  z-index: 1;
-  grid-row: 1;
-  width: 100%;
-  height: 2px;
-  background: #8b5cf6;
+.commit-graph-line,
+.commit-graph-connector {
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  opacity: 0.82;
+  vector-effect: non-scaling-stroke;
 }
 
-.commit-dot {
-  position: relative;
-  z-index: 2;
-  grid-row: 1;
-  width: 12px;
-  height: 12px;
-  border: 2px solid #1677ff;
-  border-radius: 50%;
+.commit-graph-line.is-active {
+  opacity: 0.96;
+}
+
+.commit-graph-connector {
+  stroke-width: 2.4;
+  opacity: 0.92;
+}
+
+.commit-graph-dot {
+  stroke-width: 2.6;
+  filter: drop-shadow(0 0 0 #ffffff);
+  vector-effect: non-scaling-stroke;
+}
+
+.commit-graph-dot.merge {
+  stroke-width: 3.2;
+}
+
+.commit-table .ant-table-cell {
+  height: 46px;
+  padding-top: 2px !important;
+  padding-bottom: 2px !important;
+  vertical-align: middle;
+}
+
+.commit-inline-detail {
+  display: grid;
+  gap: 12px;
+  margin-right: 12px;
+  padding: 14px;
+  border: 1px solid #dbeafe;
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
   background: #ffffff;
 }
 
-.commit-dot.merge {
-  border-color: #722ed1;
+.commit-inline-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.commit-merge-icon {
-  position: relative;
-  z-index: 3;
-  grid-row: 1;
-  margin-left: 9px;
-  color: #722ed1;
+.commit-inline-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(420px, 1.1fr);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+.commit-inline-grid .ant-table-wrapper,
+.commit-inline-diff {
+  min-width: 0;
+}
+
+.commit-inline-diff {
+  display: grid;
+  gap: 8px;
+}
+
+.commit-inline-diff h5 {
+  margin: 0 !important;
+}
+
+.remote-alignment-collapse {
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.remote-alignment-collapse .ant-collapse-header {
+  align-items: center !important;
+  padding: 10px 14px !important;
+}
+
+.remote-alignment-collapse .ant-collapse-content-box {
+  padding: 0 14px 14px !important;
+}
+
+.source-tree-commit-line,
+.source-tree-ref-strip {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.source-tree-commit-line {
+  gap: 8px;
+}
+
+.source-tree-ref-strip {
+  gap: 4px;
+  margin-top: 3px;
+  white-space: nowrap;
+}
+
+.source-tree-hash {
+  flex: 0 0 auto;
+  margin-inline-end: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+}
+
+.source-tree-message-text {
+  min-width: 0;
+  font-weight: 500;
+}
+
+.source-tree-ref {
+  max-width: 150px;
+  margin-inline-end: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.commit-author-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.commit-author-name,
+.commit-author-email {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.commit-author-name {
+  flex: 0 1 auto;
+  max-width: 86px;
+  color: #172033;
+  font-weight: 600;
+}
+
+.commit-author-email {
+  flex: 1 1 auto;
+  color: #667085;
   font-size: 12px;
+}
+
+.branch-drawer {
+  display: grid;
+  gap: 16px;
+}
+
+.branch-drawer-section {
+  display: grid;
+  gap: 8px;
+}
+
+.branch-drawer-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.branch-drawer-list {
+  display: grid;
+  gap: 6px;
+}
+
+.branch-drawer-item {
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  color: #172033;
+  text-align: left;
+  background: #ffffff;
+  border: 1px solid #e6eaf1;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.branch-drawer-item:hover,
+.branch-drawer-item.is-active {
+  border-color: #1677ff;
+  background: #f0f7ff;
+}
+
+.branch-drawer-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .selected-row > td {
@@ -513,6 +750,472 @@ body {
   display: grid;
   gap: 14px;
   margin-top: 14px;
+}
+
+.settings-module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.settings-entry-card {
+  min-height: 136px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 14px;
+  width: 100%;
+  padding: 18px;
+  border: 1px solid #e4e8ef;
+  border-radius: 8px;
+  background: #ffffff;
+  color: inherit;
+  text-align: left;
+  box-shadow: 0 8px 24px rgba(23, 32, 51, 0.05);
+  cursor: pointer;
+}
+
+.settings-entry-card:hover {
+  border-color: #b8cdfb;
+  box-shadow: 0 12px 30px rgba(37, 99, 235, 0.1);
+}
+
+.settings-entry-card-warning {
+  border-color: #ffd591;
+}
+
+.settings-entry-card-danger {
+  border-color: #ffccc7;
+}
+
+.settings-entry-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: #2563eb;
+  background: #eff6ff;
+  font-size: 20px;
+}
+
+.settings-entry-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-module-panel {
+  min-height: 0;
+}
+
+.settings-module-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.settings-module-header h3 {
+  margin: 0;
+}
+
+.settings-module-alert {
+  margin-bottom: 14px;
+}
+
+.settings-management-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.settings-management-form .ant-form-item {
+  margin-bottom: 0;
+}
+
+.ai-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  grid-column: 1 / -1;
+}
+
+.full-width-control {
+  width: 100%;
+}
+
+.ssh-key-card-list {
+  display: grid;
+  gap: 12px;
+}
+
+.ssh-key-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.ssh-key-card-warning {
+  border-color: #ffd591;
+  background: #fffdf7;
+}
+
+.ssh-key-card-main {
+  min-width: 0;
+}
+
+.ssh-key-card-actions {
+  justify-content: flex-end;
+}
+
+.ssh-key-path,
+.ssh-key-fingerprint {
+  display: block;
+  max-width: 100%;
+}
+
+.ssh-config-mode-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.ssh-config-guided {
+  display: grid;
+  gap: 14px;
+}
+
+.ssh-config-entry-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.ssh-config-entry-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ssh-config-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ssh-config-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #667085;
+  font-size: 13px;
+}
+
+.ssh-config-field .ant-input,
+.ssh-config-field .ant-select {
+  width: 100%;
+}
+
+.ssh-config-field.is-wide {
+  grid-column: span 2;
+}
+
+.ssh-config-entry-advanced .ant-collapse-header {
+  padding: 0 !important;
+}
+
+.ssh-config-entry-advanced .ant-collapse-content-box {
+  padding: 12px 0 0 !important;
+}
+
+.ssh-config-panel {
+  min-height: 0;
+  margin-top: 16px;
+}
+
+.ssh-config-editor {
+  margin-top: 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ssh-config-actions {
+  margin-top: 12px;
+}
+
+.project-settings-panel {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.project-settings-panel > .ant-space-item {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.project-settings-basic {
+  min-height: auto;
+}
+
+.project-settings-form {
+  margin-top: 8px;
+}
+
+.project-settings-form .ant-form-item {
+  margin-bottom: 16px;
+}
+
+.project-settings-section {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.project-settings-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px 16px;
+}
+
+.project-settings-heading h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 !important;
+}
+
+.project-settings-heading .ant-typography-secondary {
+  max-width: 620px;
+}
+
+.project-log-tree,
+.remote-manager,
+.git-workspace-panel,
+.git-command-console {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.advanced-settings-stack {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.project-log-toolbar,
+.remote-manager-toolbar,
+.git-workspace-toolbar,
+.git-command-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.project-log-toolbar h4 {
+  margin: 0 0 4px !important;
+}
+
+.project-log-repository-select,
+.settings-repository-select {
+  width: 280px;
+  flex: 0 0 auto;
+}
+
+.remote-manager {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  overflow: hidden;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.git-command-console {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  overflow: hidden;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.git-workspace-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  overflow: hidden;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.git-workspace-toolbar h4 {
+  margin: 0 0 4px !important;
+}
+
+.git-operation-grid {
+  width: 100%;
+}
+
+.git-operation-box {
+  display: grid;
+  gap: 8px;
+  height: 100%;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.git-operation-compact {
+  width: 100%;
+}
+
+.git-operation-compact .ant-input {
+  min-width: 0;
+}
+
+.conflict-file-list {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.conflict-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #ffe7ba;
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.project-settings-section .ant-table-wrapper,
+.remote-manager .ant-table-wrapper,
+.git-workspace-panel .ant-table-wrapper,
+.content-table {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.remote-manager-toolbar > .ant-space,
+.git-workspace-toolbar > .ant-space,
+.git-command-presets {
+  width: 100%;
+  min-width: 0;
+}
+
+.git-error-notice {
+  max-width: 100%;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(127, 29, 29, 0.08);
+}
+
+.git-error-notice-body {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.git-error-actions ol {
+  margin: 6px 0 0 20px;
+  padding: 0;
+}
+
+.git-error-actions li {
+  margin: 2px 0;
+  color: #344054;
+}
+
+.git-error-raw {
+  display: block;
+  max-width: 100%;
+  word-break: break-word;
+}
+
+.git-command-toolbar .ant-input-search {
+  min-width: 320px;
+  flex: 1;
+}
+
+.git-command-output {
+  overflow: hidden;
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  background: #111827;
+}
+
+.git-command-output.is-ok {
+  border-color: #86d36b;
+}
+
+.git-command-output.is-error {
+  border-color: #ff9c9c;
+}
+
+.git-command-output-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #1f2937;
+}
+
+.git-command-output-heading .ant-typography {
+  color: #f9fafb;
+}
+
+.git-command-output pre {
+  min-height: 180px;
+  max-height: 360px;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  color: #e5e7eb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 .inline-setup-form {
@@ -632,7 +1335,7 @@ body {
   justify-content: space-between;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 900px) {
   body {
     min-width: 0;
   }
@@ -644,20 +1347,79 @@ body {
   .sidebar {
     position: relative;
     width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    flex: 0 0 auto !important;
     height: auto;
+  }
+
+  .content {
+    width: 100%;
   }
 
   .section-heading {
     display: block;
   }
 
-  .repository-browser-header,
+  .project-log-toolbar,
+  .remote-manager-toolbar,
+  .git-workspace-toolbar,
+  .git-command-toolbar,
+  .settings-management-form,
+  .ssh-key-card,
+  .settings-module-header {
+    display: grid;
+  }
+
+  .settings-management-form,
+  .ssh-key-card {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .conflict-file-row {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .ssh-config-entry-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ssh-config-field.is-wide {
+    grid-column: span 1;
+  }
+
+  .settings-entry-card {
+    grid-template-columns: auto 1fr;
+  }
+
+  .project-log-repository-select,
+  .settings-repository-select,
+  .git-command-toolbar .ant-input-search {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .repository-summary-strip,
   .git-browser-grid,
-  .diff-split {
+  .diff-split,
+  .commit-inline-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .repository-summary-grid {
     grid-template-columns: 1fr;
   }
 
   .git-browser-grid {
     min-width: 0;
+  }
+
+  .source-tree-table .ant-table-tbody > tr.commit-expanded-row > td {
+    padding-left: 12px !important;
   }
 }

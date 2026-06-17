@@ -1,6 +1,6 @@
 {
   "name": "forgedesk",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Local-first project management console for repositories, environments, deployments, and AI reports.",
   "main": "out/main/index.js",
   "type": "module",
@@ -10,6 +10,7 @@
     "build": "node scripts/rebuild-native.mjs && tsc --noEmit && electron-vite build",
     "package:mac": "node scripts/package-mac.mjs",
     "preview": "node scripts/rebuild-native.mjs && electron-vite preview",
+    "test": "node scripts/run-tests.mjs",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

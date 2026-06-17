@@ -1,11 +1,40 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { mkdir, readdir, readFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import Database from 'better-sqlite3'
 import simpleGit from 'simple-git'
+import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion } from './ai-conflict-assistant'
+import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
+import { parseControlledGitCommand, validateRepositoryRemoteName } from './git-controls'
+import {
+  buildGitAddArgs,
+  buildGitCommitArgs,
+  buildGitMergeArgs,
+  buildGitPushArgs,
+  parsePorcelainStatus,
+  type GitAddInput,
+  type GitCommitInput,
+  type GitMergeInput,
+  type GitPushInput,
+  type GitStatusFile
+} from './git-workspace'
+import { extractConflictSections, type ConflictSection } from './merge-conflicts'
+import { readSshConfigFile, writeSshConfigFile, type SshConfigFile } from './ssh-config'
+import {
+  deleteSshKeyFile,
+  fixSshPrivateKeyPermissions,
+  importSshKeyFile,
+  normalizeSshKeyFileName,
+  readSshKeyInventory,
+  resolveSshKeyFilePath,
+  type SshKeyGenerationInput,
+  type SshKeyImportInput,
+  type SshPrivateKeyRecord,
+  type SshPublicKeyRecord
+} from './ssh-keys'
 
 type RepositoryScanResult = {
   id: string
@@ -34,6 +63,49 @@ type GitRemote = {
   name: string
   fetchUrl: string
   pushUrl: string
+}
+
+type RepositoryRemoteInput = {
+  repositoryId: string
+  currentName?: string
+  name: string
+  fetchUrl: string
+  pushUrl?: string
+}
+
+type GitCommandRequest = {
+  repositoryId: string
+  command: string
+}
+
+type GitCommandResult = {
+  ok: boolean
+  command: string
+  args: string[]
+  stdout: string
+  stderr: string
+  exitCode: number | null
+}
+
+type GitConflictFile = {
+  path: string
+  sections: ConflictSection[]
+  content: string
+}
+
+type GitWorkspaceStatus = {
+  repositoryId: string
+  branch: string
+  files: GitStatusFile[]
+  conflicts: GitConflictFile[]
+}
+
+type GitOperationResult = {
+  ok: boolean
+  repository: RepositoryRecord
+  status: GitWorkspaceStatus
+  stdout: string
+  stderr: string
 }
 
 type RemoteAlignmentStatus = 'aligned' | 'diverged' | 'missing-remote' | 'missing-branch' | 'unknown'
@@ -194,11 +266,8 @@ type GitSetupStatus = {
   gitVersion: string
   userName: string
   userEmail: string
-  sshPublicKeys: Array<{
-    fileName: string
-    path: string
-    fingerprint: string
-  }>
+  sshPublicKeys: SshPublicKeyRecord[]
+  sshPrivateKeys: SshPrivateKeyRecord[]
 }
 
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
@@ -985,6 +1054,23 @@ function runGitInPathOptional(localPath: string, args: string[]): Promise<string
   })
 }
 
+function runGitInPathResult(localPath: string, args: string[]): Promise<GitCommandResult> {
+  return new Promise((resolveResult) => {
+    execFile('git', ['-C', localPath, ...args], { timeout: 30000, maxBuffer: 1024 * 1024 * 20 }, (error, stdout, stderr) => {
+      const exitCode = typeof error?.code === 'number' ? error.code : error ? null : 0
+
+      resolveResult({
+        ok: !error,
+        command: `git ${args.join(' ')}`,
+        args,
+        stdout: stdout.trimEnd(),
+        stderr: (stderr || error?.message || '').trimEnd(),
+        exitCode
+      })
+    })
+  })
+}
+
 function runSshKeygen(args: string[]): Promise<string> {
   return new Promise((resolveOutput, reject) => {
     execFile('ssh-keygen', args, { timeout: 10000 }, (error, stdout, stderr) => {
@@ -1483,6 +1569,185 @@ async function getRepositoryCommitDiff(repositoryId: string, commitHash: string,
   }
 }
 
+function getRepositoryOrThrow(repositoryId: string): RepositoryRecord {
+  const repository = listRepositories().find((item) => item.id === repositoryId)
+
+  if (!repository) {
+    throw new Error('仓库不存在')
+  }
+
+  if (!existsSync(join(repository.localPath, '.git'))) {
+    throw new Error('仓库已不存在或不是 Git 仓库')
+  }
+
+  return repository
+}
+
+async function rescanRepositoryRecord(repository: RepositoryRecord): Promise<RepositoryRecord> {
+  const scanned = await scanRepository(repository.localPath)
+
+  if (!scanned) {
+    throw new Error('仓库已不存在或不是 Git 仓库')
+  }
+
+  return upsertRepository(repository.projectId, scanned)
+}
+
+async function listGitRemoteNames(localPath: string): Promise<string[]> {
+  return parseBranchList(await runGitInPathStrict(localPath, ['remote']))
+}
+
+function normalizeRemoteUrl(value: string, fieldName: string): string {
+  const url = value.trim()
+
+  if (!url) {
+    throw new Error(`请输入${fieldName}`)
+  }
+
+  return url
+}
+
+async function saveRepositoryRemote(input: RepositoryRemoteInput): Promise<RepositoryRecord> {
+  const repository = getRepositoryOrThrow(input.repositoryId)
+  const currentName = input.currentName ? validateRepositoryRemoteName(input.currentName) : ''
+  const nextName = validateRepositoryRemoteName(input.name)
+  const fetchUrl = normalizeRemoteUrl(input.fetchUrl, 'Fetch URL')
+  const pushUrl = normalizeRemoteUrl(input.pushUrl || input.fetchUrl, 'Push URL')
+  const remoteNames = await listGitRemoteNames(repository.localPath)
+
+  if (currentName && !remoteNames.includes(currentName)) {
+    throw new Error(`远端 ${currentName} 不存在`)
+  }
+
+  if (!currentName && remoteNames.includes(nextName)) {
+    throw new Error(`远端 ${nextName} 已存在`)
+  }
+
+  if (currentName && currentName !== nextName && remoteNames.includes(nextName)) {
+    throw new Error(`远端 ${nextName} 已存在`)
+  }
+
+  if (!currentName) {
+    await runGitInPathStrict(repository.localPath, ['remote', 'add', nextName, fetchUrl])
+  } else if (currentName !== nextName) {
+    await runGitInPathStrict(repository.localPath, ['remote', 'rename', currentName, nextName])
+  }
+
+  await runGitInPathStrict(repository.localPath, ['remote', 'set-url', nextName, fetchUrl])
+  await runGitInPathStrict(repository.localPath, ['remote', 'set-url', '--push', nextName, pushUrl])
+
+  return rescanRepositoryRecord(repository)
+}
+
+async function deleteRepositoryRemote(repositoryId: string, remoteName: string): Promise<RepositoryRecord> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const name = validateRepositoryRemoteName(remoteName)
+  const remoteNames = await listGitRemoteNames(repository.localPath)
+
+  if (!remoteNames.includes(name)) {
+    throw new Error(`远端 ${name} 不存在`)
+  }
+
+  await runGitInPathStrict(repository.localPath, ['remote', 'remove', name])
+  return rescanRepositoryRecord(repository)
+}
+
+async function fetchRepositoryRemote(repositoryId: string, remoteName?: string): Promise<RepositoryRecord> {
+  const repository = getRepositoryOrThrow(repositoryId)
+
+  if (remoteName) {
+    const name = validateRepositoryRemoteName(remoteName)
+    await runGitInPathStrict(repository.localPath, ['fetch', name, '--prune'])
+  } else {
+    await runGitInPathStrict(repository.localPath, ['fetch', '--all', '--prune'])
+  }
+
+  return rescanRepositoryRecord(repository)
+}
+
+async function runRepositoryGitCommand(input: GitCommandRequest): Promise<GitCommandResult> {
+  const repository = getRepositoryOrThrow(input.repositoryId)
+  const args = parseControlledGitCommand(input.command)
+  const result = await runGitInPathResult(repository.localPath, args)
+
+  if (result.ok && args[0] === 'fetch') {
+    await rescanRepositoryRecord(repository)
+  }
+
+  return result
+}
+
+function resolveRepositoryFilePath(repository: RepositoryRecord, filePath: string): string {
+  const normalizedPath = resolve(repository.localPath, filePath)
+  const relativePath = relative(repository.localPath, normalizedPath)
+
+  if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    throw new Error('只能处理当前仓库内的文件')
+  }
+
+  return normalizedPath
+}
+
+async function getRepositoryWorkspaceStatus(repositoryId: string): Promise<GitWorkspaceStatus> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const [statusOutput, branch] = await Promise.all([
+    runGitInPathStrict(repository.localPath, ['status', '--porcelain']),
+    runGitInPath(repository.localPath, ['branch', '--show-current'])
+  ])
+  const files = parsePorcelainStatus(statusOutput)
+  const conflicts = await Promise.all(
+    files
+      .filter((file) => file.conflict)
+      .map(async (file) => {
+        const content = await readFile(resolveRepositoryFilePath(repository, file.path), 'utf8')
+        return {
+          path: file.path,
+          content,
+          sections: extractConflictSections(content)
+        }
+      })
+  )
+
+  return { repositoryId, branch, files, conflicts }
+}
+
+async function runRepositoryWriteOperation(repositoryId: string, args: string[]): Promise<GitOperationResult> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const result = await runGitInPathResult(repository.localPath, args)
+  const rescannedRepository = await rescanRepositoryRecord(repository)
+  const status = await getRepositoryWorkspaceStatus(repositoryId)
+
+  return {
+    ok: result.ok,
+    repository: rescannedRepository,
+    status,
+    stdout: result.stdout,
+    stderr: result.stderr
+  }
+}
+
+async function suggestRepositoryConflictResolution(repositoryId: string, filePath: string): Promise<ConflictResolutionSuggestion> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const content = await readFile(resolveRepositoryFilePath(repository, filePath), 'utf8')
+  const settings = await readAiSettingsFile(app.getPath('userData'))
+
+  return requestConflictResolutionSuggestion({
+    settings,
+    repositoryName: repository.name,
+    filePath,
+    conflictedContent: content
+  })
+}
+
+async function applyRepositoryConflictResolution(repositoryId: string, filePath: string, content: string): Promise<GitOperationResult> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const normalizedPath = resolveRepositoryFilePath(repository, filePath)
+
+  await writeFile(normalizedPath, content, 'utf8')
+
+  return runRepositoryWriteOperation(repositoryId, buildGitAddArgs({ mode: 'paths', paths: [filePath] }))
+}
+
 async function listRepositoryCommits(
   repositoryId: string,
   options: { startDate?: string; endDate?: string; branchName?: string } = {}
@@ -1650,47 +1915,25 @@ async function findGitRepositories(rootPath: string): Promise<string[]> {
   return Array.from(repositories)
 }
 
-async function readSshPublicKeys(): Promise<GitSetupStatus['sshPublicKeys']> {
-  let entries
-
-  try {
-    entries = await readdir(sshDirectory, { withFileTypes: true })
-  } catch {
-    return []
-  }
-
-  const publicKeyFiles = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.pub'))
-
-  return Promise.all(
-    publicKeyFiles.map(async (entry) => {
-      const path = join(sshDirectory, entry.name)
-      const content = await readFile(path, 'utf8')
-      const fingerprint = await new Promise<string>((resolveFingerprint) => {
-        execFile('ssh-keygen', ['-lf', path], { timeout: 5000 }, (error, stdout) => {
-          if (error) {
-            resolveFingerprint(content.trim().slice(0, 48))
-            return
-          }
-
-          resolveFingerprint(stdout.trim())
-        })
-      })
-
-      return {
-        fileName: entry.name,
-        path,
-        fingerprint
+function readSshFingerprint(path: string, content: string): Promise<string> {
+  return new Promise((resolveFingerprint) => {
+    execFile('ssh-keygen', ['-lf', path], { timeout: 5000 }, (error, stdout) => {
+      if (error) {
+        resolveFingerprint(content.trim().slice(0, 80))
+        return
       }
+
+      resolveFingerprint(stdout.trim())
     })
-  )
+  })
 }
 
 async function getGitSetupStatus(): Promise<GitSetupStatus> {
-  const [gitVersion, userName, userEmail, sshPublicKeys] = await Promise.all([
+  const [gitVersion, userName, userEmail, sshKeys] = await Promise.all([
     runGit(['--version']),
     runGit(['config', '--global', 'user.name']),
     runGit(['config', '--global', 'user.email']),
-    readSshPublicKeys()
+    readSshKeyInventory(sshDirectory, readSshFingerprint)
   ])
 
   return {
@@ -1698,7 +1941,8 @@ async function getGitSetupStatus(): Promise<GitSetupStatus> {
     gitVersion,
     userName,
     userEmail,
-    sshPublicKeys
+    sshPublicKeys: sshKeys.sshPublicKeys,
+    sshPrivateKeys: sshKeys.sshPrivateKeys
   }
 }
 
@@ -1812,6 +2056,40 @@ ipcMain.handle(
 
 ipcMain.handle('repository:sync-remote', async (_event, repositoryId: string): Promise<RepositoryRecord> => syncRepositoryRemote(repositoryId))
 
+ipcMain.handle('repository:remote:save', async (_event, input: RepositoryRemoteInput): Promise<RepositoryRecord> => saveRepositoryRemote(input))
+
+ipcMain.handle('repository:remote:delete', async (_event, repositoryId: string, remoteName: string): Promise<RepositoryRecord> => deleteRepositoryRemote(repositoryId, remoteName))
+
+ipcMain.handle('repository:remote:fetch', async (_event, repositoryId: string, remoteName?: string): Promise<RepositoryRecord> => fetchRepositoryRemote(repositoryId, remoteName))
+
+ipcMain.handle('repository:git-command', async (_event, input: GitCommandRequest): Promise<GitCommandResult> => runRepositoryGitCommand(input))
+
+ipcMain.handle('repository:workspace-status', async (_event, repositoryId: string): Promise<GitWorkspaceStatus> => getRepositoryWorkspaceStatus(repositoryId))
+
+ipcMain.handle('repository:git-add', async (_event, repositoryId: string, input: GitAddInput): Promise<GitOperationResult> =>
+  runRepositoryWriteOperation(repositoryId, buildGitAddArgs(input))
+)
+
+ipcMain.handle('repository:git-commit', async (_event, repositoryId: string, input: GitCommitInput): Promise<GitOperationResult> =>
+  runRepositoryWriteOperation(repositoryId, buildGitCommitArgs(input))
+)
+
+ipcMain.handle('repository:git-push', async (_event, repositoryId: string, input: GitPushInput): Promise<GitOperationResult> =>
+  runRepositoryWriteOperation(repositoryId, buildGitPushArgs(input))
+)
+
+ipcMain.handle('repository:git-merge', async (_event, repositoryId: string, input: GitMergeInput): Promise<GitOperationResult> =>
+  runRepositoryWriteOperation(repositoryId, buildGitMergeArgs(input))
+)
+
+ipcMain.handle('repository:conflict:suggest', async (_event, repositoryId: string, filePath: string): Promise<ConflictResolutionSuggestion> =>
+  suggestRepositoryConflictResolution(repositoryId, filePath)
+)
+
+ipcMain.handle('repository:conflict:apply', async (_event, repositoryId: string, filePath: string, content: string): Promise<GitOperationResult> =>
+  applyRepositoryConflictResolution(repositoryId, filePath, content)
+)
+
 ipcMain.handle('repository:commit-files', async (_event, repositoryId: string, commitHash: string): Promise<GitCommitFileChange[]> =>
   listRepositoryCommitFiles(repositoryId, commitHash)
 )
@@ -1924,8 +2202,21 @@ ipcMain.handle('git:configure-identity', async (_event, identity: { userName: st
   return getGitSetupStatus()
 })
 
-ipcMain.handle('ssh:generate-key', async (_event, email: string): Promise<GitSetupStatus['sshPublicKeys'][number]> => {
-  const comment = email.trim()
+ipcMain.handle('settings:ai:get', async (): Promise<RedactedAiSettings> => getRedactedAiSettings(await readAiSettingsFile(app.getPath('userData'))))
+
+ipcMain.handle('settings:ai:save', async (_event, input: Partial<AiSettings>): Promise<RedactedAiSettings> => {
+  const currentSettings = await readAiSettingsFile(app.getPath('userData'))
+  const nextSettings = await writeAiSettingsFile(app.getPath('userData'), {
+    ...currentSettings,
+    ...input,
+    apiKey: input.apiKey === undefined ? currentSettings.apiKey : input.apiKey
+  })
+
+  return getRedactedAiSettings(nextSettings)
+})
+
+ipcMain.handle('ssh:generate-key', async (_event, input: string | SshKeyGenerationInput): Promise<GitSetupStatus['sshPublicKeys'][number]> => {
+  const comment = (typeof input === 'string' ? input : input.email).trim()
 
   if (!comment) {
     throw new Error('请先填写用于 SSH 公钥备注的邮箱')
@@ -1933,12 +2224,20 @@ ipcMain.handle('ssh:generate-key', async (_event, email: string): Promise<GitSet
 
   await mkdir(sshDirectory, { recursive: true, mode: 0o700 })
 
-  const keyPath = await findAvailableSshKeyPath()
+  const keyPath =
+    typeof input === 'string' || !input.keyName?.trim()
+      ? await findAvailableSshKeyPath()
+      : join(sshDirectory, normalizeSshKeyFileName(input.keyName, 'private'))
+
+  if (existsSync(keyPath) || existsSync(`${keyPath}.pub`)) {
+    throw new Error('同名 SSH 密钥已经存在，请换一个文件名')
+  }
+
   await runSshKeygen(['-t', 'ed25519', '-C', comment, '-f', keyPath, '-N', ''])
 
   const publicKeyPath = `${keyPath}.pub`
-  const keys = await readSshPublicKeys()
-  const createdKey = keys.find((key) => key.path === publicKeyPath)
+  const keys = await readSshKeyInventory(sshDirectory, readSshFingerprint)
+  const createdKey = keys.sshPublicKeys.find((key) => key.path === publicKeyPath)
 
   if (!createdKey) {
     throw new Error('SSH 公钥已生成，但读取失败，请重新检测')
@@ -1948,15 +2247,54 @@ ipcMain.handle('ssh:generate-key', async (_event, email: string): Promise<GitSet
 })
 
 ipcMain.handle('ssh:copy-public-key', async (_event, publicKeyPath: string): Promise<void> => {
-  const normalizedPath = resolve(expandHomePath(publicKeyPath))
-  const normalizedSshDirectory = resolve(sshDirectory)
-
-  if (!normalizedPath.startsWith(`${normalizedSshDirectory}/`) || !normalizedPath.endsWith('.pub')) {
-    throw new Error('只能复制 ~/.ssh 目录下的公钥文件')
-  }
+  const normalizedPath = resolveSshKeyFilePath(sshDirectory, expandHomePath(publicKeyPath), 'public')
 
   clipboard.writeText((await readFile(normalizedPath, 'utf8')).trim())
 })
+
+ipcMain.handle('ssh:copy-key-path', async (_event, path: string, kind: 'private' | 'public'): Promise<void> => {
+  clipboard.writeText(resolveSshKeyFilePath(sshDirectory, expandHomePath(path), kind))
+})
+
+ipcMain.handle('ssh:import-key', async (_event, input: SshKeyImportInput): Promise<GitSetupStatus> => {
+  await importSshKeyFile(sshDirectory, input)
+  return getGitSetupStatus()
+})
+
+ipcMain.handle('ssh:delete-key', async (_event, path: string, kind: 'private' | 'public'): Promise<GitSetupStatus> => {
+  await deleteSshKeyFile(sshDirectory, expandHomePath(path), kind)
+  return getGitSetupStatus()
+})
+
+ipcMain.handle('ssh:fix-private-key-permissions', async (_event, path: string): Promise<GitSetupStatus> => {
+  await fixSshPrivateKeyPermissions(sshDirectory, expandHomePath(path))
+  return getGitSetupStatus()
+})
+
+ipcMain.handle('ssh:derive-public-key', async (_event, privateKeyPath: string): Promise<GitSetupStatus> => {
+  const normalizedPrivateKeyPath = resolveSshKeyFilePath(sshDirectory, expandHomePath(privateKeyPath), 'private')
+  const publicKeyContent = await runSshKeygen(['-y', '-f', normalizedPrivateKeyPath])
+
+  if (!publicKeyContent.trim()) {
+    throw new Error('无法从私钥生成公钥')
+  }
+
+  await writeFile(`${normalizedPrivateKeyPath}.pub`, `${publicKeyContent.trim()}\n`, { encoding: 'utf8', mode: 0o644 })
+  return getGitSetupStatus()
+})
+
+ipcMain.handle('dialog:select-file', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Select a file',
+    properties: ['openFile']
+  })
+
+  return result.canceled ? null : result.filePaths[0]
+})
+
+ipcMain.handle('ssh:read-config', async (): Promise<SshConfigFile> => readSshConfigFile(sshDirectory))
+
+ipcMain.handle('ssh:write-config', async (_event, content: string): Promise<SshConfigFile> => writeSshConfigFile(sshDirectory, content))
 
 ipcMain.handle('ssh:open-directory', async (): Promise<void> => {
   await mkdir(sshDirectory, { recursive: true, mode: 0o700 })

@@ -25,6 +25,7 @@ type ForgeDeskState = {
   setSelectedProjectId: (projectId: string) => void
   loadWorkspace: () => Promise<void>
   createProject: (projectName: string, workspacePath: string, scanned: ScannedRepository[]) => Promise<void>
+  updateProject: (input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }) => Promise<void>
   updateRepository: (repository: ScannedRepository) => void
   setProjectSummary: (summary: ProjectGitSummary) => void
 }
@@ -77,6 +78,21 @@ export const useForgeDeskStore = create<ForgeDeskState>((set) => ({
       repositories: snapshot.repositories,
       selectedProjectId: newestProject?.id ?? null
     })
+  },
+  updateProject: async (input) => {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const snapshot = await window.forgeDesk.updateProject(input)
+    set((state) => ({
+      projects: snapshot.projects,
+      repositories: snapshot.repositories,
+      selectedProjectId:
+        state.selectedProjectId && snapshot.projects.some((project) => project.id === state.selectedProjectId)
+          ? state.selectedProjectId
+          : snapshot.projects[0]?.id ?? null
+    }))
   },
   setProjectSummary: (summary) =>
     set((state) => ({
