@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile } from './ai-settings.js'
+import { buildAiRequestHeaders, getRedactedAiSettings, normalizeAiSettings, readAiSettingsFile, writeAiSettingsFile } from './ai-settings.js'
 
 describe('ai settings', () => {
   it('returns safe defaults when settings file is missing', async () => {
@@ -22,7 +22,7 @@ describe('ai settings', () => {
     }
   })
 
-  it('persists settings and redacts the api key for renderer reads', async () => {
+  it('persists settings and returns the api key for local renderer reads', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'forgedesk-ai-settings-'))
 
     try {
@@ -42,6 +42,7 @@ describe('ai settings', () => {
         enabled: true,
         provider: 'openai-compatible',
         baseUrl: 'https://llm.example.com/v1',
+        apiKey: 'sk-secret-value',
         apiKeyConfigured: true,
         model: 'gpt-test',
         temperature: 0.2
@@ -49,5 +50,33 @@ describe('ai settings', () => {
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
+  })
+
+  it('normalizes OpenRouter settings with provider defaults', () => {
+    const settings = normalizeAiSettings({
+      enabled: true,
+      provider: 'openrouter',
+      apiKey: ' openrouter-key '
+    })
+
+    assert.equal(settings.provider, 'openrouter')
+    assert.equal(settings.baseUrl, 'https://openrouter.ai/api/v1')
+    assert.equal(settings.model, '~openai/gpt-latest')
+    assert.equal(settings.apiKey, 'openrouter-key')
+  })
+
+  it('adds OpenRouter attribution headers for chat requests', () => {
+    const headers = buildAiRequestHeaders({
+      enabled: true,
+      provider: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      apiKey: 'openrouter-key',
+      model: '~openai/gpt-latest',
+      temperature: 0.2
+    })
+
+    assert.equal(headers.authorization, 'Bearer openrouter-key')
+    assert.equal(headers['content-type'], 'application/json')
+    assert.equal(headers['X-OpenRouter-Title'], 'ForgeDesk')
   })
 })

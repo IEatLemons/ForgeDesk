@@ -45,10 +45,12 @@ import {
   SettingOutlined,
   TeamOutlined,
   UploadOutlined,
+  ThunderboltOutlined,
   UserAddOutlined
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import { useEffect, useMemo, useState } from 'react'
+import type { FormInstance } from 'antd/es/form'
 import type {
   AiSettingsView,
   AiConflictSuggestion,
@@ -59,6 +61,7 @@ import type {
   GitCommitDiff,
   GitCommitFileChange,
   GitContributorIdentity,
+  GitMergeAnalysis,
   GitOperationResult,
   GitRemote,
   GitStatusFile,
@@ -101,10 +104,53 @@ type SettingsModuleKey = 'overview' | 'git' | 'private' | 'public' | 'config' | 
 
 type AiSettingsForm = {
   enabled: boolean
+  provider: 'openai-compatible' | 'openrouter'
   baseUrl: string
   apiKey?: string
   model: string
   temperature: number
+}
+
+const AI_PROVIDER_PRESETS: Record<AiSettingsForm['provider'], { label: string; baseUrl: string; model: string; apiKeyPlaceholder: string }> = {
+  'openai-compatible': {
+    label: 'OpenAI-compatible',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4.1-mini',
+    apiKeyPlaceholder: 'sk-...'
+  },
+  openrouter: {
+    label: 'OpenRouter',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    model: '~openai/gpt-latest',
+    apiKeyPlaceholder: 'sk-or-v1-...'
+  }
+}
+
+const AI_MODEL_OPTIONS: Record<AiSettingsForm['provider'], string[]> = {
+  'openai-compatible': [
+    'gpt-4.1',
+    'gpt-4.1-mini',
+    'gpt-4.1-nano',
+    'gpt-4o',
+    'gpt-4o-mini',
+    'o3',
+    'o4-mini'
+  ],
+  openrouter: [
+    '~openai/gpt-latest',
+    'openai/gpt-4.1',
+    'openai/gpt-4.1-mini',
+    'openai/gpt-4o',
+    'openai/gpt-4o-mini',
+    'anthropic/claude-sonnet-4',
+    'anthropic/claude-3.7-sonnet',
+    'google/gemini-2.5-pro',
+    'google/gemini-2.5-flash',
+    'deepseek/deepseek-chat-v3-0324',
+    'deepseek/deepseek-r1',
+    'meta-llama/llama-4-maverick',
+    'qwen/qwen3-235b-a22b'
+  ]
 }
 
 type SshConfigMode = 'guided' | 'raw'
@@ -664,6 +710,125 @@ function RepositoryIdentityModal({
   )
 }
 
+function isAiSettingsReady(settings: AiSettingsView | null): boolean {
+  return Boolean(settings?.enabled && settings.apiKeyConfigured && settings.model)
+}
+
+function populateAiSettingsForm(form: FormInstance<AiSettingsForm>, settings: AiSettingsView): void {
+  form.setFieldsValue({
+    enabled: settings.enabled,
+    provider: settings.provider,
+    baseUrl: settings.baseUrl,
+    apiKey: settings.apiKey,
+    model: settings.model,
+    temperature: settings.temperature
+  })
+}
+
+type AiSettingsSectionProps = {
+  form: FormInstance<AiSettingsForm>
+  settings: AiSettingsView | null
+  loading: boolean
+  saving: boolean
+  onRefresh: () => void | Promise<unknown>
+  onSave: () => void | Promise<void>
+  onBack?: () => void
+}
+
+function AiSettingsSection({ form, settings, loading, saving, onRefresh, onSave, onBack }: AiSettingsSectionProps): JSX.Element {
+  const aiReady = isAiSettingsReady(settings)
+  const provider = Form.useWatch('provider', form) ?? settings?.provider ?? 'openai-compatible'
+  const providerPreset = AI_PROVIDER_PRESETS[provider]
+  const modelOptions = AI_MODEL_OPTIONS[provider].map((model) => ({ label: model, value: model }))
+
+  return (
+    <div className="panel settings-module-panel">
+      <div className="settings-module-header">
+        <Space direction="vertical" size={2}>
+          <Typography.Title level={3}>AI 助手</Typography.Title>
+          <Typography.Text type="secondary">配置 OpenAI-compatible 模型，用于生成合并冲突建议和提交信息。</Typography.Text>
+        </Space>
+        <Space wrap>
+          {onBack && <Button onClick={onBack}>返回总览</Button>}
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={onRefresh}>
+            重新读取
+          </Button>
+        </Space>
+      </div>
+      <Alert
+        className="settings-module-alert"
+        type={aiReady ? 'success' : 'info'}
+        showIcon
+        message={aiReady ? 'AI 助手已启用' : '保存 API Key 后，可以请求合并建议和提交信息'}
+        description={settings?.apiKeyConfigured ? 'API Key 已保存，可以在下方输入框通过显示按钮查看。' : 'API Key 只保存在本机应用数据目录，用于请求你配置的模型服务。'}
+      />
+      <Form form={form} layout="vertical" className="settings-management-form">
+        <div className="ai-settings-grid">
+          <Form.Item name="provider" label="提供商" rules={[{ required: true, message: '请选择 AI 提供商' }]}>
+            <Select
+              options={[
+                { label: AI_PROVIDER_PRESETS['openai-compatible'].label, value: 'openai-compatible' },
+                { label: AI_PROVIDER_PRESETS.openrouter.label, value: 'openrouter' }
+              ]}
+              onChange={(value: AiSettingsForm['provider']) => {
+                const preset = AI_PROVIDER_PRESETS[value]
+                form.setFieldsValue({
+                  baseUrl: preset.baseUrl,
+                  model: preset.model
+                })
+              }}
+            />
+          </Form.Item>
+          <Form.Item name="enabled" label="启用状态" rules={[{ required: true, message: '请选择启用状态' }]}>
+            <Select
+              options={[
+                { label: '启用', value: true },
+                { label: '停用', value: false }
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="model" label="模型" rules={[{ required: true, message: '请输入模型名称' }]}>
+            <Select
+              showSearch
+              allowClear
+              options={modelOptions}
+              placeholder={providerPreset.model}
+              optionFilterProp="label"
+              filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+              onSearch={(value) => {
+                if (value) {
+                  form.setFieldValue('model', value)
+                }
+              }}
+              onInputKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  const value = (event.target as HTMLInputElement).value.trim()
+
+                  if (value) {
+                    form.setFieldValue('model', value)
+                  }
+                }
+              }}
+            />
+          </Form.Item>
+          <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, message: '请输入 Base URL' }]}>
+            <Input placeholder={providerPreset.baseUrl} />
+          </Form.Item>
+          <Form.Item name="temperature" label="Temperature" rules={[{ required: true, message: '请输入 Temperature' }]}>
+            <InputNumber min={0} max={1} step={0.1} className="full-width-control" />
+          </Form.Item>
+        </div>
+        <Form.Item name="apiKey" label="API Key">
+          <Input.Password placeholder={settings?.apiKeyConfigured ? '已保存，留空不变' : providerPreset.apiKeyPlaceholder} />
+        </Form.Item>
+        <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave}>
+          保存 AI 设置
+        </Button>
+      </Form>
+    </div>
+  )
+}
+
 function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JSX.Element {
   const [gitIdentityForm] = Form.useForm<GitIdentityForm>()
   const [sshKeyForm] = Form.useForm<SshKeyForm>()
@@ -752,13 +917,7 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     try {
       const settings = await window.forgeDesk.getAiSettings()
       setAiSettings(settings)
-      aiSettingsForm.setFieldsValue({
-        enabled: settings.enabled,
-        baseUrl: settings.baseUrl,
-        apiKey: '',
-        model: settings.model,
-        temperature: settings.temperature
-      })
+      populateAiSettingsForm(aiSettingsForm, settings)
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
@@ -775,7 +934,7 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
   const sshPrivateKeys = gitStatus?.sshPrivateKeys ?? []
   const sshPublicKeys = gitStatus?.sshPublicKeys ?? []
   const gitReady = Boolean(gitStatus?.gitAvailable && gitStatus.userName && gitStatus.userEmail)
-  const aiReady = Boolean(aiSettings?.enabled && aiSettings.apiKeyConfigured && aiSettings.model)
+  const aiReady = isAiSettingsReady(aiSettings)
   const sshReady = sshPrivateKeys.length + sshPublicKeys.length > 0
   const sshIssueCount =
     sshPrivateKeys.filter((key) => !key.hasPublicKey || key.needsPermissionFix).length + sshPublicKeys.filter((key) => !key.pairedPrivateKeyPath).length
@@ -850,7 +1009,7 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
       const apiKey = values.apiKey?.trim()
       const settings = await window.forgeDesk.saveAiSettings({
         enabled: values.enabled,
-        provider: 'openai-compatible',
+        provider: values.provider,
         baseUrl: values.baseUrl,
         apiKey: apiKey || undefined,
         model: values.model,
@@ -1502,49 +1661,15 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
 
   function renderAiModule(): JSX.Element {
     return (
-      <div className="panel settings-module-panel">
-        {renderModuleHeader(
-          'AI 助手',
-          '配置 OpenAI-compatible 模型，用于生成合并冲突解决建议。',
-          <Button icon={<ReloadOutlined />} loading={loadingAiSettings} onClick={refreshAiSettings}>
-            重新读取
-          </Button>
-        )}
-        <Alert
-          className="settings-module-alert"
-          type={aiReady ? 'success' : 'info'}
-          showIcon
-          message={aiReady ? 'AI 冲突助手已启用' : '保存 API Key 后，项目里的 Git 工作区可以请求合并建议'}
-          description={aiSettings?.apiKeyConfigured ? 'API Key 已保存，本页不会回显密钥内容。' : 'API Key 只保存在本机应用数据目录，用于请求你配置的模型服务。'}
-        />
-        <Form form={aiSettingsForm} layout="vertical" className="settings-management-form">
-          <div className="ai-settings-grid">
-            <Form.Item name="enabled" label="启用状态" rules={[{ required: true, message: '请选择启用状态' }]}>
-              <Select
-                options={[
-                  { label: '启用', value: true },
-                  { label: '停用', value: false }
-                ]}
-              />
-            </Form.Item>
-            <Form.Item name="model" label="模型" rules={[{ required: true, message: '请输入模型名称' }]}>
-              <Input placeholder="gpt-4.1-mini" />
-            </Form.Item>
-            <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, message: '请输入 Base URL' }]}>
-              <Input placeholder="https://api.openai.com/v1" />
-            </Form.Item>
-            <Form.Item name="temperature" label="Temperature" rules={[{ required: true, message: '请输入 Temperature' }]}>
-              <InputNumber min={0} max={1} step={0.1} className="full-width-control" />
-            </Form.Item>
-          </div>
-          <Form.Item name="apiKey" label={aiSettings?.apiKeyConfigured ? 'API Key（留空则沿用已保存密钥）' : 'API Key'}>
-            <Input.Password placeholder={aiSettings?.apiKeyConfigured ? '已保存，留空不变' : 'sk-...'} />
-          </Form.Item>
-          <Button type="primary" icon={<SaveOutlined />} loading={savingAiSettings} onClick={saveAiSettings}>
-            保存 AI 设置
-          </Button>
-        </Form>
-      </div>
+      <AiSettingsSection
+        form={aiSettingsForm}
+        settings={aiSettings}
+        loading={loadingAiSettings}
+        saving={savingAiSettings}
+        onRefresh={refreshAiSettings}
+        onSave={saveAiSettings}
+        onBack={() => setActiveSettingsModule('overview')}
+      />
     )
   }
 
@@ -1862,6 +1987,723 @@ function getWorkspaceFileStatusLabel(file: GitStatusFile): { label: string; colo
   }
 
   return { label: status || '变更', color: 'default' }
+}
+
+type GitActionModalProps = {
+  open: boolean
+  repositories: Repository[]
+  onClose: () => void
+  onChanged: () => void | Promise<void>
+}
+
+function createBranchOptions(branches: string[]): Array<{ label: string; value: string }> {
+  return Array.from(new Set(branches.filter(Boolean))).map((branch) => ({ label: branch, value: branch }))
+}
+
+function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionModalProps): JSX.Element {
+  const { updateRepository } = useForgeDeskStore()
+  const [aiSettingsForm] = Form.useForm<AiSettingsForm>()
+  const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
+  const [status, setStatus] = useState<GitWorkspaceStatus | null>(null)
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([])
+  const [commitMessage, setCommitMessage] = useState('')
+  const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
+  const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
+  const [loadingStatus, setLoadingStatus] = useState(false)
+  const [loadingAiSettings, setLoadingAiSettings] = useState(false)
+  const [savingAiSettings, setSavingAiSettings] = useState(false)
+  const [working, setWorking] = useState(false)
+  const [generatingCommitMessage, setGeneratingCommitMessage] = useState(false)
+  const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
+  const files = status?.files ?? []
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    if (repositories.length === 0) {
+      setRepositoryId('')
+      setStatus(null)
+      setSelectedPaths([])
+      return
+    }
+
+    if (!repositories.some((repository) => repository.id === repositoryId)) {
+      setRepositoryId(repositories[0].id)
+    }
+  }, [open, repositories, repositoryId])
+
+  async function refreshWorkspaceStatus(): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) {
+      return
+    }
+
+    setLoadingStatus(true)
+
+    try {
+      const nextStatus = await window.forgeDesk.getRepositoryWorkspaceStatus(selectedRepository.id)
+      setStatus(nextStatus)
+      setSelectedPaths((paths) => paths.filter((path) => nextStatus.files.some((file) => file.path === path)))
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingStatus(false)
+    }
+  }
+
+  async function refreshCommitAiSettings(): Promise<AiSettingsView | null> {
+    if (!window.forgeDesk) {
+      setAiSettings(null)
+      return null
+    }
+
+    setLoadingAiSettings(true)
+
+    try {
+      const settings = await window.forgeDesk.getAiSettings()
+      setAiSettings(settings)
+      populateAiSettingsForm(aiSettingsForm, settings)
+      return settings
+    } catch (error) {
+      message.error(getErrorMessage(error))
+      return null
+    } finally {
+      setLoadingAiSettings(false)
+    }
+  }
+
+  async function saveCommitAiSettings(): Promise<void> {
+    const values = await aiSettingsForm.validateFields()
+
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中保存 AI 设置')
+      return
+    }
+
+    setSavingAiSettings(true)
+
+    try {
+      const apiKey = values.apiKey?.trim()
+      const settings = await window.forgeDesk.saveAiSettings({
+        enabled: values.enabled,
+        provider: values.provider,
+        baseUrl: values.baseUrl,
+        apiKey: apiKey || undefined,
+        model: values.model,
+        temperature: Number(values.temperature)
+      })
+      setAiSettings(settings)
+      aiSettingsForm.setFieldValue('apiKey', '')
+
+      if (isAiSettingsReady(settings)) {
+        setAiSettingsModalOpen(false)
+      }
+
+      message.success('AI 设置已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingAiSettings(false)
+    }
+  }
+
+  async function fillCommitMessageWithAi(): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) {
+      return
+    }
+
+    const settings = await refreshCommitAiSettings()
+
+    if (!isAiSettingsReady(settings)) {
+      message.info('请先填写并启用 AI API Key')
+      setAiSettingsModalOpen(true)
+      return
+    }
+
+    if (selectedPaths.length === 0) {
+      message.warning('请选择要生成提交信息的文件')
+      return
+    }
+
+    setGeneratingCommitMessage(true)
+
+    try {
+      const suggestion = await window.forgeDesk.suggestCommitMessage(selectedRepository.id, { paths: selectedPaths })
+      setCommitMessage(suggestion.message)
+      message.success('已填写提交信息')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setGeneratingCommitMessage(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!open || !selectedRepository) {
+      return
+    }
+
+    setStatus(null)
+    setSelectedPaths([])
+    setCommitMessage('')
+    refreshWorkspaceStatus()
+  }, [open, selectedRepository?.id])
+
+  async function stageSelectedFiles(): Promise<GitOperationResult | null> {
+    if (!selectedRepository || selectedPaths.length === 0 || !window.forgeDesk) {
+      message.warning('请选择要处理的文件')
+      return null
+    }
+
+    const result = await window.forgeDesk.gitAdd(selectedRepository.id, { mode: 'paths', paths: selectedPaths })
+    updateRepository(result.repository)
+    setStatus(result.status)
+
+    if (!result.ok) {
+      message.warning(result.stderr || result.stdout || '暂存失败，请检查文件状态')
+      return result
+    }
+
+    return result
+  }
+
+  async function stageOnly(): Promise<void> {
+    setWorking(true)
+
+    try {
+      const result = await stageSelectedFiles()
+
+      if (result?.ok) {
+        setSelectedPaths([])
+        message.success('已暂存选中文件')
+        await onChanged()
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  async function commitSelectedFilesAfterConfirm(trimmedMessage: string): Promise<void> {
+    setWorking(true)
+
+    try {
+      const stageResult = await stageSelectedFiles()
+
+      if (!stageResult?.ok) {
+        return
+      }
+
+      const result = await window.forgeDesk.gitCommit(selectedRepository.id, { message: trimmedMessage })
+      updateRepository(result.repository)
+      setStatus(result.status)
+
+      if (!result.ok) {
+        message.warning(result.stderr || result.stdout || '提交失败，请检查文件状态')
+        return
+      }
+
+      message.success('提交已创建')
+      setCommitMessage('')
+      setSelectedPaths([])
+      await onChanged()
+      onClose()
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  async function commitSelectedFiles(): Promise<void> {
+    if (!selectedRepository || selectedPaths.length === 0 || !window.forgeDesk) {
+      message.warning('请选择要提交的文件')
+      return
+    }
+
+    const trimmedMessage = commitMessage.trim()
+
+    if (!trimmedMessage) {
+      message.warning('请输入提交信息')
+      return
+    }
+
+    const selectedPathSet = new Set(selectedPaths)
+    const selectedFiles = files.filter((file) => selectedPathSet.has(file.path))
+    const needsAutoStage = selectedFiles.some((file) => file.worktreeStatus.trim() || file.indexStatus === '?')
+    const unselectedStagedFiles = files.filter((file) => !selectedPathSet.has(file.path) && file.indexStatus.trim() && file.indexStatus !== '?')
+
+    if (needsAutoStage || unselectedStagedFiles.length > 0) {
+      Modal.confirm({
+        title: '确认提交选中文件？',
+        content: (
+          <Space direction="vertical" size={6}>
+            {needsAutoStage && <Typography.Text>将先自动暂存当前勾选的 {selectedPaths.length} 个文件，然后创建提交。</Typography.Text>}
+            {unselectedStagedFiles.length > 0 && (
+              <Typography.Text type="warning">
+                另有 {unselectedStagedFiles.length} 个已暂存但未勾选的文件。Git 会把已暂存内容一起提交。
+              </Typography.Text>
+            )}
+          </Space>
+        ),
+        okText: '确认暂存并提交',
+        cancelText: '取消',
+        onOk: () => commitSelectedFilesAfterConfirm(trimmedMessage)
+      })
+      return
+    }
+
+    await commitSelectedFilesAfterConfirm(trimmedMessage)
+  }
+
+  const fileColumns: ColumnsType<GitStatusFile> = [
+    {
+      title: '状态',
+      key: 'status',
+      width: 96,
+      render: (_, file) => {
+        const statusLabel = getWorkspaceFileStatusLabel(file)
+        return <Tag color={statusLabel.color}>{statusLabel.label}</Tag>
+      }
+    },
+    {
+      title: '文件',
+      dataIndex: 'path',
+      key: 'path',
+      render: (path, file) => (
+        <Space direction="vertical" size={2}>
+          <Typography.Text ellipsis={{ tooltip: path }}>{path}</Typography.Text>
+          {file.oldPath && <Typography.Text type="secondary">原路径：{file.oldPath}</Typography.Text>}
+        </Space>
+      )
+    },
+    {
+      title: 'Index / Worktree',
+      key: 'rawStatus',
+      width: 150,
+      render: (_, file) => `${file.indexStatus || ' '}${file.worktreeStatus || ' '}`
+    }
+  ]
+
+  return (
+    <Modal
+      title="提交改动"
+      open={open}
+      width="min(960px, calc(100vw - 48px))"
+      onCancel={onClose}
+      footer={[
+        <Button key="cancel" onClick={onClose}>
+          取消
+        </Button>,
+        <Button key="refresh" icon={<ReloadOutlined />} loading={loadingStatus} onClick={refreshWorkspaceStatus}>
+          刷新改动
+        </Button>,
+        <Button key="stage" loading={working} disabled={selectedPaths.length === 0} onClick={stageOnly}>
+          仅暂存
+        </Button>,
+        <Button key="commit" type="primary" loading={working} disabled={selectedPaths.length === 0 || !commitMessage.trim()} onClick={commitSelectedFiles}>
+          提交选中文件
+        </Button>
+      ]}
+    >
+      <Space direction="vertical" size={14} className="git-action-modal">
+        <Space wrap className="git-action-modal-toolbar">
+          <Select
+            value={selectedRepository?.id}
+            className="git-action-repository-select"
+            options={repositories.map((repository) => ({ label: repository.name, value: repository.id }))}
+            onChange={setRepositoryId}
+          />
+          <Button disabled={files.length === 0} onClick={() => setSelectedPaths(files.map((file) => file.path))}>
+            全选
+          </Button>
+          <Button disabled={selectedPaths.length === 0} onClick={() => setSelectedPaths([])}>
+            清空
+          </Button>
+          <Typography.Text type="secondary">已选择 {selectedPaths.length} 个文件</Typography.Text>
+        </Space>
+
+        <Input
+          value={commitMessage}
+          placeholder="提交信息，例如 feat: update workspace"
+          suffix={
+            <Button
+              className="commit-message-ai-button"
+              type="text"
+              size="small"
+              icon={<ThunderboltOutlined />}
+              loading={generatingCommitMessage}
+              onClick={fillCommitMessageWithAi}
+            >
+              AI
+            </Button>
+          }
+          onChange={(event) => setCommitMessage(event.target.value)}
+        />
+
+        <Table
+          rowKey="path"
+          size="small"
+          loading={loadingStatus}
+          columns={fileColumns}
+          dataSource={files}
+          pagination={false}
+          scroll={{ x: 720, y: 360 }}
+          rowSelection={{
+            selectedRowKeys: selectedPaths,
+            onChange: (keys) => setSelectedPaths(keys.map(String))
+          }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有可提交的改动" /> }}
+        />
+      </Space>
+      <Modal
+        title="AI 设置"
+        open={aiSettingsModalOpen}
+        footer={null}
+        width="min(760px, calc(100vw - 48px))"
+        onCancel={() => setAiSettingsModalOpen(false)}
+      >
+        <AiSettingsSection
+          form={aiSettingsForm}
+          settings={aiSettings}
+          loading={loadingAiSettings}
+          saving={savingAiSettings}
+          onRefresh={refreshCommitAiSettings}
+          onSave={saveCommitAiSettings}
+        />
+      </Modal>
+    </Modal>
+  )
+}
+
+function GitMergeModal({ open, repositories, onClose, onChanged }: GitActionModalProps): JSX.Element {
+  const { updateRepository } = useForgeDeskStore()
+  const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
+  const [status, setStatus] = useState<GitWorkspaceStatus | null>(null)
+  const [sourceBranch, setSourceBranch] = useState('')
+  const [targetBranch, setTargetBranch] = useState('')
+  const [analysis, setAnalysis] = useState<GitMergeAnalysis | null>(null)
+  const [loadingStatus, setLoadingStatus] = useState(false)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [merging, setMerging] = useState(false)
+  const [suggestingFilePath, setSuggestingFilePath] = useState<string | null>(null)
+  const [previewSuggestion, setPreviewSuggestion] = useState<AiConflictSuggestion | null>(null)
+  const [applyingSuggestion, setApplyingSuggestion] = useState(false)
+  const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
+  const currentBranch = status?.branch || selectedRepository?.currentBranch || ''
+  const localBranches = createBranchOptions([...(selectedRepository?.branches ?? []), currentBranch])
+  const sourceBranches = createBranchOptions([...(selectedRepository?.remoteBranches ?? []), ...(selectedRepository?.branches ?? [])])
+  const conflicts = status?.conflicts ?? []
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    if (repositories.length === 0) {
+      setRepositoryId('')
+      setStatus(null)
+      setSourceBranch('')
+      setTargetBranch('')
+      return
+    }
+
+    if (!repositories.some((repository) => repository.id === repositoryId)) {
+      setRepositoryId(repositories[0].id)
+    }
+  }, [open, repositories, repositoryId])
+
+  function chooseDefaultSource(repository: Repository, target: string): string {
+    const defaultBranch = repository.defaultBranch || target
+    return (
+      repository.remoteBranches.find((branch) => branch.endsWith(`/${defaultBranch}`) && branch !== target) ??
+      repository.remoteBranches.find((branch) => branch !== target) ??
+      repository.branches.find((branch) => branch !== target) ??
+      ''
+    )
+  }
+
+  async function refreshWorkspaceStatus(): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) {
+      return
+    }
+
+    setLoadingStatus(true)
+
+    try {
+      const nextStatus = await window.forgeDesk.getRepositoryWorkspaceStatus(selectedRepository.id)
+      const nextTarget = nextStatus.branch || selectedRepository.currentBranch
+      setStatus(nextStatus)
+      setTargetBranch((current) => current || nextTarget)
+      setSourceBranch((current) => current || chooseDefaultSource(selectedRepository, nextTarget))
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingStatus(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!open || !selectedRepository) {
+      return
+    }
+
+    const nextTarget = selectedRepository.currentBranch || selectedRepository.defaultBranch
+    setStatus(null)
+    setAnalysis(null)
+    setPreviewSuggestion(null)
+    setTargetBranch(nextTarget)
+    setSourceBranch(chooseDefaultSource(selectedRepository, nextTarget))
+    refreshWorkspaceStatus()
+  }, [open, selectedRepository?.id])
+
+  async function runMerge(nextAnalysis: GitMergeAnalysis): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) {
+      return
+    }
+
+    setMerging(true)
+
+    try {
+      const result = await window.forgeDesk.gitMerge(selectedRepository.id, { source: nextAnalysis.source })
+      updateRepository(result.repository)
+      setStatus(result.status)
+
+      if (result.ok) {
+        message.success('合并已完成')
+        setAnalysis(null)
+        await onChanged()
+        onClose()
+        return
+      }
+
+      if (result.status.conflicts.length > 0) {
+        message.warning('合并产生冲突，可以在弹窗里请求 AI 建议')
+      } else {
+        message.warning(result.stderr || result.stdout || '合并没有完成，请查看提示')
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setMerging(false)
+    }
+  }
+
+  function confirmMerge(nextAnalysis: GitMergeAnalysis): void {
+    Modal.confirm({
+      title: '确认合并？',
+      content: (
+        <Space direction="vertical" size={6}>
+          <Typography.Text>
+            将 <Typography.Text code>{nextAnalysis.source}</Typography.Text> 合并到 <Typography.Text code>{nextAnalysis.target}</Typography.Text>
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            将引入 {nextAnalysis.incomingCommits} 个提交，{nextAnalysis.fastForward ? '可以快进合并' : '会创建一次普通合并'}。
+          </Typography.Text>
+        </Space>
+      ),
+      okText: '确认合并',
+      cancelText: '再看看',
+      onOk: () => runMerge(nextAnalysis)
+    })
+  }
+
+  async function analyzeMerge(): Promise<void> {
+    if (!selectedRepository || !sourceBranch || !targetBranch || !window.forgeDesk) {
+      message.warning('请选择合并双方')
+      return
+    }
+
+    setAnalyzing(true)
+    setAnalysis(null)
+
+    try {
+      const nextAnalysis = await window.forgeDesk.analyzeRepositoryMerge(selectedRepository.id, {
+        source: sourceBranch,
+        target: targetBranch
+      })
+      setAnalysis(nextAnalysis)
+
+      if (nextAnalysis.ok) {
+        confirmMerge(nextAnalysis)
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
+  async function suggestConflictResolution(conflict: GitConflictFile): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) {
+      return
+    }
+
+    setSuggestingFilePath(conflict.path)
+
+    try {
+      setPreviewSuggestion(await window.forgeDesk.suggestConflictResolution(selectedRepository.id, conflict.path))
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSuggestingFilePath(null)
+    }
+  }
+
+  async function applyConflictResolution(): Promise<void> {
+    if (!selectedRepository || !previewSuggestion || !window.forgeDesk) {
+      return
+    }
+
+    setApplyingSuggestion(true)
+
+    try {
+      const result = await window.forgeDesk.applyConflictResolution(selectedRepository.id, previewSuggestion.filePath, previewSuggestion.suggestedContent)
+      updateRepository(result.repository)
+      setStatus(result.status)
+      setPreviewSuggestion(null)
+      message.success(result.status.conflicts.length === 0 ? '已应用 AI 建议并暂存文件' : '已应用 AI 建议，请继续处理剩余冲突')
+      await onChanged()
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setApplyingSuggestion(false)
+    }
+  }
+
+  const analysisType = analysis?.ok ? 'success' : analysis ? 'warning' : 'info'
+
+  return (
+    <Modal
+      title="合并分支"
+      open={open}
+      width="min(900px, calc(100vw - 48px))"
+      onCancel={onClose}
+      footer={[
+        <Button key="cancel" onClick={onClose}>
+          取消
+        </Button>,
+        <Button key="refresh" icon={<ReloadOutlined />} loading={loadingStatus} onClick={refreshWorkspaceStatus}>
+          刷新状态
+        </Button>,
+        <Button key="confirm" disabled={!analysis?.ok} loading={merging} onClick={() => analysis && confirmMerge(analysis)}>
+          确认合并
+        </Button>,
+        <Button key="analyze" type="primary" loading={analyzing} disabled={!sourceBranch || !targetBranch} onClick={analyzeMerge}>
+          分析
+        </Button>
+      ]}
+    >
+      <Space direction="vertical" size={14} className="git-action-modal">
+        <Space wrap className="git-action-modal-toolbar">
+          <Select
+            value={selectedRepository?.id}
+            className="git-action-repository-select"
+            options={repositories.map((repository) => ({ label: repository.name, value: repository.id }))}
+            onChange={setRepositoryId}
+          />
+          <Select
+            value={sourceBranch || undefined}
+            className="git-branch-select"
+            placeholder="来源分支"
+            showSearch
+            options={sourceBranches}
+            onChange={(value) => {
+              setSourceBranch(value)
+              setAnalysis(null)
+            }}
+          />
+          <Select
+            value={targetBranch || undefined}
+            className="git-branch-select"
+            placeholder="目标分支"
+            showSearch
+            options={localBranches}
+            onChange={(value) => {
+              setTargetBranch(value)
+              setAnalysis(null)
+            }}
+          />
+        </Space>
+
+        <div className="merge-direction-preview">
+          <Typography.Text type="secondary">合并方向</Typography.Text>
+          <Typography.Text strong>
+            {sourceBranch || '来源分支'} → {targetBranch || '目标分支'}
+          </Typography.Text>
+          {currentBranch && <Tag color={targetBranch === currentBranch ? 'blue' : 'orange'}>当前分支：{currentBranch}</Tag>}
+        </div>
+
+        <Alert
+          type={analysisType}
+          showIcon
+          message={analysis ? (analysis.ok ? '分析通过，可以二次确认后合并' : '分析发现需要先处理的问题') : '选择双方后先分析，再确认合并'}
+          description={
+            analysis ? (
+              <Space direction="vertical" size={6} className="merge-analysis-details">
+                <Descriptions size="small" column={2}>
+                  <Descriptions.Item label="引入提交">{analysis.incomingCommits}</Descriptions.Item>
+                  <Descriptions.Item label="本地独有">{analysis.localOnlyCommits}</Descriptions.Item>
+                  <Descriptions.Item label="合并方式">{analysis.fastForward ? '快进合并' : '普通合并'}</Descriptions.Item>
+                  <Descriptions.Item label="共同基线">{analysis.mergeBase ? analysis.mergeBase.slice(0, 12) : '-'}</Descriptions.Item>
+                </Descriptions>
+                {analysis.issues.map((issue) => (
+                  <Typography.Text key={issue} type="danger">
+                    {issue}
+                  </Typography.Text>
+                ))}
+                {analysis.warnings.map((warning) => (
+                  <Typography.Text key={warning} type="secondary">
+                    {warning}
+                  </Typography.Text>
+                ))}
+              </Space>
+            ) : (
+              '目标分支应该是当前检出的分支，避免在合并时偷偷切换工作区。'
+            )
+          }
+        />
+
+        {conflicts.length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            message={`检测到 ${conflicts.length} 个冲突文件`}
+            description={
+              <Space direction="vertical" className="conflict-file-list">
+                {conflicts.map((conflict) => (
+                  <div className="conflict-file-row" key={conflict.path}>
+                    <Space direction="vertical" size={2}>
+                      <Typography.Text strong>{conflict.path}</Typography.Text>
+                      <Typography.Text type="secondary">{conflict.sections.length} 个冲突片段</Typography.Text>
+                    </Space>
+                    <Button type="primary" loading={suggestingFilePath === conflict.path} onClick={() => suggestConflictResolution(conflict)}>
+                      AI 生成合并建议
+                    </Button>
+                  </div>
+                ))}
+              </Space>
+            }
+          />
+        )}
+      </Space>
+
+      <Modal
+        title={previewSuggestion ? `AI 合并建议：${previewSuggestion.filePath}` : 'AI 合并建议'}
+        open={Boolean(previewSuggestion)}
+        okText="应用建议并暂存"
+        cancelText="取消"
+        confirmLoading={applyingSuggestion}
+        onOk={applyConflictResolution}
+        onCancel={() => setPreviewSuggestion(null)}
+        width="min(920px, calc(100vw - 64px))"
+      >
+        <Input.TextArea value={previewSuggestion?.suggestedContent ?? ''} readOnly autoSize={{ minRows: 14, maxRows: 26 }} />
+      </Modal>
+    </Modal>
+  )
 }
 
 function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JSX.Element {
@@ -2253,7 +3095,7 @@ function GitCommandConsole({ repositories }: { repositories: Repository[] }): JS
         type="info"
         showIcon
         message="只支持受控 Git 命令"
-        description="这个命令台用于安全查看仓库状态；add、commit、push、merge 请使用上方 Git 工作区。"
+        description="这个命令台用于安全查看仓库状态；提交和合并请使用项目页右上角按钮。"
       />
       <GitErrorNotice guidance={gitError} onClose={() => setGitError(null)} />
       <div className={`git-command-output${result?.ok ? ' is-ok' : result ? ' is-error' : ''}`}>
@@ -2383,7 +3225,6 @@ function ProjectSettingsPanel({
         </div>
         <div className="advanced-settings-stack">
           <RepositoryRemoteManager repositories={repositories} />
-          <GitWorkspacePanel repositories={repositories} />
           <GitCommandConsole repositories={repositories} />
         </div>
       </div>
@@ -2721,6 +3562,8 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
   const [projectDetailTab, setProjectDetailTab] = useState('data')
   const [analyzingProjectId, setAnalyzingProjectId] = useState<string | null>(null)
   const [analysisGitError, setAnalysisGitError] = useState<GitErrorGuidance | null>(null)
+  const [commitModalOpen, setCommitModalOpen] = useState(false)
+  const [mergeModalOpen, setMergeModalOpen] = useState(false)
   const [rangePreset, setRangePreset] = useState('30')
   const [range, setRange] = useState(createPresetRange(30))
   const selectedProject = projects.find((project) => project.id === detailProjectId) ?? null
@@ -2898,11 +3741,30 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                 <Button icon={<SettingOutlined />} onClick={() => setProjectDetailTab('settings')}>
                   设置
                 </Button>
+                <Button icon={<SaveOutlined />} disabled={projectRepositories.length === 0} onClick={() => setCommitModalOpen(true)}>
+                  提交
+                </Button>
+                <Button icon={<BranchesOutlined />} disabled={projectRepositories.length === 0} onClick={() => setMergeModalOpen(true)}>
+                  合并
+                </Button>
                 <Button type="primary" icon={<ReloadOutlined />} loading={analyzingProjectId === selectedProject.id} disabled={projectRepositories.length === 0} onClick={analyzeSelectedProject}>
                   刷新 Git 数据
                 </Button>
               </Space>
             </div>
+
+            <GitCommitModal
+              open={commitModalOpen}
+              repositories={projectRepositories}
+              onClose={() => setCommitModalOpen(false)}
+              onChanged={() => selectedProject && refreshSummary(selectedProject.id)}
+            />
+            <GitMergeModal
+              open={mergeModalOpen}
+              repositories={projectRepositories}
+              onClose={() => setMergeModalOpen(false)}
+              onChanged={() => selectedProject && refreshSummary(selectedProject.id)}
+            />
 
             <GitErrorNotice guidance={analysisGitError} onClose={() => setAnalysisGitError(null)} />
 

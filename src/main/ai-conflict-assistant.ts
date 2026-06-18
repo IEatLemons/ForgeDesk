@@ -1,4 +1,4 @@
-import type { AiSettings } from './ai-settings'
+import { buildAiRequestHeaders, type AiSettings } from './ai-settings.js'
 
 export type ConflictResolutionSuggestion = {
   filePath: string
@@ -29,10 +29,7 @@ export async function requestConflictResolutionSuggestion(input: {
   const fetchImpl = input.fetchImpl ?? fetch
   const response = await fetchImpl(`${input.settings.baseUrl}/chat/completions`, {
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${input.settings.apiKey}`,
-      'content-type': 'application/json'
-    },
+    headers: buildAiRequestHeaders(input.settings),
     body: JSON.stringify({
       model: input.settings.model,
       temperature: input.settings.temperature,

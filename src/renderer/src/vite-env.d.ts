@@ -58,6 +58,7 @@ type GitAddInput = {
 
 type GitCommitInput = {
   message: string
+  paths?: string[]
 }
 
 type GitPushInput = {
@@ -67,6 +68,19 @@ type GitPushInput = {
 
 type GitMergeInput = {
   source: string
+}
+
+type GitCommitMessageInput = {
+  paths: string[]
+}
+
+type CommitMessageSuggestion = {
+  message: string
+}
+
+type GitMergeAnalysisInput = {
+  source: string
+  target: string
 }
 
 type GitStatusFile = {
@@ -105,6 +119,20 @@ type GitOperationResult = {
   status: GitWorkspaceStatus
   stdout: string
   stderr: string
+}
+
+type GitMergeAnalysis = {
+  repositoryId: string
+  ok: boolean
+  source: string
+  target: string
+  currentBranch: string
+  incomingCommits: number
+  localOnlyCommits: number
+  fastForward: boolean
+  mergeBase: string
+  issues: string[]
+  warnings: string[]
 }
 
 type AiConflictSuggestion = {
@@ -312,7 +340,7 @@ type SshConfigFile = {
 
 type AiSettingsInput = {
   enabled: boolean
-  provider?: 'openai-compatible'
+  provider?: 'openai-compatible' | 'openrouter'
   baseUrl: string
   apiKey?: string
   model: string
@@ -321,8 +349,9 @@ type AiSettingsInput = {
 
 type AiSettingsView = {
   enabled: boolean
-  provider: 'openai-compatible'
+  provider: 'openai-compatible' | 'openrouter'
   baseUrl: string
+  apiKey: string
   apiKeyConfigured: boolean
   model: string
   temperature: number
@@ -346,7 +375,9 @@ interface Window {
     gitAdd: (repositoryId: string, input: GitAddInput) => Promise<GitOperationResult>
     gitCommit: (repositoryId: string, input: GitCommitInput) => Promise<GitOperationResult>
     gitPush: (repositoryId: string, input: GitPushInput) => Promise<GitOperationResult>
+    analyzeRepositoryMerge: (repositoryId: string, input: GitMergeAnalysisInput) => Promise<GitMergeAnalysis>
     gitMerge: (repositoryId: string, input: GitMergeInput) => Promise<GitOperationResult>
+    suggestCommitMessage: (repositoryId: string, input: GitCommitMessageInput) => Promise<CommitMessageSuggestion>
     suggestConflictResolution: (repositoryId: string, filePath: string) => Promise<AiConflictSuggestion>
     applyConflictResolution: (repositoryId: string, filePath: string, content: string) => Promise<GitOperationResult>
     listRepositoryCommitFiles: (repositoryId: string, commitHash: string) => Promise<GitCommitFileChange[]>

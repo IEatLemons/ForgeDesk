@@ -1,25 +1,43 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+export type AiProvider = 'openai-compatible' | 'openrouter'
+
+type AiProviderDefaults = {
+  baseUrl: string
+  model: string
+}
+
 export type AiSettings = {
   enabled: boolean
-  provider: 'openai-compatible'
+  provider: AiProvider
   baseUrl: string
   apiKey: string
   model: string
   temperature: number
 }
 
-export type RedactedAiSettings = Omit<AiSettings, 'apiKey'> & {
+export type RedactedAiSettings = AiSettings & {
   apiKeyConfigured: boolean
+}
+
+const providerDefaults: Record<AiProvider, AiProviderDefaults> = {
+  'openai-compatible': {
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4.1-mini'
+  },
+  openrouter: {
+    baseUrl: 'https://openrouter.ai/api/v1',
+    model: '~openai/gpt-latest'
+  }
 }
 
 const defaultAiSettings: AiSettings = {
   enabled: false,
   provider: 'openai-compatible',
-  baseUrl: 'https://api.openai.com/v1',
+  baseUrl: providerDefaults['openai-compatible'].baseUrl,
   apiKey: '',
-  model: 'gpt-4.1-mini',
+  model: providerDefaults['openai-compatible'].model,
   temperature: 0.2
 }
 
@@ -28,16 +46,32 @@ function getAiSettingsPath(userDataPath: string): string {
 }
 
 export function normalizeAiSettings(input: Partial<AiSettings>): AiSettings {
+  const provider: AiProvider = input.provider === 'openrouter' ? 'openrouter' : 'openai-compatible'
+  const defaults = providerDefaults[provider]
+
   return {
     ...defaultAiSettings,
     ...input,
-    provider: 'openai-compatible',
+    provider,
     enabled: Boolean(input.enabled),
-    baseUrl: (input.baseUrl || defaultAiSettings.baseUrl).trim().replace(/\/+$/, ''),
+    baseUrl: (input.baseUrl || defaults.baseUrl).trim().replace(/\/+$/, ''),
     apiKey: (input.apiKey || '').trim(),
-    model: (input.model || defaultAiSettings.model).trim(),
+    model: (input.model || defaults.model).trim(),
     temperature: Math.min(1, Math.max(0, Number(input.temperature ?? defaultAiSettings.temperature)))
   }
+}
+
+export function buildAiRequestHeaders(settings: AiSettings): Record<string, string> {
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${settings.apiKey}`,
+    'content-type': 'application/json'
+  }
+
+  if (settings.provider === 'openrouter') {
+    headers['X-OpenRouter-Title'] = 'ForgeDesk'
+  }
+
+  return headers
 }
 
 export async function readAiSettingsFile(userDataPath: string): Promise<AiSettings> {
@@ -59,6 +93,5 @@ export async function writeAiSettingsFile(userDataPath: string, input: Partial<A
 }
 
 export function getRedactedAiSettings(settings: AiSettings): RedactedAiSettings {
-  const { apiKey: _apiKey, ...rest } = settings
-  return { ...rest, apiKeyConfigured: Boolean(settings.apiKey) }
+  return { ...settings, apiKeyConfigured: Boolean(settings.apiKey) }
 }

@@ -69,6 +69,7 @@ export type GitAddInput = {
 
 export type GitCommitInput = {
   message: string
+  paths?: string[]
 }
 
 export type GitPushInput = {
@@ -78,6 +79,19 @@ export type GitPushInput = {
 
 export type GitMergeInput = {
   source: string
+}
+
+export type GitCommitMessageInput = {
+  paths: string[]
+}
+
+export type CommitMessageSuggestion = {
+  message: string
+}
+
+export type GitMergeAnalysisInput = {
+  source: string
+  target: string
 }
 
 export type GitStatusFile = {
@@ -116,6 +130,20 @@ export type GitOperationResult = {
   status: GitWorkspaceStatus
   stdout: string
   stderr: string
+}
+
+export type GitMergeAnalysis = {
+  repositoryId: string
+  ok: boolean
+  source: string
+  target: string
+  currentBranch: string
+  incomingCommits: number
+  localOnlyCommits: number
+  fastForward: boolean
+  mergeBase: string
+  issues: string[]
+  warnings: string[]
 }
 
 export type AiConflictSuggestion = {
@@ -284,7 +312,7 @@ export type ProjectGitSummary = {
 
 export type AiSettingsInput = {
   enabled: boolean
-  provider?: 'openai-compatible'
+  provider?: 'openai-compatible' | 'openrouter'
   baseUrl: string
   apiKey?: string
   model: string
@@ -293,8 +321,9 @@ export type AiSettingsInput = {
 
 export type AiSettingsView = {
   enabled: boolean
-  provider: 'openai-compatible'
+  provider: 'openai-compatible' | 'openrouter'
   baseUrl: string
+  apiKey: string
   apiKeyConfigured: boolean
   model: string
   temperature: number

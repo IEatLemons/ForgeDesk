@@ -6,17 +6,25 @@ import { homedir } from 'node:os'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import Database from 'better-sqlite3'
 import simpleGit from 'simple-git'
+import { requestCommitMessageSuggestion, type CommitMessageSuggestion } from './ai-commit-message-assistant'
 import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion } from './ai-conflict-assistant'
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
 import { parseControlledGitCommand, validateRepositoryRemoteName } from './git-controls'
 import {
   buildGitAddArgs,
   buildGitCommitArgs,
+  buildGitDiffStatArgs,
+  buildGitFastForwardCheckArgs,
   buildGitMergeArgs,
+  buildGitMergeBaseArgs,
+  buildGitMergeTreeArgs,
   buildGitPushArgs,
+  buildGitRevListCountArgs,
+  buildGitVerifyRefArgs,
   parsePorcelainStatus,
   type GitAddInput,
   type GitCommitInput,
+  type GitMergeAnalysisInput,
   type GitMergeInput,
   type GitPushInput,
   type GitStatusFile
@@ -106,6 +114,24 @@ type GitOperationResult = {
   status: GitWorkspaceStatus
   stdout: string
   stderr: string
+}
+
+type GitCommitMessageInput = {
+  paths: string[]
+}
+
+type GitMergeAnalysis = {
+  repositoryId: string
+  ok: boolean
+  source: string
+  target: string
+  currentBranch: string
+  incomingCommits: number
+  localOnlyCommits: number
+  fastForward: boolean
+  mergeBase: string
+  issues: string[]
+  warnings: string[]
 }
 
 type RemoteAlignmentStatus = 'aligned' | 'diverged' | 'missing-remote' | 'missing-branch' | 'unknown'
@@ -1711,6 +1737,128 @@ async function getRepositoryWorkspaceStatus(repositoryId: string): Promise<GitWo
   return { repositoryId, branch, files, conflicts }
 }
 
+function parseGitCount(output: string): number {
+  const count = Number.parseInt(output.trim(), 10)
+  return Number.isFinite(count) ? count : 0
+}
+
+function mergeTreeCheckIsUnsupported(result: GitCommandResult): boolean {
+  const output = `${result.stdout}\n${result.stderr}`.toLowerCase()
+  return output.includes('unknown option') || output.includes('usage:') || output.includes('not a git command')
+}
+
+async function analyzeRepositoryMerge(repositoryId: string, input: GitMergeAnalysisInput): Promise<GitMergeAnalysis> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const status = await getRepositoryWorkspaceStatus(repositoryId)
+  const currentBranch = status.branch || repository.currentBranch || 'HEAD'
+  const source = input.source.trim()
+  const target = input.target.trim()
+  const issues: string[] = []
+  const warnings: string[] = []
+
+  if (!source) {
+    issues.push('请选择要合并进来的分支')
+  }
+
+  if (!target) {
+    issues.push('请选择要合并到的目标分支')
+  }
+
+  if (source && target && source === target) {
+    issues.push('合并双方不能是同一个分支')
+  }
+
+  if (target && target !== currentBranch) {
+    issues.push(`当前工作区停在 ${currentBranch}，目标分支必须是当前分支。请先切到 ${target} 后再合并。`)
+  }
+
+  if (status.files.length > 0) {
+    issues.push('当前工作区还有未提交改动，请先提交或暂存后再合并')
+  }
+
+  let sourceExists = false
+  let targetExists = false
+  let incomingCommits = 0
+  let localOnlyCommits = 0
+  let fastForward = false
+  let mergeBase = ''
+
+  if (source) {
+    try {
+      const sourceRefResult = await runGitInPathResult(repository.localPath, buildGitVerifyRefArgs(source))
+      sourceExists = sourceRefResult.ok
+
+      if (!sourceRefResult.ok) {
+        issues.push(`找不到要合并进来的分支：${source}`)
+      }
+    } catch (error) {
+      issues.push(getErrorText(error))
+    }
+  }
+
+  if (target) {
+    try {
+      const targetRefResult = await runGitInPathResult(repository.localPath, buildGitVerifyRefArgs(target))
+      targetExists = targetRefResult.ok
+
+      if (!targetRefResult.ok) {
+        issues.push(`找不到目标分支：${target}`)
+      }
+    } catch (error) {
+      issues.push(getErrorText(error))
+    }
+  }
+
+  if (sourceExists && targetExists && source !== target) {
+    const [incomingResult, localResult, mergeBaseResult, fastForwardResult, mergeTreeResult] = await Promise.all([
+      runGitInPathResult(repository.localPath, buildGitRevListCountArgs(target, source)),
+      runGitInPathResult(repository.localPath, buildGitRevListCountArgs(source, target)),
+      runGitInPathResult(repository.localPath, buildGitMergeBaseArgs({ source, target })),
+      runGitInPathResult(repository.localPath, buildGitFastForwardCheckArgs({ source, target })),
+      runGitInPathResult(repository.localPath, buildGitMergeTreeArgs({ source, target }))
+    ])
+
+    incomingCommits = incomingResult.ok ? parseGitCount(incomingResult.stdout) : 0
+    localOnlyCommits = localResult.ok ? parseGitCount(localResult.stdout) : 0
+    mergeBase = mergeBaseResult.ok ? mergeBaseResult.stdout.trim() : ''
+    fastForward = fastForwardResult.ok
+
+    if (!incomingResult.ok || !localResult.ok || !mergeBaseResult.ok) {
+      issues.push('无法读取双方分支的提交关系，请检查本地仓库状态')
+    }
+
+    if (incomingResult.ok && incomingCommits === 0) {
+      issues.push(`${target} 已经包含 ${source} 的提交，不需要合并`)
+    }
+
+    if (localOnlyCommits > 0 && !fastForward) {
+      warnings.push(`${target} 也有 ${localOnlyCommits} 个独有提交，本次会创建一次普通合并`)
+    }
+
+    if (!mergeTreeResult.ok) {
+      if (mergeTreeCheckIsUnsupported(mergeTreeResult)) {
+        warnings.push('当前 Git 版本无法做冲突预检查，真实合并前仍会二次确认')
+      } else {
+        issues.push('预检查发现这次合并可能产生冲突，请确认双方改动后再合并')
+      }
+    }
+  }
+
+  return {
+    repositoryId,
+    ok: issues.length === 0,
+    source,
+    target,
+    currentBranch,
+    incomingCommits,
+    localOnlyCommits,
+    fastForward,
+    mergeBase,
+    issues,
+    warnings
+  }
+}
+
 async function runRepositoryWriteOperation(repositoryId: string, args: string[]): Promise<GitOperationResult> {
   const repository = getRepositoryOrThrow(repositoryId)
   const result = await runGitInPathResult(repository.localPath, args)
@@ -1736,6 +1884,39 @@ async function suggestRepositoryConflictResolution(repositoryId: string, filePat
     repositoryName: repository.name,
     filePath,
     conflictedContent: content
+  })
+}
+
+async function suggestRepositoryCommitMessage(repositoryId: string, input: GitCommitMessageInput): Promise<CommitMessageSuggestion> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const settings = await readAiSettingsFile(app.getPath('userData'))
+  const paths = input.paths
+
+  if (paths.length === 0) {
+    throw new Error('请选择要生成提交信息的文件')
+  }
+
+  const [status, diffSummaryResult] = await Promise.all([
+    getRepositoryWorkspaceStatus(repositoryId),
+    runGitInPathResult(repository.localPath, buildGitDiffStatArgs(paths))
+  ])
+  const selectedPaths = new Set(paths)
+  const files = status.files
+    .filter((file) => selectedPaths.has(file.path))
+    .map((file) => ({
+      path: file.path,
+      status: `${file.indexStatus}${file.worktreeStatus}`.trim() || 'changed'
+    }))
+
+  if (files.length === 0) {
+    throw new Error('选中文件没有可用于提交的改动')
+  }
+
+  return requestCommitMessageSuggestion({
+    settings,
+    repositoryName: repository.name,
+    files,
+    diffSummary: diffSummaryResult.stdout
   })
 }
 
@@ -2078,12 +2259,20 @@ ipcMain.handle('repository:git-push', async (_event, repositoryId: string, input
   runRepositoryWriteOperation(repositoryId, buildGitPushArgs(input))
 )
 
+ipcMain.handle('repository:merge-analysis', async (_event, repositoryId: string, input: GitMergeAnalysisInput): Promise<GitMergeAnalysis> =>
+  analyzeRepositoryMerge(repositoryId, input)
+)
+
 ipcMain.handle('repository:git-merge', async (_event, repositoryId: string, input: GitMergeInput): Promise<GitOperationResult> =>
   runRepositoryWriteOperation(repositoryId, buildGitMergeArgs(input))
 )
 
 ipcMain.handle('repository:conflict:suggest', async (_event, repositoryId: string, filePath: string): Promise<ConflictResolutionSuggestion> =>
   suggestRepositoryConflictResolution(repositoryId, filePath)
+)
+
+ipcMain.handle('repository:commit-message:suggest', async (_event, repositoryId: string, input: GitCommitMessageInput): Promise<CommitMessageSuggestion> =>
+  suggestRepositoryCommitMessage(repositoryId, input)
 )
 
 ipcMain.handle('repository:conflict:apply', async (_event, repositoryId: string, filePath: string, content: string): Promise<GitOperationResult> =>
