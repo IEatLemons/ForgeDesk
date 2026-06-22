@@ -3408,13 +3408,17 @@ function ProjectLogTreePanel({
   repositories,
   repositoryId,
   view,
+  refreshToken,
   branchTagRefreshToken,
+  onCommitCountChange,
   onRepositoryChange
 }: {
   repositories: Repository[]
   repositoryId: string
   view: RepositoryLogTreeView
+  refreshToken: number
   branchTagRefreshToken: number
+  onCommitCountChange: (repositoryId: string, commitCount: number) => void
   onRepositoryChange: (repositoryId: string) => void
 }): JSX.Element {
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
@@ -3442,8 +3446,11 @@ function ProjectLogTreePanel({
         repositories={repositories}
         selectedRepositoryId={selectedRepository?.id}
         view={view}
+        showSummary={false}
+        refreshToken={refreshToken}
         emptyDescription="请选择要查看的仓库"
         branchTagRefreshToken={branchTagRefreshToken}
+        onCommitCountChange={onCommitCountChange}
         onRepositoryChange={onRepositoryChange}
       />
     </Space>
@@ -3697,7 +3704,7 @@ function CreateProjectModal({
 }
 
 function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject: () => void; onOpenSettings: () => void }): JSX.Element {
-  const { projects, repositories, selectedProjectId, summaries, setProjectSummary, setSelectedProjectId } = useForgeDeskStore()
+  const { projects, repositories, selectedProjectId, summaries, setProjectSummary, setSelectedProjectId, updateRepository } = useForgeDeskStore()
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null)
   const [projectDetailTab, setProjectDetailTab] = useState('data')
   const [analyzingProjectId, setAnalyzingProjectId] = useState<string | null>(null)
@@ -3706,17 +3713,26 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
   const [mergeModalOpen, setMergeModalOpen] = useState(false)
   const [projectSettingsDrawerOpen, setProjectSettingsDrawerOpen] = useState(false)
   const [projectGitRepositoryId, setProjectGitRepositoryId] = useState('')
+  const [syncingProjectRepositoryId, setSyncingProjectRepositoryId] = useState<string | null>(null)
+  const [projectGitRefreshToken, setProjectGitRefreshToken] = useState(0)
+  const [projectRepositoryCommitCounts, setProjectRepositoryCommitCounts] = useState<Record<string, number>>({})
   const [branchTagRefreshToken, setBranchTagRefreshToken] = useState(0)
   const [rangePreset, setRangePreset] = useState('30')
   const [range, setRange] = useState(createPresetRange(30))
   const selectedProject = projects.find((project) => project.id === detailProjectId) ?? null
   const projectRepositories = selectedProject ? repositories.filter((repository) => repository.projectId === selectedProject.id) : []
   const projectRepositoryIds = projectRepositories.map((repository) => repository.id).join('|')
+  const selectedProjectGitRepository = projectRepositories.find((repository) => repository.id === projectGitRepositoryId) ?? projectRepositories[0] ?? null
   const changedRepositories = projectRepositories.filter((repository) => repository.hasChanges).length
   const aheadRepositories = projectRepositories.filter((repository) => repository.ahead > 0).length
   const remoteCount = projectRepositories.reduce((sum, repository) => sum + (repository.remoteCount || repository.remotes?.length || (repository.remoteUrl ? 1 : 0)), 0)
   const remoteAlignmentStats = getProjectRemoteAlignmentStats(projectRepositories)
   const summary = selectedProject ? summaries[selectedProject.id] ?? createEmptySummary(selectedProject.id) : null
+  const selectedProjectGitContribution = summary?.repositories.find((repository) => repository.repositoryId === selectedProjectGitRepository?.id)
+  const selectedProjectGitCommitCount = selectedProjectGitRepository
+    ? projectRepositoryCommitCounts[selectedProjectGitRepository.id] ?? selectedProjectGitContribution?.commits ?? 0
+    : 0
+  const showProjectRepositorySummary = Boolean(selectedProjectGitRepository && (projectDetailTab === 'log-tree' || projectDetailTab === 'remote-alignment'))
   const summaryRange = rangePreset === 'all' ? undefined : range
   const dailyDates = summary?.dailyMetrics.map((metric) => metric.date) ?? []
   const hasGitData = Boolean(summary && summary.totalCommits > 0)
@@ -3762,6 +3778,16 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
     }
   }
 
+  function recordProjectRepositoryCommitCount(repositoryId: string, commitCount: number): void {
+    setProjectRepositoryCommitCounts((current) => {
+      if (current[repositoryId] === commitCount) {
+        return current
+      }
+
+      return { ...current, [repositoryId]: commitCount }
+    })
+  }
+
   async function analyzeSelectedProject(): Promise<void> {
     if (!selectedProject || !window.forgeDesk) {
       return
@@ -3785,6 +3811,29 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
       setAnalysisGitError(createGitErrorGuidance(error, '刷新 Git 数据'))
     } finally {
       setAnalyzingProjectId(null)
+    }
+  }
+
+  async function syncProjectRepository(targetRepository: Repository): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setSyncingProjectRepositoryId(targetRepository.id)
+
+    try {
+      const synced = await window.forgeDesk.fetchRepositoryRemote(targetRepository.id)
+      updateRepository(synced)
+      setProjectGitRepositoryId(synced.id)
+      setProjectGitRefreshToken((current) => current + 1)
+      const nextSummary = await window.forgeDesk.analyzeProjectGit(synced.projectId)
+      setProjectSummary(nextSummary)
+      setAnalysisGitError(null)
+      message.success('远端已 fetch/prune，Git 数据已刷新')
+    } catch (error) {
+      setAnalysisGitError(createGitErrorGuidance(error, '同步远端'))
+    } finally {
+      setSyncingProjectRepositoryId(null)
     }
   }
 
@@ -3938,6 +3987,18 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
 
             <GitErrorNotice guidance={analysisGitError} onClose={() => setAnalysisGitError(null)} />
 
+            {showProjectRepositorySummary && selectedProjectGitRepository && (
+              <RepositorySummaryStrip
+                activeRepository={selectedProjectGitRepository}
+                repositories={projectRepositories}
+                selectedRepositoryId={selectedProjectGitRepository.id}
+                commitCount={selectedProjectGitCommitCount}
+                syncing={syncingProjectRepositoryId === selectedProjectGitRepository.id}
+                onRepositoryChange={setProjectGitRepositoryId}
+                onSync={syncProjectRepository}
+              />
+            )}
+
             <Tabs
               activeKey={projectDetailTab}
               onChange={setProjectDetailTab}
@@ -4024,7 +4085,9 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                       repositories={projectRepositories}
                       repositoryId={projectGitRepositoryId}
                       view="log"
+                      refreshToken={projectGitRefreshToken}
                       branchTagRefreshToken={branchTagRefreshToken}
+                      onCommitCountChange={recordProjectRepositoryCommitCount}
                       onRepositoryChange={setProjectGitRepositoryId}
                     />
                   )
@@ -4037,7 +4100,9 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                       repositories={projectRepositories}
                       repositoryId={projectGitRepositoryId}
                       view="alignment"
+                      refreshToken={projectGitRefreshToken}
                       branchTagRefreshToken={branchTagRefreshToken}
+                      onCommitCountChange={recordProjectRepositoryCommitCount}
                       onRepositoryChange={setProjectGitRepositoryId}
                     />
                   )
@@ -4613,21 +4678,84 @@ function RemoteAlignmentPanel({ alignment, currentBranch }: { alignment: RemoteA
 
 type RepositoryLogTreeView = 'log' | 'alignment'
 
+function RepositorySummaryStrip({
+  activeRepository,
+  repositories,
+  selectedRepositoryId,
+  commitCount,
+  syncing,
+  onRepositoryChange,
+  onSync
+}: {
+  activeRepository: Repository
+  repositories: Repository[]
+  selectedRepositoryId?: string
+  commitCount: number
+  syncing: boolean
+  onRepositoryChange?: (repositoryId: string) => void
+  onSync: (repository: Repository) => void | Promise<void>
+}): JSX.Element {
+  return (
+    <div className="repository-summary-strip">
+      <div className="repository-summary-grid">
+        <div className="repository-summary-item">
+          <Typography.Text type="secondary">当前仓库</Typography.Text>
+          {repositories.length > 1 && onRepositoryChange ? (
+            <Select
+              value={selectedRepositoryId ?? activeRepository.id}
+              className="repository-context-select"
+              options={repositories.map((item) => ({ label: item.name, value: item.id }))}
+              onChange={onRepositoryChange}
+            />
+          ) : (
+            <Typography.Text strong ellipsis={{ tooltip: activeRepository.name }}>{activeRepository.name}</Typography.Text>
+          )}
+        </div>
+        <div className="repository-summary-item is-wide">
+          <Typography.Text type="secondary">本地路径</Typography.Text>
+          <Typography.Text ellipsis={{ tooltip: activeRepository.localPath }}>{activeRepository.localPath}</Typography.Text>
+        </div>
+        <div className="repository-summary-item">
+          <Typography.Text type="secondary">当前分支</Typography.Text>
+          <Typography.Text strong ellipsis={{ tooltip: activeRepository.currentBranch }}>{activeRepository.currentBranch}</Typography.Text>
+        </div>
+        <div className="repository-summary-item is-wide">
+          <Typography.Text type="secondary">最近提交</Typography.Text>
+          <Typography.Text ellipsis={{ tooltip: activeRepository.latestCommit }}>{activeRepository.latestCommit}</Typography.Text>
+        </div>
+        <div className="repository-summary-item">
+          <Typography.Text type="secondary">提交总数</Typography.Text>
+          <Typography.Text strong>{formatNumber(commitCount)}</Typography.Text>
+        </div>
+      </div>
+      <Button icon={<DownloadOutlined />} loading={syncing} onClick={() => void onSync(activeRepository)}>
+        Fetch / Prune
+      </Button>
+    </div>
+  )
+}
+
 function RepositoryLogTree({
   repository,
   repositories = [],
   selectedRepositoryId,
   view = 'log',
+  showSummary = true,
+  refreshToken = 0,
   emptyDescription = '请选择仓库',
   branchTagRefreshToken = 0,
+  onCommitCountChange,
   onRepositoryChange
 }: {
   repository: Repository | null
   repositories?: Repository[]
   selectedRepositoryId?: string
   view?: RepositoryLogTreeView
+  showSummary?: boolean
+  refreshToken?: number
   emptyDescription?: string
   branchTagRefreshToken?: number
+  onCommitCountChange?: (repositoryId: string, commitCount: number) => void
   onRepositoryChange?: (repositoryId: string) => void
 }): JSX.Element {
   const { setProjectSummary, updateRepository } = useForgeDeskStore()
@@ -4765,6 +4893,7 @@ function RepositoryLogTree({
           updateRepository(detail)
           setDetailRepository(detail)
           setCommits(nextCommits)
+          onCommitCountChange?.(detail.id, nextCommits.length)
           setGitError(null)
         }
       } catch (error) {
@@ -4783,7 +4912,7 @@ function RepositoryLogTree({
     return () => {
       cancelled = true
     }
-  }, [repository?.id, repository?.latestCommit, repository?.remoteCount, repository?.remoteBranchCount])
+  }, [repository?.id, repository?.latestCommit, repository?.remoteCount, repository?.remoteBranchCount, refreshToken])
 
   async function refreshCommits(nextRange = commitRange, nextBranch = commitBranch, targetRepository = detailRepository): Promise<void> {
     if (!targetRepository || !window.forgeDesk) {
@@ -4799,12 +4928,13 @@ function RepositoryLogTree({
     setVisibleCommitCount(commitGraphBatchSize)
 
     try {
-      setCommits(
-        await window.forgeDesk.getRepositoryCommitGraph(targetRepository.id, {
-          ...nextRange,
-          branchName: nextBranch || undefined
-        })
-      )
+      const nextCommits = await window.forgeDesk.getRepositoryCommitGraph(targetRepository.id, {
+        ...nextRange,
+        branchName: nextBranch || undefined
+      })
+
+      setCommits(nextCommits)
+      onCommitCountChange?.(targetRepository.id, nextCommits.length)
       setGitError(null)
     } catch (error) {
       setGitError(createGitErrorGuidance(error, '读取提交图谱'))
@@ -4915,42 +5045,17 @@ function RepositoryLogTree({
 
   return (
     <Space direction="vertical" size={16} className="repository-detail">
-      <div className="repository-summary-strip">
-        <div className="repository-summary-grid">
-          <div className="repository-summary-item">
-            <Typography.Text type="secondary">当前仓库</Typography.Text>
-            {repositories.length > 1 && onRepositoryChange ? (
-              <Select
-                value={selectedRepositoryId ?? activeRepository.id}
-                className="repository-context-select"
-                options={repositories.map((item) => ({ label: item.name, value: item.id }))}
-                onChange={onRepositoryChange}
-              />
-            ) : (
-              <Typography.Text strong ellipsis={{ tooltip: activeRepository.name }}>{activeRepository.name}</Typography.Text>
-            )}
-          </div>
-          <div className="repository-summary-item is-wide">
-            <Typography.Text type="secondary">本地路径</Typography.Text>
-            <Typography.Text ellipsis={{ tooltip: activeRepository.localPath }}>{activeRepository.localPath}</Typography.Text>
-          </div>
-          <div className="repository-summary-item">
-            <Typography.Text type="secondary">当前分支</Typography.Text>
-            <Typography.Text strong ellipsis={{ tooltip: activeRepository.currentBranch }}>{activeRepository.currentBranch}</Typography.Text>
-          </div>
-          <div className="repository-summary-item is-wide">
-            <Typography.Text type="secondary">最近提交</Typography.Text>
-            <Typography.Text ellipsis={{ tooltip: activeRepository.latestCommit }}>{activeRepository.latestCommit}</Typography.Text>
-          </div>
-          <div className="repository-summary-item">
-            <Typography.Text type="secondary">提交总数</Typography.Text>
-            <Typography.Text strong>{formatNumber(commits.length)}</Typography.Text>
-          </div>
-        </div>
-        <Button icon={<DownloadOutlined />} loading={syncingRepositoryId === activeRepository.id} onClick={() => syncRemote(activeRepository)}>
-          Fetch / Prune
-        </Button>
-      </div>
+      {showSummary && (
+        <RepositorySummaryStrip
+          activeRepository={activeRepository}
+          repositories={repositories}
+          selectedRepositoryId={selectedRepositoryId}
+          commitCount={commits.length}
+          syncing={syncingRepositoryId === activeRepository.id}
+          onRepositoryChange={onRepositoryChange}
+          onSync={syncRemote}
+        />
+      )}
       <GitErrorNotice guidance={gitError} onClose={() => setGitError(null)} />
       {view === 'alignment' ? (
         <RemoteAlignmentPanel alignment={activeRepository.remoteAlignment} currentBranch={activeRepository.currentBranch} />
