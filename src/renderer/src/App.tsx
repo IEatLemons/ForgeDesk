@@ -88,6 +88,7 @@ import {
   getGitGraphColumnWidth,
   getNextVisibleCommitCount,
   getRefColor,
+  getRepositoryDefaultPushTarget,
   gitGraphLaneWidth,
   type GitGraphRow
 } from './git-log-view'
@@ -2496,6 +2497,144 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
   )
 }
 
+function GitPushModal({ open, repositories, onClose, onChanged }: GitActionModalProps): JSX.Element {
+  const { updateRepository } = useForgeDeskStore()
+  const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
+  const [status, setStatus] = useState<GitWorkspaceStatus | null>(null)
+  const [pushRemote, setPushRemote] = useState('origin')
+  const [pushBranch, setPushBranch] = useState('')
+  const [loadingStatus, setLoadingStatus] = useState(false)
+  const [working, setWorking] = useState(false)
+  const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
+  const remoteOptions = selectedRepository?.remotes.map((remote) => ({ label: remote.name, value: remote.name })) ?? []
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    if (repositories.length === 0) {
+      setRepositoryId('')
+      setStatus(null)
+      return
+    }
+
+    if (!repositories.some((repository) => repository.id === repositoryId)) {
+      setRepositoryId(repositories[0].id)
+    }
+  }, [open, repositories, repositoryId])
+
+  async function refreshWorkspaceStatus(): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) {
+      return
+    }
+
+    setLoadingStatus(true)
+
+    try {
+      const nextStatus = await window.forgeDesk.getRepositoryWorkspaceStatus(selectedRepository.id)
+      const target = getRepositoryDefaultPushTarget(selectedRepository, nextStatus.branch)
+      setStatus(nextStatus)
+      setPushRemote(target.remote)
+      setPushBranch(target.branch)
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingStatus(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!open || !selectedRepository) {
+      return
+    }
+
+    const target = getRepositoryDefaultPushTarget(selectedRepository)
+    setStatus(null)
+    setPushRemote(target.remote)
+    setPushBranch(target.branch)
+    refreshWorkspaceStatus()
+  }, [open, selectedRepository?.id])
+
+  async function pushBranchToRemote(): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) {
+      message.warning('请选择要推送的仓库')
+      return
+    }
+
+    const remote = pushRemote.trim()
+    const branch = pushBranch.trim()
+
+    if (!remote || !branch) {
+      message.warning('请选择远端并填写分支')
+      return
+    }
+
+    setWorking(true)
+
+    try {
+      const result = await window.forgeDesk.gitPush(selectedRepository.id, { remote, branch })
+      updateRepository(result.repository)
+      setStatus(result.status)
+
+      if (!result.ok) {
+        message.warning(result.stderr || result.stdout || '推送失败，请检查远端权限或分支状态')
+        return
+      }
+
+      message.success('分支已推送')
+      await onChanged()
+      onClose()
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  return (
+    <Modal
+      title="推送分支"
+      open={open}
+      width="min(720px, calc(100vw - 48px))"
+      onCancel={onClose}
+      footer={[
+        <Button key="cancel" onClick={onClose}>
+          取消
+        </Button>,
+        <Button key="refresh" icon={<ReloadOutlined />} loading={loadingStatus} onClick={refreshWorkspaceStatus}>
+          刷新状态
+        </Button>,
+        <Button key="push" type="primary" icon={<UploadOutlined />} loading={working} disabled={!selectedRepository || !pushRemote.trim() || !pushBranch.trim()} onClick={pushBranchToRemote}>
+          推送
+        </Button>
+      ]}
+    >
+      <Space direction="vertical" size={14} className="git-action-modal">
+        <Space wrap className="git-action-modal-toolbar">
+          <Select
+            value={selectedRepository?.id}
+            className="git-action-repository-select"
+            options={repositories.map((repository) => ({ label: repository.name, value: repository.id }))}
+            onChange={setRepositoryId}
+          />
+          {selectedRepository && <Tag color={selectedRepository.ahead > 0 ? 'orange' : 'default'}>{selectedRepository.ahead} 个未推送提交</Tag>}
+        </Space>
+        <Space.Compact className="git-operation-compact">
+          <Select value={pushRemote} options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]} onChange={setPushRemote} />
+          <Input value={pushBranch} placeholder={status?.branch || selectedRepository?.currentBranch || 'main'} onChange={(event) => setPushBranch(event.target.value)} />
+        </Space.Compact>
+        <Alert
+          type={selectedRepository?.ahead ? 'info' : 'warning'}
+          showIcon
+          message={selectedRepository?.ahead ? `将推送 ${selectedRepository.name} 的 ${pushBranch || selectedRepository.currentBranch} 到 ${pushRemote || 'origin'}` : '当前仓库未显示待推送提交'}
+          description="推送会使用当前仓库配置的 Git 远端和 SSH/HTTPS 认证。"
+        />
+      </Space>
+    </Modal>
+  )
+}
+
 function GitMergeModal({ open, repositories, onClose, onChanged }: GitActionModalProps): JSX.Element {
   const { updateRepository } = useForgeDeskStore()
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
@@ -2862,9 +3001,10 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
 
     try {
       const nextStatus = await window.forgeDesk.getRepositoryWorkspaceStatus(selectedRepository.id)
+      const target = getRepositoryDefaultPushTarget(selectedRepository, nextStatus.branch)
       setStatus(nextStatus)
-      setPushBranch((current) => current || nextStatus.branch || selectedRepository.currentBranch)
-      setPushRemote((current) => current || selectedRepository.remotes[0]?.name || 'origin')
+      setPushBranch((current) => current || target.branch)
+      setPushRemote((current) => current || target.remote)
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
@@ -2877,8 +3017,9 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
     setSelectedPaths([])
     setCommitMessage('')
     setMergeSource('')
-    setPushRemote(selectedRepository?.remotes[0]?.name || 'origin')
-    setPushBranch(selectedRepository?.currentBranch || '')
+    const target = getRepositoryDefaultPushTarget(selectedRepository)
+    setPushRemote(target.remote)
+    setPushBranch(target.branch)
 
     if (selectedRepository) {
       refreshWorkspaceStatus()
@@ -3710,6 +3851,7 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
   const [analyzingProjectId, setAnalyzingProjectId] = useState<string | null>(null)
   const [analysisGitError, setAnalysisGitError] = useState<GitErrorGuidance | null>(null)
   const [commitModalOpen, setCommitModalOpen] = useState(false)
+  const [pushModalOpen, setPushModalOpen] = useState(false)
   const [mergeModalOpen, setMergeModalOpen] = useState(false)
   const [projectSettingsDrawerOpen, setProjectSettingsDrawerOpen] = useState(false)
   const [projectGitRepositoryId, setProjectGitRepositoryId] = useState('')
@@ -3949,6 +4091,9 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                 <Button icon={<SaveOutlined />} disabled={projectRepositories.length === 0} onClick={() => setCommitModalOpen(true)}>
                   提交
                 </Button>
+                <Button icon={<UploadOutlined />} disabled={projectRepositories.length === 0} onClick={() => setPushModalOpen(true)}>
+                  推送
+                </Button>
                 <Button icon={<BranchesOutlined />} disabled={projectRepositories.length === 0} onClick={() => setMergeModalOpen(true)}>
                   合并
                 </Button>
@@ -3962,6 +4107,12 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
               open={commitModalOpen}
               repositories={projectRepositories}
               onClose={() => setCommitModalOpen(false)}
+              onChanged={() => selectedProject && refreshSummary(selectedProject.id)}
+            />
+            <GitPushModal
+              open={pushModalOpen}
+              repositories={projectRepositories}
+              onClose={() => setPushModalOpen(false)}
               onChanged={() => selectedProject && refreshSummary(selectedProject.id)}
             />
             <GitMergeModal

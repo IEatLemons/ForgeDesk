@@ -8,6 +8,7 @@ import {
   getGraphCellBottomLaneIndexes,
   getGitGraphColumnWidth,
   getRefColor,
+  getRepositoryDefaultPushTarget,
   getNextVisibleCommitCount,
   getRefTone
 } from './git-log-view.js'
@@ -168,5 +169,23 @@ describe('git log view helpers', () => {
       }),
       'Stone <nksqw98btv@users.noreply.github.com>'
     )
+  })
+
+  it('chooses a safe default push target from repository and workspace state', () => {
+    assert.deepEqual(
+      getRepositoryDefaultPushTarget(
+        {
+          currentBranch: 'main',
+          remotes: [
+            { name: 'origin' },
+            { name: 'backup' }
+          ]
+        },
+        'feature/card'
+      ),
+      { remote: 'origin', branch: 'feature/card' }
+    )
+
+    assert.deepEqual(getRepositoryDefaultPushTarget({ currentBranch: 'develop', remotes: [] }), { remote: 'origin', branch: 'develop' })
   })
 })

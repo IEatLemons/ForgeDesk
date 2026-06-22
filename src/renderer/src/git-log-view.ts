@@ -41,6 +41,18 @@ export type BranchTagColorRule = {
   color: string
 }
 
+export type RepositoryPushTargetInput = {
+  currentBranch?: string
+  remotes?: Array<{ name: string }>
+}
+
+export function getRepositoryDefaultPushTarget(repository: RepositoryPushTargetInput | null, statusBranch = ''): { remote: string; branch: string } {
+  return {
+    remote: repository?.remotes?.find((remote) => remote.name)?.name || 'origin',
+    branch: statusBranch || repository?.currentBranch || ''
+  }
+}
+
 export type CommitAuthorDisplayInput = {
   authorName: string
   authorEmail: string
