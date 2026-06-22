@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { buildBranchGroups, createGraphRows, getRefTone } from './git-log-view.js'
+import { buildBranchGroups, createGraphRows, getNextVisibleCommitCount, getRefTone } from './git-log-view.js'
 
 describe('git log view helpers', () => {
   it('keeps merge parent lanes for SourceTree-style graph rendering', () => {
@@ -54,5 +54,12 @@ describe('git log view helpers', () => {
     assert.equal(getRefTone('tag: v1.0.0'), 'gold')
     assert.equal(getRefTone('origin/main'), 'cyan')
     assert.equal(getRefTone('main'), 'blue')
+  })
+
+  it('increments visible commit count and clamps to total commits', () => {
+    assert.equal(getNextVisibleCommitCount({ current: 0, total: 185, batchSize: 60 }), 60)
+    assert.equal(getNextVisibleCommitCount({ current: 60, total: 185, batchSize: 60 }), 120)
+    assert.equal(getNextVisibleCommitCount({ current: 180, total: 185, batchSize: 60 }), 185)
+    assert.equal(getNextVisibleCommitCount({ current: 185, total: 185, batchSize: 60 }), 185)
   })
 })

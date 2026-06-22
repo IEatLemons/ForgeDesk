@@ -25,6 +25,18 @@ export type BranchGroup = {
 
 export type RefTone = 'blue' | 'cyan' | 'gold' | 'default'
 
+export function getNextVisibleCommitCount({
+  current,
+  total,
+  batchSize
+}: {
+  current: number
+  total: number
+  batchSize: number
+}): number {
+  return Math.min(total, current + batchSize)
+}
+
 function range(length: number): number[] {
   return Array.from({ length }, (_, index) => index)
 }

@@ -311,7 +311,7 @@ body {
 
 .repository-summary-grid {
   display: grid;
-  grid-template-columns: minmax(220px, 1.6fr) minmax(120px, 0.8fr) minmax(220px, 1.4fr) minmax(100px, 0.6fr);
+  grid-template-columns: minmax(160px, 0.9fr) minmax(220px, 1.5fr) minmax(120px, 0.7fr) minmax(220px, 1.3fr) minmax(100px, 0.5fr);
   gap: 12px;
   min-width: 0;
 }
@@ -324,6 +324,10 @@ body {
 
 .repository-summary-item .ant-typography {
   min-width: 0;
+}
+
+.repository-context-select {
+  width: 100%;
 }
 
 .remote-alignment-panel {
@@ -346,8 +350,20 @@ body {
   margin: 0;
 }
 
-.remote-alignment-remotes .table-text {
-  max-width: 430px;
+.remote-alignment-remotes-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.remote-alignment-remote-card {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #fbfcfe;
 }
 
 .git-browser {
@@ -411,12 +427,6 @@ body {
 
 .source-tree-table .ant-table-tbody > tr.ant-table-row.selected-row > td {
   border-bottom-color: #d9ebff !important;
-}
-
-.source-tree-table .ant-table-tbody > tr.commit-expanded-row > td {
-  padding: 0 0 12px 116px !important;
-  border-bottom: 1px solid #e6eaf1 !important;
-  background: #f7fbff !important;
 }
 
 .commit-detail-panel {
@@ -512,11 +522,10 @@ body {
 .commit-inline-detail {
   display: grid;
   gap: 12px;
-  margin-right: 12px;
+  margin-top: 12px;
   padding: 14px;
-  border: 1px solid #dbeafe;
-  border-top: 0;
-  border-radius: 0 0 8px 8px;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
   background: #ffffff;
 }
 
@@ -527,41 +536,49 @@ body {
   gap: 12px;
 }
 
-.commit-inline-grid {
+.commit-load-more {
   display: grid;
-  grid-template-columns: minmax(360px, 0.9fr) minmax(420px, 1.1fr);
-  gap: 12px;
-  align-items: start;
-  min-width: 0;
-}
-
-.commit-inline-grid .ant-table-wrapper,
-.commit-inline-diff {
-  min-width: 0;
-}
-
-.commit-inline-diff {
-  display: grid;
-  gap: 8px;
-}
-
-.commit-inline-diff h5 {
-  margin: 0 !important;
-}
-
-.remote-alignment-collapse {
+  place-items: center;
+  min-height: 38px;
+  padding: 8px;
   border: 1px solid #e6eaf1;
-  border-radius: 8px;
-  background: #ffffff;
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  background: #fbfcfe;
 }
 
-.remote-alignment-collapse .ant-collapse-header {
-  align-items: center !important;
-  padding: 10px 14px !important;
+.diff-preview-modal .ant-modal-content {
+  height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
 }
 
-.remote-alignment-collapse .ant-collapse-content-box {
-  padding: 0 14px 14px !important;
+.diff-preview-modal .ant-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.diff-preview-content {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.diff-preview-content .ant-spin-nested-loading,
+.diff-preview-content .ant-spin-container {
+  min-height: 0;
+  height: 100%;
+}
+
+.diff-preview-content .diff-split {
+  height: 100%;
+}
+
+.diff-preview-content .diff-pre {
+  max-height: none;
+  height: 100%;
 }
 
 .source-tree-commit-line,
@@ -1447,8 +1464,7 @@ body {
 
   .repository-summary-strip,
   .git-browser-grid,
-  .diff-split,
-  .commit-inline-grid {
+  .diff-split {
     grid-template-columns: 1fr;
   }
 
@@ -1460,7 +1476,4 @@ body {
     min-width: 0;
   }
 
-  .source-tree-table .ant-table-tbody > tr.commit-expanded-row > td {
-    padding-left: 12px !important;
-  }
 }

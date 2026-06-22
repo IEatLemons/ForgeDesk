@@ -155,23 +155,30 @@ export type RemoteAlignmentStatus = 'aligned' | 'diverged' | 'missing-remote' | 
 
 export type RemoteAlignmentBranchStatus = 'aligned' | 'diverged' | 'missing-branch' | 'unknown'
 
+export type RemoteAlignmentRemote = {
+  name: string
+  url: string
+  branchCount: number
+}
+
+export type RemoteAlignmentRemoteRef = {
+  remoteName: string
+  ref: string
+  commit: string
+  ahead: number
+}
+
 export type RemoteAlignmentBranch = {
   branchName: string
-  companyRef: string
-  githubRef: string
-  companyCommit: string
-  githubCommit: string
-  companyAhead: number
-  githubAhead: number
+  remotes: RemoteAlignmentRemoteRef[]
   status: RemoteAlignmentBranchStatus
+  uniqueCommitCount: number
 }
 
 export type RemoteAlignmentSummary = {
   status: RemoteAlignmentStatus
-  companyRemoteName: string
-  companyRemoteUrl: string
-  githubRemoteName: string
-  githubRemoteUrl: string
+  remotes: RemoteAlignmentRemote[]
+  remoteCount: number
   branchCount: number
   alignedBranchCount: number
   divergedBranchCount: number

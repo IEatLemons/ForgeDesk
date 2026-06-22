@@ -49,7 +49,7 @@ import {
   UserAddOutlined
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormInstance } from 'antd/es/form'
 import type {
   AiSettingsView,
@@ -76,7 +76,7 @@ import type {
   Repository
 } from './data'
 import { createGitErrorGuidance, type GitErrorGuidance } from './git-error-guidance'
-import { buildBranchGroups, createGraphRows, getRefTone, type GitGraphRow } from './git-log-view'
+import { buildBranchGroups, createGraphRows, getNextVisibleCommitCount, getRefTone, type GitGraphRow } from './git-log-view'
 import { createEmptySshConfigEntry, parseSshConfigEntries, serializeSshConfigEntries, type SshConfigEntry } from './ssh-config-model'
 import { useForgeDeskStore } from './store'
 
@@ -298,6 +298,10 @@ function getRemoteAlignmentDetail(alignment: RemoteAlignmentSummary): string {
     return alignment.errorMessage
   }
 
+  if (alignment.remoteCount < 2) {
+    return '至少需要 2 个远端'
+  }
+
   if (alignment.branchCount === 0) {
     return '没有本地远端引用'
   }
@@ -307,12 +311,13 @@ function getRemoteAlignmentDetail(alignment: RemoteAlignmentSummary): string {
 
 function RemoteAlignmentBadge({ alignment }: { alignment: RemoteAlignmentSummary }): JSX.Element {
   const meta = getRemoteAlignmentStatusMeta(alignment.status)
+  const remoteNames = alignment.remotes.map((remote) => remote.name).filter(Boolean).join(' ↔ ')
 
   return (
     <Space direction="vertical" size={2}>
       <Badge status={meta.badgeStatus} text={<Typography.Text>{meta.label}</Typography.Text>} />
       <Typography.Text type="secondary" className="table-text" ellipsis={{ tooltip: getRemoteAlignmentDetail(alignment) }}>
-        company ↔ GitHub · {getRemoteAlignmentDetail(alignment)}
+        {remoteNames || `${formatNumber(alignment.remoteCount)} 个远端`} · {getRemoteAlignmentDetail(alignment)}
       </Typography.Text>
     </Space>
   )
@@ -347,6 +352,7 @@ const graphLaneWidth = 16
 const graphRowHeight = 46
 const graphRowMiddle = graphRowHeight / 2
 const graphLineOverflow = 2
+const commitGraphBatchSize = 60
 
 function getGraphLaneColor(index: number): string {
   return graphLaneColors[index % graphLaneColors.length]
@@ -460,22 +466,14 @@ function CommitInlineDetail({
   commit,
   files,
   selectedFile,
-  diff,
-  diffMode,
   loadingFiles,
-  loadingDiff,
-  onSelectFile,
-  onChangeDiffMode
+  onSelectFile
 }: {
   commit: GitCommit
   files: GitCommitFileChange[]
   selectedFile: GitCommitFileChange | null
-  diff: GitCommitDiff | null
-  diffMode: 'side-by-side' | 'inline'
   loadingFiles: boolean
-  loadingDiff: boolean
   onSelectFile: (file: GitCommitFileChange) => void
-  onChangeDiffMode: (mode: 'side-by-side' | 'inline') => void
 }): JSX.Element {
   return (
     <div className="commit-inline-detail">
@@ -489,66 +487,61 @@ function CommitInlineDetail({
             </Typography.Text>
           </div>
         </div>
-        <Select
-          value={diffMode}
-          className="diff-mode-select"
-          options={[
-            { label: '左右对比', value: 'side-by-side' },
-            { label: '内联 diff', value: 'inline' }
-          ]}
-          onChange={onChangeDiffMode}
-        />
+        <Tag>{formatNumber(files.length)} 个文件</Tag>
       </div>
-      <div className="commit-inline-grid">
-        <Table
-          rowKey="id"
-          size="small"
-          loading={loadingFiles}
-          dataSource={files}
-          pagination={false}
-          rowClassName={(file) => (file.id === selectedFile?.id ? 'selected-row' : '')}
-          onRow={(file) => ({ onClick: () => onSelectFile(file) })}
-          columns={[
-            {
-              title: '状态',
-              dataIndex: 'status',
-              key: 'status',
-              width: 82,
-              render: (status) => {
-                const label = getFileStatusLabel(status)
-                return <Tag color={label.color}>{label.label}</Tag>
-              }
-            },
-            {
-              title: '文件',
-              dataIndex: 'path',
-              key: 'path',
-              render: (path, file) => (
-                <Space direction="vertical" size={2}>
-                  <Typography.Text ellipsis={{ tooltip: path }}>
-                    <FileTextOutlined /> {path}
+      <Table
+        rowKey="id"
+        size="small"
+        loading={loadingFiles}
+        dataSource={files}
+        pagination={false}
+        rowClassName={(file) => (file.id === selectedFile?.id ? 'selected-row' : '')}
+        onRow={(file) => ({ onClick: () => onSelectFile(file) })}
+        columns={[
+          {
+            title: '状态',
+            dataIndex: 'status',
+            key: 'status',
+            width: 82,
+            render: (status) => {
+              const label = getFileStatusLabel(status)
+              return <Tag color={label.color}>{label.label}</Tag>
+            }
+          },
+          {
+            title: '文件',
+            dataIndex: 'path',
+            key: 'path',
+            render: (path, file) => (
+              <Space direction="vertical" size={2}>
+                <Typography.Text ellipsis={{ tooltip: path }}>
+                  <FileTextOutlined /> {path}
+                </Typography.Text>
+                {file.oldPath && (
+                  <Typography.Text type="secondary" ellipsis={{ tooltip: file.oldPath }}>
+                    原路径：{file.oldPath}
                   </Typography.Text>
-                  {file.oldPath && (
-                    <Typography.Text type="secondary" ellipsis={{ tooltip: file.oldPath }}>
-                      原路径：{file.oldPath}
-                    </Typography.Text>
-                  )}
-                </Space>
-              )
-            },
-            { title: '+/-', key: 'lines', width: 88, render: (_, file) => (file.binary ? '二进制' : `${formatNumber(file.additions)} / ${formatNumber(file.deletions)}`) }
-          ]}
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="这个提交没有文件变更" /> }}
-        />
-        <div className="commit-inline-diff">
-          <Typography.Title level={5}>
-            <DiffOutlined /> 文件对比
-          </Typography.Title>
-          <Spin spinning={loadingDiff}>
-            <DiffViewer diff={diff} mode={diffMode} />
-          </Spin>
-        </div>
-      </div>
+                )}
+              </Space>
+            )
+          },
+          { title: '+/-', key: 'lines', width: 104, render: (_, file) => (file.binary ? '二进制' : `${formatNumber(file.additions)} / ${formatNumber(file.deletions)}`) },
+          {
+            title: '对比',
+            key: 'diff',
+            width: 92,
+            render: (_, file) => (
+              <Button size="small" icon={<DiffOutlined />} onClick={(event) => {
+                event.stopPropagation()
+                onSelectFile(file)
+              }}>
+                查看
+              </Button>
+            )
+          }
+        ]}
+        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="这个提交没有文件变更" /> }}
+      />
     </div>
   )
 }
@@ -3268,25 +3261,25 @@ function ProjectCard({
   )
 }
 
-function ProjectLogTreePanel({ repositories }: { repositories: Repository[] }): JSX.Element {
-  const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
+function ProjectLogTreePanel({
+  repositories,
+  repositoryId,
+  view,
+  onRepositoryChange
+}: {
+  repositories: Repository[]
+  repositoryId: string
+  view: RepositoryLogTreeView
+  onRepositoryChange: (repositoryId: string) => void
+}): JSX.Element {
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
-
-  useEffect(() => {
-    if (repositories.length === 0) {
-      setRepositoryId('')
-      return
-    }
-
-    if (!repositories.some((repository) => repository.id === repositoryId)) {
-      setRepositoryId(repositories[0].id)
-    }
-  }, [repositories, repositoryId])
+  const title = view === 'alignment' ? '多端对齐' : 'Log 树'
+  const description = view === 'alignment' ? '查看当前仓库所有远端之间的分支和提交对齐状态。' : '按仓库查看分支、提交图谱和提交文件。'
 
   if (repositories.length === 0) {
     return (
       <div className="panel empty-project-panel">
-        <Empty description="这个项目下还没有仓库，创建项目时扫描到的 Git 仓库会显示 Log 树" />
+        <Empty description="这个项目下还没有仓库，创建项目时扫描到的 Git 仓库会显示在这里" />
       </div>
     )
   }
@@ -3295,17 +3288,18 @@ function ProjectLogTreePanel({ repositories }: { repositories: Repository[] }): 
     <Space direction="vertical" size={16} className="project-log-tree">
       <div className="project-log-toolbar">
         <div>
-          <Typography.Title level={4}>Log 树</Typography.Title>
-          <Typography.Text type="secondary">按仓库查看分支、提交图谱、提交文件和 diff。</Typography.Text>
+          <Typography.Title level={4}>{title}</Typography.Title>
+          <Typography.Text type="secondary">{description}</Typography.Text>
         </div>
-        <Select
-          value={selectedRepository?.id}
-          className="project-log-repository-select"
-          options={repositories.map((repository) => ({ label: repository.name, value: repository.id }))}
-          onChange={setRepositoryId}
-        />
       </div>
-      <RepositoryLogTree repository={selectedRepository} emptyDescription="请选择要查看 Log 树的仓库" />
+      <RepositoryLogTree
+        repository={selectedRepository}
+        repositories={repositories}
+        selectedRepositoryId={selectedRepository?.id}
+        view={view}
+        emptyDescription="请选择要查看的仓库"
+        onRepositoryChange={onRepositoryChange}
+      />
     </Space>
   )
 }
@@ -3461,7 +3455,7 @@ function CreateProjectModal({
     { title: '当前分支', dataIndex: 'currentBranch', key: 'currentBranch', width: 120 },
     { title: 'Git 身份', key: 'identity', width: 220, render: (_, repository) => <RepositoryIdentityCell repository={repository} /> },
     { title: '远程地址', dataIndex: 'remoteUrl', key: 'remoteUrl', width: 260, render: (value) => (value ? <TableText value={value} /> : <Typography.Text type="secondary">未配置</Typography.Text>) },
-    { title: '双远端对齐', key: 'remoteAlignment', width: 190, render: (_, repository) => <RemoteAlignmentBadge alignment={repository.remoteAlignment} /> },
+    { title: '多端对齐', key: 'remoteAlignment', width: 190, render: (_, repository) => <RemoteAlignmentBadge alignment={repository.remoteAlignment} /> },
     {
       title: '状态',
       key: 'status',
@@ -3564,10 +3558,13 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
   const [analysisGitError, setAnalysisGitError] = useState<GitErrorGuidance | null>(null)
   const [commitModalOpen, setCommitModalOpen] = useState(false)
   const [mergeModalOpen, setMergeModalOpen] = useState(false)
+  const [projectSettingsDrawerOpen, setProjectSettingsDrawerOpen] = useState(false)
+  const [projectGitRepositoryId, setProjectGitRepositoryId] = useState('')
   const [rangePreset, setRangePreset] = useState('30')
   const [range, setRange] = useState(createPresetRange(30))
   const selectedProject = projects.find((project) => project.id === detailProjectId) ?? null
   const projectRepositories = selectedProject ? repositories.filter((repository) => repository.projectId === selectedProject.id) : []
+  const projectRepositoryIds = projectRepositories.map((repository) => repository.id).join('|')
   const changedRepositories = projectRepositories.filter((repository) => repository.hasChanges).length
   const aheadRepositories = projectRepositories.filter((repository) => repository.ahead > 0).length
   const remoteCount = projectRepositories.reduce((sum, repository) => sum + (repository.remoteCount || repository.remotes?.length || (repository.remoteUrl ? 1 : 0)), 0)
@@ -3598,6 +3595,17 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
       setAnalysisGitError(createGitErrorGuidance(summary.errorMessage, '刷新 Git 数据'))
     }
   }, [summary?.errorMessage, summary?.status])
+
+  useEffect(() => {
+    if (!selectedProject || projectRepositories.length === 0) {
+      setProjectGitRepositoryId('')
+      return
+    }
+
+    if (!projectRepositories.some((repository) => repository.id === projectGitRepositoryId)) {
+      setProjectGitRepositoryId(projectRepositories[0].id)
+    }
+  }, [selectedProject?.id, projectRepositoryIds, projectGitRepositoryId])
 
   function updateRangePreset(value: string): void {
     setRangePreset(value)
@@ -3715,6 +3723,7 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                     setSelectedProjectId(project.id)
                     setDetailProjectId(project.id)
                     setProjectDetailTab('data')
+                    setProjectSettingsDrawerOpen(false)
                   }}
                 />
               ))}
@@ -3738,7 +3747,7 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
               </div>
               <Space wrap>
                 {summary?.lastAnalyzedAt && <Typography.Text type="secondary">上次分析：{new Date(summary.lastAnalyzedAt).toLocaleString()}</Typography.Text>}
-                <Button icon={<SettingOutlined />} onClick={() => setProjectDetailTab('settings')}>
+                <Button icon={<SettingOutlined />} onClick={() => setProjectSettingsDrawerOpen(true)}>
                   设置
                 </Button>
                 <Button icon={<SaveOutlined />} disabled={projectRepositories.length === 0} onClick={() => setCommitModalOpen(true)}>
@@ -3765,6 +3774,19 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
               onClose={() => setMergeModalOpen(false)}
               onChanged={() => selectedProject && refreshSummary(selectedProject.id)}
             />
+            <Drawer
+              title={`项目设置：${selectedProject.name}`}
+              open={projectSettingsDrawerOpen}
+              width="min(1280px, calc(100vw - 64px))"
+              onClose={() => setProjectSettingsDrawerOpen(false)}
+            >
+              <ProjectSettingsPanel
+                project={selectedProject}
+                repositories={projectRepositories}
+                contributors={summary?.contributors ?? []}
+                onSummaryChanged={() => refreshSummary(selectedProject.id)}
+              />
+            </Drawer>
 
             <GitErrorNotice guidance={analysisGitError} onClose={() => setAnalysisGitError(null)} />
 
@@ -3849,17 +3871,24 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                 {
                   key: 'log-tree',
                   label: 'Log 树',
-                  children: <ProjectLogTreePanel repositories={projectRepositories} />
+                  children: (
+                    <ProjectLogTreePanel
+                      repositories={projectRepositories}
+                      repositoryId={projectGitRepositoryId}
+                      view="log"
+                      onRepositoryChange={setProjectGitRepositoryId}
+                    />
+                  )
                 },
                 {
-                  key: 'settings',
-                  label: '设置',
+                  key: 'remote-alignment',
+                  label: '多端对齐',
                   children: (
-                    <ProjectSettingsPanel
-                      project={selectedProject}
+                    <ProjectLogTreePanel
                       repositories={projectRepositories}
-                      contributors={summary?.contributors ?? []}
-                      onSummaryChanged={() => refreshSummary(selectedProject.id)}
+                      repositoryId={projectGitRepositoryId}
+                      view="alignment"
+                      onRepositoryChange={setProjectGitRepositoryId}
                     />
                   )
                 }
@@ -4130,6 +4159,28 @@ function ProjectPeopleMapping({ project, contributors, onChanged }: { project: P
 
 function RemoteAlignmentPanel({ alignment, currentBranch }: { alignment: RemoteAlignmentSummary; currentBranch: string }): JSX.Element {
   const meta = getRemoteAlignmentStatusMeta(alignment.status)
+  const remoteColumns: ColumnsType<RemoteAlignmentBranch> = alignment.remotes.map((remote) => ({
+    title: remote.name,
+    key: `remote:${remote.name}`,
+    width: 220,
+    render: (_, branch) => {
+      const remoteRef = branch.remotes.find((item) => item.remoteName === remote.name)
+      const commit = remoteRef?.commit ?? ''
+      const ahead = remoteRef?.ahead ?? 0
+
+      return (
+        <Space direction="vertical" size={2}>
+          <Typography.Text type="secondary" className="table-text" ellipsis={{ tooltip: remoteRef?.ref || `${remote.name}/${branch.branchName}` }}>
+            {remoteRef?.ref || `${remote.name}/${branch.branchName}`}
+          </Typography.Text>
+          <Space size={6} wrap>
+            <Tag color={commit ? 'default' : 'red'}>{commit ? formatShortCommit(commit) : '缺分支'}</Tag>
+            {branch.status === 'diverged' && ahead > 0 && <Tag color="orange">+{formatNumber(ahead)}</Tag>}
+          </Space>
+        </Space>
+      )
+    }
+  }))
   const columns: ColumnsType<RemoteAlignmentBranch> = [
     {
       title: '分支',
@@ -4143,38 +4194,14 @@ function RemoteAlignmentPanel({ alignment, currentBranch }: { alignment: RemoteA
         </Space>
       )
     },
-    {
-      title: 'company',
-      key: 'company',
-      width: 220,
-      render: (_, branch) => (
-        <Space direction="vertical" size={2}>
-          <Typography.Text type="secondary">{branch.companyRef}</Typography.Text>
-          <Tag color={branch.companyCommit ? 'default' : 'red'}>{formatShortCommit(branch.companyCommit)}</Tag>
-        </Space>
-      )
-    },
-    {
-      title: 'GitHub CI/CD',
-      key: 'github',
-      width: 220,
-      render: (_, branch) => (
-        <Space direction="vertical" size={2}>
-          <Typography.Text type="secondary">{branch.githubRef}</Typography.Text>
-          <Tag color={branch.githubCommit ? 'default' : 'red'}>{formatShortCommit(branch.githubCommit)}</Tag>
-        </Space>
-      )
-    },
+    ...remoteColumns,
     {
       title: '独有提交',
       key: 'ahead',
-      width: 160,
+      width: 120,
       render: (_, branch) =>
         branch.status === 'diverged' ? (
-          <Space direction="vertical" size={2}>
-            <Typography.Text>company +{formatNumber(branch.companyAhead)}</Typography.Text>
-            <Typography.Text>GitHub +{formatNumber(branch.githubAhead)}</Typography.Text>
-          </Space>
+          <Tag color="orange">{formatNumber(branch.uniqueCommitCount)}</Tag>
         ) : (
           <Typography.Text type="secondary">-</Typography.Text>
         )
@@ -4194,19 +4221,28 @@ function RemoteAlignmentPanel({ alignment, currentBranch }: { alignment: RemoteA
     <div className="remote-alignment-panel">
       <div className="remote-alignment-heading">
         <Space direction="vertical" size={2}>
-          <Typography.Title level={4}>双远端对齐</Typography.Title>
-          <Typography.Text type="secondary">company 内部 Gitea ↔ GitHub CI/CD</Typography.Text>
+          <Typography.Title level={4}>多端对齐</Typography.Title>
+          <Typography.Text type="secondary">
+            {formatNumber(alignment.remoteCount)} 个远端 · {getRemoteAlignmentDetail(alignment)}
+          </Typography.Text>
         </Space>
         <Tag color={meta.color}>{meta.label}</Tag>
       </div>
-      <Descriptions column={2} size="small" className="remote-alignment-remotes">
-        <Descriptions.Item label="company">
-          {alignment.companyRemoteUrl ? <TableText value={alignment.companyRemoteUrl} /> : <Typography.Text type="secondary">未配置</Typography.Text>}
-        </Descriptions.Item>
-        <Descriptions.Item label="GitHub CI/CD">
-          {alignment.githubRemoteUrl ? <TableText value={alignment.githubRemoteUrl} /> : <Typography.Text type="secondary">未配置</Typography.Text>}
-        </Descriptions.Item>
-      </Descriptions>
+      <div className="remote-alignment-remotes-list">
+        {alignment.remotes.length === 0 ? (
+          <Typography.Text type="secondary">还没有远端配置</Typography.Text>
+        ) : (
+          alignment.remotes.map((remote) => (
+            <div key={remote.name} className="remote-alignment-remote-card">
+              <Space size={6} wrap>
+                <Typography.Text strong>{remote.name}</Typography.Text>
+                <Tag>{formatNumber(remote.branchCount)} 分支</Tag>
+              </Space>
+              {remote.url ? <Typography.Text type="secondary" ellipsis={{ tooltip: remote.url }}>{remote.url}</Typography.Text> : <Typography.Text type="secondary">未配置 URL</Typography.Text>}
+            </div>
+          ))
+        )}
+      </div>
       {alignment.errorMessage && <Alert type={alignment.status === 'unknown' ? 'warning' : 'error'} showIcon message={alignment.errorMessage} />}
       <Table
         rowKey="branchName"
@@ -4215,14 +4251,30 @@ function RemoteAlignmentPanel({ alignment, currentBranch }: { alignment: RemoteA
         dataSource={alignment.branches}
         pagination={false}
         rowClassName={(branch) => (branch.branchName === currentBranch ? 'current-branch-row' : '')}
-        scroll={{ x: 920 }}
+        scroll={{ x: Math.max(720, 420 + alignment.remotes.length * 220) }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="同步远端后显示分支对齐结果" /> }}
       />
     </div>
   )
 }
 
-function RepositoryLogTree({ repository, emptyDescription = '请选择仓库' }: { repository: Repository | null; emptyDescription?: string }): JSX.Element {
+type RepositoryLogTreeView = 'log' | 'alignment'
+
+function RepositoryLogTree({
+  repository,
+  repositories = [],
+  selectedRepositoryId,
+  view = 'log',
+  emptyDescription = '请选择仓库',
+  onRepositoryChange
+}: {
+  repository: Repository | null
+  repositories?: Repository[]
+  selectedRepositoryId?: string
+  view?: RepositoryLogTreeView
+  emptyDescription?: string
+  onRepositoryChange?: (repositoryId: string) => void
+}): JSX.Element {
   const { setProjectSummary, updateRepository } = useForgeDeskStore()
   const [detailRepository, setDetailRepository] = useState<Repository | null>(repository)
   const [commits, setCommits] = useState<GitCommit[]>([])
@@ -4234,18 +4286,23 @@ function RepositoryLogTree({ repository, emptyDescription = '请选择仓库' }:
   const [selectedFile, setSelectedFile] = useState<GitCommitFileChange | null>(null)
   const [commitDiff, setCommitDiff] = useState<GitCommitDiff | null>(null)
   const [diffMode, setDiffMode] = useState<'side-by-side' | 'inline'>('side-by-side')
+  const [diffModalOpen, setDiffModalOpen] = useState(false)
+  const [visibleCommitCount, setVisibleCommitCount] = useState(commitGraphBatchSize)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [loadingFiles, setLoadingFiles] = useState(false)
   const [loadingDiff, setLoadingDiff] = useState(false)
   const [syncingRepositoryId, setSyncingRepositoryId] = useState<string | null>(null)
   const [gitError, setGitError] = useState<GitErrorGuidance | null>(null)
   const [branchDrawerOpen, setBranchDrawerOpen] = useState(false)
+  const commitLoadMoreRef = useRef<HTMLDivElement | null>(null)
 
   const filteredCommits = useMemo(
     () => commits.filter((commit) => !commitAuthor || `${commit.authorName} <${commit.authorEmail}>` === commitAuthor),
     [commitAuthor, commits]
   )
   const graphRows = useMemo(() => createGraphRows(filteredCommits), [filteredCommits])
+  const visibleGraphRows = useMemo(() => graphRows.slice(0, visibleCommitCount), [graphRows, visibleCommitCount])
+  const hasMoreCommits = visibleCommitCount < graphRows.length
   const authorOptions = useMemo(
     () =>
       Array.from(new Set(commits.map((commit) => `${commit.authorName} <${commit.authorEmail}>`)))
@@ -4253,6 +4310,39 @@ function RepositoryLogTree({ repository, emptyDescription = '请选择仓库' }:
         .sort((a, b) => a.localeCompare(b)),
     [commits]
   )
+
+  useEffect(() => {
+    setVisibleCommitCount(commitGraphBatchSize)
+  }, [commitAuthor, commitBranch, commitRange.startDate, commitRange.endDate, commits])
+
+  useEffect(() => {
+    if (view !== 'log' || !hasMoreCommits) {
+      return
+    }
+
+    const node = commitLoadMoreRef.current
+
+    if (!node) {
+      return
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setVisibleCommitCount((current) =>
+          getNextVisibleCommitCount({
+            current,
+            total: graphRows.length,
+            batchSize: commitGraphBatchSize
+          })
+        )
+      }
+    }, { rootMargin: '220px 0px' })
+
+    observer.observe(node)
+
+    return () => observer.disconnect()
+  }, [graphRows.length, hasMoreCommits, view])
+
   useEffect(() => {
     let cancelled = false
 
@@ -4272,6 +4362,8 @@ function RepositoryLogTree({ repository, emptyDescription = '请选择仓库' }:
       setCommitFiles([])
       setSelectedFile(null)
       setCommitDiff(null)
+      setDiffModalOpen(false)
+      setVisibleCommitCount(commitGraphBatchSize)
       setGitError(null)
 
       try {
@@ -4316,6 +4408,8 @@ function RepositoryLogTree({ repository, emptyDescription = '请选择仓库' }:
     setCommitFiles([])
     setSelectedFile(null)
     setCommitDiff(null)
+    setDiffModalOpen(false)
+    setVisibleCommitCount(commitGraphBatchSize)
 
     try {
       setCommits(
@@ -4352,6 +4446,8 @@ function RepositoryLogTree({ repository, emptyDescription = '请选择仓库' }:
       setCommitBranch('')
       setCommitAuthor('')
       setCommitRange({ startDate: '', endDate: '' })
+      setDiffModalOpen(false)
+      setVisibleCommitCount(commitGraphBatchSize)
       await refreshCommits({ startDate: '', endDate: '' }, '', synced)
       const summary = await window.forgeDesk.analyzeProjectGit(synced.projectId)
       setProjectSummary(summary)
@@ -4374,12 +4470,14 @@ function RepositoryLogTree({ repository, emptyDescription = '请选择仓库' }:
       setCommitFiles([])
       setSelectedFile(null)
       setCommitDiff(null)
+      setDiffModalOpen(false)
       return
     }
 
     setSelectedCommit(commit)
     setSelectedFile(null)
     setCommitDiff(null)
+    setDiffModalOpen(false)
     setLoadingFiles(true)
 
     try {
@@ -4398,6 +4496,8 @@ function RepositoryLogTree({ repository, emptyDescription = '请选择仓库' }:
     }
 
     setSelectedFile(file)
+    setCommitDiff(null)
+    setDiffModalOpen(true)
     setLoadingDiff(true)
 
     try {
@@ -4430,6 +4530,19 @@ function RepositoryLogTree({ repository, emptyDescription = '请选择仓库' }:
     <Space direction="vertical" size={16} className="repository-detail">
       <div className="repository-summary-strip">
         <div className="repository-summary-grid">
+          <div className="repository-summary-item">
+            <Typography.Text type="secondary">当前仓库</Typography.Text>
+            {repositories.length > 1 && onRepositoryChange ? (
+              <Select
+                value={selectedRepositoryId ?? activeRepository.id}
+                className="repository-context-select"
+                options={repositories.map((item) => ({ label: item.name, value: item.id }))}
+                onChange={onRepositoryChange}
+              />
+            ) : (
+              <Typography.Text strong ellipsis={{ tooltip: activeRepository.name }}>{activeRepository.name}</Typography.Text>
+            )}
+          </div>
           <div className="repository-summary-item is-wide">
             <Typography.Text type="secondary">本地路径</Typography.Text>
             <Typography.Text ellipsis={{ tooltip: activeRepository.localPath }}>{activeRepository.localPath}</Typography.Text>
@@ -4452,109 +4565,127 @@ function RepositoryLogTree({ repository, emptyDescription = '请选择仓库' }:
         </Button>
       </div>
       <GitErrorNotice guidance={gitError} onClose={() => setGitError(null)} />
-      <div className="git-browser">
-        <div className="panel-title source-tree-toolbar">
-          <Space size={8} wrap>
-            <Typography.Title level={4}>提交图谱</Typography.Title>
-            <Tag color={commitBranch ? 'blue' : 'default'}>{commitBranch || '全部引用'}</Tag>
-          </Space>
-          <Space wrap>
-            <Button icon={<BranchesOutlined />} onClick={() => setBranchDrawerOpen(true)}>
-              分支
-            </Button>
-            {commitBranch && <Button onClick={() => selectBranchFilter('')}>全部引用</Button>}
-            <Select
-              allowClear
-              placeholder="全部作者"
-              value={commitAuthor}
-              className="git-filter"
-              options={authorOptions.map((author) => ({ label: author, value: author }))}
-              onChange={(value) => setCommitAuthor(value ?? '')}
-            />
-            <Input
-              type="date"
-              value={commitRange.startDate}
-              onChange={(event) => {
-                const nextRange = { ...commitRange, startDate: event.target.value }
-                setCommitRange(nextRange)
-                refreshCommits(nextRange)
-              }}
-            />
-            <Input
-              type="date"
-              value={commitRange.endDate}
-              onChange={(event) => {
-                const nextRange = { ...commitRange, endDate: event.target.value }
-                setCommitRange(nextRange)
-                refreshCommits(nextRange)
-              }}
-            />
-          </Space>
-        </div>
-        <Table
-          rowKey="id"
-          loading={loadingDetail}
-          size="small"
-          className="commit-table source-tree-table"
-          rowClassName={(commit) => (commit.hash === selectedCommit?.hash ? 'selected-row' : '')}
-          onRow={(commit) => ({ onClick: () => selectCommit(commit) })}
-          columns={[
-            { title: '', key: 'graph', width: 116, render: (_, commit) => <CommitGraphCell commit={commit} /> },
-            {
-              title: '提交',
-              dataIndex: 'message',
-              key: 'message',
-              render: (_, commit) => <CommitMessageCell commit={commit} />
-            },
-            { title: '提交人', key: 'author', width: 210, render: (_, commit) => <CommitAuthorCell commit={commit} /> },
-            { title: '时间', dataIndex: 'committedAt', key: 'committedAt', width: 160, render: (value) => new Date(value).toLocaleString() },
-            { title: '+/-', key: 'lines', width: 96, render: (_, commit) => `${formatNumber(commit.additions)} / ${formatNumber(commit.deletions)}` }
-          ]}
-          dataSource={graphRows}
-          expandable={{
-            expandedRowKeys: selectedCommit ? [selectedCommit.id] : [],
-            showExpandColumn: false,
-            expandedRowClassName: () => 'commit-expanded-row',
-            expandedRowRender: (commit) => (
-              <CommitInlineDetail
-                commit={commit}
-                files={commit.hash === selectedCommit?.hash ? commitFiles : []}
-                selectedFile={commit.hash === selectedCommit?.hash ? selectedFile : null}
-                diff={commit.hash === selectedCommit?.hash ? commitDiff : null}
-                diffMode={diffMode}
-                loadingFiles={commit.hash === selectedCommit?.hash && loadingFiles}
-                loadingDiff={commit.hash === selectedCommit?.hash && loadingDiff}
-                onSelectFile={(file) => {
-                  selectCommitFile(file)
-                }}
-                onChangeDiffMode={setDiffMode}
+      {view === 'alignment' ? (
+        <RemoteAlignmentPanel alignment={activeRepository.remoteAlignment} currentBranch={activeRepository.currentBranch} />
+      ) : (
+        <div className="git-browser">
+          <div className="panel-title source-tree-toolbar">
+            <Space size={8} wrap>
+              <Typography.Title level={4}>提交图谱</Typography.Title>
+              <Tag color={commitBranch ? 'blue' : 'default'}>{commitBranch || '全部引用'}</Tag>
+            </Space>
+            <Space wrap>
+              <Button icon={<BranchesOutlined />} onClick={() => setBranchDrawerOpen(true)}>
+                分支
+              </Button>
+              {commitBranch && <Button onClick={() => selectBranchFilter('')}>全部引用</Button>}
+              <Select
+                allowClear
+                placeholder="全部作者"
+                value={commitAuthor}
+                className="git-filter"
+                options={authorOptions.map((author) => ({ label: author, value: author }))}
+                onChange={(value) => setCommitAuthor(value ?? '')}
               />
-            )
-          }}
-          pagination={{ pageSize: 18, showSizeChanger: false }}
-          scroll={{ x: 980 }}
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前范围没有提交" /> }}
-        />
-      </div>
-      <Collapse
-        className="remote-alignment-collapse"
-        bordered={false}
-        ghost
-        items={[
-          {
-            key: 'remote-alignment',
-            label: (
-              <Space size={8} wrap>
-                <Typography.Text strong>双远端对齐</Typography.Text>
-                <Tag color={getRemoteAlignmentStatusMeta(activeRepository.remoteAlignment.status).color}>
-                  {getRemoteAlignmentStatusMeta(activeRepository.remoteAlignment.status).label}
-                </Tag>
-              </Space>
-            ),
-            children: <RemoteAlignmentPanel alignment={activeRepository.remoteAlignment} currentBranch={activeRepository.currentBranch} />
-          }
-        ]}
-      />
+              <Input
+                type="date"
+                value={commitRange.startDate}
+                onChange={(event) => {
+                  const nextRange = { ...commitRange, startDate: event.target.value }
+                  setCommitRange(nextRange)
+                  refreshCommits(nextRange)
+                }}
+              />
+              <Input
+                type="date"
+                value={commitRange.endDate}
+                onChange={(event) => {
+                  const nextRange = { ...commitRange, endDate: event.target.value }
+                  setCommitRange(nextRange)
+                  refreshCommits(nextRange)
+                }}
+              />
+            </Space>
+          </div>
+          <Table
+            rowKey="id"
+            loading={loadingDetail}
+            size="small"
+            className="commit-table source-tree-table"
+            rowClassName={(commit) => (commit.hash === selectedCommit?.hash ? 'selected-row' : '')}
+            onRow={(commit) => ({ onClick: () => selectCommit(commit) })}
+            columns={[
+              { title: '', key: 'graph', width: 116, render: (_, commit) => <CommitGraphCell commit={commit} /> },
+              {
+                title: '提交',
+                dataIndex: 'message',
+                key: 'message',
+                render: (_, commit) => <CommitMessageCell commit={commit} />
+              },
+              { title: '提交人', key: 'author', width: 210, render: (_, commit) => <CommitAuthorCell commit={commit} /> },
+              { title: '时间', dataIndex: 'committedAt', key: 'committedAt', width: 160, render: (value) => new Date(value).toLocaleString() },
+              { title: '+/-', key: 'lines', width: 96, render: (_, commit) => `${formatNumber(commit.additions)} / ${formatNumber(commit.deletions)}` }
+            ]}
+            dataSource={visibleGraphRows}
+            pagination={false}
+            scroll={{ x: 980 }}
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前范围没有提交" /> }}
+          />
+          {graphRows.length > 0 && (
+            <div ref={commitLoadMoreRef} className="commit-load-more">
+              {hasMoreCommits ? (
+                <Typography.Text type="secondary">
+                  已显示 {formatNumber(visibleGraphRows.length)} / {formatNumber(graphRows.length)}
+                </Typography.Text>
+              ) : (
+                <Typography.Text type="secondary">已显示全部 {formatNumber(graphRows.length)} 条提交</Typography.Text>
+              )}
+            </div>
+          )}
+          {selectedCommit && (
+            <CommitInlineDetail
+              commit={selectedCommit}
+              files={commitFiles}
+              selectedFile={selectedFile}
+              loadingFiles={loadingFiles}
+              onSelectFile={(file) => {
+                selectCommitFile(file)
+              }}
+            />
+          )}
+        </div>
+      )}
+      <Modal
+        title={selectedFile ? `文件对比：${selectedFile.path}` : '文件对比'}
+        open={diffModalOpen}
+        width="calc(100vw - 64px)"
+        footer={null}
+        className="diff-preview-modal"
+        centered
+        destroyOnClose
+        onCancel={() => setDiffModalOpen(false)}
+      >
+        <div className="diff-preview-content">
+          <div className="diff-toolbar">
+            <Space size={8} wrap>
+              {selectedCommit && <Tag>{selectedCommit.shortHash}</Tag>}
+              {selectedFile && <Tag color={getFileStatusLabel(selectedFile.status).color}>{getFileStatusLabel(selectedFile.status).label}</Tag>}
+            </Space>
+            <Select
+              value={diffMode}
+              className="diff-mode-select"
+              options={[
+                { label: '左右对比', value: 'side-by-side' },
+                { label: '内联 diff', value: 'inline' }
+              ]}
+              onChange={setDiffMode}
+            />
+          </div>
+          <Spin spinning={loadingDiff}>
+            <DiffViewer diff={commitDiff} mode={diffMode} />
+          </Spin>
+        </div>
+      </Modal>
       <Drawer
         title="分支"
         open={branchDrawerOpen}

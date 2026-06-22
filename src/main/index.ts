@@ -43,6 +43,7 @@ import {
   type SshPrivateKeyRecord,
   type SshPublicKeyRecord
 } from './ssh-keys'
+import { parseRemoteAlignment, summarizeRemoteAlignment, type GitRemote, type RemoteAlignmentSummary } from './remote-alignment'
 
 type RepositoryScanResult = {
   id: string
@@ -65,12 +66,6 @@ type RepositoryScanResult = {
   effectiveUserName: string
   effectiveUserEmail: string
   remoteAlignment: RemoteAlignmentSummary
-}
-
-type GitRemote = {
-  name: string
-  fetchUrl: string
-  pushUrl: string
 }
 
 type RepositoryRemoteInput = {
@@ -132,36 +127,6 @@ type GitMergeAnalysis = {
   mergeBase: string
   issues: string[]
   warnings: string[]
-}
-
-type RemoteAlignmentStatus = 'aligned' | 'diverged' | 'missing-remote' | 'missing-branch' | 'unknown'
-
-type RemoteAlignmentBranchStatus = 'aligned' | 'diverged' | 'missing-branch' | 'unknown'
-
-type RemoteAlignmentBranch = {
-  branchName: string
-  companyRef: string
-  githubRef: string
-  companyCommit: string
-  githubCommit: string
-  companyAhead: number
-  githubAhead: number
-  status: RemoteAlignmentBranchStatus
-}
-
-type RemoteAlignmentSummary = {
-  status: RemoteAlignmentStatus
-  companyRemoteName: string
-  companyRemoteUrl: string
-  githubRemoteName: string
-  githubRemoteUrl: string
-  branchCount: number
-  alignedBranchCount: number
-  divergedBranchCount: number
-  missingBranchCount: number
-  currentBranchStatus: RemoteAlignmentBranchStatus | ''
-  errorMessage: string
-  branches: RemoteAlignmentBranch[]
 }
 
 type ProjectRecord = {
@@ -401,58 +366,6 @@ function parseRefs(refs: string): string[] {
     .filter(Boolean)
 }
 
-function createEmptyRemoteAlignment(status: RemoteAlignmentStatus = 'unknown', errorMessage = ''): RemoteAlignmentSummary {
-  return {
-    status,
-    companyRemoteName: '',
-    companyRemoteUrl: '',
-    githubRemoteName: '',
-    githubRemoteUrl: '',
-    branchCount: 0,
-    alignedBranchCount: 0,
-    divergedBranchCount: 0,
-    missingBranchCount: 0,
-    currentBranchStatus: '',
-    errorMessage,
-    branches: []
-  }
-}
-
-function parseRemoteAlignment(value: unknown): RemoteAlignmentSummary {
-  if (!value) {
-    return createEmptyRemoteAlignment()
-  }
-
-  try {
-    const parsed = typeof value === 'string' ? JSON.parse(value) : value
-
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return createEmptyRemoteAlignment()
-    }
-
-    const remoteAlignment = parsed as Partial<RemoteAlignmentSummary>
-    return {
-      ...createEmptyRemoteAlignment(),
-      ...remoteAlignment,
-      branches: Array.isArray(remoteAlignment.branches) ? remoteAlignment.branches : []
-    }
-  } catch {
-    return createEmptyRemoteAlignment()
-  }
-}
-
-function getRemoteUrl(remote: GitRemote | undefined): string {
-  return remote?.fetchUrl || remote?.pushUrl || ''
-}
-
-function isGithubRemoteUrl(remote: GitRemote): boolean {
-  return getRemoteUrl(remote).toLowerCase().includes('github.com')
-}
-
-function findGithubRemote(remotes: GitRemote[]): GitRemote | undefined {
-  return remotes.find((remote) => remote.name === 'github') ?? remotes.find((remote) => remote.name === 'origin' && isGithubRemoteUrl(remote))
-}
-
 async function listRepositoryBranches(localPath: string): Promise<{ branches: string[]; remoteBranches: string[] }> {
   const [localBranches, remoteBranches] = await Promise.all([
     runGitInPath(localPath, ['branch', '--format=%(refname:short)']),
@@ -493,117 +406,38 @@ async function countExclusiveCommits(localPath: string, baseCommit: string, head
   return Number.isFinite(count) ? count : 0
 }
 
-function sortAlignmentBranches(branches: RemoteAlignmentBranch[], currentBranch: string, defaultBranch: string): RemoteAlignmentBranch[] {
-  return [...branches].sort((a, b) => {
-    if (a.branchName === currentBranch) {
-      return -1
-    }
-
-    if (b.branchName === currentBranch) {
-      return 1
-    }
-
-    if (a.branchName === defaultBranch) {
-      return -1
-    }
-
-    if (b.branchName === defaultBranch) {
-      return 1
-    }
-
-    return a.branchName.localeCompare(b.branchName)
-  })
-}
-
 async function inspectRemoteAlignment(
   localPath: string,
   remotes: GitRemote[],
   currentBranch: string,
   defaultBranch: string
 ): Promise<RemoteAlignmentSummary> {
-  const companyRemote = remotes.find((remote) => remote.name === 'company')
-  const githubRemote = findGithubRemote(remotes)
-  const summary = createEmptyRemoteAlignment()
-  summary.companyRemoteName = companyRemote?.name ?? 'company'
-  summary.companyRemoteUrl = getRemoteUrl(companyRemote)
-  summary.githubRemoteName = githubRemote?.name ?? ''
-  summary.githubRemoteUrl = getRemoteUrl(githubRemote)
-
-  if (!companyRemote || !githubRemote) {
-    const missingRemotes = [
-      !companyRemote ? 'company 内部 Gitea' : '',
-      !githubRemote ? 'GitHub CI/CD' : ''
-    ].filter(Boolean)
-
-    return {
-      ...summary,
-      status: 'missing-remote',
-      errorMessage: `缺少 ${missingRemotes.join('、')} 远端`
-    }
-  }
-
   try {
-    const [companyRefs, githubRefs] = await Promise.all([
-      listRemoteBranchRefs(localPath, companyRemote.name),
-      listRemoteBranchRefs(localPath, githubRemote.name)
-    ])
-    const branchNames = Array.from(new Set([...companyRefs.keys(), ...githubRefs.keys()]))
+    const refsByRemote = new Map(await Promise.all(remotes.map(async (remote) => [remote.name, await listRemoteBranchRefs(localPath, remote.name)] as const)))
 
-    if (branchNames.length === 0) {
-      return {
-        ...summary,
-        status: 'unknown',
-        errorMessage: '没有本地远端引用，请先同步远端'
-      }
-    }
-
-    const branches = await Promise.all(
-      branchNames.map(async (branchName): Promise<RemoteAlignmentBranch> => {
-        const companyCommit = companyRefs.get(branchName) ?? ''
-        const githubCommit = githubRefs.get(branchName) ?? ''
-        const hasBothCommits = Boolean(companyCommit && githubCommit)
-        const status: RemoteAlignmentBranchStatus = !hasBothCommits ? 'missing-branch' : companyCommit === githubCommit ? 'aligned' : 'diverged'
-        const [companyAhead, githubAhead] = hasBothCommits && companyCommit !== githubCommit
-          ? await Promise.all([
-              countExclusiveCommits(localPath, githubCommit, companyCommit),
-              countExclusiveCommits(localPath, companyCommit, githubCommit)
-            ])
-          : [0, 0]
-
-        return {
-          branchName,
-          companyRef: `${companyRemote.name}/${branchName}`,
-          githubRef: `${githubRemote.name}/${branchName}`,
-          companyCommit,
-          githubCommit,
-          companyAhead,
-          githubAhead,
-          status
-        }
-      })
-    )
-    const sortedBranches = sortAlignmentBranches(branches, currentBranch, defaultBranch)
-    const alignedBranchCount = sortedBranches.filter((branch) => branch.status === 'aligned').length
-    const divergedBranchCount = sortedBranches.filter((branch) => branch.status === 'diverged').length
-    const missingBranchCount = sortedBranches.filter((branch) => branch.status === 'missing-branch').length
-    const currentBranchStatus = sortedBranches.find((branch) => branch.branchName === currentBranch)?.status ?? ''
-    const status: RemoteAlignmentStatus = missingBranchCount > 0 ? 'missing-branch' : divergedBranchCount > 0 ? 'diverged' : 'aligned'
-
-    return {
-      ...summary,
-      status,
-      branchCount: sortedBranches.length,
-      alignedBranchCount,
-      divergedBranchCount,
-      missingBranchCount,
-      currentBranchStatus,
-      branches: sortedBranches
-    }
+    return summarizeRemoteAlignment({
+      remotes,
+      refsByRemote,
+      currentBranch,
+      defaultBranch,
+      countExclusiveCommits: (baseCommit, headCommit) => countExclusiveCommits(localPath, baseCommit, headCommit)
+    })
   } catch (error) {
     return {
-      ...summary,
+      remotes: remotes.map((remote) => ({
+        name: remote.name,
+        url: remote.fetchUrl || remote.pushUrl || '',
+        branchCount: 0
+      })),
+      remoteCount: remotes.length,
       status: 'unknown',
-      errorMessage: getErrorText(error)
+      branchCount: 0,
+      alignedBranchCount: 0,
+      divergedBranchCount: 0,
+      missingBranchCount: 0,
+      currentBranchStatus: '',
+      errorMessage: getErrorText(error),
+      branches: []
     }
   }
 }

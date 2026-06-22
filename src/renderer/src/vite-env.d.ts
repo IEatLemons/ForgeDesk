@@ -144,23 +144,30 @@ type RemoteAlignmentStatus = 'aligned' | 'diverged' | 'missing-remote' | 'missin
 
 type RemoteAlignmentBranchStatus = 'aligned' | 'diverged' | 'missing-branch' | 'unknown'
 
+type RemoteAlignmentRemote = {
+  name: string
+  url: string
+  branchCount: number
+}
+
+type RemoteAlignmentRemoteRef = {
+  remoteName: string
+  ref: string
+  commit: string
+  ahead: number
+}
+
 type RemoteAlignmentBranch = {
   branchName: string
-  companyRef: string
-  githubRef: string
-  companyCommit: string
-  githubCommit: string
-  companyAhead: number
-  githubAhead: number
+  remotes: RemoteAlignmentRemoteRef[]
   status: RemoteAlignmentBranchStatus
+  uniqueCommitCount: number
 }
 
 type RemoteAlignmentSummary = {
   status: RemoteAlignmentStatus
-  companyRemoteName: string
-  companyRemoteUrl: string
-  githubRemoteName: string
-  githubRemoteUrl: string
+  remotes: RemoteAlignmentRemote[]
+  remoteCount: number
   branchCount: number
   alignedBranchCount: number
   divergedBranchCount: number
