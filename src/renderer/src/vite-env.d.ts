@@ -187,6 +187,9 @@ type GitCommitRecord = {
   refs: string[]
   authorName: string
   authorEmail: string
+  authorDisplayName: string
+  authorDisplayEmail: string
+  mappedPersonId: string
   committedAt: string
   message: string
   branchName: string
@@ -226,6 +229,14 @@ type ProjectPersonRecord = {
     name: string
     email: string
   }>
+}
+
+type ProjectBranchTagRecord = {
+  id: string
+  projectId: string
+  label: string
+  branchName: string
+  color: string
 }
 
 type ProjectRecord = {
@@ -393,6 +404,9 @@ interface Window {
     analyzeProjectGit: (projectId: string) => Promise<ProjectGitSummary>
     listProjectPeople: (projectId: string) => Promise<ProjectPersonRecord[]>
     listProjectContributorIdentities: (projectId: string) => Promise<GitContributorIdentity[]>
+    listProjectBranchTags: (projectId: string) => Promise<ProjectBranchTagRecord[]>
+    saveProjectBranchTag: (input: { id?: string; projectId: string; label: string; branchName: string; color: string }) => Promise<ProjectBranchTagRecord>
+    deleteProjectBranchTag: (projectId: string, tagId: string) => Promise<ProjectBranchTagRecord[]>
     saveProjectPerson: (input: { id?: string; projectId: string; displayName: string; role?: string; identities: Array<{ name: string; email: string }> }) => Promise<ProjectPersonRecord>
     deleteProjectPerson: (projectId: string, personId: string) => Promise<ProjectPersonRecord[]>
     scanRepositories: (paths: string[]) => Promise<ScannedRepository[]>

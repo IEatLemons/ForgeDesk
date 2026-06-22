@@ -9,6 +9,7 @@ import simpleGit from 'simple-git'
 import { requestCommitMessageSuggestion, type CommitMessageSuggestion } from './ai-commit-message-assistant'
 import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion } from './ai-conflict-assistant'
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
+import { buildGitAuthorLookup, resolveGitAuthorDisplay, type GitAuthorLookup } from './git-author-mapping'
 import { parseControlledGitCommand, validateRepositoryRemoteName } from './git-controls'
 import {
   buildGitAddArgs,
@@ -30,6 +31,14 @@ import {
   type GitStatusFile
 } from './git-workspace'
 import { extractConflictSections, type ConflictSection } from './merge-conflicts'
+import {
+  deleteProjectBranchTag as deleteProjectBranchTagRecord,
+  listProjectBranchTags as listProjectBranchTagRecords,
+  migrateProjectBranchTagTable,
+  saveProjectBranchTag as saveProjectBranchTagRecord,
+  type ProjectBranchTagInput,
+  type ProjectBranchTagRecord
+} from './project-branch-tags'
 import { readSshConfigFile, writeSshConfigFile, type SshConfigFile } from './ssh-config'
 import {
   deleteSshKeyFile,
@@ -191,6 +200,9 @@ type GitCommitRecord = {
   refs: string[]
   authorName: string
   authorEmail: string
+  authorDisplayName: string
+  authorDisplayEmail: string
+  mappedPersonId: string
   committedAt: string
   message: string
   branchName: string
@@ -551,6 +563,8 @@ function migrateDatabase(db: Database.Database): void {
       FOREIGN KEY (person_id) REFERENCES project_people(id) ON DELETE CASCADE
     );
   `)
+
+  migrateProjectBranchTagTable(db)
 
   addColumnIfMissing(db, 'repositories', 'remotes_json', "TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(db, 'repositories', 'remote_count', 'INTEGER NOT NULL DEFAULT 0')
@@ -1312,7 +1326,24 @@ function listProjectContributorIdentities(projectId: string): GitContributorIden
     .sort((a, b) => b.commits - a.commits || a.name.localeCompare(b.name))
 }
 
-function mapCommitRecord(commit: ParsedGitCommit & { repositoryId: string; repositoryName: string; branchName: string }): GitCommitRecord {
+function mapCommitRecord(
+  commit: ParsedGitCommit & { repositoryId: string; repositoryName: string; branchName: string },
+  authorLookup?: GitAuthorLookup
+): GitCommitRecord {
+  const authorDisplay = authorLookup
+    ? resolveGitAuthorDisplay(
+        {
+          authorName: commit.authorName,
+          authorEmail: commit.authorEmail
+        },
+        authorLookup
+      )
+    : {
+        authorDisplayName: commit.authorName,
+        authorDisplayEmail: commit.authorEmail,
+        mappedPersonId: ''
+      }
+
   return {
     id: `${commit.repositoryId}:${commit.hash}`,
     repositoryId: commit.repositoryId,
@@ -1323,6 +1354,9 @@ function mapCommitRecord(commit: ParsedGitCommit & { repositoryId: string; repos
     refs: commit.refs,
     authorName: commit.authorName,
     authorEmail: commit.authorEmail,
+    authorDisplayName: authorDisplay.authorDisplayName,
+    authorDisplayEmail: authorDisplay.authorDisplayEmail,
+    mappedPersonId: authorDisplay.mappedPersonId,
     committedAt: commit.committedAt,
     message: commit.message,
     branchName: commit.branchName,
@@ -1776,6 +1810,7 @@ async function listRepositoryCommits(
   const since = options.startDate ? `${options.startDate}T00:00:00.000Z` : undefined
   const output = await runGitLog(repository.localPath, { sinceDate: since, branchName: options.branchName, allRefs: !options.branchName })
   const endTime = options.endDate ? new Date(`${options.endDate}T23:59:59.999Z`).getTime() : Number.POSITIVE_INFINITY
+  const authorLookup = buildGitAuthorLookup(listProjectPeople(repository.projectId))
 
   return parseGitLog(output)
     .filter((commit) => new Date(commit.committedAt).getTime() <= endTime)
@@ -1785,7 +1820,7 @@ async function listRepositoryCommits(
         repositoryId: repository.id,
         repositoryName: repository.name,
         branchName: options.branchName || '全部引用'
-      })
+      }, authorLookup)
     )
 }
 
@@ -2130,6 +2165,14 @@ ipcMain.handle('project:analyze-git', async (_event, projectId: string): Promise
 ipcMain.handle('project:people', async (_event, projectId: string): Promise<ProjectPersonRecord[]> => listProjectPeople(projectId))
 
 ipcMain.handle('project:contributor-identities', async (_event, projectId: string): Promise<GitContributorIdentity[]> => listProjectContributorIdentities(projectId))
+
+ipcMain.handle('project:branch-tags', async (_event, projectId: string): Promise<ProjectBranchTagRecord[]> => listProjectBranchTagRecords(getDatabase(), projectId))
+
+ipcMain.handle('project:branch-tag:save', async (_event, input: ProjectBranchTagInput): Promise<ProjectBranchTagRecord> => saveProjectBranchTagRecord(getDatabase(), input))
+
+ipcMain.handle('project:branch-tag:delete', async (_event, projectId: string, tagId: string): Promise<ProjectBranchTagRecord[]> =>
+  deleteProjectBranchTagRecord(getDatabase(), projectId, tagId)
+)
 
 ipcMain.handle(
   'project:person:save',

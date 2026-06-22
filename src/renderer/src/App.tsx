@@ -13,6 +13,7 @@ import {
   Layout,
   Menu,
   Modal,
+  Popconfirm,
   Row,
   Segmented,
   Select,
@@ -67,6 +68,7 @@ import type {
   GitStatusFile,
   GitWorkspaceStatus,
   Project,
+  ProjectBranchTag,
   ProjectGitSummary,
   ProjectPerson,
   RemoteAlignmentBranch,
@@ -75,8 +77,20 @@ import type {
   RemoteAlignmentSummary,
   Repository
 } from './data'
+import { createDiffResultLines, createSourceDiffLines, type DiffDisplayLine } from './diff-view'
 import { createGitErrorGuidance, type GitErrorGuidance } from './git-error-guidance'
-import { buildBranchGroups, createGraphRows, getNextVisibleCommitCount, getRefTone, type GitGraphRow } from './git-log-view'
+import {
+  buildBranchGroups,
+  createGraphRows,
+  getCommitAuthorDisplay,
+  getCommitAuthorFilterValue,
+  getGraphCellBottomLaneIndexes,
+  getGitGraphColumnWidth,
+  getNextVisibleCommitCount,
+  getRefColor,
+  gitGraphLaneWidth,
+  type GitGraphRow
+} from './git-log-view'
 import { createEmptySshConfigEntry, parseSshConfigEntries, serializeSshConfigEntries, type SshConfigEntry } from './ssh-config-model'
 import { useForgeDeskStore } from './store'
 
@@ -165,6 +179,12 @@ type ProjectSettingsForm = {
   workspacePath: string
   description: string
   owner: string
+}
+
+type BranchTagForm = {
+  label: string
+  branchName: string
+  color: string
 }
 
 type RepositoryRemoteForm = {
@@ -348,18 +368,38 @@ function getProjectRemoteAlignmentStats(repositories: Repository[]): {
 }
 
 const graphLaneColors = ['#1677ff', '#13c2c2', '#722ed1', '#fa8c16', '#52c41a', '#eb2f96', '#2f54eb']
-const graphLaneWidth = 16
 const graphRowHeight = 46
 const graphRowMiddle = graphRowHeight / 2
 const graphLineOverflow = 2
+const graphCurveOffset = 12
 const commitGraphBatchSize = 60
 
 function getGraphLaneColor(index: number): string {
   return graphLaneColors[index % graphLaneColors.length]
 }
 
+function createGraphParentPath({
+  fromX,
+  toX
+}: {
+  fromX: number
+  toX: number
+}): string {
+  if (fromX === toX) {
+    return `M ${fromX} ${graphRowMiddle} L ${toX} ${graphRowHeight + graphLineOverflow}`
+  }
+
+  return [
+    `M ${fromX} ${graphRowMiddle}`,
+    `C ${fromX} ${graphRowMiddle + graphCurveOffset}`,
+    `${toX} ${graphRowHeight - graphCurveOffset}`,
+    `${toX} ${graphRowHeight + graphLineOverflow}`
+  ].join(' ')
+}
+
 function CommitGraphCell({ commit }: { commit: GitGraphRow<GitCommit> }): JSX.Element {
   const isMerge = commit.parentHashes.length > 1
+  const graphCellBottomLaneIndexes = getGraphCellBottomLaneIndexes(commit)
   const allLaneIndexes = [
     commit.graphLaneIndex,
     ...commit.graphParentLaneIndexes,
@@ -367,9 +407,9 @@ function CommitGraphCell({ commit }: { commit: GitGraphRow<GitCommit> }): JSX.El
     ...commit.graphBottomLaneIndexes
   ]
   const laneCount = Math.max(commit.graphLanes.length, ...allLaneIndexes.map((index) => index + 1), 1)
-  const svgWidth = Math.max(42, laneCount * graphLaneWidth)
-  const xForLane = (index: number): number => index * graphLaneWidth + graphLaneWidth / 2
-  const connectorLaneIndexes = commit.graphParentLaneIndexes.filter((index) => index !== commit.graphLaneIndex)
+  const svgWidth = Math.max(42, laneCount * gitGraphLaneWidth)
+  const xForLane = (index: number): number => index * gitGraphLaneWidth + gitGraphLaneWidth / 2
+  const parentEdges = commit.graphParentEdges.filter((edge) => edge.fromLaneIndex !== edge.toLaneIndex)
 
   return (
     <div className="commit-graph-cell">
@@ -377,7 +417,8 @@ function CommitGraphCell({ commit }: { commit: GitGraphRow<GitCommit> }): JSX.El
         aria-hidden="true"
         className="commit-graph-svg"
         focusable="false"
-        height={graphRowHeight}
+        height="100%"
+        preserveAspectRatio="none"
         viewBox={`0 0 ${svgWidth} ${graphRowHeight}`}
         width={svgWidth}
       >
@@ -392,7 +433,7 @@ function CommitGraphCell({ commit }: { commit: GitGraphRow<GitCommit> }): JSX.El
             y2={graphRowMiddle}
           />
         ))}
-        {commit.graphBottomLaneIndexes.map((laneIndex) => (
+        {graphCellBottomLaneIndexes.map((laneIndex) => (
           <line
             key={`bottom-${laneIndex}`}
             className={laneIndex === commit.graphLaneIndex ? 'commit-graph-line is-active' : 'commit-graph-line'}
@@ -403,43 +444,81 @@ function CommitGraphCell({ commit }: { commit: GitGraphRow<GitCommit> }): JSX.El
             y2={graphRowHeight + graphLineOverflow}
           />
         ))}
-        {connectorLaneIndexes.map((laneIndex) => (
-          <line
-            key={`connector-${laneIndex}`}
-            className="commit-graph-connector"
-            stroke={getGraphLaneColor(laneIndex)}
-            x1={xForLane(commit.graphLaneIndex)}
-            x2={xForLane(laneIndex)}
-            y1={graphRowMiddle}
-            y2={graphRowMiddle}
+        {parentEdges.map((edge) => (
+          <path
+            key={`parent-edge-${edge.fromLaneIndex}-${edge.toLaneIndex}`}
+            className="commit-graph-parent-edge"
+            d={createGraphParentPath({
+              fromX: xForLane(edge.fromLaneIndex),
+              toX: xForLane(edge.toLaneIndex)
+            })}
+            stroke={getGraphLaneColor(edge.toLaneIndex)}
           />
         ))}
         <circle
           className={isMerge ? 'commit-graph-dot merge' : 'commit-graph-dot'}
           cx={xForLane(commit.graphLaneIndex)}
           cy={graphRowMiddle}
-          fill="#ffffff"
-          r={isMerge ? 5.5 : 5}
-          stroke={getGraphLaneColor(commit.graphLaneIndex)}
+          fill={getGraphLaneColor(commit.graphLaneIndex)}
+          r={isMerge ? 4.5 : 3.8}
+          stroke="#ffffff"
         />
       </svg>
     </div>
   )
 }
 
-function CommitAuthorCell({ commit }: { commit: GitCommit }): JSX.Element {
-  const authorName = commit.authorName || '未知提交人'
-  const authorText = commit.authorEmail ? `${authorName} · ${commit.authorEmail}` : authorName
+function CommitGraphContinuation({
+  commit,
+  columnWidth
+}: {
+  commit: GitGraphRow<GitCommit>
+  columnWidth: number
+}): JSX.Element {
+  const allLaneIndexes = [...commit.graphBottomLaneIndexes, ...commit.graphParentEdges.map((edge) => edge.toLaneIndex)]
+  const laneCount = Math.max(commit.graphLanes.length, ...allLaneIndexes.map((index) => index + 1), 1)
+  const svgWidth = Math.max(42, laneCount * gitGraphLaneWidth)
+  const xForLane = (index: number): number => index * gitGraphLaneWidth + gitGraphLaneWidth / 2
 
   return (
-    <span className="commit-author-cell" title={authorText}>
-      <span className="commit-author-name">{authorName}</span>
-      {commit.authorEmail && <span className="commit-author-email">{commit.authorEmail}</span>}
+    <div className="commit-expanded-graph-cell" style={{ width: columnWidth }}>
+      <svg
+        aria-hidden="true"
+        className="commit-expanded-graph-svg"
+        focusable="false"
+        height="100%"
+        preserveAspectRatio="none"
+        viewBox={`0 0 ${svgWidth} ${graphRowHeight}`}
+        width={svgWidth}
+      >
+        {commit.graphBottomLaneIndexes.map((laneIndex) => (
+          <line
+            key={`expanded-bottom-${laneIndex}`}
+            className={laneIndex === commit.graphLaneIndex ? 'commit-graph-line is-active' : 'commit-graph-line'}
+            stroke={getGraphLaneColor(laneIndex)}
+            x1={xForLane(laneIndex)}
+            x2={xForLane(laneIndex)}
+            y1={-graphLineOverflow}
+            y2={graphRowHeight + graphLineOverflow}
+          />
+        ))}
+      </svg>
+    </div>
+  )
+}
+
+function CommitAuthorCell({ commit }: { commit: GitCommit }): JSX.Element {
+  const author = getCommitAuthorDisplay(commit)
+
+  return (
+    <span className="commit-author-cell" title={author.title}>
+      <span className="commit-author-name">{author.name}</span>
+      {author.email && <span className="commit-author-email">{author.email}</span>}
     </span>
   )
 }
 
-function CommitMessageCell({ commit }: { commit: GitCommit }): JSX.Element {
+function CommitMessageCell({ commit, branchTags }: { commit: GitCommit; branchTags: ProjectBranchTag[] }): JSX.Element {
   return (
     <div className="source-tree-commit-message">
       <div className="source-tree-commit-line">
@@ -451,7 +530,7 @@ function CommitMessageCell({ commit }: { commit: GitCommit }): JSX.Element {
       {commit.refs.length > 0 && (
         <div className="source-tree-ref-strip">
           {commit.refs.slice(0, 6).map((ref) => (
-            <Tag key={ref} color={getRefTone(ref)} className="source-tree-ref">
+            <Tag key={ref} color={getRefColor(ref, branchTags)} className="source-tree-ref">
               {ref}
             </Tag>
           ))}
@@ -467,86 +546,133 @@ function CommitInlineDetail({
   files,
   selectedFile,
   loadingFiles,
-  onSelectFile
+  onSelectFile,
+  graphColumnWidth
 }: {
-  commit: GitCommit
+  commit: GitGraphRow<GitCommit>
   files: GitCommitFileChange[]
   selectedFile: GitCommitFileChange | null
   loadingFiles: boolean
   onSelectFile: (file: GitCommitFileChange) => void
+  graphColumnWidth: number
 }): JSX.Element {
+  const author = getCommitAuthorDisplay(commit)
+
   return (
-    <div className="commit-inline-detail">
-      <div className="commit-inline-heading">
-        <div>
-          <Typography.Text strong>{commit.message}</Typography.Text>
-          <div className="commit-meta">
-            <Tag>{commit.shortHash}</Tag>
-            <Typography.Text type="secondary">
-              {commit.authorName} · {new Date(commit.committedAt).toLocaleString()}
-            </Typography.Text>
+    <div className="commit-expanded-detail-row">
+      <CommitGraphContinuation commit={commit} columnWidth={graphColumnWidth} />
+      <div className="commit-inline-detail">
+        <div className="commit-inline-heading">
+          <div>
+            <Typography.Text strong>{commit.message}</Typography.Text>
+            <div className="commit-meta">
+              <Tag>{commit.shortHash}</Tag>
+              <Typography.Text type="secondary">
+                {author.email ? `${author.name} · ${author.email}` : author.name} · {new Date(commit.committedAt).toLocaleString()}
+              </Typography.Text>
+            </div>
           </div>
+          <Tag>{formatNumber(files.length)} 个文件</Tag>
         </div>
-        <Tag>{formatNumber(files.length)} 个文件</Tag>
-      </div>
-      <Table
-        rowKey="id"
-        size="small"
-        loading={loadingFiles}
-        dataSource={files}
-        pagination={false}
-        rowClassName={(file) => (file.id === selectedFile?.id ? 'selected-row' : '')}
-        onRow={(file) => ({ onClick: () => onSelectFile(file) })}
-        columns={[
-          {
-            title: '状态',
-            dataIndex: 'status',
-            key: 'status',
-            width: 82,
-            render: (status) => {
-              const label = getFileStatusLabel(status)
-              return <Tag color={label.color}>{label.label}</Tag>
-            }
-          },
-          {
-            title: '文件',
-            dataIndex: 'path',
-            key: 'path',
-            render: (path, file) => (
-              <Space direction="vertical" size={2}>
-                <Typography.Text ellipsis={{ tooltip: path }}>
-                  <FileTextOutlined /> {path}
-                </Typography.Text>
-                {file.oldPath && (
-                  <Typography.Text type="secondary" ellipsis={{ tooltip: file.oldPath }}>
-                    原路径：{file.oldPath}
+        <Table
+          rowKey="id"
+          size="small"
+          loading={loadingFiles}
+          dataSource={files}
+          pagination={false}
+          rowClassName={(file) => (file.id === selectedFile?.id ? 'selected-row' : '')}
+          onRow={(file) => ({ onClick: () => onSelectFile(file) })}
+          columns={[
+            {
+              title: '状态',
+              dataIndex: 'status',
+              key: 'status',
+              width: 82,
+              render: (status) => {
+                const label = getFileStatusLabel(status)
+                return <Tag color={label.color}>{label.label}</Tag>
+              }
+            },
+            {
+              title: '文件',
+              dataIndex: 'path',
+              key: 'path',
+              render: (path, file) => (
+                <Space direction="vertical" size={2}>
+                  <Typography.Text ellipsis={{ tooltip: path }}>
+                    <FileTextOutlined /> {path}
                   </Typography.Text>
-                )}
-              </Space>
-            )
-          },
-          { title: '+/-', key: 'lines', width: 104, render: (_, file) => (file.binary ? '二进制' : `${formatNumber(file.additions)} / ${formatNumber(file.deletions)}`) },
-          {
-            title: '对比',
-            key: 'diff',
-            width: 92,
-            render: (_, file) => (
-              <Button size="small" icon={<DiffOutlined />} onClick={(event) => {
-                event.stopPropagation()
-                onSelectFile(file)
-              }}>
-                查看
-              </Button>
-            )
-          }
-        ]}
-        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="这个提交没有文件变更" /> }}
-      />
+                  {file.oldPath && (
+                    <Typography.Text type="secondary" ellipsis={{ tooltip: file.oldPath }}>
+                      原路径：{file.oldPath}
+                    </Typography.Text>
+                  )}
+                </Space>
+              )
+            },
+            { title: '+/-', key: 'lines', width: 104, render: (_, file) => (file.binary ? '二进制' : `${formatNumber(file.additions)} / ${formatNumber(file.deletions)}`) },
+            {
+              title: '对比',
+              key: 'diff',
+              width: 92,
+              render: (_, file) => (
+                <Button size="small" icon={<DiffOutlined />} onClick={(event) => {
+                  event.stopPropagation()
+                  onSelectFile(file)
+                }}>
+                  查看
+                </Button>
+              )
+            }
+          ]}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="这个提交没有文件变更" /> }}
+        />
+      </div>
     </div>
   )
 }
 
-function DiffViewer({ diff, mode }: { diff: GitCommitDiff | null; mode: 'side-by-side' | 'inline' }): JSX.Element {
+function DiffLineRow({ line, side }: { line: DiffDisplayLine; side: 'source' | 'result' }): JSX.Element {
+  const lineNumber = side === 'source' ? line.oldLineNumber : line.type === 'delete' ? line.oldLineNumber : line.newLineNumber
+  const marker = side === 'result' && line.type === 'add' ? '+' : side === 'result' && line.type === 'delete' ? '-' : ''
+
+  return (
+    <div className={side === 'result' ? `diff-line ${line.type}` : 'diff-line source'}>
+      <span className="diff-line-marker">{marker}</span>
+      <span className="diff-line-number">{lineNumber ?? ''}</span>
+      <span className="diff-line-content">{line.text || ' '}</span>
+    </div>
+  )
+}
+
+function DiffPane({
+  title,
+  lines,
+  side,
+  emptyText
+}: {
+  title: string
+  lines: DiffDisplayLine[]
+  side: 'source' | 'result'
+  emptyText: string
+}): JSX.Element {
+  return (
+    <div className="diff-pane">
+      <div className="diff-pane-title">{title}</div>
+      {lines.length > 0 ? (
+        <div className="diff-lines">
+          {lines.map((line) => (
+            <DiffLineRow key={line.id} line={line} side={side} />
+          ))}
+        </div>
+      ) : (
+        <div className="diff-empty">{emptyText}</div>
+      )}
+    </div>
+  )
+}
+
+function DiffViewer({ diff }: { diff: GitCommitDiff | null }): JSX.Element {
   if (!diff) {
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择文件后查看对比" />
   }
@@ -555,14 +681,13 @@ function DiffViewer({ diff, mode }: { diff: GitCommitDiff | null; mode: 'side-by
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="二进制文件无法预览文本差异" />
   }
 
-  if (mode === 'inline') {
-    return <pre className="diff-pre inline">{diff.patch || '这个文件没有文本差异'}</pre>
-  }
+  const sourceLines = createSourceDiffLines(diff.oldContent)
+  const resultLines = createDiffResultLines(diff)
 
   return (
-    <div className="diff-split">
-      <pre className="diff-pre">{diff.oldContent}</pre>
-      <pre className="diff-pre">{diff.newContent}</pre>
+    <div className="diff-merged">
+      <DiffPane title="上一版（源文件）" lines={sourceLines} side="source" emptyText="上一版为空" />
+      <DiffPane title="Diff 结果" lines={resultLines} side="result" emptyText="这个文件没有文本差异" />
     </div>
   )
 }
@@ -3106,16 +3231,24 @@ function ProjectSettingsPanel({
   project,
   repositories,
   contributors,
-  onSummaryChanged
+  onSummaryChanged,
+  onBranchTagsChanged
 }: {
   project: Project
   repositories: Repository[]
   contributors: ContributorSummary[]
   onSummaryChanged: () => void | Promise<void>
+  onBranchTagsChanged: () => void
 }): JSX.Element {
   const { updateProject } = useForgeDeskStore()
   const [form] = Form.useForm<ProjectSettingsForm>()
   const [savingProject, setSavingProject] = useState(false)
+  const [branchTagRefreshToken, setBranchTagRefreshToken] = useState(0)
+
+  function notifyBranchTagsChanged(): void {
+    setBranchTagRefreshToken((current) => current + 1)
+    onBranchTagsChanged()
+  }
 
   useEffect(() => {
     form.setFieldsValue({
@@ -3195,12 +3328,22 @@ function ProjectSettingsPanel({
       <div className="project-settings-section">
         <div className="project-settings-heading">
           <Typography.Title level={4}>
+            <BranchesOutlined /> 分支标签颜色
+          </Typography.Title>
+          <Typography.Text type="secondary">按分支短名维护 Log 树里的 ref 标签颜色，例如 main 会覆盖本地和任意远端的 main。</Typography.Text>
+        </div>
+        <ProjectBranchTagSettings project={project} onChanged={notifyBranchTagsChanged} />
+      </div>
+
+      <div className="project-settings-section">
+        <div className="project-settings-heading">
+          <Typography.Title level={4}>
             <BranchesOutlined /> Git 仓库
           </Typography.Title>
           <Typography.Text type="secondary">查看当前项目仓库状态，并配置单仓库提交身份。</Typography.Text>
         </div>
         {repositories.length > 0 ? (
-          <RepositoryTable repositories={repositories} />
+          <RepositoryTable repositories={repositories} branchTagRefreshToken={branchTagRefreshToken} />
         ) : (
           <div className="panel empty-project-panel">
             <Empty description="这个项目下还没有仓库" />
@@ -3265,11 +3408,13 @@ function ProjectLogTreePanel({
   repositories,
   repositoryId,
   view,
+  branchTagRefreshToken,
   onRepositoryChange
 }: {
   repositories: Repository[]
   repositoryId: string
   view: RepositoryLogTreeView
+  branchTagRefreshToken: number
   onRepositoryChange: (repositoryId: string) => void
 }): JSX.Element {
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
@@ -3298,6 +3443,7 @@ function ProjectLogTreePanel({
         selectedRepositoryId={selectedRepository?.id}
         view={view}
         emptyDescription="请选择要查看的仓库"
+        branchTagRefreshToken={branchTagRefreshToken}
         onRepositoryChange={onRepositoryChange}
       />
     </Space>
@@ -3560,6 +3706,7 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
   const [mergeModalOpen, setMergeModalOpen] = useState(false)
   const [projectSettingsDrawerOpen, setProjectSettingsDrawerOpen] = useState(false)
   const [projectGitRepositoryId, setProjectGitRepositoryId] = useState('')
+  const [branchTagRefreshToken, setBranchTagRefreshToken] = useState(0)
   const [rangePreset, setRangePreset] = useState('30')
   const [range, setRange] = useState(createPresetRange(30))
   const selectedProject = projects.find((project) => project.id === detailProjectId) ?? null
@@ -3785,6 +3932,7 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                 repositories={projectRepositories}
                 contributors={summary?.contributors ?? []}
                 onSummaryChanged={() => refreshSummary(selectedProject.id)}
+                onBranchTagsChanged={() => setBranchTagRefreshToken((current) => current + 1)}
               />
             </Drawer>
 
@@ -3876,6 +4024,7 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                       repositories={projectRepositories}
                       repositoryId={projectGitRepositoryId}
                       view="log"
+                      branchTagRefreshToken={branchTagRefreshToken}
                       onRepositoryChange={setProjectGitRepositoryId}
                     />
                   )
@@ -3888,6 +4037,7 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                       repositories={projectRepositories}
                       repositoryId={projectGitRepositoryId}
                       view="alignment"
+                      branchTagRefreshToken={branchTagRefreshToken}
                       onRepositoryChange={setProjectGitRepositoryId}
                     />
                   )
@@ -4157,6 +4307,209 @@ function ProjectPeopleMapping({ project, contributors, onChanged }: { project: P
   )
 }
 
+const branchTagColorPresets = ['#f5222d', '#1d39c4', '#1677ff', '#13c2c2', '#52c41a', '#722ed1', '#eb2f96', '#fa8c16']
+
+function ProjectBranchTagSettings({ project, onChanged }: { project: Project; onChanged: () => void }): JSX.Element {
+  const [branchTags, setBranchTags] = useState<ProjectBranchTag[]>([])
+  const [editingBranchTag, setEditingBranchTag] = useState<ProjectBranchTag | null>(null)
+  const [branchTagModalOpen, setBranchTagModalOpen] = useState(false)
+  const [loadingBranchTags, setLoadingBranchTags] = useState(false)
+  const [savingBranchTag, setSavingBranchTag] = useState(false)
+  const [branchTagForm] = Form.useForm<BranchTagForm>()
+  const selectedColor = String(Form.useWatch('color', branchTagForm) ?? branchTagColorPresets[0])
+
+  async function loadBranchTags(): Promise<void> {
+    if (!window.forgeDesk) {
+      setBranchTags([])
+      return
+    }
+
+    setLoadingBranchTags(true)
+
+    try {
+      setBranchTags(await window.forgeDesk.listProjectBranchTags(project.id))
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingBranchTags(false)
+    }
+  }
+
+  useEffect(() => {
+    loadBranchTags().catch((error) => message.error(getErrorMessage(error)))
+  }, [project.id])
+
+  function openBranchTagModal(tag?: ProjectBranchTag): void {
+    setEditingBranchTag(tag ?? null)
+    branchTagForm.setFieldsValue({
+      label: tag?.label ?? '',
+      branchName: tag?.branchName ?? '',
+      color: tag?.color ?? branchTagColorPresets[0]
+    })
+    setBranchTagModalOpen(true)
+  }
+
+  function closeBranchTagModal(): void {
+    setEditingBranchTag(null)
+    setBranchTagModalOpen(false)
+    branchTagForm.resetFields()
+  }
+
+  async function saveBranchTag(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const values = await branchTagForm.validateFields()
+    setSavingBranchTag(true)
+
+    try {
+      await window.forgeDesk.saveProjectBranchTag({
+        id: editingBranchTag?.id,
+        projectId: project.id,
+        label: values.label.trim(),
+        branchName: values.branchName.trim(),
+        color: values.color.trim()
+      })
+      message.success('分支标签颜色已保存')
+      closeBranchTagModal()
+      await loadBranchTags()
+      onChanged()
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingBranchTag(false)
+    }
+  }
+
+  async function deleteBranchTag(tag: ProjectBranchTag): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    try {
+      setBranchTags(await window.forgeDesk.deleteProjectBranchTag(project.id, tag.id))
+      message.success('分支标签颜色已删除')
+      onChanged()
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    }
+  }
+
+  const columns: ColumnsType<ProjectBranchTag> = [
+    {
+      title: '名称',
+      dataIndex: 'label',
+      key: 'label',
+      width: 180,
+      render: (value, tag) => <Tag color={tag.color}>{value}</Tag>
+    },
+    {
+      title: '匹配分支',
+      dataIndex: 'branchName',
+      key: 'branchName',
+      render: (value) => <Typography.Text code>{value}</Typography.Text>
+    },
+    {
+      title: '颜色',
+      dataIndex: 'color',
+      key: 'color',
+      width: 160,
+      render: (value) => (
+        <Space size={8}>
+          <span className="branch-tag-color-swatch" style={{ backgroundColor: value }} />
+          <Typography.Text>{value}</Typography.Text>
+        </Space>
+      )
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 150,
+      render: (_, tag) => (
+        <Space>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openBranchTagModal(tag)}>
+            编辑
+          </Button>
+          <Popconfirm
+            title="删除这条颜色规则？"
+            description="删除后命中的分支会回到默认颜色。"
+            okText="删除"
+            okButtonProps={{ danger: true }}
+            cancelText="取消"
+            onConfirm={() => deleteBranchTag(tag)}
+          >
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
+      )
+    }
+  ]
+
+  return (
+    <div className="panel branch-tag-settings-panel">
+      <div className="branch-tag-settings-toolbar">
+        <Typography.Text type="secondary">填写短分支名即可匹配本地和远端同名分支。</Typography.Text>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => openBranchTagModal()}>
+          新增规则
+        </Button>
+      </div>
+      <Table
+        rowKey="id"
+        columns={columns}
+        dataSource={branchTags}
+        loading={loadingBranchTags}
+        pagination={false}
+        scroll={{ x: 640 }}
+        locale={{ emptyText: <Empty description="还没有分支标签颜色规则" /> }}
+      />
+      <Modal
+        title={editingBranchTag ? '编辑分支标签颜色' : '新增分支标签颜色'}
+        open={branchTagModalOpen}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={savingBranchTag}
+        onOk={saveBranchTag}
+        onCancel={closeBranchTagModal}
+      >
+        <Form form={branchTagForm} layout="vertical">
+          <Form.Item name="label" label="显示名称" rules={[{ required: true, message: '请输入显示名称' }]}>
+            <Input placeholder="例如 主分支" />
+          </Form.Item>
+          <Form.Item name="branchName" label="分支短名" rules={[{ required: true, message: '请输入分支短名' }]}>
+            <Input placeholder="例如 main 或 develop" />
+          </Form.Item>
+          <Form.Item
+            name="color"
+            label="颜色"
+            rules={[
+              { required: true, message: '请输入颜色' },
+              { pattern: /^#[0-9a-fA-F]{6}$/, message: '请输入 6 位 hex 颜色，例如 #f5222d' }
+            ]}
+          >
+            <Input
+              placeholder="#f5222d"
+              addonBefore={<span className="branch-tag-color-swatch" style={{ backgroundColor: selectedColor }} />}
+            />
+          </Form.Item>
+          <div className="branch-tag-color-grid">
+            {branchTagColorPresets.map((color) => (
+              <button
+                key={color}
+                type="button"
+                className={selectedColor.toLowerCase() === color.toLowerCase() ? 'branch-tag-color-button is-active' : 'branch-tag-color-button'}
+                style={{ backgroundColor: color }}
+                aria-label={`使用颜色 ${color}`}
+                onClick={() => branchTagForm.setFieldsValue({ color })}
+              />
+            ))}
+          </div>
+        </Form>
+      </Modal>
+    </div>
+  )
+}
+
 function RemoteAlignmentPanel({ alignment, currentBranch }: { alignment: RemoteAlignmentSummary; currentBranch: string }): JSX.Element {
   const meta = getRemoteAlignmentStatusMeta(alignment.status)
   const remoteColumns: ColumnsType<RemoteAlignmentBranch> = alignment.remotes.map((remote) => ({
@@ -4266,6 +4619,7 @@ function RepositoryLogTree({
   selectedRepositoryId,
   view = 'log',
   emptyDescription = '请选择仓库',
+  branchTagRefreshToken = 0,
   onRepositoryChange
 }: {
   repository: Repository | null
@@ -4273,6 +4627,7 @@ function RepositoryLogTree({
   selectedRepositoryId?: string
   view?: RepositoryLogTreeView
   emptyDescription?: string
+  branchTagRefreshToken?: number
   onRepositoryChange?: (repositoryId: string) => void
 }): JSX.Element {
   const { setProjectSummary, updateRepository } = useForgeDeskStore()
@@ -4285,7 +4640,6 @@ function RepositoryLogTree({
   const [commitFiles, setCommitFiles] = useState<GitCommitFileChange[]>([])
   const [selectedFile, setSelectedFile] = useState<GitCommitFileChange | null>(null)
   const [commitDiff, setCommitDiff] = useState<GitCommitDiff | null>(null)
-  const [diffMode, setDiffMode] = useState<'side-by-side' | 'inline'>('side-by-side')
   const [diffModalOpen, setDiffModalOpen] = useState(false)
   const [visibleCommitCount, setVisibleCommitCount] = useState(commitGraphBatchSize)
   const [loadingDetail, setLoadingDetail] = useState(false)
@@ -4294,18 +4648,21 @@ function RepositoryLogTree({
   const [syncingRepositoryId, setSyncingRepositoryId] = useState<string | null>(null)
   const [gitError, setGitError] = useState<GitErrorGuidance | null>(null)
   const [branchDrawerOpen, setBranchDrawerOpen] = useState(false)
+  const [branchTags, setBranchTags] = useState<ProjectBranchTag[]>([])
   const commitLoadMoreRef = useRef<HTMLDivElement | null>(null)
+  const activeProjectId = (detailRepository ?? repository)?.projectId ?? ''
 
   const filteredCommits = useMemo(
-    () => commits.filter((commit) => !commitAuthor || `${commit.authorName} <${commit.authorEmail}>` === commitAuthor),
+    () => commits.filter((commit) => !commitAuthor || getCommitAuthorFilterValue(commit) === commitAuthor),
     [commitAuthor, commits]
   )
   const graphRows = useMemo(() => createGraphRows(filteredCommits), [filteredCommits])
   const visibleGraphRows = useMemo(() => graphRows.slice(0, visibleCommitCount), [graphRows, visibleCommitCount])
+  const graphColumnWidth = useMemo(() => getGitGraphColumnWidth(visibleGraphRows), [visibleGraphRows])
   const hasMoreCommits = visibleCommitCount < graphRows.length
   const authorOptions = useMemo(
     () =>
-      Array.from(new Set(commits.map((commit) => `${commit.authorName} <${commit.authorEmail}>`)))
+      Array.from(new Set(commits.map((commit) => getCommitAuthorFilterValue(commit))))
         .filter(Boolean)
         .sort((a, b) => a.localeCompare(b)),
     [commits]
@@ -4314,6 +4671,36 @@ function RepositoryLogTree({
   useEffect(() => {
     setVisibleCommitCount(commitGraphBatchSize)
   }, [commitAuthor, commitBranch, commitRange.startDate, commitRange.endDate, commits])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadBranchTags(): Promise<void> {
+      if (!activeProjectId || !window.forgeDesk) {
+        setBranchTags([])
+        return
+      }
+
+      try {
+        const tags = await window.forgeDesk.listProjectBranchTags(activeProjectId)
+
+        if (!cancelled) {
+          setBranchTags(tags)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setBranchTags([])
+          setGitError(createGitErrorGuidance(error, '读取分支标签颜色'))
+        }
+      }
+    }
+
+    loadBranchTags()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeProjectId, branchTagRefreshToken])
 
   useEffect(() => {
     if (view !== 'log' || !hasMoreCommits) {
@@ -4615,20 +5002,46 @@ function RepositoryLogTree({
             rowClassName={(commit) => (commit.hash === selectedCommit?.hash ? 'selected-row' : '')}
             onRow={(commit) => ({ onClick: () => selectCommit(commit) })}
             columns={[
-              { title: '', key: 'graph', width: 116, render: (_, commit) => <CommitGraphCell commit={commit} /> },
+              {
+                title: '图谱',
+                key: 'graph',
+                width: graphColumnWidth,
+                className: 'commit-graph-column',
+                onCell: () => ({ style: { width: graphColumnWidth, minWidth: graphColumnWidth } }),
+                onHeaderCell: () => ({ style: { width: graphColumnWidth, minWidth: graphColumnWidth } }),
+                render: (_, commit) => <CommitGraphCell commit={commit} />
+              },
               {
                 title: '提交',
                 dataIndex: 'message',
                 key: 'message',
-                render: (_, commit) => <CommitMessageCell commit={commit} />
+                render: (_, commit) => <CommitMessageCell commit={commit} branchTags={branchTags} />
               },
               { title: '提交人', key: 'author', width: 210, render: (_, commit) => <CommitAuthorCell commit={commit} /> },
               { title: '时间', dataIndex: 'committedAt', key: 'committedAt', width: 160, render: (value) => new Date(value).toLocaleString() },
               { title: '+/-', key: 'lines', width: 96, render: (_, commit) => `${formatNumber(commit.additions)} / ${formatNumber(commit.deletions)}` }
             ]}
             dataSource={visibleGraphRows}
+            tableLayout="fixed"
+            expandable={{
+              expandedRowKeys: selectedCommit ? [selectedCommit.id] : [],
+              expandedRowRender: (commit) =>
+                commit.hash === selectedCommit?.hash ? (
+                  <CommitInlineDetail
+                    commit={commit}
+                    files={commitFiles}
+                    selectedFile={selectedFile}
+                    loadingFiles={loadingFiles}
+                    graphColumnWidth={graphColumnWidth}
+                    onSelectFile={(file) => {
+                      selectCommitFile(file)
+                    }}
+                  />
+                ) : null,
+              showExpandColumn: false
+            }}
             pagination={false}
-            scroll={{ x: 980 }}
+            scroll={{ x: graphColumnWidth + 864 }}
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前范围没有提交" /> }}
           />
           {graphRows.length > 0 && (
@@ -4642,17 +5055,6 @@ function RepositoryLogTree({
               )}
             </div>
           )}
-          {selectedCommit && (
-            <CommitInlineDetail
-              commit={selectedCommit}
-              files={commitFiles}
-              selectedFile={selectedFile}
-              loadingFiles={loadingFiles}
-              onSelectFile={(file) => {
-                selectCommitFile(file)
-              }}
-            />
-          )}
         </div>
       )}
       <Modal
@@ -4662,7 +5064,7 @@ function RepositoryLogTree({
         footer={null}
         className="diff-preview-modal"
         centered
-        destroyOnClose
+        destroyOnHidden
         onCancel={() => setDiffModalOpen(false)}
       >
         <div className="diff-preview-content">
@@ -4670,19 +5072,11 @@ function RepositoryLogTree({
             <Space size={8} wrap>
               {selectedCommit && <Tag>{selectedCommit.shortHash}</Tag>}
               {selectedFile && <Tag color={getFileStatusLabel(selectedFile.status).color}>{getFileStatusLabel(selectedFile.status).label}</Tag>}
+              <Tag color="blue">上一版 / Diff 结果</Tag>
             </Space>
-            <Select
-              value={diffMode}
-              className="diff-mode-select"
-              options={[
-                { label: '左右对比', value: 'side-by-side' },
-                { label: '内联 diff', value: 'inline' }
-              ]}
-              onChange={setDiffMode}
-            />
           </div>
           <Spin spinning={loadingDiff}>
-            <DiffViewer diff={commitDiff} mode={diffMode} />
+            <DiffViewer diff={commitDiff} />
           </Spin>
         </div>
       </Modal>
@@ -4729,7 +5123,7 @@ function RepositoryLogTree({
   )
 }
 
-function RepositoryTable({ repositories }: { repositories: Repository[] }): JSX.Element {
+function RepositoryTable({ repositories, branchTagRefreshToken = 0 }: { repositories: Repository[]; branchTagRefreshToken?: number }): JSX.Element {
   const { setProjectSummary, updateRepository } = useForgeDeskStore()
   const [selectedRepository, setSelectedRepository] = useState<Repository | null>(null)
   const [detailRepository, setDetailRepository] = useState<Repository | null>(null)
@@ -4741,7 +5135,6 @@ function RepositoryTable({ repositories }: { repositories: Repository[] }): JSX.
   const [commitFiles, setCommitFiles] = useState<GitCommitFileChange[]>([])
   const [selectedFile, setSelectedFile] = useState<GitCommitFileChange | null>(null)
   const [commitDiff, setCommitDiff] = useState<GitCommitDiff | null>(null)
-  const [diffMode, setDiffMode] = useState<'side-by-side' | 'inline'>('side-by-side')
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [loadingFiles, setLoadingFiles] = useState(false)
   const [loadingDiff, setLoadingDiff] = useState(false)
@@ -4749,13 +5142,13 @@ function RepositoryTable({ repositories }: { repositories: Repository[] }): JSX.
   const [savingRepositoryIdentity, setSavingRepositoryIdentity] = useState(false)
 
   const filteredCommits = useMemo(
-    () => commits.filter((commit) => !commitAuthor || `${commit.authorName} <${commit.authorEmail}>` === commitAuthor),
+    () => commits.filter((commit) => !commitAuthor || getCommitAuthorFilterValue(commit) === commitAuthor),
     [commitAuthor, commits]
   )
   const graphRows = useMemo(() => createGraphRows(filteredCommits), [filteredCommits])
   const authorOptions = useMemo(
     () =>
-      Array.from(new Set(commits.map((commit) => `${commit.authorName} <${commit.authorEmail}>`)))
+      Array.from(new Set(commits.map((commit) => getCommitAuthorFilterValue(commit))))
         .filter(Boolean)
         .sort((a, b) => a.localeCompare(b)),
     [commits]
@@ -4984,7 +5377,7 @@ function RepositoryTable({ repositories }: { repositories: Repository[] }): JSX.
         width={1280}
         onClose={() => setDetailRepository(null)}
       >
-        <RepositoryLogTree repository={detailRepository} />
+        <RepositoryLogTree repository={detailRepository} branchTagRefreshToken={branchTagRefreshToken} />
       </Drawer>
       <RepositoryIdentityModal
         repository={selectedRepository}

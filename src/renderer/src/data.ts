@@ -198,6 +198,9 @@ export type GitCommit = {
   refs: string[]
   authorName: string
   authorEmail: string
+  authorDisplayName: string
+  authorDisplayEmail: string
+  mappedPersonId: string
   committedAt: string
   message: string
   branchName: string
@@ -237,6 +240,14 @@ export type ProjectPerson = {
     name: string
     email: string
   }>
+}
+
+export type ProjectBranchTag = {
+  id: string
+  projectId: string
+  label: string
+  branchName: string
+  color: string
 }
 
 export type Person = {

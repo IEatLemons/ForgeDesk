@@ -7,9 +7,19 @@ export type GitGraphRow<TCommit extends GraphCommitInput = GraphCommitInput> = T
   graphLanes: string[]
   graphLaneIndex: number
   graphParentLaneIndexes: number[]
+  graphParentEdges: GraphParentEdge[]
   graphTopLaneIndexes: number[]
   graphBottomLaneIndexes: number[]
 }
+
+export type GraphParentEdge = {
+  fromLaneIndex: number
+  toLaneIndex: number
+}
+
+export const gitGraphLaneWidth = 16
+export const gitGraphColumnMinWidth = 152
+const gitGraphColumnPadding = 56
 
 export type BranchGroupItem = {
   name: string
@@ -25,6 +35,39 @@ export type BranchGroup = {
 
 export type RefTone = 'blue' | 'cyan' | 'gold' | 'default'
 
+export type BranchTagColorRule = {
+  label: string
+  branchName: string
+  color: string
+}
+
+export type CommitAuthorDisplayInput = {
+  authorName: string
+  authorEmail: string
+  authorDisplayName?: string
+  authorDisplayEmail?: string
+}
+
+export function getCommitAuthorDisplay(commit: CommitAuthorDisplayInput): {
+  name: string
+  email: string
+  title: string
+} {
+  const name = commit.authorDisplayName?.trim() || commit.authorName.trim() || '未知提交人'
+  const email = commit.authorDisplayEmail?.trim() || commit.authorEmail.trim()
+
+  return {
+    name,
+    email,
+    title: email ? `${name} · ${email}` : name
+  }
+}
+
+export function getCommitAuthorFilterValue(commit: CommitAuthorDisplayInput): string {
+  const author = getCommitAuthorDisplay(commit)
+  return author.email ? `${author.name} <${author.email}>` : author.name
+}
+
 export function getNextVisibleCommitCount({
   current,
   total,
@@ -37,6 +80,33 @@ export function getNextVisibleCommitCount({
   return Math.min(total, current + batchSize)
 }
 
+function getGraphLaneCount(row: GitGraphRow): number {
+  const allLaneIndexes = [
+    row.graphLaneIndex,
+    ...row.graphParentLaneIndexes,
+    ...row.graphTopLaneIndexes,
+    ...row.graphBottomLaneIndexes,
+    ...row.graphParentEdges.flatMap((edge) => [edge.fromLaneIndex, edge.toLaneIndex])
+  ]
+
+  return Math.max(row.graphLanes.length, ...allLaneIndexes.map((index) => index + 1), 1)
+}
+
+export function getGitGraphColumnWidth(rows: GitGraphRow[]): number {
+  const maxLaneCount = rows.reduce((max, row) => Math.max(max, getGraphLaneCount(row)), 1)
+  return Math.max(gitGraphColumnMinWidth, maxLaneCount * gitGraphLaneWidth + gitGraphColumnPadding)
+}
+
+export function getGraphCellBottomLaneIndexes(row: GitGraphRow): number[] {
+  const lanesStartedBySideEdge = new Set(
+    row.graphParentEdges
+      .filter((edge) => edge.fromLaneIndex !== edge.toLaneIndex && !row.graphTopLaneIndexes.includes(edge.toLaneIndex))
+      .map((edge) => edge.toLaneIndex)
+  )
+
+  return row.graphBottomLaneIndexes.filter((laneIndex) => !lanesStartedBySideEdge.has(laneIndex))
+}
+
 function range(length: number): number[] {
   return Array.from({ length }, (_, index) => index)
 }
@@ -45,60 +115,117 @@ function uniqueSortedIndexes(indexes: number[]): number[] {
   return [...new Set(indexes)].sort((left, right) => left - right)
 }
 
+type GraphLane = {
+  hash: string
+  visible: boolean
+} | null
+
+function cloneLanes(lanes: GraphLane[]): GraphLane[] {
+  return lanes.map((lane) => (lane ? { ...lane } : null))
+}
+
+function getVisibleLaneIndexes(lanes: GraphLane[]): number[] {
+  return lanes.flatMap((lane, index) => (lane?.visible ? [index] : []))
+}
+
+function findLaneIndex(lanes: GraphLane[], hash: string, excludedIndex?: number): number {
+  return lanes.findIndex((lane, index) => lane?.hash === hash && index !== excludedIndex)
+}
+
+function placeLane(lanes: GraphLane[], hash: string, visible = true): number {
+  const emptyLaneIndex = lanes.indexOf(null)
+
+  if (emptyLaneIndex >= 0) {
+    lanes[emptyLaneIndex] = { hash, visible }
+    return emptyLaneIndex
+  }
+
+  lanes.push({ hash, visible })
+  return lanes.length - 1
+}
+
+function compactTrailingEmptyLanes(lanes: GraphLane[]): void {
+  while (lanes.length > 0 && lanes[lanes.length - 1] === null) {
+    lanes.pop()
+  }
+}
+
 export function createGraphRows<TCommit extends GraphCommitInput>(commits: TCommit[]): Array<GitGraphRow<TCommit>> {
   const rows: Array<GitGraphRow<TCommit>> = []
-  const lanes: string[] = []
+  const lanes: GraphLane[] = []
+  const visibleCommitHashes = new Set(commits.map((commit) => commit.hash))
 
   for (const commit of commits) {
-    let laneIndex = lanes.indexOf(commit.hash)
+    let laneIndex = findLaneIndex(lanes, commit.hash)
     const entersFromAbove = laneIndex !== -1
+    const wasVisibleBefore = laneIndex >= 0 && lanes[laneIndex]?.visible === true
 
     if (laneIndex === -1) {
-      laneIndex = lanes.length
-      lanes.push(commit.hash)
+      laneIndex = placeLane(lanes, commit.hash)
+    } else {
+      lanes[laneIndex] = { hash: commit.hash, visible: true }
     }
 
-    const lanesBefore = [...lanes]
-    const lanesAfter = [...lanesBefore]
-    const topLaneIndexes = entersFromAbove ? range(lanesBefore.length) : range(lanesBefore.length).filter((index) => index !== laneIndex)
+    const lanesBefore = cloneLanes(lanes)
+    const lanesAfter = cloneLanes(lanesBefore)
+    const topLaneIndexes =
+      entersFromAbove && wasVisibleBefore
+        ? getVisibleLaneIndexes(lanesBefore)
+        : getVisibleLaneIndexes(lanesBefore).filter((index) => index !== laneIndex)
     const parentLaneIndexes: number[] = []
+    const parentEdges: GraphParentEdge[] = []
 
     if (commit.parentHashes.length === 0) {
-      lanesAfter.splice(laneIndex, 1)
+      lanesAfter[laneIndex] = null
     } else {
       const firstParentHash = commit.parentHashes[0]
-      const existingFirstParentLane = lanesAfter.findIndex((laneHash, index) => laneHash === firstParentHash && index !== laneIndex)
+      const firstParentIsVisible = visibleCommitHashes.has(firstParentHash)
+      const existingFirstParentLane = findLaneIndex(lanesAfter, firstParentHash, laneIndex)
 
       if (existingFirstParentLane >= 0) {
         parentLaneIndexes.push(existingFirstParentLane)
-        lanesAfter.splice(laneIndex, 1)
-      } else {
+        parentEdges.push({ fromLaneIndex: laneIndex, toLaneIndex: existingFirstParentLane })
+        lanesAfter[laneIndex] = null
+      } else if (firstParentIsVisible) {
         parentLaneIndexes.push(laneIndex)
-        lanesAfter[laneIndex] = firstParentHash
+        parentEdges.push({ fromLaneIndex: laneIndex, toLaneIndex: laneIndex })
+        lanesAfter[laneIndex] = { hash: firstParentHash, visible: true }
+      } else {
+        lanesAfter[laneIndex] = null
       }
     }
 
     for (const parentHash of commit.parentHashes.slice(1)) {
-      const existingLane = lanesAfter.indexOf(parentHash)
+      const parentIsVisible = visibleCommitHashes.has(parentHash)
+      const existingLane = findLaneIndex(lanesAfter, parentHash)
 
-      if (existingLane >= 0) {
-        parentLaneIndexes.push(existingLane)
-      } else {
-        lanesAfter.push(parentHash)
-        parentLaneIndexes.push(lanesAfter.length - 1)
+      if (!parentIsVisible && (existingLane < 0 || lanesAfter[existingLane]?.visible !== true)) {
+        continue
       }
+
+      const parentLaneIndex = existingLane >= 0 ? existingLane : placeLane(lanesAfter, parentHash, true)
+
+      if (parentIsVisible && existingLane >= 0) {
+        lanesAfter[existingLane] = { hash: parentHash, visible: true }
+      }
+
+      parentLaneIndexes.push(parentLaneIndex)
+      parentEdges.push({ fromLaneIndex: laneIndex, toLaneIndex: parentLaneIndex })
     }
 
+    compactTrailingEmptyLanes(lanesAfter)
+
     const laneCount = Math.max(lanesBefore.length, lanesAfter.length, laneIndex + 1, ...parentLaneIndexes.map((index) => index + 1))
-    const graphLanes = Array.from({ length: laneCount }, (_, index) => lanesBefore[index] ?? lanesAfter[index] ?? `${commit.hash}:lane-${index}`)
+    const graphLanes = Array.from({ length: laneCount }, (_, index) => lanesBefore[index]?.hash ?? lanesAfter[index]?.hash ?? `${commit.hash}:lane-${index}`)
 
     rows.push({
       ...commit,
       graphLanes,
       graphLaneIndex: laneIndex,
       graphParentLaneIndexes: uniqueSortedIndexes(parentLaneIndexes),
+      graphParentEdges: parentEdges,
       graphTopLaneIndexes: uniqueSortedIndexes(topLaneIndexes),
-      graphBottomLaneIndexes: uniqueSortedIndexes(range(lanesAfter.length))
+      graphBottomLaneIndexes: uniqueSortedIndexes(getVisibleLaneIndexes(lanesAfter))
     })
 
     lanes.splice(0, lanes.length, ...lanesAfter)
@@ -150,4 +277,21 @@ export function getRefTone(ref: string): RefTone {
   }
 
   return ref ? 'blue' : 'default'
+}
+
+export function getRefShortBranchName(ref: string): string {
+  const value = ref.includes(' -> ') ? (ref.split(' -> ').pop() ?? ref) : ref
+
+  return value.trim().replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '').replace(/^[^/]+\//, '')
+}
+
+export function getRefColor(ref: string, branchTags: BranchTagColorRule[] = []): RefTone | string {
+  if (ref.startsWith('tag:')) {
+    return 'gold'
+  }
+
+  const shortName = getRefShortBranchName(ref)
+  const branchTag = branchTags.find((tag) => tag.branchName === shortName)
+
+  return branchTag?.color || getRefTone(ref)
 }

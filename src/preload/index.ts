@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   analyzeProjectGit: (projectId: string) => ipcRenderer.invoke('project:analyze-git', projectId),
   listProjectPeople: (projectId: string) => ipcRenderer.invoke('project:people', projectId),
   listProjectContributorIdentities: (projectId: string) => ipcRenderer.invoke('project:contributor-identities', projectId),
+  listProjectBranchTags: (projectId: string) => ipcRenderer.invoke('project:branch-tags', projectId),
+  saveProjectBranchTag: (input: { id?: string; projectId: string; label: string; branchName: string; color: string }) => ipcRenderer.invoke('project:branch-tag:save', input),
+  deleteProjectBranchTag: (projectId: string, tagId: string) => ipcRenderer.invoke('project:branch-tag:delete', projectId, tagId),
   saveProjectPerson: (input: { id?: string; projectId: string; displayName: string; role?: string; identities: Array<{ name: string; email: string }> }) =>
     ipcRenderer.invoke('project:person:save', input),
   deleteProjectPerson: (projectId: string, personId: string) => ipcRenderer.invoke('project:person:delete', projectId, personId),
