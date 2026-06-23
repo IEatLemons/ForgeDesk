@@ -16,6 +16,7 @@ export type SshPrivateKeyRecord = {
   fingerprint: string
   publicKeyPath: string
   hasPublicKey: boolean
+  hasPassphrase: boolean
   mode: string
   needsPermissionFix: boolean
 }
@@ -118,7 +119,8 @@ async function readFingerprint(path: string, content: string, fingerprintReader:
 
 export async function readSshKeyInventory(
   sshDirectory: string,
-  fingerprintReader: SshFingerprintReader = async (_path, content) => getFallbackFingerprint(content)
+  fingerprintReader: SshFingerprintReader = async (_path, content) => getFallbackFingerprint(content),
+  passphrasePaths: ReadonlySet<string> = new Set()
 ): Promise<SshKeyInventory> {
   let entries
 
@@ -162,6 +164,7 @@ export async function readSshKeyInventory(
         fingerprint: await readFingerprint(path, content, fingerprintReader),
         publicKeyPath,
         hasPublicKey: publicFileSet.has(`${fileName}.pub`),
+        hasPassphrase: passphrasePaths.has(path),
         mode,
         needsPermissionFix: mode !== '0600'
       }

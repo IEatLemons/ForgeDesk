@@ -59,6 +59,7 @@ type GitAddInput = {
 type GitCommitInput = {
   message: string
   paths?: string[]
+  tagName?: string
 }
 
 type GitPushInput = {
@@ -239,6 +240,125 @@ type ProjectBranchTagRecord = {
   color: string
 }
 
+type ServiceProviderType = 'railway' | 'vercel'
+
+type RailwayTokenType = 'account' | 'workspace' | 'project'
+
+type ServiceMonitorStatus = 'online' | 'degraded' | 'offline' | 'unknown'
+
+type ServiceConnectionRecord = {
+  id: string
+  projectId: string
+  provider: ServiceProviderType
+  name: string
+  token: string
+  tokenConfigured: boolean
+  teamId: string
+  workspaceId: string
+  railwayTokenType: RailwayTokenType
+  createdAt: string
+  updatedAt: string
+}
+
+type ServiceConnectionInput = {
+  id?: string
+  projectId?: string
+  provider: ServiceProviderType
+  name: string
+  token?: string
+  teamId?: string
+  workspaceId?: string
+  railwayTokenType?: RailwayTokenType
+}
+
+type ProjectServiceEnvironmentRecord = {
+  id: string
+  projectId: string
+  serviceId: string
+  provider: ServiceProviderType
+  name: string
+  externalEnvironmentId: string
+  status: string
+  deploymentStatus: string
+  latestDeploymentId: string
+  latestDeploymentUrl: string
+  latestCommit: string
+  updatedAt: string
+}
+
+type ProjectServiceDomainRecord = {
+  id: string
+  projectId: string
+  serviceId: string
+  environmentId: string
+  environmentName: string
+  domain: string
+  url: string
+  kind: 'custom' | 'generated' | 'manual'
+  enabled: boolean
+  lastStatus: ServiceMonitorStatus
+  lastStatusCode: number
+  lastResponseMs: number
+  lastCheckedAt: string
+  lastError: string
+  createdAt: string
+  updatedAt: string
+}
+
+type ProjectServiceRecord = {
+  id: string
+  projectId: string
+  provider: ServiceProviderType
+  connectionId: string
+  repositoryId: string
+  name: string
+  externalProjectId: string
+  externalServiceId: string
+  defaultEnvironment: string
+  healthPath: string
+  enabled: boolean
+  lastSyncedAt: string
+  createdAt: string
+  updatedAt: string
+  environments: ProjectServiceEnvironmentRecord[]
+  domains: ProjectServiceDomainRecord[]
+}
+
+type ProjectServiceInput = {
+  id?: string
+  projectId?: string
+  provider: ServiceProviderType
+  connectionId?: string
+  repositoryId?: string
+  name: string
+  externalProjectId?: string
+  externalServiceId?: string
+  defaultEnvironment?: string
+  healthPath?: string
+  enabled?: boolean
+  environments?: Array<Partial<ProjectServiceEnvironmentRecord> & { name: string }>
+  domains?: Array<Partial<ProjectServiceDomainRecord> & { domain: string }>
+}
+
+type ServiceMonitorCheckRecord = {
+  id: string
+  projectId: string
+  serviceId: string
+  domainId: string
+  status: ServiceMonitorStatus
+  statusCode: number
+  responseMs: number
+  checkedAt: string
+  errorMessage: string
+}
+
+type ServiceEnvironmentLogRecord = {
+  timestamp: string
+  level: string
+  message: string
+  source: string
+}
+
 type ProjectRecord = {
   id: string
   name: string
@@ -335,6 +455,7 @@ type SshPrivateKeyRecord = {
   fingerprint: string
   publicKeyPath: string
   hasPublicKey: boolean
+  hasPassphrase: boolean
   mode: string
   needsPermissionFix: boolean
 }
@@ -380,6 +501,7 @@ interface Window {
     listProjects: () => Promise<WorkspaceSnapshot>
     createProject: (input: { name: string; workspacePath: string; repositories: ScannedRepository[] }) => Promise<WorkspaceSnapshot>
     updateProject: (input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }) => Promise<WorkspaceSnapshot>
+    deleteProject: (projectId: string) => Promise<WorkspaceSnapshot>
     listRepositories: (projectId?: string) => Promise<RepositoryRecord[]>
     getRepositoryDetail: (repositoryId: string) => Promise<RepositoryRecord>
     listRepositoryCommits: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) => Promise<GitCommitRecord[]>
@@ -407,6 +529,20 @@ interface Window {
     listProjectBranchTags: (projectId: string) => Promise<ProjectBranchTagRecord[]>
     saveProjectBranchTag: (input: { id?: string; projectId: string; label: string; branchName: string; color: string }) => Promise<ProjectBranchTagRecord>
     deleteProjectBranchTag: (projectId: string, tagId: string) => Promise<ProjectBranchTagRecord[]>
+    listServiceConnections: () => Promise<ServiceConnectionRecord[]>
+    saveServiceConnection: (input: ServiceConnectionInput) => Promise<ServiceConnectionRecord>
+    deleteServiceConnection: (connectionId: string) => Promise<ServiceConnectionRecord[]>
+    testServiceConnection: (connectionId: string) => Promise<{ ok: boolean; message: string; serviceCount: number }>
+    listAllProjectServices: () => Promise<ProjectServiceRecord[]>
+    listProjectServices: (projectId: string) => Promise<ProjectServiceRecord[]>
+    saveProjectService: (input: ProjectServiceInput) => Promise<ProjectServiceRecord>
+    bindProjectService: (input: { projectId: string; serviceId: string; repositoryId?: string }) => Promise<ProjectServiceRecord[]>
+    syncProjectServices: (connectionId?: string) => Promise<ProjectServiceRecord[]>
+    checkProjectServices: (projectId?: string) => Promise<ProjectServiceRecord[]>
+    listLatestServiceMonitorChecks: (projectId: string) => Promise<ServiceMonitorCheckRecord[]>
+    listServiceMonitorHistory: (projectId: string) => Promise<ServiceMonitorCheckRecord[]>
+    listAllServiceMonitorHistory: () => Promise<ServiceMonitorCheckRecord[]>
+    listServiceEnvironmentLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
     saveProjectPerson: (input: { id?: string; projectId: string; displayName: string; role?: string; identities: Array<{ name: string; email: string }> }) => Promise<ProjectPersonRecord>
     deleteProjectPerson: (projectId: string, personId: string) => Promise<ProjectPersonRecord[]>
     scanRepositories: (paths: string[]) => Promise<ScannedRepository[]>
@@ -424,6 +560,8 @@ interface Window {
     copySshKeyPath: (path: string, kind: SshKeyKind) => Promise<void>
     importSshKey: (input: SshKeyImportInput) => Promise<GitSetupStatus>
     deleteSshKey: (path: string, kind: SshKeyKind) => Promise<GitSetupStatus>
+    saveSshPrivateKeyPassphrase: (path: string, passphrase: string) => Promise<GitSetupStatus>
+    clearSshPrivateKeyPassphrase: (path: string) => Promise<GitSetupStatus>
     fixSshPrivateKeyPermissions: (path: string) => Promise<GitSetupStatus>
     deriveSshPublicKey: (privateKeyPath: string) => Promise<GitSetupStatus>
     readSshConfig: () => Promise<SshConfigFile>

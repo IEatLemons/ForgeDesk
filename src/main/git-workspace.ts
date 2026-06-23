@@ -11,6 +11,7 @@ export type GitAddInput = {
 export type GitCommitInput = {
   message: string
   paths?: string[]
+  tagName?: string
 }
 
 export type GitPushInput = {
@@ -99,6 +100,10 @@ export function buildGitCommitArgs(input: GitCommitInput): string[] {
   const paths = input.paths?.map(assertSafePath) ?? []
 
   return paths.length > 0 ? ['commit', '-m', message, '--', ...paths] : ['commit', '-m', message]
+}
+
+export function buildGitTagArgs(tagName: string): string[] {
+  return ['tag', assertSafeRef(tagName, 'Tag')]
 }
 
 export function buildGitPushArgs(input: GitPushInput): string[] {

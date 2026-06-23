@@ -21,6 +21,7 @@ import {
   buildGitMergeTreeArgs,
   buildGitPushArgs,
   buildGitRevListCountArgs,
+  buildGitTagArgs,
   buildGitVerifyRefArgs,
   parsePorcelainStatus,
   type GitAddInput,
@@ -52,7 +53,39 @@ import {
   type SshPrivateKeyRecord,
   type SshPublicKeyRecord
 } from './ssh-keys'
+import {
+  clearSshPassphrase,
+  listSshPassphrasePaths,
+  readSshPassphrases,
+  saveSshPassphrase,
+  withSshPassphraseAskpass
+} from './ssh-passphrases'
 import { parseRemoteAlignment, summarizeRemoteAlignment, type GitRemote, type RemoteAlignmentSummary } from './remote-alignment'
+import {
+  bindProjectService as bindProjectServiceRecord,
+  checkServiceDomain,
+  deleteOldServiceMonitorHistory,
+  deleteServiceConnection as deleteServiceConnectionRecord,
+  isMonitorableServiceDomain,
+  listAllProjectServices as listAllProjectServiceRecords,
+  listAllServiceMonitorHistory as listAllServiceMonitorHistoryRecords,
+  listLatestServiceMonitorChecks as listLatestServiceMonitorCheckRecords,
+  listProjectServices as listProjectServiceRecords,
+  listServiceConnections as listServiceConnectionRecords,
+  listServiceEnvironmentLogs as listServiceEnvironmentLogRecords,
+  listServiceMonitorHistory as listServiceMonitorHistoryRecords,
+  migrateServiceMonitoringTables,
+  recordServiceMonitorCheck,
+  saveProjectService as saveProjectServiceRecord,
+  saveServiceConnection as saveServiceConnectionRecord,
+  syncServiceConnection,
+  type ProjectServiceInput,
+  type ProjectServiceRecord,
+  type ServiceEnvironmentLogRecord,
+  type ServiceConnectionInput,
+  type ServiceConnectionRecord,
+  type ServiceMonitorCheckRecord
+} from './service-monitoring'
 
 type RepositoryScanResult = {
   id: string
@@ -271,6 +304,10 @@ type GitSetupStatus = {
   userEmail: string
   sshPublicKeys: SshPublicKeyRecord[]
   sshPrivateKeys: SshPrivateKeyRecord[]
+}
+
+type GitExecutionOptions = {
+  env?: NodeJS.ProcessEnv
 }
 
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
@@ -565,6 +602,7 @@ function migrateDatabase(db: Database.Database): void {
   `)
 
   migrateProjectBranchTagTable(db)
+  migrateServiceMonitoringTables(db)
 
   addColumnIfMissing(db, 'repositories', 'remotes_json', "TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(db, 'repositories', 'remote_count', 'INTEGER NOT NULL DEFAULT 0')
@@ -830,6 +868,18 @@ function deleteProjectPerson(projectId: string, personId: string): ProjectPerson
   return listProjectPeople(projectId)
 }
 
+function deleteProject(projectId: string): WorkspaceSnapshot {
+  const db = getDatabase()
+  const existing = db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId)
+
+  if (!existing) {
+    throw new Error('项目不存在')
+  }
+
+  db.prepare('DELETE FROM projects WHERE id = ?').run(projectId)
+  return getWorkspaceSnapshot()
+}
+
 function getWorkspaceSnapshot(): WorkspaceSnapshot {
   return {
     projects: listProjects(),
@@ -902,9 +952,13 @@ function upsertRepository(projectId: string, repository: RepositoryScanResult): 
   return { ...repository, projectId }
 }
 
-function runGitInPathStrict(localPath: string, args: string[]): Promise<string> {
+function createGitExecutionEnv(options: GitExecutionOptions = {}): NodeJS.ProcessEnv {
+  return options.env ? { ...process.env, ...options.env } : process.env
+}
+
+function runGitInPathStrict(localPath: string, args: string[], options: GitExecutionOptions = {}): Promise<string> {
   return new Promise((resolveOutput, reject) => {
-    execFile('git', ['-C', localPath, ...args], { timeout: 30000, maxBuffer: 1024 * 1024 * 20 }, (error, stdout, stderr) => {
+    execFile('git', ['-C', localPath, ...args], { timeout: 30000, maxBuffer: 1024 * 1024 * 20, env: createGitExecutionEnv(options) }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(stderr.trim() || error.message))
         return
@@ -928,9 +982,9 @@ function runGitInPathOptional(localPath: string, args: string[]): Promise<string
   })
 }
 
-function runGitInPathResult(localPath: string, args: string[]): Promise<GitCommandResult> {
+function runGitInPathResult(localPath: string, args: string[], options: GitExecutionOptions = {}): Promise<GitCommandResult> {
   return new Promise((resolveResult) => {
-    execFile('git', ['-C', localPath, ...args], { timeout: 30000, maxBuffer: 1024 * 1024 * 20 }, (error, stdout, stderr) => {
+    execFile('git', ['-C', localPath, ...args], { timeout: 30000, maxBuffer: 1024 * 1024 * 20, env: createGitExecutionEnv(options) }, (error, stdout, stderr) => {
       const exitCode = typeof error?.code === 'number' ? error.code : error ? null : 0
 
       resolveResult({
@@ -943,6 +997,10 @@ function runGitInPathResult(localPath: string, args: string[]): Promise<GitComma
       })
     })
   })
+}
+
+async function withSavedSshPassphrases<T>(operation: (env: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
+  return withSshPassphraseAskpass(await readSshPassphrases(app.getPath('userData')), operation)
 }
 
 function runSshKeygen(args: string[]): Promise<string> {
@@ -1551,18 +1609,85 @@ async function fetchRepositoryRemote(repositoryId: string, remoteName?: string):
 
   if (remoteName) {
     const name = validateRepositoryRemoteName(remoteName)
-    await runGitInPathStrict(repository.localPath, ['fetch', name, '--prune'])
+    await withSavedSshPassphrases((env) => runGitInPathStrict(repository.localPath, ['fetch', name, '--prune'], { env }))
   } else {
-    await runGitInPathStrict(repository.localPath, ['fetch', '--all', '--prune'])
+    await withSavedSshPassphrases((env) => runGitInPathStrict(repository.localPath, ['fetch', '--all', '--prune'], { env }))
   }
 
   return rescanRepositoryRecord(repository)
 }
 
+const serviceMonitorIntervalMs = 5 * 60 * 1000
+const serviceMonitorRetentionDays = 30
+let serviceMonitorTimer: NodeJS.Timeout | null = null
+let serviceMonitorRunning = false
+
+function getServiceMonitorCutoffIso(): string {
+  return new Date(Date.now() - serviceMonitorRetentionDays * 24 * 60 * 60 * 1000).toISOString()
+}
+
+async function checkProjectServicesNow(projectId?: string): Promise<ProjectServiceRecord[]> {
+  const db = getDatabase()
+  const services = projectId ? listProjectServiceRecords(db, projectId) : listAllProjectServiceRecords(db)
+
+  for (const service of services) {
+    if (!service.enabled) {
+      continue
+    }
+
+    for (const domain of service.domains) {
+      if (!isMonitorableServiceDomain(domain)) {
+        continue
+      }
+
+      const result = await checkServiceDomain(domain)
+      recordServiceMonitorCheck(db, {
+        projectId: projectId ?? '',
+        serviceId: service.id,
+        domainId: domain.id,
+        ...result
+      })
+    }
+  }
+
+  deleteOldServiceMonitorHistory(db, getServiceMonitorCutoffIso())
+  return projectId ? listProjectServiceRecords(db, projectId) : listAllProjectServiceRecords(db)
+}
+
+async function runServiceMonitorSweep(projectId?: string): Promise<void> {
+  if (serviceMonitorRunning) {
+    return
+  }
+
+  serviceMonitorRunning = true
+
+  try {
+    await checkProjectServicesNow(projectId)
+  } catch (error) {
+    console.error('Service monitor sweep failed', error)
+  } finally {
+    serviceMonitorRunning = false
+  }
+}
+
+function startServiceMonitorScheduler(): void {
+  if (serviceMonitorTimer) {
+    return
+  }
+
+  serviceMonitorTimer = setInterval(() => {
+    runServiceMonitorSweep().catch((error) => console.error('Service monitor sweep failed', error))
+  }, serviceMonitorIntervalMs)
+  serviceMonitorTimer.unref?.()
+  setTimeout(() => runServiceMonitorSweep().catch((error) => console.error('Service monitor sweep failed', error)), 10000).unref?.()
+}
+
 async function runRepositoryGitCommand(input: GitCommandRequest): Promise<GitCommandResult> {
   const repository = getRepositoryOrThrow(input.repositoryId)
   const args = parseControlledGitCommand(input.command)
-  const result = await runGitInPathResult(repository.localPath, args)
+  const result = args[0] === 'fetch'
+    ? await withSavedSshPassphrases((env) => runGitInPathResult(repository.localPath, args, { env }))
+    : await runGitInPathResult(repository.localPath, args)
 
   if (result.ok && args[0] === 'fetch') {
     await rescanRepositoryRecord(repository)
@@ -1727,9 +1852,9 @@ async function analyzeRepositoryMerge(repositoryId: string, input: GitMergeAnaly
   }
 }
 
-async function runRepositoryWriteOperation(repositoryId: string, args: string[]): Promise<GitOperationResult> {
+async function runRepositoryWriteOperation(repositoryId: string, args: string[], options: GitExecutionOptions = {}): Promise<GitOperationResult> {
   const repository = getRepositoryOrThrow(repositoryId)
-  const result = await runGitInPathResult(repository.localPath, args)
+  const result = await runGitInPathResult(repository.localPath, args, options)
   const rescannedRepository = await rescanRepositoryRecord(repository)
   const status = await getRepositoryWorkspaceStatus(repositoryId)
 
@@ -1739,6 +1864,29 @@ async function runRepositoryWriteOperation(repositoryId: string, args: string[])
     status,
     stdout: result.stdout,
     stderr: result.stderr
+  }
+}
+
+async function commitRepositoryChanges(repositoryId: string, input: GitCommitInput): Promise<GitOperationResult> {
+  const tagName = input.tagName?.trim() ?? ''
+  const tagArgs = tagName ? buildGitTagArgs(tagName) : null
+  const commitResult = await runRepositoryWriteOperation(repositoryId, buildGitCommitArgs(input))
+
+  if (!commitResult.ok || !tagArgs) {
+    return commitResult
+  }
+
+  const repository = getRepositoryOrThrow(repositoryId)
+  const tagResult = await runGitInPathResult(repository.localPath, tagArgs)
+  const rescannedRepository = await rescanRepositoryRecord(repository)
+  const status = await getRepositoryWorkspaceStatus(repositoryId)
+
+  return {
+    ok: tagResult.ok,
+    repository: rescannedRepository,
+    status,
+    stdout: [commitResult.stdout, tagResult.stdout].filter(Boolean).join('\n'),
+    stderr: tagResult.ok ? commitResult.stderr : tagResult.stderr || tagResult.stdout || 'Tag 创建失败'
   }
 }
 
@@ -1831,7 +1979,7 @@ async function syncRepositoryRemote(repositoryId: string): Promise<RepositoryRec
     throw new Error('仓库不存在')
   }
 
-  await runGitInPathStrict(existing.localPath, ['fetch', '--all', '--prune'])
+  await withSavedSshPassphrases((env) => runGitInPathStrict(existing.localPath, ['fetch', '--all', '--prune'], { env }))
 
   const scanned = await scanRepository(existing.localPath)
 
@@ -1979,12 +2127,13 @@ function readSshFingerprint(path: string, content: string): Promise<string> {
 }
 
 async function getGitSetupStatus(): Promise<GitSetupStatus> {
-  const [gitVersion, userName, userEmail, sshKeys] = await Promise.all([
+  const [gitVersion, userName, userEmail, passphrasePaths] = await Promise.all([
     runGit(['--version']),
     runGit(['config', '--global', 'user.name']),
     runGit(['config', '--global', 'user.email']),
-    readSshKeyInventory(sshDirectory, readSshFingerprint)
+    listSshPassphrasePaths(app.getPath('userData'))
   ])
+  const sshKeys = await readSshKeyInventory(sshDirectory, readSshFingerprint, passphrasePaths)
 
   return {
     gitAvailable: gitVersion.length > 0,
@@ -2074,6 +2223,8 @@ ipcMain.handle(
   }
 )
 
+ipcMain.handle('projects:delete', async (_event, projectId: string): Promise<WorkspaceSnapshot> => deleteProject(projectId))
+
 ipcMain.handle('repositories:list', async (_event, projectId?: string): Promise<RepositoryRecord[]> => listRepositories(projectId))
 
 ipcMain.handle('repository:detail', async (_event, repositoryId: string): Promise<RepositoryRecord> => {
@@ -2121,11 +2272,11 @@ ipcMain.handle('repository:git-add', async (_event, repositoryId: string, input:
 )
 
 ipcMain.handle('repository:git-commit', async (_event, repositoryId: string, input: GitCommitInput): Promise<GitOperationResult> =>
-  runRepositoryWriteOperation(repositoryId, buildGitCommitArgs(input))
+  commitRepositoryChanges(repositoryId, input)
 )
 
 ipcMain.handle('repository:git-push', async (_event, repositoryId: string, input: GitPushInput): Promise<GitOperationResult> =>
-  runRepositoryWriteOperation(repositoryId, buildGitPushArgs(input))
+  withSavedSshPassphrases((env) => runRepositoryWriteOperation(repositoryId, buildGitPushArgs(input), { env }))
 )
 
 ipcMain.handle('repository:merge-analysis', async (_event, repositoryId: string, input: GitMergeAnalysisInput): Promise<GitMergeAnalysis> =>
@@ -2172,6 +2323,61 @@ ipcMain.handle('project:branch-tag:save', async (_event, input: ProjectBranchTag
 
 ipcMain.handle('project:branch-tag:delete', async (_event, projectId: string, tagId: string): Promise<ProjectBranchTagRecord[]> =>
   deleteProjectBranchTagRecord(getDatabase(), projectId, tagId)
+)
+
+ipcMain.handle('service:connections:list', async (): Promise<ServiceConnectionRecord[]> => listServiceConnectionRecords(getDatabase()))
+
+ipcMain.handle('service:connection:save', async (_event, input: ServiceConnectionInput): Promise<ServiceConnectionRecord> => saveServiceConnectionRecord(getDatabase(), input))
+
+ipcMain.handle('service:connection:delete', async (_event, connectionId: string): Promise<ServiceConnectionRecord[]> =>
+  deleteServiceConnectionRecord(getDatabase(), connectionId)
+)
+
+ipcMain.handle(
+  'service:connection:test',
+  async (_event, connectionId: string): Promise<{ ok: boolean; message: string; serviceCount: number }> => {
+    const services = await syncServiceConnection(getDatabase(), connectionId)
+
+    return {
+      ok: true,
+      message: `读取到 ${services.length} 个服务`,
+      serviceCount: services.length
+    }
+  }
+)
+
+ipcMain.handle('service:services:list', async (): Promise<ProjectServiceRecord[]> => listAllProjectServiceRecords(getDatabase()))
+
+ipcMain.handle('project:services:list', async (_event, projectId: string): Promise<ProjectServiceRecord[]> => listProjectServiceRecords(getDatabase(), projectId))
+
+ipcMain.handle('project:service:save', async (_event, input: ProjectServiceInput): Promise<ProjectServiceRecord> => saveProjectServiceRecord(getDatabase(), input))
+
+ipcMain.handle('project:service:bind', async (_event, input: { projectId: string; serviceId: string; repositoryId?: string }): Promise<ProjectServiceRecord[]> =>
+  bindProjectServiceRecord(getDatabase(), input)
+)
+
+ipcMain.handle('project:services:sync', async (_event, connectionId?: string): Promise<ProjectServiceRecord[]> => {
+  const connections = connectionId
+    ? listServiceConnectionRecords(getDatabase()).filter((connection) => connection.id === connectionId)
+    : listServiceConnectionRecords(getDatabase())
+
+  for (const connection of connections) {
+    await syncServiceConnection(getDatabase(), connection.id)
+  }
+
+  return listAllProjectServiceRecords(getDatabase())
+})
+
+ipcMain.handle('service:monitor:check', async (_event, projectId?: string): Promise<ProjectServiceRecord[]> => checkProjectServicesNow(projectId))
+
+ipcMain.handle('service:monitor:latest', async (_event, projectId: string): Promise<ServiceMonitorCheckRecord[]> => listLatestServiceMonitorCheckRecords(getDatabase(), projectId))
+
+ipcMain.handle('service:monitor:history', async (_event, projectId: string): Promise<ServiceMonitorCheckRecord[]> => listServiceMonitorHistoryRecords(getDatabase(), projectId))
+
+ipcMain.handle('service:monitor:history:all', async (): Promise<ServiceMonitorCheckRecord[]> => listAllServiceMonitorHistoryRecords(getDatabase()))
+
+ipcMain.handle('service:environment:logs', async (_event, serviceId: string, environmentName: string): Promise<ServiceEnvironmentLogRecord[]> =>
+  listServiceEnvironmentLogRecords(getDatabase(), serviceId, environmentName)
 )
 
 ipcMain.handle(
@@ -2328,7 +2534,25 @@ ipcMain.handle('ssh:import-key', async (_event, input: SshKeyImportInput): Promi
 })
 
 ipcMain.handle('ssh:delete-key', async (_event, path: string, kind: 'private' | 'public'): Promise<GitSetupStatus> => {
-  await deleteSshKeyFile(sshDirectory, expandHomePath(path), kind)
+  const normalizedPath = resolveSshKeyFilePath(sshDirectory, expandHomePath(path), kind)
+  await deleteSshKeyFile(sshDirectory, normalizedPath, kind)
+
+  if (kind === 'private') {
+    await clearSshPassphrase(app.getPath('userData'), normalizedPath)
+  }
+
+  return getGitSetupStatus()
+})
+
+ipcMain.handle('ssh:save-private-key-passphrase', async (_event, path: string, passphrase: string): Promise<GitSetupStatus> => {
+  const normalizedPath = resolveSshKeyFilePath(sshDirectory, expandHomePath(path), 'private')
+  await saveSshPassphrase(app.getPath('userData'), normalizedPath, passphrase)
+  return getGitSetupStatus()
+})
+
+ipcMain.handle('ssh:clear-private-key-passphrase', async (_event, path: string): Promise<GitSetupStatus> => {
+  const normalizedPath = resolveSshKeyFilePath(sshDirectory, expandHomePath(path), 'private')
+  await clearSshPassphrase(app.getPath('userData'), normalizedPath)
   return getGitSetupStatus()
 })
 
@@ -2373,6 +2597,7 @@ ipcMain.handle('external:open-git-download', async (): Promise<void> => {
 
 app.whenReady().then(() => {
   createWindow()
+  startServiceMonitorScheduler()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

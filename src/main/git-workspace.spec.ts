@@ -10,6 +10,7 @@ import {
   buildGitMergeTreeArgs,
   buildGitPushArgs,
   buildGitRevListCountArgs,
+  buildGitTagArgs,
   buildGitVerifyRefArgs,
   parsePorcelainStatus
 } from './git-workspace.js'
@@ -30,10 +31,13 @@ describe('git workspace operations', () => {
   it('builds safe commit, push, and merge args', () => {
     assert.deepEqual(buildGitCommitArgs({ message: 'feat: add git workflow' }), ['commit', '-m', 'feat: add git workflow'])
     assert.deepEqual(buildGitCommitArgs({ message: 'feat: add git workflow', paths: ['src/main/index.ts'] }), ['commit', '-m', 'feat: add git workflow', '--', 'src/main/index.ts'])
+    assert.deepEqual(buildGitTagArgs('v1.2.3'), ['tag', 'v1.2.3'])
+    assert.deepEqual(buildGitTagArgs(' release/1.2.3 '), ['tag', 'release/1.2.3'])
     assert.deepEqual(buildGitPushArgs({ remote: 'origin', branch: 'main' }), ['push', 'origin', 'main'])
     assert.deepEqual(buildGitMergeArgs({ source: 'origin/main' }), ['merge', '--no-edit', 'origin/main'])
     assert.throws(() => buildGitCommitArgs({ message: '' }), /请输入提交信息/)
     assert.throws(() => buildGitCommitArgs({ message: 'feat: bad path', paths: ['src/main/index.ts;rm'] }), /不支持的文件路径/)
+    assert.throws(() => buildGitTagArgs('v1.2.3;rm'), /不支持的Tag/)
     assert.throws(() => buildGitPushArgs({ remote: 'bad/name', branch: 'main' }), /远端名称/)
     assert.throws(() => buildGitMergeArgs({ source: 'main;rm' }), /不支持的分支/)
   })

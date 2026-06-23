@@ -29,7 +29,8 @@ describe('ssh key management', () => {
 
       const inventory = await readSshKeyInventory(
         sshDirectory,
-        async (path) => `fingerprint:${basename(path)}`
+        async (path) => `fingerprint:${basename(path)}`,
+        new Set([join(sshDirectory, 'github-work')])
       )
 
       assert.deepEqual(
@@ -44,6 +45,7 @@ describe('ssh key management', () => {
       assert.equal(inventory.sshPrivateKeys[0].publicKeyPath, join(sshDirectory, 'github-work.pub'))
       assert.equal(inventory.sshPrivateKeys[0].mode, '0644')
       assert.equal(inventory.sshPrivateKeys[0].needsPermissionFix, true)
+      assert.equal(inventory.sshPrivateKeys[0].hasPassphrase, true)
       assert.equal(inventory.sshPublicKeys[0].pairedPrivateKeyPath, join(sshDirectory, 'github-work'))
       assert.equal(inventory.sshPublicKeys[1].pairedPrivateKeyPath, '')
       assert.equal(inventory.sshPublicKeys[0].fingerprint, 'fingerprint:github-work.pub')

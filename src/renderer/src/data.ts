@@ -70,6 +70,7 @@ export type GitAddInput = {
 export type GitCommitInput = {
   message: string
   paths?: string[]
+  tagName?: string
 }
 
 export type GitPushInput = {
@@ -273,6 +274,125 @@ export type Provider = {
   name: string
   type: 'Git' | 'Hosting' | 'Cloud' | 'DNS'
   status: 'Not configured' | 'Connected'
+}
+
+export type ServiceProviderType = 'railway' | 'vercel'
+
+export type RailwayTokenType = 'account' | 'workspace' | 'project'
+
+export type ServiceMonitorStatus = 'online' | 'degraded' | 'offline' | 'unknown'
+
+export type ServiceConnection = {
+  id: string
+  projectId: string
+  provider: ServiceProviderType
+  name: string
+  token: string
+  tokenConfigured: boolean
+  teamId: string
+  workspaceId: string
+  railwayTokenType: RailwayTokenType
+  createdAt: string
+  updatedAt: string
+}
+
+export type ServiceConnectionInput = {
+  id?: string
+  projectId?: string
+  provider: ServiceProviderType
+  name: string
+  token?: string
+  teamId?: string
+  workspaceId?: string
+  railwayTokenType?: RailwayTokenType
+}
+
+export type ProjectServiceEnvironment = {
+  id: string
+  projectId: string
+  serviceId: string
+  provider: ServiceProviderType
+  name: string
+  externalEnvironmentId: string
+  status: string
+  deploymentStatus: string
+  latestDeploymentId: string
+  latestDeploymentUrl: string
+  latestCommit: string
+  updatedAt: string
+}
+
+export type ProjectServiceDomain = {
+  id: string
+  projectId: string
+  serviceId: string
+  environmentId: string
+  environmentName: string
+  domain: string
+  url: string
+  kind: 'custom' | 'generated' | 'manual'
+  enabled: boolean
+  lastStatus: ServiceMonitorStatus
+  lastStatusCode: number
+  lastResponseMs: number
+  lastCheckedAt: string
+  lastError: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type ProjectService = {
+  id: string
+  projectId: string
+  provider: ServiceProviderType
+  connectionId: string
+  repositoryId: string
+  name: string
+  externalProjectId: string
+  externalServiceId: string
+  defaultEnvironment: string
+  healthPath: string
+  enabled: boolean
+  lastSyncedAt: string
+  createdAt: string
+  updatedAt: string
+  environments: ProjectServiceEnvironment[]
+  domains: ProjectServiceDomain[]
+}
+
+export type ProjectServiceInput = {
+  id?: string
+  projectId?: string
+  provider: ServiceProviderType
+  connectionId?: string
+  repositoryId?: string
+  name: string
+  externalProjectId?: string
+  externalServiceId?: string
+  defaultEnvironment?: string
+  healthPath?: string
+  enabled?: boolean
+  environments?: Array<Partial<ProjectServiceEnvironment> & { name: string }>
+  domains?: Array<Partial<ProjectServiceDomain> & { domain: string }>
+}
+
+export type ServiceMonitorCheck = {
+  id: string
+  projectId: string
+  serviceId: string
+  domainId: string
+  status: ServiceMonitorStatus
+  statusCode: number
+  responseMs: number
+  checkedAt: string
+  errorMessage: string
+}
+
+export type ServiceEnvironmentLogLine = {
+  timestamp: string
+  level: string
+  message: string
+  source: string
 }
 
 export type ContributorSummary = {
