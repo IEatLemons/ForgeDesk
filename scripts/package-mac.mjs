@@ -85,6 +85,7 @@ writeFileSync(
       version,
       description: packageJson.description,
       main: packageJson.main,
+      bin: packageJson.bin,
       type: packageJson.type,
       dependencies: packageJson.dependencies
     },

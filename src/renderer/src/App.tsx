@@ -2,6 +2,7 @@ import {
   Alert,
   Badge,
   Button,
+  Checkbox,
   Col,
   Collapse,
   Descriptions,
@@ -36,10 +37,12 @@ import {
   DiffOutlined,
   DownloadOutlined,
   EditOutlined,
+  ArrowLeftOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
   GithubOutlined,
   KeyOutlined,
+  LinkOutlined,
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
@@ -71,12 +74,22 @@ import type {
   ProjectBranchTag,
   ProjectGitSummary,
   ProjectPerson,
+  ProjectService,
+  ProjectServiceDomain,
+  ProjectServiceEnvironment,
   RemoteAlignmentBranch,
   RemoteAlignmentBranchStatus,
   RemoteAlignmentStatus,
   RemoteAlignmentSummary,
-  Repository
+  Repository,
+  ServiceConnection,
+  ServiceEnvironmentLogLine,
+  ServiceMonitorCheck,
+  ServiceMonitorStatus,
+  ServiceProviderType,
+  RailwayTokenType
 } from './data'
+import { APP_NAVIGATION_ITEMS, type AppNavigationKey } from './app-navigation'
 import { createDiffResultLines, createSourceDiffLines, type DiffDisplayLine } from './diff-view'
 import { createGitErrorGuidance, type GitErrorGuidance } from './git-error-guidance'
 import {
@@ -92,6 +105,16 @@ import {
   gitGraphLaneWidth,
   type GitGraphRow
 } from './git-log-view'
+import { createRepositorySummaryFields, shouldShowRepositorySummary, type ProjectDetailTabKey } from './project-detail-view'
+import {
+  closeProjectSettingsModule,
+  createInitialProjectSettingsView,
+  openProjectSettingsModule,
+  PROJECT_SETTINGS_MODULES,
+  type ProjectSettingsModuleKey
+} from './project-settings-view'
+import { getServiceProviderGuide, type ServiceProviderGuideProvider } from './service-config-guide'
+import { createServiceDetailSummary, getMonitorableServiceDomains, getProjectServiceStats } from './service-monitor-view'
 import { createEmptySshConfigEntry, parseSshConfigEntries, serializeSshConfigEntries, type SshConfigEntry } from './ssh-config-model'
 import { useForgeDeskStore } from './store'
 
@@ -115,7 +138,12 @@ type SshKeyImportForm = {
   fileName: string
 }
 
-type SettingsModuleKey = 'overview' | 'git' | 'private' | 'public' | 'config' | 'ai'
+type SshPassphraseForm = {
+  passphrase: string
+  confirmPassphrase: string
+}
+
+type SettingsModuleKey = 'overview' | 'git' | 'private' | 'public' | 'config' | 'services' | 'ai'
 
 type AiSettingsForm = {
   enabled: boolean
@@ -194,8 +222,39 @@ type RepositoryRemoteForm = {
   pushUrl: string
 }
 
+type ServiceConnectionForm = {
+  provider: ServiceProviderType
+  name: string
+  token?: string
+  teamId?: string
+  workspaceId?: string
+  railwayTokenType: RailwayTokenType
+}
+
+type ProjectServiceForm = {
+  provider: ServiceProviderType
+  connectionId?: string
+  repositoryId?: string
+  name: string
+  externalProjectId?: string
+  externalServiceId?: string
+  defaultEnvironment?: string
+  healthPath: string
+  enabled: boolean
+  domainsText?: string
+}
+
+type ProjectServiceBindingForm = {
+  serviceId: string
+  repositoryId?: string
+}
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '操作失败，请稍后重试'
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
 function getPathFileName(path: string): string {
@@ -310,8 +369,82 @@ function getRemoteAlignmentStatusMeta(status: RemoteAlignmentStatus | RemoteAlig
   return status ? statusMap[status] : { label: '未检测', color: 'default', badgeStatus: 'default' }
 }
 
+function getServiceProviderLabel(provider: ServiceProviderType): string {
+  return provider === 'railway' ? 'Railway' : 'Vercel'
+}
+
+function getServiceMonitorStatusMeta(status: ServiceMonitorStatus): {
+  label: string
+  color: string
+  badgeStatus: 'success' | 'processing' | 'default' | 'error' | 'warning'
+} {
+  const statusMap: Record<ServiceMonitorStatus, { label: string; color: string; badgeStatus: 'success' | 'processing' | 'default' | 'error' | 'warning' }> = {
+    online: { label: '在线', color: 'green', badgeStatus: 'success' },
+    degraded: { label: '异常', color: 'orange', badgeStatus: 'warning' },
+    offline: { label: '离线', color: 'red', badgeStatus: 'error' },
+    unknown: { label: '未检查', color: 'default', badgeStatus: 'default' }
+  }
+
+  return statusMap[status] ?? statusMap.unknown
+}
+
+function parseServiceDomainsText(value = ''): Array<{ domain: string; enabled: boolean; kind: 'manual' }> {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((domain) => ({ domain, enabled: true, kind: 'manual' }))
+}
+
+function formatServiceDomainsText(domains: ProjectServiceDomain[]): string {
+  return domains.map((domain) => domain.domain).join('\n')
+}
+
+function ServiceProviderGuidePanel({ provider }: { provider: ServiceProviderGuideProvider }): JSX.Element {
+  const guide = getServiceProviderGuide(provider)
+
+  return (
+    <div className="service-guide-box">
+      <div className="service-guide-heading">
+        <Space direction="vertical" size={2}>
+          <Space size={6} wrap>
+            <Tag>{guide.title}</Tag>
+            <Typography.Text strong>{guide.title} 配置入口</Typography.Text>
+          </Space>
+          <Typography.Text type="secondary">Token 保存后只显示已配置，不会展示明文。</Typography.Text>
+        </Space>
+        <Space wrap size={8} className="service-guide-actions">
+          <Button size="small" icon={<LinkOutlined />} href={guide.primaryTokenUrl} target="_blank" rel="noreferrer">
+            Token 页面
+          </Button>
+          {guide.projectTokenDocsUrl ? (
+            <Button size="small" href={guide.projectTokenDocsUrl} target="_blank" rel="noreferrer">
+              Project Token
+            </Button>
+          ) : null}
+          <Button size="small" href={guide.dashboardUrl} target="_blank" rel="noreferrer">
+            控制台
+          </Button>
+          <Button size="small" href={guide.docsUrl} target="_blank" rel="noreferrer">
+            API 文档
+          </Button>
+        </Space>
+      </div>
+      <ol className="service-guide-steps">
+        {guide.steps.map((step) => (
+          <li key={step}>{step}</li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
 function formatShortCommit(commitHash: string): string {
   return commitHash ? commitHash.slice(0, 7) : '-'
+}
+
+function formatDateTime(value: string): string {
+  return value ? new Date(value).toLocaleString() : '-'
 }
 
 function getRemoteAlignmentDetail(alignment: RemoteAlignmentSummary): string {
@@ -952,6 +1085,7 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
   const [gitIdentityForm] = Form.useForm<GitIdentityForm>()
   const [sshKeyForm] = Form.useForm<SshKeyForm>()
   const [sshImportForm] = Form.useForm<SshKeyImportForm>()
+  const [sshPassphraseForm] = Form.useForm<SshPassphraseForm>()
   const [aiSettingsForm] = Form.useForm<AiSettingsForm>()
   const [gitStatus, setGitStatus] = useState<GitSetupStatus | null>(null)
   const [sshConfig, setSshConfig] = useState<SshConfigFile | null>(null)
@@ -962,6 +1096,7 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
   const [sshConfigEntries, setSshConfigEntries] = useState<SshConfigEntry[]>([])
   const [sshImportKind, setSshImportKind] = useState<SshKeyKind>('private')
   const [sshImportModalOpen, setSshImportModalOpen] = useState(false)
+  const [sshPassphraseKey, setSshPassphraseKey] = useState<SshPrivateKeyRecord | null>(null)
   const [loadingGit, setLoadingGit] = useState(false)
   const [loadingSshConfig, setLoadingSshConfig] = useState(false)
   const [loadingAiSettings, setLoadingAiSettings] = useState(false)
@@ -970,6 +1105,7 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
   const [savingAiSettings, setSavingAiSettings] = useState(false)
   const [generatingSsh, setGeneratingSsh] = useState(false)
   const [importingSshKey, setImportingSshKey] = useState(false)
+  const [savingSshPassphrase, setSavingSshPassphrase] = useState(false)
   const [selectingImportFile, setSelectingImportFile] = useState(false)
   const [workingSshKeyPath, setWorkingSshKeyPath] = useState<string | null>(null)
 
@@ -1055,6 +1191,7 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
   const gitReady = Boolean(gitStatus?.gitAvailable && gitStatus.userName && gitStatus.userEmail)
   const aiReady = isAiSettingsReady(aiSettings)
   const sshReady = sshPrivateKeys.length + sshPublicKeys.length > 0
+  const sshPassphraseCount = sshPrivateKeys.filter((key) => key.hasPassphrase).length
   const sshIssueCount =
     sshPrivateKeys.filter((key) => !key.hasPublicKey || key.needsPermissionFix).length + sshPublicKeys.filter((key) => !key.pairedPrivateKeyPath).length
   const sshIdentityFileOptions = sshPrivateKeys.map((key) => ({
@@ -1256,6 +1393,71 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     }
   }
 
+  function openSshPassphraseModal(key: SshPrivateKeyRecord): void {
+    setSshPassphraseKey(key)
+    sshPassphraseForm.resetFields()
+  }
+
+  function closeSshPassphraseModal(): void {
+    setSshPassphraseKey(null)
+    sshPassphraseForm.resetFields()
+  }
+
+  async function savePrivateKeyPassphrase(): Promise<void> {
+    if (!sshPassphraseKey || !window.forgeDesk) {
+      return
+    }
+
+    const values = await sshPassphraseForm.validateFields()
+
+    if (values.passphrase !== values.confirmPassphrase) {
+      sshPassphraseForm.setFields([{ name: 'confirmPassphrase', errors: ['两次输入不一致'] }])
+      return
+    }
+
+    setSavingSshPassphrase(true)
+    setWorkingSshKeyPath(sshPassphraseKey.path)
+
+    try {
+      const status = await window.forgeDesk.saveSshPrivateKeyPassphrase(sshPassphraseKey.path, values.passphrase)
+      setGitStatus(status)
+      closeSshPassphraseModal()
+      message.success('私钥密码已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingSshPassphrase(false)
+      setWorkingSshKeyPath(null)
+    }
+  }
+
+  function clearPrivateKeyPassphrase(path: string): void {
+    Modal.confirm({
+      title: '清除私钥密码',
+      content: `将删除 ${getPathFileName(path)} 在 ForgeDesk 中保存的密码，不会修改私钥文件。`,
+      okText: '清除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      async onOk() {
+        if (!window.forgeDesk) {
+          return
+        }
+
+        setWorkingSshKeyPath(path)
+
+        try {
+          const status = await window.forgeDesk.clearSshPrivateKeyPassphrase(path)
+          setGitStatus(status)
+          message.success('私钥密码已清除')
+        } catch (error) {
+          message.error(getErrorMessage(error))
+        } finally {
+          setWorkingSshKeyPath(null)
+        }
+      }
+    })
+  }
+
   function deleteSshKey(path: string, kind: SshKeyKind): void {
     Modal.confirm({
       title: `删除 SSH ${getSshKeyKindLabel(kind)}`,
@@ -1378,9 +1580,11 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     {
       key: 'private',
       title: '私钥管理',
-      description: '生成、导入、修复权限和生成 pub。',
+      description: '生成、导入、修复权限、设置密码和生成 pub。',
       icon: <KeyOutlined />,
-      meta: `${sshPrivateKeys.length} 个${sshPrivateKeys.some((key) => !key.hasPublicKey) ? ' · 缺 pub' : ''}`,
+      meta: `${sshPrivateKeys.length} 个${sshPassphraseCount > 0 ? ` · ${sshPassphraseCount} 个有密码` : ''}${
+        sshPrivateKeys.some((key) => !key.hasPublicKey) ? ' · 缺 pub' : ''
+      }`,
       tone: sshPrivateKeys.some((key) => !key.hasPublicKey || key.needsPermissionFix) ? 'warning' : sshPrivateKeys.length > 0 ? 'ok' : 'neutral'
     },
     {
@@ -1398,6 +1602,14 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
       icon: <FileTextOutlined />,
       meta: sshConfig?.exists ? '已存在' : '未创建',
       tone: sshConfig?.exists ? 'ok' : 'neutral'
+    },
+    {
+      key: 'services',
+      title: '服务中心',
+      description: '维护 Vercel / Railway 连接、同步服务和自定义域名。',
+      icon: <ThunderboltOutlined />,
+      meta: '全局',
+      tone: 'neutral'
     },
     {
       key: 'ai',
@@ -1479,6 +1691,7 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
               <Typography.Text strong>{key.fileName}</Typography.Text>
               <Tag color={key.hasPublicKey ? 'green' : 'gold'}>{key.hasPublicKey ? '已配对公钥' : '缺少 pub'}</Tag>
               <Tag color={key.needsPermissionFix ? 'orange' : 'green'}>权限 {key.mode}</Tag>
+              <Tag color={key.hasPassphrase ? 'blue' : 'default'}>{key.hasPassphrase ? '已保存密码' : '未设密码'}</Tag>
             </Space>
             <Typography.Text type="secondary" copyable className="ssh-key-path">
               {key.path}
@@ -1500,6 +1713,14 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
           {key.needsPermissionFix && (
             <Button icon={<SaveOutlined />} loading={workingSshKeyPath === key.path} onClick={() => fixPrivateKeyPermissions(key.path)}>
               修复权限
+            </Button>
+          )}
+          <Button icon={<KeyOutlined />} loading={workingSshKeyPath === key.path} onClick={() => openSshPassphraseModal(key)}>
+            {key.hasPassphrase ? '更新密码' : '设置密码'}
+          </Button>
+          {key.hasPassphrase && (
+            <Button danger icon={<DeleteOutlined />} loading={workingSshKeyPath === key.path} onClick={() => clearPrivateKeyPassphrase(key.path)}>
+              清除密码
             </Button>
           )}
           <Button icon={<CopyOutlined />} loading={workingSshKeyPath === key.path} onClick={() => copySshKeyPath(key.path, 'private')}>
@@ -1792,6 +2013,10 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     )
   }
 
+  function renderServicesModule(): JSX.Element {
+    return <GlobalServiceCenterPanel onBack={() => setActiveSettingsModule('overview')} />
+  }
+
   function renderOverview(): JSX.Element {
     return (
       <div className="settings-module-grid">
@@ -1824,6 +2049,8 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
         return renderPublicModule()
       case 'config':
         return renderConfigModule()
+      case 'services':
+        return renderServicesModule()
       case 'ai':
         return renderAiModule()
       default:
@@ -1872,6 +2099,25 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
           </Form.Item>
           <Form.Item name="fileName" label="保存为" rules={[{ required: true, message: '请输入保存文件名' }]}>
             <Input placeholder={sshImportKind === 'private' ? 'github-work' : 'github-work.pub'} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={sshPassphraseKey ? `设置私钥密码：${sshPassphraseKey.fileName}` : '设置私钥密码'}
+        open={Boolean(sshPassphraseKey)}
+        okText="保存密码"
+        cancelText="取消"
+        confirmLoading={savingSshPassphrase}
+        onOk={savePrivateKeyPassphrase}
+        onCancel={closeSshPassphraseModal}
+      >
+        <Form form={sshPassphraseForm} layout="vertical">
+          <Form.Item name="passphrase" label="私钥密码" rules={[{ required: true, message: '请输入私钥密码' }]}>
+            <Input.Password autoFocus autoComplete="new-password" placeholder="输入私钥密码" />
+          </Form.Item>
+          <Form.Item name="confirmPassphrase" label="再次输入" rules={[{ required: true, message: '请再次输入私钥密码' }]}>
+            <Input.Password autoComplete="new-password" placeholder="再次输入私钥密码" />
           </Form.Item>
         </Form>
       </Modal>
@@ -2078,6 +2324,939 @@ function RepositoryRemoteManager({ repositories }: { repositories: Repository[] 
   )
 }
 
+function ProjectServiceSettings({ project, repositories = [] }: { project?: Project; repositories?: Repository[] }): JSX.Element {
+  const [connections, setConnections] = useState<ServiceConnection[]>([])
+  const [services, setServices] = useState<ProjectService[]>([])
+  const [allServices, setAllServices] = useState<ProjectService[]>([])
+  const [loading, setLoading] = useState(false)
+  const [workingConnectionId, setWorkingConnectionId] = useState<string | null>(null)
+  const [syncingConnectionId, setSyncingConnectionId] = useState<string | null>(null)
+  const [deletingConnectionId, setDeletingConnectionId] = useState<string | null>(null)
+  const [editingConnection, setEditingConnection] = useState<ServiceConnection | null>(null)
+  const [editingService, setEditingService] = useState<ProjectService | null>(null)
+  const [detailServiceId, setDetailServiceId] = useState<string | null>(null)
+  const [connectionModalOpen, setConnectionModalOpen] = useState(false)
+  const [serviceModalOpen, setServiceModalOpen] = useState(false)
+  const [bindingModalOpen, setBindingModalOpen] = useState(false)
+  const [savingConnection, setSavingConnection] = useState(false)
+  const [savingService, setSavingService] = useState(false)
+  const [savingBinding, setSavingBinding] = useState(false)
+  const [connectionForm] = Form.useForm<ServiceConnectionForm>()
+  const [serviceForm] = Form.useForm<ProjectServiceForm>()
+  const [bindingForm] = Form.useForm<ProjectServiceBindingForm>()
+  const isProjectMode = Boolean(project)
+
+  async function loadServiceSettings(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLoading(true)
+
+    try {
+      const [nextConnections, nextServices, nextAllServices] = await Promise.all([
+        window.forgeDesk.listServiceConnections(),
+        project ? window.forgeDesk.listProjectServices(project.id) : window.forgeDesk.listAllProjectServices(),
+        window.forgeDesk.listAllProjectServices()
+      ])
+      setConnections(nextConnections)
+      setServices(nextServices)
+      setAllServices(nextAllServices)
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadServiceSettings().catch((error) => message.error(getErrorMessage(error)))
+  }, [project?.id])
+
+  function openConnectionModal(connection?: ServiceConnection): void {
+    setEditingConnection(connection ?? null)
+    connectionForm.setFieldsValue({
+      provider: connection?.provider ?? 'vercel',
+      name: connection?.name ?? '',
+      token: '',
+      teamId: connection?.teamId ?? '',
+      workspaceId: connection?.workspaceId ?? '',
+      railwayTokenType: connection?.railwayTokenType ?? 'workspace'
+    })
+    setConnectionModalOpen(true)
+  }
+
+  async function saveConnection(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const values = await connectionForm.validateFields()
+    const token = values.token?.trim()
+    setSavingConnection(true)
+
+    try {
+      await window.forgeDesk.saveServiceConnection({
+        id: editingConnection?.id,
+        provider: values.provider,
+        name: values.name.trim() || getServiceProviderLabel(values.provider),
+        token: token || undefined,
+        teamId: values.teamId,
+        workspaceId: values.workspaceId,
+        railwayTokenType: values.railwayTokenType
+      })
+      setConnectionModalOpen(false)
+      setEditingConnection(null)
+      connectionForm.resetFields()
+      await loadServiceSettings()
+      message.success('服务连接已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingConnection(false)
+    }
+  }
+
+  async function syncConnection(connection?: ServiceConnection): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const loadingKey = connection?.id ?? 'all'
+    setSyncingConnectionId(loadingKey)
+
+    try {
+      const nextServices = await window.forgeDesk.syncProjectServices(connection?.id)
+      setAllServices(nextServices)
+      setServices(project ? await window.forgeDesk.listProjectServices(project.id) : nextServices)
+      setConnections(await window.forgeDesk.listServiceConnections())
+      message.success(connection ? `${connection.name} 已同步` : '服务已同步')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSyncingConnectionId(null)
+    }
+  }
+
+  async function testConnection(connection: ServiceConnection): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setWorkingConnectionId(connection.id)
+
+    try {
+      const result = await window.forgeDesk.testServiceConnection(connection.id)
+      setAllServices(await window.forgeDesk.listAllProjectServices())
+      if (project) {
+        setServices(await window.forgeDesk.listProjectServices(project.id))
+      } else {
+        setServices(await window.forgeDesk.listAllProjectServices())
+      }
+      message.success(result.message)
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setWorkingConnectionId(null)
+    }
+  }
+
+  function confirmDeleteConnection(connection: ServiceConnection): void {
+    Modal.confirm({
+      title: `删除平台连接 ${connection.name}？`,
+      content: '会删除 ForgeDesk 中保存的 Token，以及通过这个连接同步出来的服务；不会删除 Vercel / Railway 上的真实项目。',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        if (!window.forgeDesk) {
+          return
+        }
+
+        setDeletingConnectionId(connection.id)
+
+        try {
+          await window.forgeDesk.deleteServiceConnection(connection.id)
+          setDetailServiceId(null)
+          await loadServiceSettings()
+          message.success('平台连接已删除')
+        } catch (error) {
+          message.error(getErrorMessage(error))
+        } finally {
+          setDeletingConnectionId(null)
+        }
+      }
+    })
+  }
+
+  function openBindingModal(): void {
+    bindingForm.resetFields()
+    setBindingModalOpen(true)
+  }
+
+  async function saveServiceBinding(): Promise<void> {
+    if (!window.forgeDesk || !project) {
+      return
+    }
+
+    const values = await bindingForm.validateFields()
+    setSavingBinding(true)
+
+    try {
+      setServices(
+        await window.forgeDesk.bindProjectService({
+          projectId: project.id,
+          serviceId: values.serviceId,
+          repositoryId: values.repositoryId
+        })
+      )
+      setBindingModalOpen(false)
+      bindingForm.resetFields()
+      message.success('服务已绑定到当前项目')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingBinding(false)
+    }
+  }
+
+  function openServiceModal(service?: ProjectService): void {
+    setEditingService(service ?? null)
+    serviceForm.setFieldsValue({
+      provider: service?.provider ?? 'vercel',
+      connectionId: service?.connectionId || undefined,
+      repositoryId: service?.repositoryId || undefined,
+      name: service?.name ?? '',
+      externalProjectId: service?.externalProjectId ?? '',
+      externalServiceId: service?.externalServiceId ?? '',
+      defaultEnvironment: service?.defaultEnvironment ?? '',
+      healthPath: service?.healthPath ?? '/',
+      enabled: service?.enabled ?? true,
+      domainsText: service ? formatServiceDomainsText(getMonitorableServiceDomains(service)) : ''
+    })
+    setServiceModalOpen(true)
+  }
+
+  function openServiceDetail(service: ProjectService): void {
+    setDetailServiceId(service.id)
+  }
+
+  async function saveService(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const values = await serviceForm.validateFields()
+    setSavingService(true)
+
+    try {
+      const service = await window.forgeDesk.saveProjectService({
+        id: editingService?.id,
+        projectId: project?.id,
+        provider: values.provider,
+        connectionId: values.connectionId,
+        repositoryId: values.repositoryId,
+        name: values.name.trim(),
+        externalProjectId: values.externalProjectId,
+        externalServiceId: values.externalServiceId,
+        defaultEnvironment: values.defaultEnvironment,
+        healthPath: values.healthPath || '/',
+        enabled: values.enabled,
+        environments: editingService?.environments.map((environment) => ({
+          name: environment.name,
+          externalEnvironmentId: environment.externalEnvironmentId,
+          status: environment.status,
+          deploymentStatus: environment.deploymentStatus,
+          latestDeploymentId: environment.latestDeploymentId,
+          latestDeploymentUrl: environment.latestDeploymentUrl,
+          latestCommit: environment.latestCommit
+        })),
+        domains: parseServiceDomainsText(values.domainsText)
+      })
+      setServices((current) => {
+        const existing = current.some((item) => item.id === service.id)
+        return existing ? current.map((item) => (item.id === service.id ? service : item)) : [...current, service]
+      })
+      setAllServices(await window.forgeDesk.listAllProjectServices())
+      setServiceModalOpen(false)
+      setEditingService(null)
+      serviceForm.resetFields()
+      message.success('服务配置已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingService(false)
+    }
+  }
+
+  const connectionColumns: ColumnsType<ServiceConnection> = [
+    { title: '平台', dataIndex: 'provider', key: 'provider', width: 110, render: (provider) => <Tag>{getServiceProviderLabel(provider)}</Tag> },
+    { title: '连接', dataIndex: 'name', key: 'name', render: (name) => <Typography.Text strong>{name}</Typography.Text> },
+    {
+      title: 'Token',
+      key: 'token',
+      width: 110,
+      render: (_, connection) => <Tag color={connection.tokenConfigured ? 'green' : 'red'}>{connection.tokenConfigured ? '已配置' : '未配置'}</Tag>
+    },
+    {
+      title: '范围',
+      key: 'scope',
+      width: 190,
+      render: (_, connection) =>
+        connection.provider === 'vercel' ? (
+          <TableText value={connection.teamId || 'Personal'} />
+        ) : (
+          <TableText value={connection.railwayTokenType === 'project' ? 'Project Token' : connection.workspaceId || connection.railwayTokenType} />
+        )
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 330,
+      render: (_, connection) => (
+        <Space>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openConnectionModal(connection)}>
+            编辑
+          </Button>
+          <Button size="small" loading={workingConnectionId === connection.id} onClick={() => testConnection(connection)}>
+            测试
+          </Button>
+          <Button size="small" icon={<ReloadOutlined />} loading={syncingConnectionId === connection.id} onClick={() => syncConnection(connection)}>
+            同步
+          </Button>
+          <Button size="small" danger icon={<DeleteOutlined />} loading={deletingConnectionId === connection.id} onClick={() => confirmDeleteConnection(connection)}>
+            删除
+          </Button>
+        </Space>
+      )
+    }
+  ]
+
+  const serviceColumns: ColumnsType<ProjectService> = [
+    {
+      title: '服务',
+      key: 'service',
+      width: 220,
+      render: (_, service) => (
+        <Space direction="vertical" size={2}>
+          <Space size={6}>
+            <Tag>{getServiceProviderLabel(service.provider)}</Tag>
+            <Button
+              type="link"
+              className="table-link-button"
+              onClick={(event) => {
+                event.stopPropagation()
+                openServiceDetail(service)
+              }}
+            >
+              {service.name}
+            </Button>
+          </Space>
+          <Typography.Text type="secondary">{service.enabled ? '启用' : '停用'}</Typography.Text>
+        </Space>
+      )
+    },
+    {
+      title: '环境',
+      key: 'environments',
+      render: (_, service) => (
+        <Space wrap>
+          {service.environments.length > 0 ? (
+            service.environments.map((environment) => (
+              <Tag key={environment.id} color={environment.deploymentStatus === 'SUCCESS' || environment.deploymentStatus === 'READY' ? 'green' : 'default'}>
+                {environment.name}
+                {environment.deploymentStatus ? ` · ${environment.deploymentStatus}` : ''}
+              </Tag>
+            ))
+          ) : (
+            <Typography.Text type="secondary">未同步</Typography.Text>
+          )}
+        </Space>
+      )
+    },
+    {
+      title: '域名',
+      key: 'domains',
+      render: (_, service) => (
+        <Space direction="vertical" size={2}>
+          {getMonitorableServiceDomains(service).length > 0 ? (
+            getMonitorableServiceDomains(service).map((domain) => <TableText key={domain.id} value={domain.domain} />)
+          ) : (
+            <Typography.Text type="secondary">暂无自定义域名</Typography.Text>
+          )}
+        </Space>
+      )
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 170,
+      render: (_, service) => (
+        <Space>
+          <Button
+            size="small"
+            icon={<FileTextOutlined />}
+            onClick={(event) => {
+              event.stopPropagation()
+              openServiceDetail(service)
+            }}
+          >
+            详情
+          </Button>
+          <Button
+            size="small"
+            icon={<EditOutlined />}
+            onClick={(event) => {
+              event.stopPropagation()
+              openServiceModal(service)
+            }}
+          >
+            编辑
+          </Button>
+        </Space>
+      )
+    }
+  ]
+
+  const connectionProvider = Form.useWatch('provider', connectionForm) ?? editingConnection?.provider ?? 'vercel'
+  const connectionGuide = getServiceProviderGuide(connectionProvider)
+  const serviceProvider = Form.useWatch('provider', serviceForm) ?? editingService?.provider ?? 'vercel'
+  const serviceGuide = getServiceProviderGuide(serviceProvider)
+  const boundServiceIds = new Set(services.map((service) => service.id))
+  const detailService = detailServiceId
+    ? services.find((service) => service.id === detailServiceId) ?? allServices.find((service) => service.id === detailServiceId) ?? null
+    : null
+  const bindableServiceOptions = allServices
+    .filter((service) => !boundServiceIds.has(service.id))
+    .map((service) => ({
+      label: `${getServiceProviderLabel(service.provider)} · ${service.name}`,
+      value: service.id
+    }))
+
+  return (
+    <Space direction="vertical" size={16} className="project-service-settings">
+      {isProjectMode ? (
+        <Alert
+          type="info"
+          showIcon
+          message="项目只绑定服务，不保存平台 Token"
+          description="Vercel / Railway Token 和同步出来的服务在“设置 / 服务中心”维护；这里只选择哪些服务属于当前项目。"
+        />
+      ) : (
+        <>
+          <div className="service-guide-grid">
+            <ServiceProviderGuidePanel provider="vercel" />
+            <ServiceProviderGuidePanel provider="railway" />
+          </div>
+
+          <div className="remote-manager-toolbar service-settings-toolbar">
+            <Typography.Title level={4}>平台连接</Typography.Title>
+            <Space wrap>
+              <Button icon={<ReloadOutlined />} loading={syncingConnectionId === 'all'} disabled={connections.length === 0} onClick={() => syncConnection()}>
+                同步全部
+              </Button>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => openConnectionModal()}>
+                新增连接
+              </Button>
+            </Space>
+          </div>
+          <Table
+            rowKey="id"
+            size="small"
+            loading={loading}
+            columns={connectionColumns}
+            dataSource={connections}
+            pagination={false}
+            scroll={{ x: 920 }}
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无服务平台连接" /> }}
+          />
+        </>
+      )}
+
+      <div className="remote-manager-toolbar service-settings-toolbar">
+        <Typography.Title level={4}>{isProjectMode ? '已绑定服务' : '全部服务'}</Typography.Title>
+        <Space wrap>
+          {isProjectMode ? (
+            <Button icon={<LinkOutlined />} disabled={bindableServiceOptions.length === 0} onClick={openBindingModal}>
+              绑定已有服务
+            </Button>
+          ) : null}
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openServiceModal()}>
+            {isProjectMode ? '新增并绑定' : '新增服务'}
+          </Button>
+        </Space>
+      </div>
+      <Table
+        rowKey="id"
+        size="small"
+        loading={loading}
+        columns={serviceColumns}
+        dataSource={services}
+        pagination={false}
+        onRow={(service) => ({
+          className: 'clickable-table-row',
+          onClick: () => openServiceDetail(service)
+        })}
+        scroll={{ x: 980 }}
+        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={isProjectMode ? '当前项目还没有绑定服务' : '暂无服务配置'} /> }}
+      />
+
+      <ServiceDetailDrawer
+        service={detailService}
+        open={Boolean(detailService)}
+        onClose={() => setDetailServiceId(null)}
+        onEdit={(service) => {
+          setDetailServiceId(null)
+          openServiceModal(service)
+        }}
+      />
+
+      <Modal
+        title="绑定已有服务"
+        open={bindingModalOpen}
+        okText="绑定"
+        cancelText="取消"
+        confirmLoading={savingBinding}
+        onOk={saveServiceBinding}
+        onCancel={() => {
+          setBindingModalOpen(false)
+          bindingForm.resetFields()
+        }}
+      >
+        <Form form={bindingForm} layout="vertical">
+          <Form.Item name="serviceId" label="服务" rules={[{ required: true, message: '请选择服务' }]}>
+            <Select
+              showSearch
+              placeholder="选择服务中心里的服务"
+              options={bindableServiceOptions}
+              optionFilterProp="label"
+              notFoundContent="没有可绑定的服务"
+            />
+          </Form.Item>
+          <Form.Item name="repositoryId" label="关联仓库">
+            <Select allowClear options={repositories.map((repository) => ({ label: repository.name, value: repository.id }))} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={editingConnection ? `编辑连接：${editingConnection.name}` : '新增服务连接'}
+        open={connectionModalOpen}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={savingConnection}
+        onOk={saveConnection}
+        onCancel={() => {
+          setConnectionModalOpen(false)
+          setEditingConnection(null)
+          connectionForm.resetFields()
+        }}
+      >
+        <Form form={connectionForm} layout="vertical">
+          <Row gutter={[12, 0]}>
+            <Col span={12}>
+              <Form.Item name="provider" label="平台" rules={[{ required: true, message: '请选择平台' }]}>
+                <Select
+                  options={[
+                    { label: 'Vercel', value: 'vercel' },
+                    { label: 'Railway', value: 'railway' }
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="name" label="连接名称" rules={[{ required: true, message: '请输入连接名称' }]}>
+                <Input placeholder="Production" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="token" label="Token">
+            <Input.Password placeholder={editingConnection?.tokenConfigured ? '已保存，留空不变' : '平台 API Token'} />
+          </Form.Item>
+          <Alert
+            className="service-guide-alert"
+            type="info"
+            showIcon
+            message={`${connectionGuide.title} 配置提示`}
+            description={
+              <Space direction="vertical" size={8}>
+                <Typography.Text>{connectionGuide.steps[0]}</Typography.Text>
+                <Space wrap>
+                  <Button size="small" icon={<LinkOutlined />} href={connectionGuide.primaryTokenUrl} target="_blank" rel="noreferrer">
+                    打开 Token 页面
+                  </Button>
+                  <Button size="small" href={connectionGuide.docsUrl} target="_blank" rel="noreferrer">
+                    打开 API 文档
+                  </Button>
+                </Space>
+              </Space>
+            }
+          />
+          {connectionProvider === 'vercel' ? (
+            <Form.Item name="teamId" label="Vercel Team ID">
+              <Input placeholder="团队项目填写 team_xxx，个人项目可留空" />
+            </Form.Item>
+          ) : (
+            <Row gutter={[12, 0]}>
+              <Col span={12}>
+                <Form.Item name="railwayTokenType" label="Railway Token 类型">
+                  <Select
+                    options={[
+                      { label: 'Workspace', value: 'workspace' },
+                      { label: 'Account', value: 'account' },
+                      { label: 'Project', value: 'project' }
+                    ]}
+                  />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item name="workspaceId" label="Workspace ID">
+                  <Input placeholder="可选" />
+                </Form.Item>
+              </Col>
+            </Row>
+          )}
+        </Form>
+      </Modal>
+
+      <Modal
+        title={editingService ? `编辑服务：${editingService.name}` : '新增服务'}
+        open={serviceModalOpen}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={savingService}
+        onOk={saveService}
+        onCancel={() => {
+          setServiceModalOpen(false)
+          setEditingService(null)
+          serviceForm.resetFields()
+        }}
+      >
+        <Form form={serviceForm} layout="vertical">
+          <Row gutter={[12, 0]}>
+            <Col span={12}>
+              <Form.Item name="provider" label="平台" rules={[{ required: true, message: '请选择平台' }]}>
+                <Select
+                  options={[
+                    { label: 'Vercel', value: 'vercel' },
+                    { label: 'Railway', value: 'railway' }
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="name" label="服务名称" rules={[{ required: true, message: '请输入服务名称' }]}>
+                <Input placeholder="web" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Alert
+            className="service-guide-alert"
+            type="info"
+            showIcon
+            message={`${serviceGuide.title} 服务配置提示`}
+            description={
+              <Space direction="vertical" size={8}>
+                <Typography.Text>
+                  {serviceProvider === 'railway'
+                    ? 'Railway 项目里可用 Cmd/Ctrl+K 复制 Project、Service 或 Environment ID；Project Token 也在项目设置的 Tokens 页面创建。'
+                    : 'Vercel 通常同步后会自动带出项目和域名；团队项目请先在连接里填写 Team ID。'}
+                </Typography.Text>
+                <Space wrap>
+                  <Button size="small" href={serviceGuide.dashboardUrl} target="_blank" rel="noreferrer">
+                    打开控制台
+                  </Button>
+                  {serviceGuide.projectTokenDocsUrl ? (
+                    <Button size="small" href={serviceGuide.projectTokenDocsUrl} target="_blank" rel="noreferrer">
+                      Project Token
+                    </Button>
+                  ) : null}
+                  <Button size="small" href={serviceGuide.docsUrl} target="_blank" rel="noreferrer">
+                    API 文档
+                  </Button>
+                </Space>
+              </Space>
+            }
+          />
+          <Row gutter={[12, 0]}>
+            <Col span={isProjectMode ? 12 : 24}>
+              <Form.Item name="connectionId" label="平台连接">
+                <Select allowClear options={connections.map((connection) => ({ label: connection.name, value: connection.id }))} />
+              </Form.Item>
+            </Col>
+            {isProjectMode ? (
+              <Col span={12}>
+                <Form.Item name="repositoryId" label="关联仓库">
+                  <Select allowClear options={repositories.map((repository) => ({ label: repository.name, value: repository.id }))} />
+                </Form.Item>
+              </Col>
+            ) : null}
+          </Row>
+          <Row gutter={[12, 0]}>
+            <Col span={12}>
+              <Form.Item name="externalProjectId" label="平台项目 ID">
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="externalServiceId" label="平台服务 ID">
+                <Input />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={[12, 0]}>
+            <Col span={12}>
+              <Form.Item name="defaultEnvironment" label="默认环境">
+                <Input placeholder="production" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="healthPath" label="Health Path" rules={[{ required: true, message: '请输入检查路径' }]}>
+                <Input placeholder="/" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="enabled" valuePropName="checked">
+            <Checkbox>启用监控</Checkbox>
+          </Form.Item>
+          <Form.Item name="domainsText" label="域名">
+            <Input.TextArea rows={4} placeholder="app.example.com" />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </Space>
+  )
+}
+
+function ServiceDetailDrawer({
+  service,
+  open,
+  onClose,
+  onEdit
+}: {
+  service: ProjectService | null
+  open: boolean
+  onClose: () => void
+  onEdit: (service: ProjectService) => void
+}): JSX.Element {
+  const [logEnvironment, setLogEnvironment] = useState<ProjectServiceEnvironment | null>(null)
+  const [logLines, setLogLines] = useState<ServiceEnvironmentLogLine[]>([])
+  const [logLoading, setLogLoading] = useState(false)
+  const [logError, setLogError] = useState('')
+
+  useEffect(() => {
+    setLogEnvironment(null)
+    setLogLines([])
+    setLogError('')
+  }, [service?.id, open])
+
+  async function loadEnvironmentLogs(environment: ProjectServiceEnvironment): Promise<void> {
+    if (!service || !window.forgeDesk) {
+      return
+    }
+
+    setLogEnvironment(environment)
+    setLogLines([])
+    setLogError('')
+    setLogLoading(true)
+
+    try {
+      setLogLines(await window.forgeDesk.listServiceEnvironmentLogs(service.id, environment.name))
+    } catch (error) {
+      setLogError(getErrorMessage(error))
+    } finally {
+      setLogLoading(false)
+    }
+  }
+
+  const summary = service ? createServiceDetailSummary(service) : null
+  const monitorableDomains = service ? getMonitorableServiceDomains(service) : []
+  const environmentColumns: ColumnsType<ProjectServiceEnvironment> = [
+    {
+      title: '环境',
+      dataIndex: 'name',
+      key: 'name',
+      width: 150,
+      render: (name, environment) => (
+        <Space direction="vertical" size={2}>
+          <Tag color={environment.deploymentStatus === 'SUCCESS' || environment.deploymentStatus === 'READY' ? 'green' : 'default'}>{name}</Tag>
+          <Typography.Text type="secondary">{environment.deploymentStatus || '未同步部署'}</Typography.Text>
+        </Space>
+      )
+    },
+    { title: '最新提交', key: 'commit', width: 120, render: (_, environment) => formatShortCommit(environment.latestCommit) },
+    {
+      title: '部署 ID',
+      key: 'deploymentId',
+      width: 180,
+      render: (_, environment) => <TableText value={environment.latestDeploymentId || '-'} />
+    },
+    {
+      title: '部署 URL',
+      key: 'deploymentUrl',
+      render: (_, environment) => <TableText value={environment.latestDeploymentUrl || '-'} />
+    },
+    { title: '更新时间', key: 'updatedAt', width: 180, render: (_, environment) => formatDateTime(environment.updatedAt) },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 100,
+      render: (_, environment) => (
+        <Button size="small" icon={<FileTextOutlined />} disabled={!environment.latestDeploymentId} onClick={() => loadEnvironmentLogs(environment)}>
+          日志
+        </Button>
+      )
+    }
+  ]
+  const domainColumns: ColumnsType<ProjectServiceDomain> = [
+    {
+      title: '域名',
+      key: 'domain',
+      render: (_, domain) => (
+        <Space direction="vertical" size={2}>
+          <TableText value={domain.domain} />
+          <Typography.Text type="secondary" className="table-text" ellipsis={{ tooltip: domain.url }}>
+            {domain.url}
+          </Typography.Text>
+        </Space>
+      )
+    },
+    { title: '环境', key: 'environmentName', width: 120, render: (_, domain) => domain.environmentName || '-' },
+    { title: '来源', key: 'kind', width: 100, render: (_, domain) => <Tag>{domain.kind}</Tag> },
+    {
+      title: '状态',
+      key: 'status',
+      width: 130,
+      render: (_, domain) => {
+        const meta = getServiceMonitorStatusMeta(domain.lastStatus)
+        return <Badge status={meta.badgeStatus} text={meta.label} />
+      }
+    },
+    { title: 'HTTP', key: 'statusCode', width: 90, render: (_, domain) => domain.lastStatusCode || '-' },
+    { title: '响应时间', key: 'responseMs', width: 110, render: (_, domain) => (domain.lastResponseMs ? `${domain.lastResponseMs} ms` : '-') },
+    { title: '最后检查', key: 'lastCheckedAt', width: 180, render: (_, domain) => formatDateTime(domain.lastCheckedAt) },
+    {
+      title: '错误',
+      key: 'lastError',
+      width: 180,
+      render: (_, domain) =>
+        domain.lastError ? (
+          <Typography.Text type="danger" className="table-text" ellipsis={{ tooltip: domain.lastError }}>
+            {domain.lastError}
+          </Typography.Text>
+        ) : (
+          '-'
+        )
+    }
+  ]
+
+  return (
+    <Drawer
+      title={service ? `${service.name} 详情` : '服务详情'}
+      open={open}
+      width={860}
+      onClose={onClose}
+      extra={service ? (
+        <Button icon={<EditOutlined />} onClick={() => onEdit(service)}>
+          编辑
+        </Button>
+      ) : null}
+    >
+      {service && summary ? (
+        <Space direction="vertical" size={16} className="service-detail-drawer">
+          <Row gutter={[12, 12]}>
+            <Col xs={12} md={6}><div className="metric-tile"><Statistic title="环境" value={summary.environmentCount} /></div></Col>
+            <Col xs={12} md={6}><div className="metric-tile"><Statistic title="可监控域名" value={summary.monitorableDomainCount} /></div></Col>
+            <Col xs={12} md={6}><div className="metric-tile"><Statistic title="在线" value={summary.online} /></div></Col>
+            <Col xs={12} md={6}><div className="metric-tile"><Statistic title="异常 / 离线" value={`${summary.degraded} / ${summary.offline}`} /></div></Col>
+          </Row>
+          <Descriptions column={2} size="small" bordered>
+            <Descriptions.Item label="平台">{getServiceProviderLabel(service.provider)}</Descriptions.Item>
+            <Descriptions.Item label="状态">{service.enabled ? '启用' : '停用'}</Descriptions.Item>
+            <Descriptions.Item label="平台项目 ID">{service.externalProjectId || '-'}</Descriptions.Item>
+            <Descriptions.Item label="平台服务 ID">{service.externalServiceId || '-'}</Descriptions.Item>
+            <Descriptions.Item label="默认环境">{service.defaultEnvironment || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Health Path">{service.healthPath || '/'}</Descriptions.Item>
+            <Descriptions.Item label="上次同步">{formatDateTime(service.lastSyncedAt)}</Descriptions.Item>
+            <Descriptions.Item label="生成域名">{summary.generatedDomainCount > 0 ? `${summary.generatedDomainCount} 个已隐藏` : '-'}</Descriptions.Item>
+          </Descriptions>
+          <Tabs
+            items={[
+              {
+                key: 'environments',
+                label: '环境部署',
+                children: (
+                  <Space direction="vertical" size={12} className="service-detail-tab">
+                    <Table
+                      rowKey="id"
+                      size="small"
+                      columns={environmentColumns}
+                      dataSource={service.environments}
+                      pagination={false}
+                      scroll={{ x: 920 }}
+                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无环境数据" /> }}
+                    />
+                    {logEnvironment ? (
+                      <div className="service-detail-log-panel">
+                        <Typography.Title level={5}>{logEnvironment.name} 部署日志</Typography.Title>
+                        <Spin spinning={logLoading}>
+                          {logError ? <Alert type="warning" showIcon message="日志暂不可用" description={logError} /> : null}
+                          {!logError && logLines.length === 0 && !logLoading ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日志" /> : null}
+                          <Space direction="vertical" size={8} className="service-log-lines">
+                            {logLines.map((line, index) => (
+                              <div key={`${line.timestamp}-${index}`} className="service-log-line">
+                                <Typography.Text type="secondary">{formatDateTime(line.timestamp)}</Typography.Text>
+                                <Tag>{line.level || 'log'}</Tag>
+                                <Typography.Text>{line.message || '-'}</Typography.Text>
+                              </div>
+                            ))}
+                          </Space>
+                        </Spin>
+                      </div>
+                    ) : null}
+                  </Space>
+                )
+              },
+              {
+                key: 'domains',
+                label: '域名监控',
+                children: (
+                  <Table
+                    rowKey="id"
+                    size="small"
+                    columns={domainColumns}
+                    dataSource={monitorableDomains}
+                    pagination={false}
+                    scroll={{ x: 980 }}
+                    locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无自定义域名" /> }}
+                  />
+                )
+              }
+            ]}
+          />
+        </Space>
+      ) : null}
+    </Drawer>
+  )
+}
+
+function GlobalServiceCenterPanel({ onBack }: { onBack?: () => void }): JSX.Element {
+  return (
+    <div className="panel settings-module-panel">
+      <div className="settings-module-header">
+        <Space direction="vertical" size={2}>
+          <Typography.Title level={3}>服务中心</Typography.Title>
+          <Typography.Text type="secondary">全局维护 Vercel / Railway Token、同步出来的服务和自定义域名。</Typography.Text>
+        </Space>
+        {onBack ? (
+          <Button onClick={onBack}>返回总览</Button>
+        ) : null}
+      </div>
+      <ProjectServiceSettings />
+    </div>
+  )
+}
+
 function getWorkspaceFileStatusLabel(file: GitStatusFile): { label: string; color: string } {
   if (file.conflict) {
     return { label: '冲突', color: 'red' }
@@ -2126,6 +3305,7 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
   const [status, setStatus] = useState<GitWorkspaceStatus | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [commitMessage, setCommitMessage] = useState('')
+  const [commitTag, setCommitTag] = useState('')
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
   const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
   const [loadingStatus, setLoadingStatus] = useState(false)
@@ -2145,6 +3325,7 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
       setRepositoryId('')
       setStatus(null)
       setSelectedPaths([])
+      setCommitTag('')
       return
     }
 
@@ -2305,7 +3486,7 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
     }
   }
 
-  async function commitSelectedFilesAfterConfirm(trimmedMessage: string): Promise<void> {
+  async function commitSelectedFilesAfterConfirm(trimmedMessage: string, trimmedTag: string): Promise<void> {
     setWorking(true)
 
     try {
@@ -2315,7 +3496,7 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
         return
       }
 
-      const result = await window.forgeDesk.gitCommit(selectedRepository.id, { message: trimmedMessage })
+      const result = await window.forgeDesk.gitCommit(selectedRepository.id, { message: trimmedMessage, tagName: trimmedTag || undefined })
       updateRepository(result.repository)
       setStatus(result.status)
 
@@ -2324,8 +3505,9 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
         return
       }
 
-      message.success('提交已创建')
+      message.success(trimmedTag ? `提交已创建，Tag ${trimmedTag} 已设置` : '提交已创建')
       setCommitMessage('')
+      setCommitTag('')
       setSelectedPaths([])
       await onChanged()
       onClose()
@@ -2343,6 +3525,7 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
     }
 
     const trimmedMessage = commitMessage.trim()
+    const trimmedTag = commitTag.trim()
 
     if (!trimmedMessage) {
       message.warning('请输入提交信息')
@@ -2360,6 +3543,7 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
         content: (
           <Space direction="vertical" size={6}>
             {needsAutoStage && <Typography.Text>将先自动暂存当前勾选的 {selectedPaths.length} 个文件，然后创建提交。</Typography.Text>}
+            {trimmedTag && <Typography.Text>提交成功后会创建 Tag：{trimmedTag}</Typography.Text>}
             {unselectedStagedFiles.length > 0 && (
               <Typography.Text type="warning">
                 另有 {unselectedStagedFiles.length} 个已暂存但未勾选的文件。Git 会把已暂存内容一起提交。
@@ -2369,12 +3553,12 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
         ),
         okText: '确认暂存并提交',
         cancelText: '取消',
-        onOk: () => commitSelectedFilesAfterConfirm(trimmedMessage)
+        onOk: () => commitSelectedFilesAfterConfirm(trimmedMessage, trimmedTag)
       })
       return
     }
 
-    await commitSelectedFilesAfterConfirm(trimmedMessage)
+    await commitSelectedFilesAfterConfirm(trimmedMessage, trimmedTag)
   }
 
   const fileColumns: ColumnsType<GitStatusFile> = [
@@ -2460,6 +3644,14 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
             </Button>
           }
           onChange={(event) => setCommitMessage(event.target.value)}
+        />
+
+        <Input
+          value={commitTag}
+          addonBefore="版本 Tag"
+          placeholder="可选，例如 v1.2.3"
+          allowClear
+          onChange={(event) => setCommitTag(event.target.value)}
         />
 
         <Table
@@ -2969,6 +4161,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
   const [status, setStatus] = useState<GitWorkspaceStatus | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [commitMessage, setCommitMessage] = useState('')
+  const [commitTag, setCommitTag] = useState('')
   const [pushRemote, setPushRemote] = useState('origin')
   const [pushBranch, setPushBranch] = useState('')
   const [mergeSource, setMergeSource] = useState('')
@@ -3164,7 +4357,22 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
             <Typography.Text strong>提交</Typography.Text>
             <Space.Compact className="git-operation-compact">
               <Input value={commitMessage} placeholder="feat: update workspace" onChange={(event) => setCommitMessage(event.target.value)} />
-              <Button type="primary" loading={working} disabled={!selectedRepository || !commitMessage.trim()} onClick={() => selectedRepository && runGitWrite(() => window.forgeDesk.gitCommit(selectedRepository.id, { message: commitMessage }), '提交已创建')}>
+              <Input className="git-operation-tag-input" value={commitTag} placeholder="Tag 可选，如 v1.2.3" allowClear onChange={(event) => setCommitTag(event.target.value)} />
+              <Button
+                type="primary"
+                loading={working}
+                disabled={!selectedRepository || !commitMessage.trim()}
+                onClick={() => {
+                  const tagName = commitTag.trim()
+                  return (
+                    selectedRepository &&
+                    runGitWrite(
+                      () => window.forgeDesk.gitCommit(selectedRepository.id, { message: commitMessage, tagName: tagName || undefined }),
+                      tagName ? `提交已创建，Tag ${tagName} 已设置` : '提交已创建'
+                    )
+                  )
+                }}
+              >
                 提交
               </Button>
             </Space.Compact>
@@ -3385,6 +4593,7 @@ function ProjectSettingsPanel({
   const [form] = Form.useForm<ProjectSettingsForm>()
   const [savingProject, setSavingProject] = useState(false)
   const [branchTagRefreshToken, setBranchTagRefreshToken] = useState(0)
+  const [settingsView, setSettingsView] = useState(createInitialProjectSettingsView)
 
   function notifyBranchTagsChanged(): void {
     setBranchTagRefreshToken((current) => current + 1)
@@ -3420,91 +4629,107 @@ function ProjectSettingsPanel({
     }
   }
 
-  return (
-    <Space direction="vertical" size={18} className="project-settings-panel">
-      <div className="panel project-settings-basic">
-        <div className="panel-title">
-          <Typography.Title level={4}>基础信息</Typography.Title>
-          <Button type="primary" icon={<SaveOutlined />} loading={savingProject} onClick={saveProjectSettings}>
-            保存
-          </Button>
-        </div>
-        <Form form={form} layout="vertical" className="project-settings-form">
-          <Row gutter={[16, 0]}>
-            <Col xs={24} md={12}>
-              <Form.Item name="name" label="项目名称" rules={[{ required: true, message: '请输入项目名称' }]}>
-                <Input placeholder="例如 CardPIE" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="owner" label="负责人">
-                <Input placeholder="可选，例如 Stone" />
-              </Form.Item>
-            </Col>
-            <Col span={24}>
-              <Form.Item name="workspacePath" label="项目目录" rules={[{ required: true, message: '请输入项目目录' }]}>
-                <Input placeholder="/Users/stone/Dev/project" />
-              </Form.Item>
-            </Col>
-            <Col span={24}>
-              <Form.Item name="description" label="描述">
-                <Input.TextArea rows={3} placeholder="可选，记录项目用途或说明" />
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
-        <Alert type="info" showIcon message="修改项目目录只更新项目记录，不会自动重新扫描仓库。" />
-      </div>
+  const moduleIcons: Record<ProjectSettingsModuleKey, JSX.Element> = {
+    basic: <SettingOutlined />,
+    people: <TeamOutlined />,
+    branches: <BranchesOutlined />,
+    repositories: <GithubOutlined />,
+    remotes: <BranchesOutlined />,
+    services: <ThunderboltOutlined />,
+    commands: <FileTextOutlined />
+  }
+  const activeModule = PROJECT_SETTINGS_MODULES.find((module) => module.key === settingsView.activeModuleKey) ?? PROJECT_SETTINGS_MODULES[0]
 
-      <div className="project-settings-section">
-        <div className="project-settings-heading">
-          <Typography.Title level={4}>
-            <TeamOutlined /> 人员映射
-          </Typography.Title>
-          <Typography.Text type="secondary">维护当前项目内真实人员和 Git 提交身份的归属关系。</Typography.Text>
-        </div>
-        <ProjectPeopleMapping project={project} contributors={contributors} onChanged={onSummaryChanged} />
-      </div>
-
-      <div className="project-settings-section">
-        <div className="project-settings-heading">
-          <Typography.Title level={4}>
-            <BranchesOutlined /> 分支标签颜色
-          </Typography.Title>
-          <Typography.Text type="secondary">按分支短名维护 Log 树里的 ref 标签颜色，例如 main 会覆盖本地和任意远端的 main。</Typography.Text>
-        </div>
-        <ProjectBranchTagSettings project={project} onChanged={notifyBranchTagsChanged} />
-      </div>
-
-      <div className="project-settings-section">
-        <div className="project-settings-heading">
-          <Typography.Title level={4}>
-            <BranchesOutlined /> Git 仓库
-          </Typography.Title>
-          <Typography.Text type="secondary">查看当前项目仓库状态，并配置单仓库提交身份。</Typography.Text>
-        </div>
-        {repositories.length > 0 ? (
+  function renderSettingsModuleContent(moduleKey: ProjectSettingsModuleKey): JSX.Element {
+    switch (moduleKey) {
+      case 'basic':
+        return (
+          <div className="panel project-settings-basic">
+            <div className="panel-title">
+              <Typography.Title level={4}>基础信息</Typography.Title>
+              <Button type="primary" icon={<SaveOutlined />} loading={savingProject} onClick={saveProjectSettings}>
+                保存
+              </Button>
+            </div>
+            <Form form={form} layout="vertical" className="project-settings-form">
+              <Row gutter={[16, 0]}>
+                <Col xs={24} md={12}>
+                  <Form.Item name="name" label="项目名称" rules={[{ required: true, message: '请输入项目名称' }]}>
+                    <Input placeholder="例如 CardPIE" />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Form.Item name="owner" label="负责人">
+                    <Input placeholder="可选，例如 Stone" />
+                  </Form.Item>
+                </Col>
+                <Col span={24}>
+                  <Form.Item name="workspacePath" label="项目目录" rules={[{ required: true, message: '请输入项目目录' }]}>
+                    <Input placeholder="/Users/stone/Dev/project" />
+                  </Form.Item>
+                </Col>
+                <Col span={24}>
+                  <Form.Item name="description" label="描述">
+                    <Input.TextArea rows={3} placeholder="可选，记录项目用途或说明" />
+                  </Form.Item>
+                </Col>
+              </Row>
+            </Form>
+            <Alert type="info" showIcon message="修改项目目录只更新项目记录，不会自动重新扫描仓库。" />
+          </div>
+        )
+      case 'people':
+        return <ProjectPeopleMapping project={project} contributors={contributors} onChanged={onSummaryChanged} />
+      case 'branches':
+        return <ProjectBranchTagSettings project={project} onChanged={notifyBranchTagsChanged} />
+      case 'repositories':
+        return repositories.length > 0 ? (
           <RepositoryTable repositories={repositories} branchTagRefreshToken={branchTagRefreshToken} />
         ) : (
           <div className="panel empty-project-panel">
             <Empty description="这个项目下还没有仓库" />
             <Typography.Text type="secondary">创建项目时扫描到的 Git 仓库会显示在这里；修改项目目录不会自动重新扫描。</Typography.Text>
           </div>
-        )}
-      </div>
+        )
+      case 'remotes':
+        return <RepositoryRemoteManager repositories={repositories} />
+      case 'services':
+        return <ProjectServiceSettings project={project} repositories={repositories} />
+      case 'commands':
+        return <GitCommandConsole repositories={repositories} />
+    }
+  }
 
-      <div className="project-settings-section">
-        <div className="project-settings-heading">
-          <Typography.Title level={4}>
-            <SettingOutlined /> 高级设置
-          </Typography.Title>
-          <Typography.Text type="secondary">管理仓库远端，并通过受控命令查看仓库状态，不开放任意 shell。</Typography.Text>
-        </div>
-        <div className="advanced-settings-stack">
-          <RepositoryRemoteManager repositories={repositories} />
-          <GitCommandConsole repositories={repositories} />
-        </div>
+  if (settingsView.mode === 'list') {
+    return (
+      <div className="project-settings-module-list">
+        {PROJECT_SETTINGS_MODULES.map((module) => (
+          <button className="project-settings-entry-card" key={module.key} type="button" onClick={() => setSettingsView(openProjectSettingsModule(module.key))}>
+            <span className="project-settings-entry-icon">{moduleIcons[module.key]}</span>
+            <span className="project-settings-entry-copy">
+              <Typography.Text strong>{module.title}</Typography.Text>
+              <Typography.Text type="secondary">{module.description}</Typography.Text>
+            </span>
+          </button>
+        ))}
       </div>
+    )
+  }
+
+  return (
+    <Space direction="vertical" size={18} className="project-settings-panel">
+      <div className="project-settings-detail-header">
+        <Button icon={<ArrowLeftOutlined />} onClick={() => setSettingsView(closeProjectSettingsModule())}>
+          返回设置列表
+        </Button>
+        <Space direction="vertical" size={2}>
+          <Typography.Title level={4}>
+            {moduleIcons[activeModule.key]} {activeModule.title}
+          </Typography.Title>
+          <Typography.Text type="secondary">{activeModule.description}</Typography.Text>
+        </Space>
+      </div>
+      <div className="project-settings-section">{renderSettingsModuleContent(activeModule.key)}</div>
     </Space>
   )
 }
@@ -3513,12 +4738,16 @@ function ProjectCard({
   project,
   selected,
   repositories,
-  onSelect
+  deleting,
+  onSelect,
+  onDelete
 }: {
   project: Project
   selected: boolean
   repositories: Repository[]
+  deleting: boolean
   onSelect: () => void
+  onDelete: () => void
 }): JSX.Element {
   const changedRepositories = repositories.filter((repository) => repository.hasChanges).length
   const aheadRepositories = repositories.filter((repository) => repository.ahead > 0).length
@@ -3526,10 +4755,35 @@ function ProjectCard({
   const remoteAlignmentStats = getProjectRemoteAlignmentStats(repositories)
 
   return (
-    <button className={`project-card${selected ? ' is-selected' : ''}`} onClick={onSelect}>
+    <div
+      className={`project-card${selected ? ' is-selected' : ''}`}
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onSelect()
+        }
+      }}
+    >
       <div className="project-card-heading">
         <Typography.Title level={4}>{project.name}</Typography.Title>
-        <Tag color={selected ? 'blue' : 'default'}>{selected ? '当前项目' : '项目'}</Tag>
+        <Space size={6}>
+          <Tag color={selected ? 'blue' : 'default'}>{selected ? '当前项目' : '项目'}</Tag>
+          <Button
+            type="text"
+            size="small"
+            danger
+            icon={<DeleteOutlined />}
+            loading={deleting}
+            aria-label={`删除项目 ${project.name}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              onDelete()
+            }}
+          />
+        </Space>
       </div>
       <Typography.Text className="table-text" type="secondary" ellipsis={{ tooltip: project.workspacePath }}>
         {project.workspacePath}
@@ -3541,7 +4795,7 @@ function ProjectCard({
         <span>{aheadRepositories} 个未推送</span>
         <span>{remoteAlignmentStats.aligned} 个远端对齐</span>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -3594,6 +4848,291 @@ function ProjectLogTreePanel({
         onCommitCountChange={onCommitCountChange}
         onRepositoryChange={onRepositoryChange}
       />
+    </Space>
+  )
+}
+
+function ProjectServiceMonitorPanel({ projectId }: { projectId: string }): JSX.Element {
+  const [services, setServices] = useState<ProjectService[]>([])
+  const [history, setHistory] = useState<ServiceMonitorCheck[]>([])
+  const [loading, setLoading] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [logDrawer, setLogDrawer] = useState<{ service: ProjectService; environment: ProjectServiceEnvironment } | null>(null)
+  const [logLines, setLogLines] = useState<ServiceEnvironmentLogLine[]>([])
+  const [logLoading, setLogLoading] = useState(false)
+  const [logError, setLogError] = useState('')
+
+  async function loadMonitorData(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLoading(true)
+
+    try {
+      const [nextServices, nextHistory] = await Promise.all([
+        window.forgeDesk.listProjectServices(projectId),
+        window.forgeDesk.listServiceMonitorHistory(projectId)
+      ])
+      setServices(nextServices)
+      setHistory(nextHistory)
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadMonitorData().catch((error) => message.error(getErrorMessage(error)))
+  }, [projectId])
+
+  async function checkServices(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setChecking(true)
+
+    try {
+      setServices(await window.forgeDesk.checkProjectServices(projectId))
+      setHistory(await window.forgeDesk.listServiceMonitorHistory(projectId))
+      message.success('服务监控已刷新')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  async function openEnvironmentLogs(service: ProjectService, environment: ProjectServiceEnvironment): Promise<void> {
+    setLogDrawer({ service, environment })
+    setLogLines([])
+    setLogError('')
+
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLogLoading(true)
+
+    try {
+      setLogLines(await window.forgeDesk.listServiceEnvironmentLogs(service.id, environment.name))
+    } catch (error) {
+      setLogError(getErrorMessage(error))
+    } finally {
+      setLogLoading(false)
+    }
+  }
+
+  const stats = getProjectServiceStats(services)
+  const monitorableDomainRows = services.flatMap((service) =>
+    getMonitorableServiceDomains(service).map((domain) => ({
+      key: domain.id,
+      service,
+      domain,
+      environment: service.environments.find((item) => item.id === domain.environmentId || item.name === domain.environmentName) ?? null
+    }))
+  )
+  const monitorableDomainIds = new Set(monitorableDomainRows.map((row) => row.domain.id))
+  const historyRows = history.filter((item) => monitorableDomainIds.has(item.domainId)).reverse()
+  const historyOption = {
+    tooltip: { trigger: 'axis' },
+    grid: { left: 48, right: 20, top: 28, bottom: 42 },
+    xAxis: {
+      type: 'category',
+      data: historyRows.map((item) => (item.checkedAt ? new Date(item.checkedAt).toLocaleString() : ''))
+    },
+    yAxis: { type: 'value' },
+    series: [
+      {
+        name: '响应时间 ms',
+        type: 'line',
+        smooth: true,
+        data: historyRows.map((item) => item.responseMs)
+      }
+    ]
+  }
+  const environmentColumns = (service: ProjectService): ColumnsType<ProjectServiceEnvironment> => [
+    {
+      title: '环境',
+      dataIndex: 'name',
+      key: 'name',
+      width: 160,
+      render: (name, environment) => (
+        <Space direction="vertical" size={2}>
+          <Tag color={environment.deploymentStatus === 'SUCCESS' || environment.deploymentStatus === 'READY' ? 'green' : 'default'}>{name}</Tag>
+          <Typography.Text type="secondary">{environment.deploymentStatus || '未同步部署'}</Typography.Text>
+        </Space>
+      )
+    },
+    { title: '最新提交', key: 'commit', width: 120, render: (_, environment) => formatShortCommit(environment.latestCommit) },
+    {
+      title: '部署 URL',
+      key: 'deploymentUrl',
+      render: (_, environment) =>
+        environment.latestDeploymentUrl ? (
+          <Typography.Text className="table-text" ellipsis={{ tooltip: environment.latestDeploymentUrl }}>
+            {environment.latestDeploymentUrl}
+          </Typography.Text>
+        ) : (
+          <Typography.Text type="secondary">-</Typography.Text>
+        )
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 110,
+      render: (_, environment) => (
+        <Button size="small" icon={<FileTextOutlined />} disabled={!environment.latestDeploymentId} onClick={() => openEnvironmentLogs(service, environment)}>
+          日志
+        </Button>
+      )
+    }
+  ]
+  const domainColumns: ColumnsType<ProjectServiceDomain> = [
+    {
+      title: '域名',
+      key: 'domain',
+      render: (_, domain) => (
+        <Space direction="vertical" size={2}>
+          <TableText value={domain.domain} />
+          <Typography.Text type="secondary" className="table-text" ellipsis={{ tooltip: domain.url }}>
+            {domain.url}
+          </Typography.Text>
+        </Space>
+      )
+    },
+    { title: '环境', key: 'environment', width: 120, render: (_, domain) => domain.environmentName || '-' },
+    {
+      title: '状态',
+      key: 'status',
+      width: 130,
+      render: (_, domain) => {
+        const meta = getServiceMonitorStatusMeta(domain.lastStatus)
+        return <Badge status={meta.badgeStatus} text={meta.label} />
+      }
+    },
+    { title: 'HTTP', key: 'statusCode', width: 90, render: (_, domain) => domain.lastStatusCode || '-' },
+    { title: '响应时间', key: 'responseMs', width: 110, render: (_, domain) => (domain.lastResponseMs ? `${domain.lastResponseMs} ms` : '-') },
+    {
+      title: '最后检查',
+      key: 'lastCheckedAt',
+      width: 190,
+      render: (_, domain) => (domain.lastCheckedAt ? new Date(domain.lastCheckedAt).toLocaleString() : '-')
+    },
+    {
+      title: '错误',
+      key: 'lastError',
+      width: 180,
+      render: (_, domain) =>
+        domain.lastError ? (
+          <Typography.Text type="danger" className="table-text" ellipsis={{ tooltip: domain.lastError }}>
+            {domain.lastError}
+          </Typography.Text>
+        ) : (
+          '-'
+        )
+    }
+  ]
+
+  return (
+    <Space direction="vertical" size={16} className="service-monitor-panel">
+      <div className="project-log-toolbar">
+        <div>
+          <Typography.Title level={4}>服务监控</Typography.Title>
+        </div>
+        <Button icon={<ReloadOutlined />} loading={checking} onClick={checkServices}>
+          刷新监控
+        </Button>
+      </div>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} md={6}><div className="metric-tile"><Statistic title="服务数" value={stats.serviceCount} /></div></Col>
+        <Col xs={24} md={6}><div className="metric-tile"><Statistic title="自定义域名" value={stats.domainCount} /></div></Col>
+        <Col xs={24} md={6}><div className="metric-tile"><Statistic title="在线" value={stats.online} /></div></Col>
+        <Col xs={24} md={6}><div className="metric-tile"><Statistic title="异常 / 离线" value={`${stats.degraded} / ${stats.offline}`} /></div></Col>
+      </Row>
+      {services.length > 0 ? (
+        <Collapse
+          className="service-monitor-services"
+          items={services.map((service) => {
+            const serviceDomains = getMonitorableServiceDomains(service)
+            const statusSummary = getProjectServiceStats([{ ...service, domains: serviceDomains }])
+
+            return {
+              key: service.id,
+              label: (
+                <div className="service-monitor-service-header">
+                  <Space wrap size={8}>
+                    <Tag>{getServiceProviderLabel(service.provider)}</Tag>
+                    <Typography.Text strong>{service.name}</Typography.Text>
+                    <Tag color={service.enabled ? 'green' : 'default'}>{service.enabled ? '启用' : '停用'}</Tag>
+                    <Typography.Text type="secondary">{service.environments.length} 环境</Typography.Text>
+                    <Typography.Text type="secondary">{serviceDomains.length} 自定义域名</Typography.Text>
+                    <Typography.Text type={statusSummary.offline || statusSummary.degraded ? 'danger' : 'secondary'}>
+                      在线 {statusSummary.online} / 异常 {statusSummary.degraded} / 离线 {statusSummary.offline}
+                    </Typography.Text>
+                  </Space>
+                </div>
+              ),
+              children: (
+                <Space direction="vertical" size={12} className="service-monitor-service-body">
+                  <Table
+                    rowKey="id"
+                    size="small"
+                    columns={environmentColumns(service)}
+                    dataSource={service.environments}
+                    pagination={false}
+                    scroll={{ x: 720 }}
+                    locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无环境数据" /> }}
+                  />
+                  <Table
+                    rowKey="id"
+                    size="small"
+                    columns={domainColumns}
+                    dataSource={serviceDomains}
+                    pagination={false}
+                    scroll={{ x: 920 }}
+                    locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无自定义域名" /> }}
+                  />
+                </Space>
+              )
+            }
+          })}
+        />
+      ) : (
+        <Spin spinning={loading}>
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前项目还没有绑定服务" />
+        </Spin>
+      )}
+      <div className="chart-panel">
+        <Typography.Title level={4}>30 天响应时间</Typography.Title>
+        {history.length > 0 && monitorableDomainRows.length > 0 ? <ReactECharts option={historyOption} style={{ height: 280 }} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无监控历史" />}
+      </div>
+      <Drawer
+        title={logDrawer ? `${logDrawer.service.name} / ${logDrawer.environment.name} 部署日志` : '部署日志'}
+        open={Boolean(logDrawer)}
+        width={680}
+        onClose={() => {
+          setLogDrawer(null)
+          setLogLines([])
+          setLogError('')
+        }}
+      >
+        <Spin spinning={logLoading}>
+          {logError ? <Alert type="warning" showIcon message="日志暂不可用" description={logError} /> : null}
+          {!logError && logLines.length === 0 && !logLoading ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日志" /> : null}
+          <Space direction="vertical" size={8} className="service-log-lines">
+            {logLines.map((line, index) => (
+              <div key={`${line.timestamp}-${index}`} className="service-log-line">
+                <Typography.Text type="secondary">{line.timestamp ? new Date(line.timestamp).toLocaleString() : '-'}</Typography.Text>
+                <Tag>{line.level || 'log'}</Tag>
+                <Typography.Text>{line.message || '-'}</Typography.Text>
+              </div>
+            ))}
+          </Space>
+        </Spin>
+      </Drawer>
     </Space>
   )
 }
@@ -3845,9 +5384,9 @@ function CreateProjectModal({
 }
 
 function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject: () => void; onOpenSettings: () => void }): JSX.Element {
-  const { projects, repositories, selectedProjectId, summaries, setProjectSummary, setSelectedProjectId, updateRepository } = useForgeDeskStore()
+  const { projects, repositories, selectedProjectId, summaries, deleteProject, setProjectSummary, setSelectedProjectId, updateRepository } = useForgeDeskStore()
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null)
-  const [projectDetailTab, setProjectDetailTab] = useState('data')
+  const [projectDetailTab, setProjectDetailTab] = useState<ProjectDetailTabKey>('data')
   const [analyzingProjectId, setAnalyzingProjectId] = useState<string | null>(null)
   const [analysisGitError, setAnalysisGitError] = useState<GitErrorGuidance | null>(null)
   const [commitModalOpen, setCommitModalOpen] = useState(false)
@@ -3858,6 +5397,7 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
   const [syncingProjectRepositoryId, setSyncingProjectRepositoryId] = useState<string | null>(null)
   const [projectGitRefreshToken, setProjectGitRefreshToken] = useState(0)
   const [projectRepositoryCommitCounts, setProjectRepositoryCommitCounts] = useState<Record<string, number>>({})
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [branchTagRefreshToken, setBranchTagRefreshToken] = useState(0)
   const [rangePreset, setRangePreset] = useState('30')
   const [range, setRange] = useState(createPresetRange(30))
@@ -3874,7 +5414,7 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
   const selectedProjectGitCommitCount = selectedProjectGitRepository
     ? projectRepositoryCommitCounts[selectedProjectGitRepository.id] ?? selectedProjectGitContribution?.commits ?? 0
     : 0
-  const showProjectRepositorySummary = Boolean(selectedProjectGitRepository && (projectDetailTab === 'log-tree' || projectDetailTab === 'remote-alignment'))
+  const showProjectRepositorySummary = shouldShowRepositorySummary(projectDetailTab, Boolean(selectedProjectGitRepository))
   const summaryRange = rangePreset === 'all' ? undefined : range
   const dailyDates = summary?.dailyMetrics.map((metric) => metric.date) ?? []
   const hasGitData = Boolean(summary && summary.totalCommits > 0)
@@ -3979,6 +5519,34 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
     }
   }
 
+  function confirmDeleteProject(project: Project): void {
+    Modal.confirm({
+      title: `删除项目 ${project.name}？`,
+      content: '会删除 ForgeDesk 中的项目记录、仓库扫描结果和 Git 分析数据；不会删除本地目录、代码仓库或远端仓库。',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        setDeletingProjectId(project.id)
+
+        try {
+          await deleteProject(project.id)
+
+          if (detailProjectId === project.id) {
+            setDetailProjectId(null)
+          }
+
+          setProjectSettingsDrawerOpen(false)
+          message.success('项目已删除')
+        } catch (error) {
+          message.error(getErrorMessage(error))
+        } finally {
+          setDeletingProjectId(null)
+        }
+      }
+    })
+  }
+
   const commitTrendOption = {
     tooltip: { trigger: 'axis' },
     grid: { left: 42, right: 20, top: 28, bottom: 32 },
@@ -4057,12 +5625,14 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                   project={project}
                   selected={project.id === selectedProjectId}
                   repositories={repositories.filter((repository) => repository.projectId === project.id)}
+                  deleting={deletingProjectId === project.id}
                   onSelect={() => {
                     setSelectedProjectId(project.id)
                     setDetailProjectId(project.id)
                     setProjectDetailTab('data')
                     setProjectSettingsDrawerOpen(false)
                   }}
+                  onDelete={() => confirmDeleteProject(project)}
                 />
               ))}
             </div>
@@ -4085,6 +5655,9 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
               </div>
               <Space wrap>
                 {summary?.lastAnalyzedAt && <Typography.Text type="secondary">上次分析：{new Date(summary.lastAnalyzedAt).toLocaleString()}</Typography.Text>}
+                <Button danger icon={<DeleteOutlined />} loading={deletingProjectId === selectedProject.id} onClick={() => confirmDeleteProject(selectedProject)}>
+                  删除项目
+                </Button>
                 <Button icon={<SettingOutlined />} onClick={() => setProjectSettingsDrawerOpen(true)}>
                   设置
                 </Button>
@@ -4096,6 +5669,14 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                 </Button>
                 <Button icon={<BranchesOutlined />} disabled={projectRepositories.length === 0} onClick={() => setMergeModalOpen(true)}>
                   合并
+                </Button>
+                <Button
+                  icon={<DownloadOutlined />}
+                  loading={Boolean(selectedProjectGitRepository && syncingProjectRepositoryId === selectedProjectGitRepository.id)}
+                  disabled={!selectedProjectGitRepository}
+                  onClick={() => selectedProjectGitRepository && syncProjectRepository(selectedProjectGitRepository)}
+                >
+                  Fetch / Prune
                 </Button>
                 <Button type="primary" icon={<ReloadOutlined />} loading={analyzingProjectId === selectedProject.id} disabled={projectRepositories.length === 0} onClick={analyzeSelectedProject}>
                   刷新 Git 数据
@@ -4128,6 +5709,7 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
               onClose={() => setProjectSettingsDrawerOpen(false)}
             >
               <ProjectSettingsPanel
+                key={`${selectedProject.id}:${projectSettingsDrawerOpen ? 'open' : 'closed'}`}
                 project={selectedProject}
                 repositories={projectRepositories}
                 contributors={summary?.contributors ?? []}
@@ -4144,15 +5726,13 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                 repositories={projectRepositories}
                 selectedRepositoryId={selectedProjectGitRepository.id}
                 commitCount={selectedProjectGitCommitCount}
-                syncing={syncingProjectRepositoryId === selectedProjectGitRepository.id}
                 onRepositoryChange={setProjectGitRepositoryId}
-                onSync={syncProjectRepository}
               />
             )}
 
             <Tabs
               activeKey={projectDetailTab}
-              onChange={setProjectDetailTab}
+              onChange={(key) => setProjectDetailTab(key as ProjectDetailTabKey)}
               items={[
                 {
                   key: 'data',
@@ -4257,6 +5837,11 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                       onRepositoryChange={setProjectGitRepositoryId}
                     />
                   )
+                },
+                {
+                  key: 'service-monitor',
+                  label: '服务监控',
+                  children: <ProjectServiceMonitorPanel projectId={selectedProject.id} />
                 }
               ]}
             />
@@ -4834,54 +6419,43 @@ function RepositorySummaryStrip({
   repositories,
   selectedRepositoryId,
   commitCount,
-  syncing,
-  onRepositoryChange,
-  onSync
+  onRepositoryChange
 }: {
   activeRepository: Repository
   repositories: Repository[]
   selectedRepositoryId?: string
   commitCount: number
-  syncing: boolean
   onRepositoryChange?: (repositoryId: string) => void
-  onSync: (repository: Repository) => void | Promise<void>
 }): JSX.Element {
+  const fields = createRepositorySummaryFields(activeRepository, commitCount)
+
   return (
     <div className="repository-summary-strip">
-      <div className="repository-summary-grid">
-        <div className="repository-summary-item">
-          <Typography.Text type="secondary">当前仓库</Typography.Text>
-          {repositories.length > 1 && onRepositoryChange ? (
-            <Select
-              value={selectedRepositoryId ?? activeRepository.id}
-              className="repository-context-select"
-              options={repositories.map((item) => ({ label: item.name, value: item.id }))}
-              onChange={onRepositoryChange}
-            />
-          ) : (
-            <Typography.Text strong ellipsis={{ tooltip: activeRepository.name }}>{activeRepository.name}</Typography.Text>
-          )}
-        </div>
-        <div className="repository-summary-item is-wide">
-          <Typography.Text type="secondary">本地路径</Typography.Text>
-          <Typography.Text ellipsis={{ tooltip: activeRepository.localPath }}>{activeRepository.localPath}</Typography.Text>
-        </div>
-        <div className="repository-summary-item">
-          <Typography.Text type="secondary">当前分支</Typography.Text>
-          <Typography.Text strong ellipsis={{ tooltip: activeRepository.currentBranch }}>{activeRepository.currentBranch}</Typography.Text>
-        </div>
-        <div className="repository-summary-item is-wide">
-          <Typography.Text type="secondary">最近提交</Typography.Text>
-          <Typography.Text ellipsis={{ tooltip: activeRepository.latestCommit }}>{activeRepository.latestCommit}</Typography.Text>
-        </div>
-        <div className="repository-summary-item">
-          <Typography.Text type="secondary">提交总数</Typography.Text>
-          <Typography.Text strong>{formatNumber(commitCount)}</Typography.Text>
-        </div>
+      <div className="repository-summary-context">
+        <Typography.Text type="secondary">仓库</Typography.Text>
+        {repositories.length > 1 && onRepositoryChange ? (
+          <Select
+            value={selectedRepositoryId ?? activeRepository.id}
+            className="repository-context-select"
+            options={repositories.map((item) => ({ label: item.name, value: item.id }))}
+            onChange={onRepositoryChange}
+          />
+        ) : (
+          <Typography.Text strong ellipsis={{ tooltip: activeRepository.name }}>
+            {activeRepository.name}
+          </Typography.Text>
+        )}
       </div>
-      <Button icon={<DownloadOutlined />} loading={syncing} onClick={() => void onSync(activeRepository)}>
-        Fetch / Prune
-      </Button>
+      <div className="repository-summary-grid">
+        {fields.map((field) => (
+          <div className="repository-summary-item" key={field.label}>
+            <Typography.Text type="secondary">{field.label}</Typography.Text>
+            <Typography.Text strong={field.strong} ellipsis={{ tooltip: field.value }}>
+              {field.label === '提交总数' ? formatNumber(Number(field.value)) : field.value}
+            </Typography.Text>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -5202,9 +6776,7 @@ function RepositoryLogTree({
           repositories={repositories}
           selectedRepositoryId={selectedRepositoryId}
           commitCount={commits.length}
-          syncing={syncingRepositoryId === activeRepository.id}
           onRepositoryChange={onRepositoryChange}
-          onSync={syncRemote}
         />
       )}
       <GitErrorNotice guidance={gitError} onClose={() => setGitError(null)} />
@@ -5649,17 +7221,38 @@ function RepositoryTable({ repositories, branchTagRefreshToken = 0 }: { reposito
 
 function App(): JSX.Element {
   const { loadingWorkspace, loadWorkspace } = useForgeDeskStore()
-  const [activeKey, setActiveKey] = useState('overview')
+  const [activeKey, setActiveKey] = useState<AppNavigationKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
 
   useEffect(() => {
-    loadWorkspace().catch((error) => message.error(getErrorMessage(error)))
+    let cancelled = false
+
+    async function loadWhenReady(): Promise<void> {
+      for (let attempt = 0; attempt < 10 && !window.forgeDesk; attempt += 1) {
+        await wait(50)
+      }
+
+      if (!cancelled) {
+        await loadWorkspace()
+      }
+    }
+
+    loadWhenReady().catch((error) => message.error(getErrorMessage(error)))
+
+    return () => {
+      cancelled = true
+    }
   }, [loadWorkspace])
 
-  const menuItems = [
-    { key: 'overview', icon: <DashboardOutlined />, label: '项目' },
-    { key: 'settings', icon: <SettingOutlined />, label: '设置' }
-  ]
+  const navigationIcons: Record<AppNavigationKey, JSX.Element> = {
+    overview: <DashboardOutlined />,
+    services: <ThunderboltOutlined />,
+    settings: <SettingOutlined />
+  }
+  const menuItems = APP_NAVIGATION_ITEMS.map((item) => ({
+    ...item,
+    icon: navigationIcons[item.key]
+  }))
 
   return (
     <Layout className="app-shell">
@@ -5673,7 +7266,7 @@ function App(): JSX.Element {
             <Typography.Text type="secondary">Local First Console</Typography.Text>
           </div>
         </div>
-        <Menu mode="inline" selectedKeys={[activeKey]} items={menuItems} onClick={({ key }) => setActiveKey(key)} />
+        <Menu mode="inline" selectedKeys={[activeKey]} items={menuItems} onClick={({ key }) => setActiveKey(key as AppNavigationKey)} />
       </Layout.Sider>
       <Layout.Content className="content">
         {loadingWorkspace && (
@@ -5688,6 +7281,11 @@ function App(): JSX.Element {
               setCreatingProject(true)
             }}
           />
+        )}
+        {!loadingWorkspace && activeKey === 'services' && (
+          <section className="workspace-section">
+            <GlobalServiceCenterPanel />
+          </section>
         )}
         {!loadingWorkspace && activeKey === 'overview' && <ProjectOverview onCreateProject={() => setCreatingProject(true)} onOpenSettings={() => setActiveKey('settings')} />}
         <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('overview')} />

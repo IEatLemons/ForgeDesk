@@ -3,6 +3,9 @@
   "version": "1.0.2",
   "description": "Local-first project management console for repositories, environments, deployments, and AI reports.",
   "main": "out/main/index.js",
+  "bin": {
+    "forgedesk": "out/main/cli.js"
+  },
   "type": "module",
   "scripts": {
     "rebuild:native": "node scripts/rebuild-native.mjs",

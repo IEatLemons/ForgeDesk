@@ -74,6 +74,7 @@ body {
 }
 
 .workspace-section {
+  width: 100%;
   max-width: 1240px;
   margin: 0 auto 28px;
   min-width: 0;
@@ -300,7 +301,7 @@ body {
 
 .repository-summary-strip {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(180px, 280px) minmax(0, 1fr);
   gap: 16px;
   align-items: center;
   padding: 14px;
@@ -309,9 +310,15 @@ body {
   background: #fbfcfe;
 }
 
+.repository-summary-context {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
 .repository-summary-grid {
   display: grid;
-  grid-template-columns: minmax(160px, 0.9fr) minmax(220px, 1.5fr) minmax(120px, 0.7fr) minmax(220px, 1.3fr) minmax(100px, 0.5fr);
+  grid-template-columns: minmax(120px, 0.65fr) minmax(220px, 1.5fr) minmax(100px, 0.45fr);
   gap: 12px;
   min-width: 0;
 }
@@ -364,6 +371,111 @@ body {
   border: 1px solid #e6eaf1;
   border-radius: 8px;
   background: #fbfcfe;
+}
+
+.project-service-settings,
+.service-monitor-panel {
+  width: 100%;
+}
+
+.project-service-settings .ant-table-wrapper,
+.service-monitor-panel .ant-table-wrapper {
+  width: 100%;
+}
+
+.clickable-table-row {
+  cursor: pointer;
+}
+
+.table-link-button {
+  height: auto;
+  padding: 0;
+  font-weight: 600;
+}
+
+.service-monitor-services,
+.service-monitor-service-body,
+.service-detail-drawer,
+.service-detail-tab {
+  width: 100%;
+}
+
+.service-monitor-service-header {
+  min-width: 0;
+}
+
+.service-log-lines {
+  width: 100%;
+}
+
+.service-log-line {
+  display: grid;
+  grid-template-columns: 160px auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  width: 100%;
+  padding: 8px 0;
+  border-bottom: 1px solid #edf0f5;
+}
+
+.service-log-line .ant-typography {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.service-detail-log-panel {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.service-detail-log-panel h5 {
+  margin: 0 0 10px;
+}
+
+.service-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.service-guide-box {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.service-guide-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.service-guide-actions {
+  justify-content: flex-end;
+}
+
+.service-guide-steps {
+  margin: 0;
+  padding-left: 18px;
+  color: #44546a;
+}
+
+.service-guide-steps li + li {
+  margin-top: 4px;
+}
+
+.service-guide-alert {
+  margin-bottom: 14px;
 }
 
 .git-browser {
@@ -1093,6 +1205,59 @@ body {
   padding-top: 4px;
 }
 
+.project-settings-module-list {
+  display: grid;
+  gap: 10px;
+}
+
+.project-settings-entry-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 14px;
+  text-align: left;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.project-settings-entry-card:hover {
+  border-color: #b9d4ff;
+  background: #f8fbff;
+}
+
+.project-settings-entry-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  color: #165dcc;
+  border-radius: 8px;
+  background: #eef5ff;
+}
+
+.project-settings-entry-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.project-settings-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.project-settings-detail-header h4 {
+  margin: 0 !important;
+}
+
 .project-settings-panel > .ant-space-item {
   width: 100%;
   max-width: 100%;
@@ -1319,6 +1484,10 @@ body {
   min-width: 0;
 }
 
+.git-operation-tag-input {
+  max-width: 180px;
+}
+
 .conflict-file-list {
   width: 100%;
   margin-top: 8px;
@@ -1350,6 +1519,23 @@ body {
 .git-command-presets {
   width: 100%;
   min-width: 0;
+}
+
+.service-settings-toolbar {
+  align-items: center;
+  justify-content: flex-start;
+  gap: 20px;
+}
+
+.service-settings-toolbar h4 {
+  flex: 0 0 auto;
+  margin: 0 !important;
+  white-space: nowrap;
+}
+
+.service-settings-toolbar > .ant-space {
+  width: auto;
+  flex: 0 0 auto;
 }
 
 .git-error-notice {
@@ -1548,7 +1734,7 @@ body {
     min-width: 0;
   }
 
-  .app-shell {
+  .app-shell.ant-layout {
     display: block;
   }
 
@@ -1561,8 +1747,11 @@ body {
     height: auto;
   }
 
-  .content {
+  .content.ant-layout-content {
+    flex: none !important;
     width: 100%;
+    width: 100vw !important;
+    max-width: 100%;
   }
 
   .section-heading {
@@ -1573,10 +1762,15 @@ body {
   .remote-manager-toolbar,
   .git-workspace-toolbar,
   .git-command-toolbar,
+  .project-settings-detail-header,
   .settings-management-form,
   .ssh-key-card,
   .settings-module-header {
     display: grid;
+  }
+
+  .service-settings-toolbar h4 {
+    white-space: normal;
   }
 
   .settings-management-form,
