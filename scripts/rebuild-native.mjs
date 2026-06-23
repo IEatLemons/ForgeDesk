@@ -1,15 +1,26 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
+const require = createRequire(import.meta.url)
 const betterSqlitePath = join(root, 'node_modules', 'better-sqlite3')
-const prebuildInstallBin = join(root, 'node_modules', 'prebuild-install', 'bin.js')
 const electronPackagePath = join(root, 'node_modules', 'electron', 'package.json')
 const nativeCachePath = join(root, '.cache', 'native')
 
-if (!existsSync(betterSqlitePath) || !existsSync(prebuildInstallBin) || !existsSync(electronPackagePath)) {
+let prebuildInstallBin
+if (existsSync(betterSqlitePath)) {
+  try {
+    const betterSqliteModulesRoot = dirname(realpathSync(betterSqlitePath))
+    prebuildInstallBin = require.resolve('prebuild-install/bin.js', { paths: [betterSqliteModulesRoot] })
+  } catch {
+    prebuildInstallBin = null
+  }
+}
+
+if (!existsSync(betterSqlitePath) || !prebuildInstallBin || !existsSync(electronPackagePath)) {
   console.warn('Skipping native rebuild: dependencies are not installed yet.')
   process.exit(0)
 }

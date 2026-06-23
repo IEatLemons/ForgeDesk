@@ -58,8 +58,8 @@ if (!existsSync(electronApp)) {
 }
 
 run(nodeBin, [join(root, 'scripts', 'rebuild-native.mjs')])
-run(nodeBin, [join(root, 'node_modules', '.bin', 'tsc'), '--noEmit'])
-run(nodeBin, [join(root, 'node_modules', '.bin', 'electron-vite'), 'build'])
+run(nodeBin, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit'])
+run(nodeBin, [join(root, 'node_modules', 'electron-vite', 'bin', 'electron-vite.js'), 'build'])
 
 mkdirSync(distDir, { recursive: true })
 rmSync(tempApp, { recursive: true, force: true })
