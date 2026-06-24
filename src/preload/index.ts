@@ -90,5 +90,14 @@ contextBridge.exposeInMainWorld('forgeDesk', {
     ipcRenderer.on('terminal:exit', wrapped)
     return () => ipcRenderer.removeListener('terminal:exit', wrapped)
   },
+  getAppUpdateState: () => ipcRenderer.invoke('app:update:get-state'),
+  checkAppUpdate: () => ipcRenderer.invoke('app:update:check'),
+  installAppUpdate: () => ipcRenderer.invoke('app:update:install'),
+  onAppUpdateState: (listener: (state: AppUpdateState) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, state: AppUpdateState): void => listener(state)
+    ipcRenderer.on('app:update:state', wrapped)
+    return () => ipcRenderer.removeListener('app:update:state', wrapped)
+  },
+  openAppReleases: () => ipcRenderer.invoke('external:open-app-releases'),
   openGitDownload: () => ipcRenderer.invoke('external:open-git-download')
 })

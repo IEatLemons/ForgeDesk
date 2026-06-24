@@ -9,6 +9,7 @@ import simpleGit from 'simple-git'
 import { requestCommitMessageSuggestion, type CommitMessageSuggestion } from './ai-commit-message-assistant'
 import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion } from './ai-conflict-assistant'
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
+import { registerAppUpdateIpc } from './app-updates'
 import { buildGitAuthorLookup, resolveGitAuthorDisplay, type GitAuthorLookup } from './git-author-mapping'
 import { parseControlledGitCommand, validateRepositoryRemoteName } from './git-controls'
 import {
@@ -2621,10 +2622,15 @@ ipcMain.handle('ssh:open-directory', async (): Promise<void> => {
   await shell.openPath(sshDirectory)
 })
 
+registerAppUpdateIpc()
 registerTerminalIpc(ipcMain, terminalService)
 
 ipcMain.handle('external:open-git-download', async (): Promise<void> => {
   await shell.openExternal('https://git-scm.com/downloads')
+})
+
+ipcMain.handle('external:open-app-releases', async (): Promise<void> => {
+  await shell.openExternal('https://github.com/IEatLemons/ForgeDesk/releases')
 })
 
 app.whenReady().then(() => {

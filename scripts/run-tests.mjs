@@ -28,6 +28,9 @@ async function walk(directory) {
 try {
   const files = (await Promise.all(sourceRoots.map((item) => walk(join(root, item))))).flat()
   const specFiles = []
+  const scriptTestFiles = (await readdir(join(root, 'scripts')))
+    .filter((file) => file.endsWith('.test.mjs'))
+    .map((file) => join(root, 'scripts', file))
 
   for (const file of files) {
     const source = await readFile(file, 'utf8')
@@ -50,7 +53,7 @@ try {
     }
   }
 
-  const child = spawn(process.execPath, ['--test', ...specFiles], { stdio: 'inherit' })
+  const child = spawn(process.execPath, ['--test', ...specFiles, ...scriptTestFiles], { stdio: 'inherit' })
   const exitCode = await new Promise((resolve) => child.on('exit', resolve))
   process.exit(exitCode ?? 1)
 } finally {

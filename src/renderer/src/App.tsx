@@ -93,6 +93,7 @@ import type {
   RailwayTokenType
 } from './data'
 import { APP_NAVIGATION_ITEMS, type AppNavigationKey } from './app-navigation'
+import { createAppUpdateViewModel } from './app-update-view'
 import { createDiffResultLines, createSourceDiffLines, type DiffDisplayLine } from './diff-view'
 import { createGitErrorGuidance, type GitErrorGuidance } from './git-error-guidance'
 import {
@@ -153,7 +154,7 @@ type SshPassphraseForm = {
   confirmPassphrase: string
 }
 
-type SettingsModuleKey = 'overview' | 'git' | 'private' | 'public' | 'config' | 'services' | 'ai'
+type SettingsModuleKey = 'overview' | 'git' | 'private' | 'public' | 'config' | 'services' | 'ai' | 'updates'
 
 type AiSettingsForm = {
   enabled: boolean
@@ -1118,6 +1119,36 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
   const [savingSshPassphrase, setSavingSshPassphrase] = useState(false)
   const [selectingImportFile, setSelectingImportFile] = useState(false)
   const [workingSshKeyPath, setWorkingSshKeyPath] = useState<string | null>(null)
+  const [appUpdateState, setAppUpdateState] = useState<AppUpdateState>({
+    status: 'idle',
+    currentVersion: ''
+  })
+  const [checkingAppUpdate, setCheckingAppUpdate] = useState(false)
+  const [installingAppUpdate, setInstallingAppUpdate] = useState(false)
+
+  useEffect(() => {
+    if (!window.forgeDesk) {
+      return undefined
+    }
+
+    let mounted = true
+
+    window.forgeDesk
+      .getAppUpdateState()
+      .then((state) => {
+        if (mounted) {
+          setAppUpdateState(state)
+        }
+      })
+      .catch((error) => message.error(getErrorMessage(error)))
+
+    const unsubscribe = window.forgeDesk.onAppUpdateState((state) => setAppUpdateState(state))
+
+    return () => {
+      mounted = false
+      unsubscribe()
+    }
+  }, [])
 
   async function refreshGitStatus(): Promise<void> {
     if (!window.forgeDesk) {
@@ -1571,6 +1602,57 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     await window.forgeDesk.openGitDownload()
   }
 
+  async function checkAppUpdate(): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中检查更新')
+      return
+    }
+
+    setCheckingAppUpdate(true)
+
+    try {
+      const state = await window.forgeDesk.checkAppUpdate()
+      setAppUpdateState(state)
+
+      if (state.status === 'not-available') {
+        message.success('ForgeDesk 已经是最新版本')
+      } else if (state.status === 'error') {
+        message.error(state.error || '更新检查失败')
+      }
+    } finally {
+      setCheckingAppUpdate(false)
+    }
+  }
+
+  async function installAppUpdate(): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中安装更新')
+      return
+    }
+
+    setInstallingAppUpdate(true)
+
+    try {
+      const state = await window.forgeDesk.installAppUpdate()
+      setAppUpdateState(state)
+
+      if (state.status === 'error') {
+        message.error(state.error || '新版还没有下载完成')
+      }
+    } finally {
+      setInstallingAppUpdate(false)
+    }
+  }
+
+  async function openAppReleases(): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中打开发布页')
+      return
+    }
+
+    await window.forgeDesk.openAppReleases()
+  }
+
   const settingsModules: Array<{
     key: Exclude<SettingsModuleKey, 'overview'>
     title: string
@@ -1620,6 +1702,14 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
       icon: <ThunderboltOutlined />,
       meta: '全局',
       tone: 'neutral'
+    },
+    {
+      key: 'updates',
+      title: '应用更新',
+      description: '通过 GitHub Releases 检查和安装新版。',
+      icon: <DownloadOutlined />,
+      meta: appUpdateState.status === 'downloaded' ? '待安装' : appUpdateState.status === 'downloading' ? '下载中' : appUpdateState.currentVersion || '当前版本',
+      tone: appUpdateState.status === 'downloaded' ? 'warning' : appUpdateState.status === 'error' ? 'danger' : 'neutral'
     },
     {
       key: 'ai',
@@ -2027,6 +2117,48 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     return <GlobalServiceCenterPanel onBack={() => setActiveSettingsModule('overview')} />
   }
 
+  function renderUpdatesModule(): JSX.Element {
+    const view = createAppUpdateViewModel(appUpdateState)
+    const isBusy = view.primaryAction === 'busy' || checkingAppUpdate || installingAppUpdate
+    const primaryAction = view.primaryAction === 'install' ? installAppUpdate : checkAppUpdate
+
+    return (
+      <div className="panel settings-module-panel">
+        {renderModuleHeader(
+          '应用更新',
+          'ForgeDesk 会从 GitHub Releases 检查、下载并安装新版本。',
+          <Button icon={<GithubOutlined />} onClick={openAppReleases}>
+            打开 Releases
+          </Button>
+        )}
+        <Descriptions column={1} size="small" className="setup-description">
+          <Descriptions.Item label="当前版本">{appUpdateState.currentVersion || '未知'}</Descriptions.Item>
+          <Descriptions.Item label="发布源">GitHub Releases / IEatLemons/ForgeDesk</Descriptions.Item>
+          <Descriptions.Item label="新版">{appUpdateState.availableVersion || '暂无'}</Descriptions.Item>
+        </Descriptions>
+        <Alert
+          className="settings-module-alert"
+          type={appUpdateState.status === 'error' ? 'error' : appUpdateState.status === 'downloaded' ? 'success' : 'info'}
+          showIcon
+          message={view.title}
+          description={view.description}
+        />
+        <Space wrap>
+          <Button
+            type="primary"
+            icon={view.primaryAction === 'install' ? <ReloadOutlined /> : <DownloadOutlined />}
+            loading={isBusy}
+            disabled={view.primaryAction === 'busy'}
+            onClick={primaryAction}
+          >
+            {view.primaryLabel}
+          </Button>
+          {appUpdateState.status === 'downloading' && <Tag color="blue">{Math.round(appUpdateState.percent ?? 0)}%</Tag>}
+        </Space>
+      </div>
+    )
+  }
+
   function renderOverview(): JSX.Element {
     return (
       <div className="settings-module-grid">
@@ -2063,6 +2195,8 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
         return renderServicesModule()
       case 'ai':
         return renderAiModule()
+      case 'updates':
+        return renderUpdatesModule()
       default:
         return renderOverview()
     }

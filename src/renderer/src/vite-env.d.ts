@@ -534,6 +534,16 @@ type AiSettingsView = {
   temperature: number
 }
 
+type AppUpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
+
+type AppUpdateState = {
+  status: AppUpdateStatus
+  currentVersion: string
+  availableVersion?: string
+  percent?: number
+  error?: string
+}
+
 interface Window {
   forgeDesk: {
     listProjects: () => Promise<WorkspaceSnapshot>
@@ -612,6 +622,11 @@ interface Window {
     closeTerminal: (sessionId: string) => Promise<void>
     onTerminalData: (listener: (event: TerminalDataEvent) => void) => () => void
     onTerminalExit: (listener: (event: TerminalExitEvent) => void) => () => void
+    getAppUpdateState: () => Promise<AppUpdateState>
+    checkAppUpdate: () => Promise<AppUpdateState>
+    installAppUpdate: () => Promise<AppUpdateState>
+    onAppUpdateState: (listener: (state: AppUpdateState) => void) => () => void
+    openAppReleases: () => Promise<void>
     openGitDownload: () => Promise<void>
   }
 }

@@ -11,7 +11,9 @@
     "rebuild:native": "node scripts/rebuild-native.mjs",
     "dev": "node scripts/rebuild-native.mjs && electron-vite dev",
     "build": "node scripts/rebuild-native.mjs && tsc --noEmit && electron-vite build",
-    "package:mac": "node scripts/package-mac.mjs",
+    "package:mac": "node scripts/rebuild-native.mjs && tsc --noEmit && electron-vite build && electron-builder --mac --publish never",
+    "publish:mac": "node scripts/publish-mac.mjs",
+    "package:mac:legacy": "node scripts/package-mac.mjs",
     "preview": "node scripts/rebuild-native.mjs && electron-vite preview",
     "test": "node scripts/run-tests.mjs",
     "lint": "tsc --noEmit"
@@ -25,6 +27,7 @@
     "chokidar": "^4.0.3",
     "echarts": "^5.5.1",
     "echarts-for-react": "^3.0.2",
+    "electron-updater": "^6.8.9",
     "node-pty": "^1.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -38,8 +41,60 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.1",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^2.3.0",
     "typescript": "^5.7.2",
     "vite": "^5.4.11"
+  },
+  "build": {
+    "appId": "app.forgedesk.desktop",
+    "productName": "ForgeDesk",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "directories": {
+      "buildResources": "resources",
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/forgedesk.png",
+        "to": "forgedesk.png"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/node-pty/**/*"
+    ],
+    "npmRebuild": false,
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "resources/forgedesk.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "IEatLemons",
+        "repo": "ForgeDesk",
+        "releaseType": "release"
+      }
+    ]
   }
 }
