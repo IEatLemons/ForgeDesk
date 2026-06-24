@@ -10,6 +10,7 @@ import {
   buildGitMergeTreeArgs,
   buildGitPushArgs,
   buildGitRevListCountArgs,
+  buildGitSwitchBranchArgs,
   buildGitTagArgs,
   buildGitVerifyRefArgs,
   parsePorcelainStatus
@@ -40,6 +41,21 @@ describe('git workspace operations', () => {
     assert.throws(() => buildGitTagArgs('v1.2.3;rm'), /不支持的Tag/)
     assert.throws(() => buildGitPushArgs({ remote: 'bad/name', branch: 'main' }), /远端名称/)
     assert.throws(() => buildGitMergeArgs({ source: 'main;rm' }), /不支持的分支/)
+  })
+
+  it('builds safe branch switch args', () => {
+    assert.deepEqual(buildGitSwitchBranchArgs({ branchName: 'develop' }), ['switch', 'develop'])
+    assert.deepEqual(buildGitSwitchBranchArgs({ branchName: 'feature/provider', create: true }), ['switch', '-c', 'feature/provider'])
+    assert.deepEqual(buildGitSwitchBranchArgs({ branchName: 'feature/provider', create: true, startPoint: 'origin/feature/provider', track: true }), [
+      'switch',
+      '--track',
+      '-c',
+      'feature/provider',
+      'origin/feature/provider'
+    ])
+    assert.throws(() => buildGitSwitchBranchArgs({ branchName: 'bad branch' }), /不支持的分支/)
+    assert.throws(() => buildGitSwitchBranchArgs({ branchName: 'develop', startPoint: 'origin/develop' }), /不需要起点/)
+    assert.throws(() => buildGitSwitchBranchArgs({ branchName: 'feature/provider', create: true, track: true }), /需要远端起点/)
   })
 
   it('builds safe merge analysis args', () => {

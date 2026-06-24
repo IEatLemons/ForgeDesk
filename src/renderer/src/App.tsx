@@ -24,6 +24,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
   message
 } from 'antd'
@@ -31,6 +32,7 @@ import type { ColumnsType } from 'antd/es/table'
 import {
   BranchesOutlined,
   CheckCircleOutlined,
+  CodeOutlined,
   CopyOutlined,
   DashboardOutlined,
   DeleteOutlined,
@@ -60,6 +62,7 @@ import type {
   AiConflictSuggestion,
   ContributorSummary,
   GitCommandResult,
+  GitBranchSwitchInput,
   GitConflictFile,
   GitCommit,
   GitCommitDiff,
@@ -105,7 +108,13 @@ import {
   gitGraphLaneWidth,
   type GitGraphRow
 } from './git-log-view'
-import { createRepositorySummaryFields, shouldShowRepositorySummary, type ProjectDetailTabKey } from './project-detail-view'
+import {
+  chooseTerminalShortcutProject,
+  createProjectTerminalOpenRequest,
+  createRepositorySummaryFields,
+  shouldShowRepositorySummary,
+  type ProjectDetailTabKey
+} from './project-detail-view'
 import {
   closeProjectSettingsModule,
   createInitialProjectSettingsView,
@@ -117,6 +126,8 @@ import { getServiceProviderGuide, type ServiceProviderGuideProvider } from './se
 import { createServiceDetailSummary, getMonitorableServiceDomains, getProjectServiceStats } from './service-monitor-view'
 import { createEmptySshConfigEntry, parseSshConfigEntries, serializeSshConfigEntries, type SshConfigEntry } from './ssh-config-model'
 import { useForgeDeskStore } from './store'
+import { TerminalWorkspace } from './terminal-panel'
+import type { TerminalOpenRequest } from './terminal-panel-events'
 
 type ImportForm = {
   projectName: string
@@ -247,6 +258,11 @@ type ProjectServiceForm = {
 type ProjectServiceBindingForm = {
   serviceId: string
   repositoryId?: string
+}
+
+type ProjectTerminalShortcutRequest = {
+  requestId: number
+  projectId: string
 }
 
 function getErrorMessage(error: unknown): string {
@@ -2198,7 +2214,7 @@ function RepositoryRemoteManager({ repositories }: { repositories: Repository[] 
       const repository = await window.forgeDesk.fetchRepositoryRemote(selectedRepository.id, remoteName)
       updateRepository(repository)
       setGitError(null)
-      message.success(remoteName ? `${remoteName} 已 fetch/prune` : '全部远端已 fetch/prune')
+      message.success(remoteName ? `${remoteName} 已 Fetch` : '全部远端已 Fetch')
     } catch (error) {
       setGitError(createGitErrorGuidance(error, remoteName ? `同步远端 ${remoteName}` : '同步全部远端'))
     } finally {
@@ -4471,8 +4487,7 @@ function GitCommandConsole({ repositories }: { repositories: Repository[] }): JS
     'branch -a',
     'log --graph --decorate --oneline --all -n 80',
     'show --stat HEAD',
-    'diff --stat',
-    'fetch --prune'
+    'diff --stat'
   ]
 
   useEffect(() => {
@@ -5383,11 +5398,19 @@ function CreateProjectModal({
   )
 }
 
-function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject: () => void; onOpenSettings: () => void }): JSX.Element {
+function ProjectOverview({
+  onCreateProject,
+  onOpenSettings,
+  terminalShortcut
+}: {
+  onCreateProject: () => void
+  onOpenSettings: () => void
+  terminalShortcut?: ProjectTerminalShortcutRequest | null
+}): JSX.Element {
   const { projects, repositories, selectedProjectId, summaries, deleteProject, setProjectSummary, setSelectedProjectId, updateRepository } = useForgeDeskStore()
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null)
   const [projectDetailTab, setProjectDetailTab] = useState<ProjectDetailTabKey>('data')
-  const [analyzingProjectId, setAnalyzingProjectId] = useState<string | null>(null)
+  const [terminalOpenRequest, setTerminalOpenRequest] = useState<TerminalOpenRequest | null>(null)
   const [analysisGitError, setAnalysisGitError] = useState<GitErrorGuidance | null>(null)
   const [commitModalOpen, setCommitModalOpen] = useState(false)
   const [pushModalOpen, setPushModalOpen] = useState(false)
@@ -5395,12 +5418,14 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
   const [projectSettingsDrawerOpen, setProjectSettingsDrawerOpen] = useState(false)
   const [projectGitRepositoryId, setProjectGitRepositoryId] = useState('')
   const [syncingProjectRepositoryId, setSyncingProjectRepositoryId] = useState<string | null>(null)
+  const [switchingProjectRepositoryId, setSwitchingProjectRepositoryId] = useState<string | null>(null)
   const [projectGitRefreshToken, setProjectGitRefreshToken] = useState(0)
   const [projectRepositoryCommitCounts, setProjectRepositoryCommitCounts] = useState<Record<string, number>>({})
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [branchTagRefreshToken, setBranchTagRefreshToken] = useState(0)
   const [rangePreset, setRangePreset] = useState('30')
   const [range, setRange] = useState(createPresetRange(30))
+  const terminalRequestSeqRef = useRef(0)
   const selectedProject = projects.find((project) => project.id === detailProjectId) ?? null
   const projectRepositories = selectedProject ? repositories.filter((repository) => repository.projectId === selectedProject.id) : []
   const projectRepositoryIds = projectRepositories.map((repository) => repository.id).join('|')
@@ -5419,6 +5444,19 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
   const dailyDates = summary?.dailyMetrics.map((metric) => metric.date) ?? []
   const hasGitData = Boolean(summary && summary.totalCommits > 0)
 
+  function queueTerminalOpen(request: TerminalOpenRequest): void {
+    terminalRequestSeqRef.current += 1
+    setTerminalOpenRequest({ ...request, requestId: terminalRequestSeqRef.current })
+  }
+
+  function openProjectTerminal(project: Project): void {
+    setSelectedProjectId(project.id)
+    setDetailProjectId(project.id)
+    setProjectDetailTab('terminal')
+    setProjectSettingsDrawerOpen(false)
+    queueTerminalOpen(createProjectTerminalOpenRequest(project))
+  }
+
   async function refreshSummary(projectId: string, nextRange = summaryRange): Promise<void> {
     if (!window.forgeDesk) {
       return
@@ -5426,6 +5464,18 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
 
     setProjectSummary(await window.forgeDesk.getProjectSummary(projectId, nextRange))
   }
+
+  useEffect(() => {
+    if (!terminalShortcut) {
+      return
+    }
+
+    const project = projects.find((item) => item.id === terminalShortcut.projectId) ?? projects[0]
+
+    if (project) {
+      openProjectTerminal(project)
+    }
+  }, [terminalShortcut?.requestId])
 
   useEffect(() => {
     if (!selectedProject || !window.forgeDesk) {
@@ -5470,32 +5520,6 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
     })
   }
 
-  async function analyzeSelectedProject(): Promise<void> {
-    if (!selectedProject || !window.forgeDesk) {
-      return
-    }
-
-    setAnalyzingProjectId(selectedProject.id)
-
-    try {
-      const nextSummary = await window.forgeDesk.analyzeProjectGit(selectedProject.id)
-
-      if (nextSummary.status === 'failed') {
-        setProjectSummary(nextSummary)
-        setAnalysisGitError(createGitErrorGuidance(nextSummary.errorMessage || 'Git 分析失败', '刷新 Git 数据'))
-        return
-      }
-
-      await refreshSummary(selectedProject.id)
-      setAnalysisGitError(null)
-      message.success('Git 数据已刷新')
-    } catch (error) {
-      setAnalysisGitError(createGitErrorGuidance(error, '刷新 Git 数据'))
-    } finally {
-      setAnalyzingProjectId(null)
-    }
-  }
-
   async function syncProjectRepository(targetRepository: Repository): Promise<void> {
     if (!window.forgeDesk) {
       return
@@ -5511,11 +5535,35 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
       const nextSummary = await window.forgeDesk.analyzeProjectGit(synced.projectId)
       setProjectSummary(nextSummary)
       setAnalysisGitError(null)
-      message.success('远端已 fetch/prune，Git 数据已刷新')
+      message.success('远端已 Fetch，Git 数据已刷新')
     } catch (error) {
       setAnalysisGitError(createGitErrorGuidance(error, '同步远端'))
     } finally {
       setSyncingProjectRepositoryId(null)
+    }
+  }
+
+  async function switchProjectRepositoryBranch(targetRepository: Repository, input: GitBranchSwitchInput): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中切换分支')
+      return
+    }
+
+    setSwitchingProjectRepositoryId(targetRepository.id)
+
+    try {
+      const repository = await window.forgeDesk.switchRepositoryBranch(targetRepository.id, input)
+      updateRepository(repository)
+      setProjectGitRepositoryId(repository.id)
+      setProjectGitRefreshToken((current) => current + 1)
+      setAnalysisGitError(null)
+      message.success(input.create ? `已创建并切换到 ${repository.currentBranch}` : `已切换到 ${repository.currentBranch}`)
+    } catch (error) {
+      setAnalysisGitError(createGitErrorGuidance(error, input.create ? '创建分支' : '切换分支'))
+      message.error(getErrorMessage(error))
+      throw error
+    } finally {
+      setSwitchingProjectRepositoryId(null)
     }
   }
 
@@ -5653,7 +5701,7 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                   </Typography.Text>
                 </div>
               </div>
-              <Space wrap>
+              <Space wrap className="project-detail-actions">
                 {summary?.lastAnalyzedAt && <Typography.Text type="secondary">上次分析：{new Date(summary.lastAnalyzedAt).toLocaleString()}</Typography.Text>}
                 <Button danger icon={<DeleteOutlined />} loading={deletingProjectId === selectedProject.id} onClick={() => confirmDeleteProject(selectedProject)}>
                   删除项目
@@ -5671,15 +5719,13 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                   合并
                 </Button>
                 <Button
+                  type="primary"
                   icon={<DownloadOutlined />}
                   loading={Boolean(selectedProjectGitRepository && syncingProjectRepositoryId === selectedProjectGitRepository.id)}
                   disabled={!selectedProjectGitRepository}
                   onClick={() => selectedProjectGitRepository && syncProjectRepository(selectedProjectGitRepository)}
                 >
-                  Fetch / Prune
-                </Button>
-                <Button type="primary" icon={<ReloadOutlined />} loading={analyzingProjectId === selectedProject.id} disabled={projectRepositories.length === 0} onClick={analyzeSelectedProject}>
-                  刷新 Git 数据
+                  Fetch
                 </Button>
               </Space>
             </div>
@@ -5726,7 +5772,9 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                 repositories={projectRepositories}
                 selectedRepositoryId={selectedProjectGitRepository.id}
                 commitCount={selectedProjectGitCommitCount}
+                switchingBranch={switchingProjectRepositoryId === selectedProjectGitRepository.id}
                 onRepositoryChange={setProjectGitRepositoryId}
+                onSwitchBranch={switchProjectRepositoryBranch}
               />
             )}
 
@@ -5842,6 +5890,17 @@ function ProjectOverview({ onCreateProject, onOpenSettings }: { onCreateProject:
                   key: 'service-monitor',
                   label: '服务监控',
                   children: <ProjectServiceMonitorPanel projectId={selectedProject.id} />
+                },
+                {
+                  key: 'terminal',
+                  label: '终端',
+                  children: (
+                    <TerminalWorkspace
+                      defaultCwd={selectedProject.workspacePath}
+                      defaultTitle={selectedProject.name}
+                      openRequest={terminalOpenRequest}
+                    />
+                  )
                 }
               ]}
             />
@@ -6414,45 +6473,210 @@ function RemoteAlignmentPanel({ alignment, currentBranch }: { alignment: RemoteA
 
 type RepositoryLogTreeView = 'log' | 'alignment'
 
+const localBranchValuePrefix = 'local|'
+const remoteBranchValuePrefix = 'remote|'
+
+function createBranchOptionValue(kind: 'local' | 'remote', branchName: string): string {
+  return `${kind === 'local' ? localBranchValuePrefix : remoteBranchValuePrefix}${branchName}`
+}
+
+function parseBranchOptionValue(value: string): { kind: 'local' | 'remote'; branchName: string } {
+  if (value.startsWith(remoteBranchValuePrefix)) {
+    return { kind: 'remote', branchName: value.slice(remoteBranchValuePrefix.length) }
+  }
+
+  return { kind: 'local', branchName: value.startsWith(localBranchValuePrefix) ? value.slice(localBranchValuePrefix.length) : value }
+}
+
+function getRemoteBranchLocalName(remoteBranchName: string): string {
+  const [, ...branchParts] = remoteBranchName.split('/')
+
+  return branchParts.join('/') || remoteBranchName
+}
+
+function RepositoryBranchControl({
+  repository,
+  repositories,
+  selectedRepositoryId,
+  switching,
+  onRepositoryChange,
+  onSwitchBranch
+}: {
+  repository: Repository
+  repositories: Repository[]
+  selectedRepositoryId?: string
+  switching?: boolean
+  onRepositoryChange?: (repositoryId: string) => void
+  onSwitchBranch?: (repository: Repository, input: GitBranchSwitchInput) => Promise<void>
+}): JSX.Element {
+  const [createBranchOpen, setCreateBranchOpen] = useState(false)
+  const [newBranchName, setNewBranchName] = useState('')
+  const localBranches = Array.from(new Set([repository.currentBranch, ...repository.branches].filter(Boolean)))
+  const remoteBranches = Array.from(new Set(repository.remoteBranches.filter(Boolean)))
+  const branchOptions = [
+    {
+      label: '本地分支',
+      options: localBranches.map((branchName) => ({
+        label: branchName,
+        value: createBranchOptionValue('local', branchName)
+      }))
+    },
+    {
+      label: '远端分支',
+      options: remoteBranches.map((branchName) => ({
+        label: (
+          <Space size={6}>
+            <span>{branchName}</span>
+            <Tag>远端</Tag>
+          </Space>
+        ),
+        value: createBranchOptionValue('remote', branchName)
+      }))
+    }
+  ].filter((group) => group.options.length > 0)
+  const selectedBranchValue = createBranchOptionValue('local', repository.currentBranch)
+
+  async function switchBranch(value: string): Promise<void> {
+    if (!onSwitchBranch) {
+      return
+    }
+
+    const nextBranch = parseBranchOptionValue(value)
+
+    if (nextBranch.kind === 'local') {
+      await onSwitchBranch(repository, { branchName: nextBranch.branchName })
+      return
+    }
+
+    const localBranchName = getRemoteBranchLocalName(nextBranch.branchName)
+
+    if (repository.branches.includes(localBranchName)) {
+      await onSwitchBranch(repository, { branchName: localBranchName })
+      return
+    }
+
+    Modal.confirm({
+      title: '创建本地分支？',
+      content: `远端分支 ${nextBranch.branchName} 还没有对应的本地分支。是否创建 ${localBranchName} 并切换过去？`,
+      okText: '创建并切换',
+      cancelText: '取消',
+      onOk: () =>
+        onSwitchBranch(repository, {
+          branchName: localBranchName,
+          create: true,
+          startPoint: nextBranch.branchName,
+          track: true
+        })
+    })
+  }
+
+  async function createBranch(): Promise<void> {
+    const branchName = newBranchName.trim()
+
+    if (!branchName) {
+      message.warning('请输入分支名')
+      return
+    }
+
+    if (!onSwitchBranch) {
+      return
+    }
+
+    await onSwitchBranch(repository, { branchName, create: true })
+    setCreateBranchOpen(false)
+    setNewBranchName('')
+  }
+
+  return (
+    <>
+      <Space.Compact className="repository-branch-control">
+        {repositories.length > 1 && onRepositoryChange && (
+          <Select
+            className="repository-branch-repository-select"
+            value={selectedRepositoryId ?? repository.id}
+            options={repositories.map((item) => ({ label: item.name, value: item.id }))}
+            onChange={onRepositoryChange}
+          />
+        )}
+        <Select
+          showSearch
+          className="repository-branch-select"
+          value={selectedBranchValue}
+          disabled={!onSwitchBranch}
+          loading={switching}
+          options={branchOptions}
+          optionFilterProp="value"
+          popupMatchSelectWidth={false}
+          onChange={(value) => {
+            switchBranch(value).catch(() => undefined)
+          }}
+        />
+        {onSwitchBranch && (
+          <Tooltip title="创建分支">
+            <Button icon={<PlusOutlined />} loading={switching} onClick={() => setCreateBranchOpen(true)} />
+          </Tooltip>
+        )}
+      </Space.Compact>
+      <Modal
+        title="创建分支"
+        open={createBranchOpen}
+        okText="创建并切换"
+        cancelText="取消"
+        confirmLoading={switching}
+        onOk={createBranch}
+        onCancel={() => setCreateBranchOpen(false)}
+      >
+        <Input
+          autoFocus
+          value={newBranchName}
+          placeholder={`从 ${repository.currentBranch || '当前 HEAD'} 创建，例如 feature/new-page`}
+          onChange={(event) => setNewBranchName(event.target.value)}
+          onPressEnter={() => createBranch().catch(() => undefined)}
+        />
+      </Modal>
+    </>
+  )
+}
+
 function RepositorySummaryStrip({
   activeRepository,
   repositories,
   selectedRepositoryId,
   commitCount,
-  onRepositoryChange
+  switchingBranch,
+  onRepositoryChange,
+  onSwitchBranch
 }: {
   activeRepository: Repository
   repositories: Repository[]
   selectedRepositoryId?: string
   commitCount: number
+  switchingBranch?: boolean
   onRepositoryChange?: (repositoryId: string) => void
+  onSwitchBranch?: (repository: Repository, input: GitBranchSwitchInput) => Promise<void>
 }): JSX.Element {
   const fields = createRepositorySummaryFields(activeRepository, commitCount)
 
   return (
     <div className="repository-summary-strip">
-      <div className="repository-summary-context">
-        <Typography.Text type="secondary">仓库</Typography.Text>
-        {repositories.length > 1 && onRepositoryChange ? (
-          <Select
-            value={selectedRepositoryId ?? activeRepository.id}
-            className="repository-context-select"
-            options={repositories.map((item) => ({ label: item.name, value: item.id }))}
-            onChange={onRepositoryChange}
-          />
-        ) : (
-          <Typography.Text strong ellipsis={{ tooltip: activeRepository.name }}>
-            {activeRepository.name}
-          </Typography.Text>
-        )}
-      </div>
       <div className="repository-summary-grid">
         {fields.map((field) => (
           <div className="repository-summary-item" key={field.label}>
             <Typography.Text type="secondary">{field.label}</Typography.Text>
-            <Typography.Text strong={field.strong} ellipsis={{ tooltip: field.value }}>
-              {field.label === '提交总数' ? formatNumber(Number(field.value)) : field.value}
-            </Typography.Text>
+            {field.label === '当前分支' ? (
+              <RepositoryBranchControl
+                repository={activeRepository}
+                repositories={repositories}
+                selectedRepositoryId={selectedRepositoryId}
+                switching={switchingBranch}
+                onRepositoryChange={onRepositoryChange}
+                onSwitchBranch={onSwitchBranch}
+              />
+            ) : (
+              <Typography.Text strong={field.strong} ellipsis={{ tooltip: field.value }}>
+                {field.label === '提交总数' ? formatNumber(Number(field.value)) : field.value}
+              </Typography.Text>
+            )}
           </div>
         ))}
       </div>
@@ -6694,7 +6918,7 @@ function RepositoryLogTree({
       const summary = await window.forgeDesk.analyzeProjectGit(synced.projectId)
       setProjectSummary(summary)
       setGitError(null)
-      message.success('远端已 fetch/prune，Git 数据已刷新')
+      message.success('远端已 Fetch，Git 数据已刷新')
     } catch (error) {
       setGitError(createGitErrorGuidance(error, '同步远端'))
     } finally {
@@ -7220,9 +7444,11 @@ function RepositoryTable({ repositories, branchTagRefreshToken = 0 }: { reposito
 }
 
 function App(): JSX.Element {
-  const { loadingWorkspace, loadWorkspace } = useForgeDeskStore()
+  const { loadingWorkspace, loadWorkspace, projects, selectedProjectId } = useForgeDeskStore()
   const [activeKey, setActiveKey] = useState<AppNavigationKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
+  const [terminalShortcutRequest, setTerminalShortcutRequest] = useState<ProjectTerminalShortcutRequest | null>(null)
+  const terminalShortcutProject = chooseTerminalShortcutProject(projects, selectedProjectId)
 
   useEffect(() => {
     let cancelled = false
@@ -7257,39 +7483,73 @@ function App(): JSX.Element {
   return (
     <Layout className="app-shell">
       <Layout.Sider width={236} theme="light" className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">
-            <GithubOutlined />
+        <div className="sidebar-inner">
+          <div className="brand">
+            <div className="brand-mark">
+              <GithubOutlined />
+            </div>
+            <div>
+              <Typography.Title level={4}>ForgeDesk</Typography.Title>
+              <Typography.Text type="secondary">Local First Console</Typography.Text>
+            </div>
           </div>
-          <div>
-            <Typography.Title level={4}>ForgeDesk</Typography.Title>
-            <Typography.Text type="secondary">Local First Console</Typography.Text>
+          <Menu mode="inline" selectedKeys={[activeKey]} items={menuItems} onClick={({ key }) => setActiveKey(key as AppNavigationKey)} />
+          <div className="sidebar-footer">
+            <Tooltip title={terminalShortcutProject ? `打开 ${terminalShortcutProject.name} 的终端` : '暂无项目，先创建项目后再打开终端'}>
+              <span className="sidebar-footer-button">
+                <Button
+                  block
+                  disabled={!terminalShortcutProject}
+                  icon={<CodeOutlined />}
+                  onClick={() => {
+                    if (!terminalShortcutProject) {
+                      return
+                    }
+
+                    setActiveKey('overview')
+                    setTerminalShortcutRequest((current) => ({
+                      projectId: terminalShortcutProject.id,
+                      requestId: (current?.requestId ?? 0) + 1
+                    }))
+                  }}
+                >
+                  打开终端
+                </Button>
+              </span>
+            </Tooltip>
           </div>
         </div>
-        <Menu mode="inline" selectedKeys={[activeKey]} items={menuItems} onClick={({ key }) => setActiveKey(key as AppNavigationKey)} />
       </Layout.Sider>
-      <Layout.Content className="content">
-        {loadingWorkspace && (
-          <div className="loading-panel">
-            <Spin />
-          </div>
-        )}
-        {!loadingWorkspace && activeKey === 'settings' && (
-          <SettingsPanel
-            onCreateProject={() => {
-              setActiveKey('overview')
-              setCreatingProject(true)
-            }}
-          />
-        )}
-        {!loadingWorkspace && activeKey === 'services' && (
-          <section className="workspace-section">
-            <GlobalServiceCenterPanel />
-          </section>
-        )}
-        {!loadingWorkspace && activeKey === 'overview' && <ProjectOverview onCreateProject={() => setCreatingProject(true)} onOpenSettings={() => setActiveKey('settings')} />}
-        <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('overview')} />
-      </Layout.Content>
+      <Layout className="app-main">
+        <Layout.Content className="content">
+          {loadingWorkspace && (
+            <div className="loading-panel">
+              <Spin />
+            </div>
+          )}
+          {!loadingWorkspace && activeKey === 'settings' && (
+            <SettingsPanel
+              onCreateProject={() => {
+                setActiveKey('overview')
+                setCreatingProject(true)
+              }}
+            />
+          )}
+          {!loadingWorkspace && activeKey === 'services' && (
+            <section className="workspace-section">
+              <GlobalServiceCenterPanel />
+            </section>
+          )}
+          {!loadingWorkspace && activeKey === 'overview' && (
+            <ProjectOverview
+              onCreateProject={() => setCreatingProject(true)}
+              onOpenSettings={() => setActiveKey('settings')}
+              terminalShortcut={terminalShortcutRequest}
+            />
+          )}
+          <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('overview')} />
+        </Layout.Content>
+      </Layout>
     </Layout>
   )
 }

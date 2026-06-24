@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   saveRepositoryRemote: (input: RepositoryRemoteInput) => ipcRenderer.invoke('repository:remote:save', input),
   deleteRepositoryRemote: (repositoryId: string, remoteName: string) => ipcRenderer.invoke('repository:remote:delete', repositoryId, remoteName),
   fetchRepositoryRemote: (repositoryId: string, remoteName?: string) => ipcRenderer.invoke('repository:remote:fetch', repositoryId, remoteName),
+  switchRepositoryBranch: (repositoryId: string, input: GitBranchSwitchInput) => ipcRenderer.invoke('repository:branch:switch', repositoryId, input),
   runRepositoryGitCommand: (input: GitCommandRequest) => ipcRenderer.invoke('repository:git-command', input),
   getRepositoryWorkspaceStatus: (repositoryId: string) => ipcRenderer.invoke('repository:workspace-status', repositoryId),
   gitAdd: (repositoryId: string, input: GitAddInput) => ipcRenderer.invoke('repository:git-add', repositoryId, input),
@@ -75,5 +76,19 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   readSshConfig: () => ipcRenderer.invoke('ssh:read-config'),
   writeSshConfig: (content: string) => ipcRenderer.invoke('ssh:write-config', content),
   openSshDirectory: () => ipcRenderer.invoke('ssh:open-directory'),
+  openTerminal: (input?: TerminalCreateInput) => ipcRenderer.invoke('terminal:create', input),
+  writeTerminal: (sessionId: string, data: string) => ipcRenderer.invoke('terminal:write', sessionId, data),
+  resizeTerminal: (sessionId: string, cols: number, rows: number) => ipcRenderer.invoke('terminal:resize', sessionId, cols, rows),
+  closeTerminal: (sessionId: string) => ipcRenderer.invoke('terminal:close', sessionId),
+  onTerminalData: (listener: (event: TerminalDataEvent) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, event: TerminalDataEvent): void => listener(event)
+    ipcRenderer.on('terminal:data', wrapped)
+    return () => ipcRenderer.removeListener('terminal:data', wrapped)
+  },
+  onTerminalExit: (listener: (event: TerminalExitEvent) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, event: TerminalExitEvent): void => listener(event)
+    ipcRenderer.on('terminal:exit', wrapped)
+    return () => ipcRenderer.removeListener('terminal:exit', wrapped)
+  },
   openGitDownload: () => ipcRenderer.invoke('external:open-git-download')
 })

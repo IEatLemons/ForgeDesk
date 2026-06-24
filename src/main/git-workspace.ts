@@ -23,6 +23,13 @@ export type GitMergeInput = {
   source: string
 }
 
+export type GitBranchSwitchInput = {
+  branchName: string
+  create?: boolean
+  startPoint?: string
+  track?: boolean
+}
+
 export type GitMergeAnalysisInput = {
   source: string
   target: string
@@ -112,6 +119,29 @@ export function buildGitPushArgs(input: GitPushInput): string[] {
 
 export function buildGitMergeArgs(input: GitMergeInput): string[] {
   return ['merge', '--no-edit', assertSafeRef(input.source, '分支')]
+}
+
+export function buildGitSwitchBranchArgs(input: GitBranchSwitchInput): string[] {
+  const branchName = assertSafeRef(input.branchName, '分支')
+  const startPoint = input.startPoint ? assertSafeRef(input.startPoint, '起点') : ''
+
+  if (!input.create) {
+    if (startPoint || input.track) {
+      throw new Error('切换已有分支不需要起点')
+    }
+
+    return ['switch', branchName]
+  }
+
+  if (input.track) {
+    if (!startPoint) {
+      throw new Error('创建跟踪分支需要远端起点')
+    }
+
+    return ['switch', '--track', '-c', branchName, startPoint]
+  }
+
+  return startPoint ? ['switch', '-c', branchName, startPoint] : ['switch', '-c', branchName]
 }
 
 export function buildGitVerifyRefArgs(ref: string): string[] {

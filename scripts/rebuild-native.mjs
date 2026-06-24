@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -9,6 +9,35 @@ const require = createRequire(import.meta.url)
 const betterSqlitePath = join(root, 'node_modules', 'better-sqlite3')
 const electronPackagePath = join(root, 'node_modules', 'electron', 'package.json')
 const nativeCachePath = join(root, '.cache', 'native')
+
+function ensureNodePtySpawnHelperPermissions() {
+  if (process.platform !== 'darwin') {
+    return
+  }
+
+  let nodePtyPackagePath
+  try {
+    nodePtyPackagePath = require.resolve('node-pty/package.json', { paths: [root] })
+  } catch {
+    return
+  }
+
+  const helperPath = join(dirname(nodePtyPackagePath), 'prebuilds', `darwin-${process.arch}`, 'spawn-helper')
+
+  if (!existsSync(helperPath)) {
+    return
+  }
+
+  const mode = statSync(helperPath).mode
+  const executableMode = mode | 0o755
+
+  if ((mode & 0o755) !== 0o755) {
+    chmodSync(helperPath, executableMode)
+    console.warn(`Fixed node-pty spawn-helper permissions: ${helperPath}`)
+  }
+}
+
+ensureNodePtySpawnHelperPermissions()
 
 let prebuildInstallBin
 if (existsSync(betterSqlitePath)) {

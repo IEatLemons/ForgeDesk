@@ -62,6 +62,37 @@ export type GitCommandResult = {
   exitCode: number | null
 }
 
+export type TerminalCreateInput = {
+  cwd?: string
+  title?: string
+  reuseKey?: string
+  cols?: number
+  rows?: number
+}
+
+export type TerminalSession = {
+  id: string
+  title: string
+  cwd: string
+  shell: string
+  pid: number
+  reuseKey?: string
+  exited: boolean
+  exitCode?: number
+  signal?: number
+}
+
+export type TerminalDataEvent = {
+  sessionId: string
+  data: string
+}
+
+export type TerminalExitEvent = {
+  sessionId: string
+  exitCode: number
+  signal?: number
+}
+
 export type GitAddInput = {
   mode: 'all' | 'paths'
   paths: string[]
@@ -80,6 +111,13 @@ export type GitPushInput = {
 
 export type GitMergeInput = {
   source: string
+}
+
+export type GitBranchSwitchInput = {
+  branchName: string
+  create?: boolean
+  startPoint?: string
+  track?: boolean
 }
 
 export type GitCommitMessageInput = {

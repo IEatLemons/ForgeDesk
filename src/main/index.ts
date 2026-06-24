@@ -21,10 +21,12 @@ import {
   buildGitMergeTreeArgs,
   buildGitPushArgs,
   buildGitRevListCountArgs,
+  buildGitSwitchBranchArgs,
   buildGitTagArgs,
   buildGitVerifyRefArgs,
   parsePorcelainStatus,
   type GitAddInput,
+  type GitBranchSwitchInput,
   type GitCommitInput,
   type GitMergeAnalysisInput,
   type GitMergeInput,
@@ -41,6 +43,7 @@ import {
   type ProjectBranchTagRecord
 } from './project-branch-tags'
 import { readSshConfigFile, writeSshConfigFile, type SshConfigFile } from './ssh-config'
+import { createNodePtyFactory } from './node-pty-factory'
 import {
   deleteSshKeyFile,
   fixSshPrivateKeyPermissions,
@@ -60,6 +63,8 @@ import {
   saveSshPassphrase,
   withSshPassphraseAskpass
 } from './ssh-passphrases'
+import { registerTerminalIpc } from './terminal-ipc'
+import { TerminalService, type TerminalDataEvent, type TerminalExitEvent } from './terminal-service'
 import { parseRemoteAlignment, summarizeRemoteAlignment, type GitRemote, type RemoteAlignmentSummary } from './remote-alignment'
 import {
   bindProjectService as bindProjectServiceRecord,
@@ -313,9 +318,22 @@ type GitExecutionOptions = {
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
 const sshDirectory = join(homedir(), '.ssh')
 let database: Database.Database | null = null
+const terminalService = new TerminalService({
+  onData: (event) => sendTerminalEvent('terminal:data', event),
+  onExit: (event) => sendTerminalEvent('terminal:exit', event),
+  ptyFactory: createNodePtyFactory()
+})
 
 function getErrorText(error: unknown): string {
   return error instanceof Error ? error.message : '读取远端对齐状态失败'
+}
+
+function sendTerminalEvent(channel: 'terminal:data', event: TerminalDataEvent): void
+function sendTerminalEvent(channel: 'terminal:exit', event: TerminalExitEvent): void
+function sendTerminalEvent(channel: 'terminal:data' | 'terminal:exit', event: TerminalDataEvent | TerminalExitEvent): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send(channel, event)
+  }
 }
 
 function expandHomePath(path: string): string {
@@ -1617,6 +1635,14 @@ async function fetchRepositoryRemote(repositoryId: string, remoteName?: string):
   return rescanRepositoryRecord(repository)
 }
 
+async function switchRepositoryBranch(repositoryId: string, input: GitBranchSwitchInput): Promise<RepositoryRecord> {
+  const repository = getRepositoryOrThrow(repositoryId)
+
+  await runGitInPathStrict(repository.localPath, buildGitSwitchBranchArgs(input))
+
+  return rescanRepositoryRecord(repository)
+}
+
 const serviceMonitorIntervalMs = 5 * 60 * 1000
 const serviceMonitorRetentionDays = 30
 let serviceMonitorTimer: NodeJS.Timeout | null = null
@@ -2263,6 +2289,8 @@ ipcMain.handle('repository:remote:delete', async (_event, repositoryId: string, 
 
 ipcMain.handle('repository:remote:fetch', async (_event, repositoryId: string, remoteName?: string): Promise<RepositoryRecord> => fetchRepositoryRemote(repositoryId, remoteName))
 
+ipcMain.handle('repository:branch:switch', async (_event, repositoryId: string, input: GitBranchSwitchInput): Promise<RepositoryRecord> => switchRepositoryBranch(repositoryId, input))
+
 ipcMain.handle('repository:git-command', async (_event, input: GitCommandRequest): Promise<GitCommandResult> => runRepositoryGitCommand(input))
 
 ipcMain.handle('repository:workspace-status', async (_event, repositoryId: string): Promise<GitWorkspaceStatus> => getRepositoryWorkspaceStatus(repositoryId))
@@ -2590,6 +2618,8 @@ ipcMain.handle('ssh:open-directory', async (): Promise<void> => {
   await mkdir(sshDirectory, { recursive: true, mode: 0o700 })
   await shell.openPath(sshDirectory)
 })
+
+registerTerminalIpc(ipcMain, terminalService)
 
 ipcMain.handle('external:open-git-download', async (): Promise<void> => {
   await shell.openExternal('https://git-scm.com/downloads')

@@ -51,6 +51,37 @@ type GitCommandResult = {
   exitCode: number | null
 }
 
+type TerminalCreateInput = {
+  cwd?: string
+  title?: string
+  reuseKey?: string
+  cols?: number
+  rows?: number
+}
+
+type TerminalSession = {
+  id: string
+  title: string
+  cwd: string
+  shell: string
+  pid: number
+  reuseKey?: string
+  exited: boolean
+  exitCode?: number
+  signal?: number
+}
+
+type TerminalDataEvent = {
+  sessionId: string
+  data: string
+}
+
+type TerminalExitEvent = {
+  sessionId: string
+  exitCode: number
+  signal?: number
+}
+
 type GitAddInput = {
   mode: 'all' | 'paths'
   paths: string[]
@@ -69,6 +100,13 @@ type GitPushInput = {
 
 type GitMergeInput = {
   source: string
+}
+
+type GitBranchSwitchInput = {
+  branchName: string
+  create?: boolean
+  startPoint?: string
+  track?: boolean
 }
 
 type GitCommitMessageInput = {
@@ -510,6 +548,7 @@ interface Window {
     saveRepositoryRemote: (input: RepositoryRemoteInput) => Promise<RepositoryRecord>
     deleteRepositoryRemote: (repositoryId: string, remoteName: string) => Promise<RepositoryRecord>
     fetchRepositoryRemote: (repositoryId: string, remoteName?: string) => Promise<RepositoryRecord>
+    switchRepositoryBranch: (repositoryId: string, input: GitBranchSwitchInput) => Promise<RepositoryRecord>
     runRepositoryGitCommand: (input: GitCommandRequest) => Promise<GitCommandResult>
     getRepositoryWorkspaceStatus: (repositoryId: string) => Promise<GitWorkspaceStatus>
     gitAdd: (repositoryId: string, input: GitAddInput) => Promise<GitOperationResult>
@@ -567,6 +606,12 @@ interface Window {
     readSshConfig: () => Promise<SshConfigFile>
     writeSshConfig: (content: string) => Promise<SshConfigFile>
     openSshDirectory: () => Promise<void>
+    openTerminal: (input?: TerminalCreateInput) => Promise<TerminalSession>
+    writeTerminal: (sessionId: string, data: string) => Promise<void>
+    resizeTerminal: (sessionId: string, cols: number, rows: number) => Promise<void>
+    closeTerminal: (sessionId: string) => Promise<void>
+    onTerminalData: (listener: (event: TerminalDataEvent) => void) => () => void
+    onTerminalExit: (listener: (event: TerminalExitEvent) => void) => () => void
     openGitDownload: () => Promise<void>
   }
 }
