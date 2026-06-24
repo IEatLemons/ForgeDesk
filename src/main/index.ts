@@ -317,6 +317,7 @@ type GitExecutionOptions = {
 
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
 const sshDirectory = join(homedir(), '.ssh')
+const appIconPath = isDev ? join(__dirname, '../../resources/forgedesk.png') : join(process.resourcesPath, 'forgedesk.png')
 let database: Database.Database | null = null
 const terminalService = new TerminalService({
   onData: (event) => sendTerminalEvent('terminal:data', event),
@@ -1066,6 +1067,7 @@ function createWindow(): void {
     minHeight: 720,
     title: 'ForgeDesk',
     backgroundColor: '#f6f7f9',
+    icon: appIconPath,
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
@@ -2626,6 +2628,10 @@ ipcMain.handle('external:open-git-download', async (): Promise<void> => {
 })
 
 app.whenReady().then(() => {
+  if (process.platform === 'darwin' && existsSync(appIconPath)) {
+    app.dock?.setIcon(appIconPath)
+  }
+
   createWindow()
   startServiceMonitorScheduler()
 

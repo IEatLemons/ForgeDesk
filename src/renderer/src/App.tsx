@@ -32,7 +32,6 @@ import type { ColumnsType } from 'antd/es/table'
 import {
   BranchesOutlined,
   CheckCircleOutlined,
-  CodeOutlined,
   CopyOutlined,
   DashboardOutlined,
   DeleteOutlined,
@@ -57,6 +56,7 @@ import {
 import ReactECharts from 'echarts-for-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormInstance } from 'antd/es/form'
+import forgedeskLogoUrl from './assets/forgedesk-logo.svg'
 import type {
   AiSettingsView,
   AiConflictSuggestion,
@@ -109,7 +109,6 @@ import {
   type GitGraphRow
 } from './git-log-view'
 import {
-  chooseTerminalShortcutProject,
   createProjectTerminalOpenRequest,
   createRepositorySummaryFields,
   shouldShowRepositorySummary,
@@ -258,11 +257,6 @@ type ProjectServiceForm = {
 type ProjectServiceBindingForm = {
   serviceId: string
   repositoryId?: string
-}
-
-type ProjectTerminalShortcutRequest = {
-  requestId: number
-  projectId: string
 }
 
 function getErrorMessage(error: unknown): string {
@@ -5400,12 +5394,10 @@ function CreateProjectModal({
 
 function ProjectOverview({
   onCreateProject,
-  onOpenSettings,
-  terminalShortcut
+  onOpenSettings
 }: {
   onCreateProject: () => void
   onOpenSettings: () => void
-  terminalShortcut?: ProjectTerminalShortcutRequest | null
 }): JSX.Element {
   const { projects, repositories, selectedProjectId, summaries, deleteProject, setProjectSummary, setSelectedProjectId, updateRepository } = useForgeDeskStore()
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null)
@@ -5464,18 +5456,6 @@ function ProjectOverview({
 
     setProjectSummary(await window.forgeDesk.getProjectSummary(projectId, nextRange))
   }
-
-  useEffect(() => {
-    if (!terminalShortcut) {
-      return
-    }
-
-    const project = projects.find((item) => item.id === terminalShortcut.projectId) ?? projects[0]
-
-    if (project) {
-      openProjectTerminal(project)
-    }
-  }, [terminalShortcut?.requestId])
 
   useEffect(() => {
     if (!selectedProject || !window.forgeDesk) {
@@ -7444,11 +7424,9 @@ function RepositoryTable({ repositories, branchTagRefreshToken = 0 }: { reposito
 }
 
 function App(): JSX.Element {
-  const { loadingWorkspace, loadWorkspace, projects, selectedProjectId } = useForgeDeskStore()
+  const { loadingWorkspace, loadWorkspace } = useForgeDeskStore()
   const [activeKey, setActiveKey] = useState<AppNavigationKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
-  const [terminalShortcutRequest, setTerminalShortcutRequest] = useState<ProjectTerminalShortcutRequest | null>(null)
-  const terminalShortcutProject = chooseTerminalShortcutProject(projects, selectedProjectId)
 
   useEffect(() => {
     let cancelled = false
@@ -7486,7 +7464,7 @@ function App(): JSX.Element {
         <div className="sidebar-inner">
           <div className="brand">
             <div className="brand-mark">
-              <GithubOutlined />
+              <img src={forgedeskLogoUrl} alt="ForgeDesk" />
             </div>
             <div>
               <Typography.Title level={4}>ForgeDesk</Typography.Title>
@@ -7494,30 +7472,6 @@ function App(): JSX.Element {
             </div>
           </div>
           <Menu mode="inline" selectedKeys={[activeKey]} items={menuItems} onClick={({ key }) => setActiveKey(key as AppNavigationKey)} />
-          <div className="sidebar-footer">
-            <Tooltip title={terminalShortcutProject ? `打开 ${terminalShortcutProject.name} 的终端` : '暂无项目，先创建项目后再打开终端'}>
-              <span className="sidebar-footer-button">
-                <Button
-                  block
-                  disabled={!terminalShortcutProject}
-                  icon={<CodeOutlined />}
-                  onClick={() => {
-                    if (!terminalShortcutProject) {
-                      return
-                    }
-
-                    setActiveKey('overview')
-                    setTerminalShortcutRequest((current) => ({
-                      projectId: terminalShortcutProject.id,
-                      requestId: (current?.requestId ?? 0) + 1
-                    }))
-                  }}
-                >
-                  打开终端
-                </Button>
-              </span>
-            </Tooltip>
-          </div>
         </div>
       </Layout.Sider>
       <Layout className="app-main">
@@ -7544,7 +7498,6 @@ function App(): JSX.Element {
             <ProjectOverview
               onCreateProject={() => setCreatingProject(true)}
               onOpenSettings={() => setActiveKey('settings')}
-              terminalShortcut={terminalShortcutRequest}
             />
           )}
           <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('overview')} />

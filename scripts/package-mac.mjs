@@ -9,10 +9,34 @@ const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const appName = 'ForgeDesk'
 const appId = 'app.forgedesk.desktop'
 const version = packageJson.version
+const artifactVersion = parseArtifactVersion(process.argv.slice(2))
 const distDir = join(root, 'dist')
 const electronApp = join(root, 'node_modules', 'electron', 'dist', 'Electron.app')
+const iconFile = join(root, 'resources', 'forgedesk.icns')
+const iconPngFile = join(root, 'resources', 'forgedesk.png')
 const tempApp = join(distDir, `${appName}.packaging.app`)
-const finalApp = join(distDir, `${appName}-${version}-arm64.app`)
+const finalAppName = artifactVersion ? `${appName}-${artifactVersion}-arm64.app` : `${appName}.app`
+const finalApp = join(distDir, finalAppName)
+
+function parseArtifactVersion(args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]
+
+    if (arg === '--version' || arg === '-v') {
+      return args[index + 1]?.trim() ?? ''
+    }
+
+    if (arg.startsWith('--version=')) {
+      return arg.slice('--version='.length).trim()
+    }
+
+    if (!arg.startsWith('-')) {
+      return arg.trim()
+    }
+  }
+
+  return ''
+}
 
 function run(command, args) {
   const result = spawnSync(command, args, {
@@ -57,6 +81,14 @@ if (!existsSync(electronApp)) {
   throw new Error('Electron app shell was not found. Run dependency installation first.')
 }
 
+if (!existsSync(iconFile)) {
+  throw new Error('ForgeDesk macOS icon was not found. Expected resources/forgedesk.icns.')
+}
+
+if (!existsSync(iconPngFile)) {
+  throw new Error('ForgeDesk runtime icon was not found. Expected resources/forgedesk.png.')
+}
+
 run(nodeBin, [join(root, 'scripts', 'rebuild-native.mjs')])
 run(nodeBin, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit'])
 run(nodeBin, [join(root, 'node_modules', 'electron-vite', 'bin', 'electron-vite.js'), 'build'])
@@ -69,6 +101,9 @@ const resourcesDir = join(tempApp, 'Contents', 'Resources')
 const appResourceDir = join(resourcesDir, 'app')
 rmSync(appResourceDir, { recursive: true, force: true })
 mkdirSync(appResourceDir, { recursive: true })
+cpSync(iconFile, join(resourcesDir, 'forgedesk.icns'))
+cpSync(iconFile, join(resourcesDir, 'electron.icns'))
+cpSync(iconPngFile, join(resourcesDir, 'forgedesk.png'))
 
 for (const entry of ['out', 'node_modules', 'package.json', 'package-lock.json']) {
   cpSync(join(root, entry), join(appResourceDir, entry), { recursive: true })
@@ -105,7 +140,7 @@ writeFileSync(
   <key>CFBundleExecutable</key>
   <string>Electron</string>
   <key>CFBundleIconFile</key>
-  <string>electron.icns</string>
+  <string>forgedesk</string>
   <key>CFBundleIdentifier</key>
   <string>${plistEscape(appId)}</string>
   <key>CFBundleInfoDictionaryVersion</key>
