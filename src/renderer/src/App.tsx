@@ -3301,7 +3301,7 @@ type GitActionModalProps = {
   open: boolean
   repositories: Repository[]
   onClose: () => void
-  onChanged: () => void | Promise<void>
+  onChanged: (repository?: Repository) => void | Promise<void>
 }
 
 function createBranchOptions(branches: string[]): Array<{ label: string; value: string }> {
@@ -3487,7 +3487,7 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
       if (result?.ok) {
         setSelectedPaths([])
         message.success('已暂存选中文件')
-        await onChanged()
+        await onChanged(result.repository)
       }
     } catch (error) {
       message.error(getErrorMessage(error))
@@ -3519,7 +3519,7 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
       setCommitMessage('')
       setCommitTag('')
       setSelectedPaths([])
-      await onChanged()
+      await onChanged(result.repository)
       onClose()
     } catch (error) {
       message.error(getErrorMessage(error))
@@ -3785,7 +3785,7 @@ function GitPushModal({ open, repositories, onClose, onChanged }: GitActionModal
       }
 
       message.success('分支已推送')
-      await onChanged()
+      await onChanged(result.repository)
       onClose()
     } catch (error) {
       message.error(getErrorMessage(error))
@@ -3933,7 +3933,7 @@ function GitMergeModal({ open, repositories, onClose, onChanged }: GitActionModa
       if (result.ok) {
         message.success('合并已完成')
         setAnalysis(null)
-        await onChanged()
+        await onChanged(result.repository)
         onClose()
         return
       }
@@ -4024,7 +4024,7 @@ function GitMergeModal({ open, repositories, onClose, onChanged }: GitActionModa
       setStatus(result.status)
       setPreviewSuggestion(null)
       message.success(result.status.conflicts.length === 0 ? '已应用 AI 建议并暂存文件' : '已应用 AI 建议，请继续处理剩余冲突')
-      await onChanged()
+      await onChanged(result.repository)
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
@@ -5457,6 +5457,15 @@ function ProjectOverview({
     setProjectSummary(await window.forgeDesk.getProjectSummary(projectId, nextRange))
   }
 
+  async function refreshProjectGitData(projectId: string, changedRepository?: Repository): Promise<void> {
+    if (changedRepository) {
+      setProjectGitRepositoryId(changedRepository.id)
+    }
+
+    await refreshSummary(projectId)
+    setProjectGitRefreshToken((current) => current + 1)
+  }
+
   useEffect(() => {
     if (!selectedProject || !window.forgeDesk) {
       return
@@ -5714,19 +5723,19 @@ function ProjectOverview({
               open={commitModalOpen}
               repositories={projectRepositories}
               onClose={() => setCommitModalOpen(false)}
-              onChanged={() => selectedProject && refreshSummary(selectedProject.id)}
+              onChanged={(repository) => selectedProject && refreshProjectGitData(selectedProject.id, repository)}
             />
             <GitPushModal
               open={pushModalOpen}
               repositories={projectRepositories}
               onClose={() => setPushModalOpen(false)}
-              onChanged={() => selectedProject && refreshSummary(selectedProject.id)}
+              onChanged={(repository) => selectedProject && refreshProjectGitData(selectedProject.id, repository)}
             />
             <GitMergeModal
               open={mergeModalOpen}
               repositories={projectRepositories}
               onClose={() => setMergeModalOpen(false)}
-              onChanged={() => selectedProject && refreshSummary(selectedProject.id)}
+              onChanged={(repository) => selectedProject && refreshProjectGitData(selectedProject.id, repository)}
             />
             <Drawer
               title={`项目设置：${selectedProject.name}`}
