@@ -9,6 +9,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import '@xterm/xterm/css/xterm.css'
+import { getErrorMessage as getNormalizedErrorMessage } from './error-messages'
 import type { TerminalOpenRequest } from './terminal-panel-events'
 import {
   closeTerminalTab,
@@ -40,7 +41,7 @@ type TerminalPaneProps = {
 }
 
 function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : '终端操作失败'
+  return getNormalizedErrorMessage(error, '终端操作失败')
 }
 
 function TerminalPane({ active, session, onDispose, onReady, onResize, onWriteError }: TerminalPaneProps): JSX.Element {

@@ -1,3 +1,4 @@
+import { createAiNetworkError, createAiRequestError } from './ai-errors.js'
 import { buildAiRequestHeaders, type AiSettings } from './ai-settings.js'
 
 export type ConflictResolutionSuggestion = {
@@ -27,27 +28,33 @@ export async function requestConflictResolutionSuggestion(input: {
   }
 
   const fetchImpl = input.fetchImpl ?? fetch
-  const response = await fetchImpl(`${input.settings.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: buildAiRequestHeaders(input.settings),
-    body: JSON.stringify({
-      model: input.settings.model,
-      temperature: input.settings.temperature,
-      messages: [
-        {
-          role: 'system',
-          content: 'You resolve Git merge conflicts. Return only the full resolved file content, with no markdown fences and no explanation.'
-        },
-        {
-          role: 'user',
-          content: `Repository: ${input.repositoryName}\nFile: ${input.filePath}\n\nResolve this conflicted file:\n${input.conflictedContent}`
-        }
-      ]
+  let response: Response
+
+  try {
+    response = await fetchImpl(`${input.settings.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: buildAiRequestHeaders(input.settings),
+      body: JSON.stringify({
+        model: input.settings.model,
+        temperature: input.settings.temperature,
+        messages: [
+          {
+            role: 'system',
+            content: 'You resolve Git merge conflicts. Return only the full resolved file content, with no markdown fences and no explanation.'
+          },
+          {
+            role: 'user',
+            content: `Repository: ${input.repositoryName}\nFile: ${input.filePath}\n\nResolve this conflicted file:\n${input.conflictedContent}`
+          }
+        ]
+      })
     })
-  })
+  } catch (error) {
+    throw createAiNetworkError(error)
+  }
 
   if (!response.ok) {
-    throw new Error(`AI 请求失败：HTTP ${response.status}`)
+    throw await createAiRequestError(response)
   }
 
   const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> }

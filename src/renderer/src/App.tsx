@@ -1,5 +1,6 @@
 import {
   Alert,
+  AutoComplete,
   Badge,
   Button,
   Checkbox,
@@ -85,6 +86,10 @@ import type {
   RemoteAlignmentStatus,
   RemoteAlignmentSummary,
   Repository,
+  RepositoryReleasePreparation,
+  RepositoryReleasePublishResult,
+  RepositoryReleaseSuggestion,
+  RepositoryReleaseTagRecommendation,
   ServiceConnection,
   ServiceEnvironmentLogLine,
   ServiceMonitorCheck,
@@ -95,6 +100,7 @@ import type {
 import { APP_NAVIGATION_ITEMS, type AppNavigationKey } from './app-navigation'
 import { createAppUpdateViewModel } from './app-update-view'
 import { createDiffResultLines, createSourceDiffLines, type DiffDisplayLine } from './diff-view'
+import { getErrorMessage, isAiCredentialErrorMessage } from './error-messages'
 import { createGitErrorGuidance, type GitErrorGuidance } from './git-error-guidance'
 import {
   buildBranchGroups,
@@ -122,6 +128,7 @@ import {
   PROJECT_SETTINGS_MODULES,
   type ProjectSettingsModuleKey
 } from './project-settings-view'
+import { createReleasePublishViewModel } from './release-publish-view'
 import { getServiceProviderGuide, type ServiceProviderGuideProvider } from './service-config-guide'
 import { createServiceDetailSummary, getMonitorableServiceDomains, getProjectServiceStats } from './service-monitor-view'
 import { createEmptySshConfigEntry, parseSshConfigEntries, serializeSshConfigEntries, type SshConfigEntry } from './ssh-config-model'
@@ -258,10 +265,6 @@ type ProjectServiceForm = {
 type ProjectServiceBindingForm = {
   serviceId: string
   repositoryId?: string
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : '操作失败，请稍后重试'
 }
 
 function wait(ms: number): Promise<void> {
@@ -3431,6 +3434,96 @@ function getWorkspaceFileStatusLabel(file: GitStatusFile): { label: string; colo
   return { label: status || '变更', color: 'default' }
 }
 
+function createReleaseTagOptions(recommendation: RepositoryReleaseTagRecommendation | null): Array<{ value: string; label: string }> {
+  const options: Array<{ value: string; label: string }> = []
+  const seen = new Set<string>()
+  const suggestedTagName = recommendation?.suggestedTagName
+
+  if (suggestedTagName) {
+    options.push({ value: suggestedTagName, label: `推荐 ${suggestedTagName}` })
+    seen.add(suggestedTagName)
+  }
+
+  for (const tag of recommendation?.historicalTags ?? []) {
+    if (!seen.has(tag.tagName)) {
+      options.push({ value: tag.tagName, label: `历史 ${tag.tagName}` })
+      seen.add(tag.tagName)
+    }
+  }
+
+  return options
+}
+
+function filterReleaseTagOption(inputValue: string, option?: { value?: string; label?: string }): boolean {
+  const keyword = inputValue.trim().toLowerCase()
+
+  if (!keyword) {
+    return true
+  }
+
+  return `${option?.value ?? ''} ${option?.label ?? ''}`.toLowerCase().includes(keyword)
+}
+
+function getReleaseTagPlaceholder(loading: boolean, recommendation: RepositoryReleaseTagRecommendation | null): string {
+  if (loading) {
+    return '正在读取历史版本...'
+  }
+
+  if (recommendation?.suggestedTagName) {
+    return `推荐 ${recommendation.suggestedTagName}，也可手动输入`
+  }
+
+  return '可选，例如 v1.2.3'
+}
+
+function ReleaseTagPicker({
+  value,
+  recommendation,
+  loading,
+  className = '',
+  onChange
+}: {
+  value: string
+  recommendation: RepositoryReleaseTagRecommendation | null
+  loading: boolean
+  className?: string
+  onChange: (value: string) => void
+}): JSX.Element {
+  const options = useMemo(() => createReleaseTagOptions(recommendation), [recommendation])
+  const suggestedTagName = recommendation?.suggestedTagName ?? ''
+  const historicalTags = recommendation?.historicalTags.slice(0, 5) ?? []
+
+  return (
+    <div className={['release-tag-picker', className].filter(Boolean).join(' ')}>
+      <AutoComplete
+        value={value}
+        options={options}
+        className="release-tag-picker-control"
+        filterOption={filterReleaseTagOption}
+        onChange={onChange}
+      >
+        <Input addonBefore="版本 Tag" placeholder={getReleaseTagPlaceholder(loading, recommendation)} allowClear />
+      </AutoComplete>
+      <div className="release-tag-suggestions">
+        {loading ? <Typography.Text type="secondary">读取历史版本...</Typography.Text> : null}
+        {!loading && suggestedTagName ? (
+          <Button size="small" type={value === suggestedTagName ? 'primary' : 'default'} onClick={() => onChange(suggestedTagName)}>
+            推荐 {suggestedTagName}
+          </Button>
+        ) : null}
+        {!loading
+          ? historicalTags.map((tag) => (
+              <Button key={tag.tagName} size="small" type={value === tag.tagName ? 'primary' : 'default'} onClick={() => onChange(tag.tagName)}>
+                历史 {tag.tagName}
+              </Button>
+            ))
+          : null}
+        {!loading && !suggestedTagName && historicalTags.length === 0 ? <Typography.Text type="secondary">暂无历史版本</Typography.Text> : null}
+      </div>
+    </div>
+  )
+}
+
 type GitActionModalProps = {
   open: boolean
   repositories: Repository[]
@@ -3450,13 +3543,16 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [commitMessage, setCommitMessage] = useState('')
   const [commitTag, setCommitTag] = useState('')
+  const [tagRecommendation, setTagRecommendation] = useState<RepositoryReleaseTagRecommendation | null>(null)
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
   const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
   const [loadingStatus, setLoadingStatus] = useState(false)
+  const [loadingTagRecommendation, setLoadingTagRecommendation] = useState(false)
   const [loadingAiSettings, setLoadingAiSettings] = useState(false)
   const [savingAiSettings, setSavingAiSettings] = useState(false)
   const [working, setWorking] = useState(false)
   const [generatingCommitMessage, setGeneratingCommitMessage] = useState(false)
+  const [releaseModalOpen, setReleaseModalOpen] = useState(false)
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
   const files = status?.files ?? []
 
@@ -3470,6 +3566,7 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
       setStatus(null)
       setSelectedPaths([])
       setCommitTag('')
+      setTagRecommendation(null)
       return
     }
 
@@ -3493,6 +3590,24 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
       message.error(getErrorMessage(error))
     } finally {
       setLoadingStatus(false)
+    }
+  }
+
+  async function refreshReleaseTagRecommendation(): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) {
+      setTagRecommendation(null)
+      return
+    }
+
+    setLoadingTagRecommendation(true)
+
+    try {
+      setTagRecommendation(await window.forgeDesk.recommendRepositoryReleaseTag(selectedRepository.id))
+    } catch (error) {
+      setTagRecommendation(null)
+      message.warning(getErrorMessage(error))
+    } finally {
+      setLoadingTagRecommendation(false)
     }
   }
 
@@ -3577,7 +3692,12 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
       setCommitMessage(suggestion.message)
       message.success('已填写提交信息')
     } catch (error) {
-      message.error(getErrorMessage(error))
+      const errorMessage = getErrorMessage(error)
+      message.error(errorMessage)
+
+      if (isAiCredentialErrorMessage(errorMessage)) {
+        setAiSettingsModalOpen(true)
+      }
     } finally {
       setGeneratingCommitMessage(false)
     }
@@ -3591,7 +3711,9 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
     setStatus(null)
     setSelectedPaths([])
     setCommitMessage('')
+    setTagRecommendation(null)
     refreshWorkspaceStatus()
+    refreshReleaseTagRecommendation()
   }, [open, selectedRepository?.id])
 
   async function stageSelectedFiles(): Promise<GitOperationResult | null> {
@@ -3750,6 +3872,9 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
         <Button key="stage" loading={working} disabled={selectedPaths.length === 0} onClick={stageOnly}>
           仅暂存
         </Button>,
+        <Button key="release" icon={<UploadOutlined />} disabled={!selectedRepository} onClick={() => setReleaseModalOpen(true)}>
+          发布版本
+        </Button>,
         <Button key="commit" type="primary" loading={working} disabled={selectedPaths.length === 0 || !commitMessage.trim()} onClick={commitSelectedFiles}>
           提交选中文件
         </Button>
@@ -3790,12 +3915,11 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
           onChange={(event) => setCommitMessage(event.target.value)}
         />
 
-        <Input
+        <ReleaseTagPicker
           value={commitTag}
-          addonBefore="版本 Tag"
-          placeholder="可选，例如 v1.2.3"
-          allowClear
-          onChange={(event) => setCommitTag(event.target.value)}
+          recommendation={tagRecommendation}
+          loading={loadingTagRecommendation}
+          onChange={setCommitTag}
         />
 
         <Table
@@ -3827,6 +3951,423 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
           saving={savingAiSettings}
           onRefresh={refreshCommitAiSettings}
           onSave={saveCommitAiSettings}
+        />
+      </Modal>
+      <RepositoryReleaseModal
+        open={releaseModalOpen}
+        repositories={repositories}
+        initialRepositoryId={selectedRepository?.id}
+        onClose={() => setReleaseModalOpen(false)}
+        onChanged={async (repository) => {
+          if (repository) {
+            updateRepository(repository)
+          }
+          await refreshWorkspaceStatus()
+          await onChanged(repository)
+        }}
+      />
+    </Modal>
+  )
+}
+
+type RepositoryReleaseModalProps = GitActionModalProps & {
+  initialRepositoryId?: string
+}
+
+function createTagNameFromVersion(version: string): string {
+  const trimmed = version.trim()
+  return /^\d+\.\d+\.\d+$/.test(trimmed) ? `v${trimmed}` : ''
+}
+
+function getReleaseScriptLabel(scriptName: string): string {
+  if (scriptName === 'publish:mac') {
+    return '发布到 GitHub Releases'
+  }
+
+  if (scriptName === 'package:mac') {
+    return '本地打包 macOS 应用'
+  }
+
+  if (scriptName === 'build') {
+    return '运行项目 build'
+  }
+
+  return '未配置'
+}
+
+function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClose, onChanged }: RepositoryReleaseModalProps): JSX.Element {
+  const { updateRepository } = useForgeDeskStore()
+  const [aiSettingsForm] = Form.useForm<AiSettingsForm>()
+  const [repositoryId, setRepositoryId] = useState(initialRepositoryId || repositories[0]?.id || '')
+  const [preparation, setPreparation] = useState<RepositoryReleasePreparation | null>(null)
+  const [targetVersion, setTargetVersion] = useState('')
+  const [tagName, setTagName] = useState('')
+  const [releaseTitle, setReleaseTitle] = useState('')
+  const [releaseNotes, setReleaseNotes] = useState('')
+  const [releaseCommitMessage, setReleaseCommitMessage] = useState('')
+  const [githubToken, setGithubToken] = useState('')
+  const [publishLog, setPublishLog] = useState('')
+  const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
+  const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
+  const [loadingPreparation, setLoadingPreparation] = useState(false)
+  const [generatingRelease, setGeneratingRelease] = useState(false)
+  const [publishing, setPublishing] = useState(false)
+  const [loadingAiSettings, setLoadingAiSettings] = useState(false)
+  const [savingAiSettings, setSavingAiSettings] = useState(false)
+  const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
+  const releaseView = useMemo(
+    () => createReleasePublishViewModel({ plan: preparation?.plan ?? null, githubToken }),
+    [githubToken, preparation]
+  )
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const nextRepositoryId = initialRepositoryId && repositories.some((repository) => repository.id === initialRepositoryId)
+      ? initialRepositoryId
+      : repositories[0]?.id ?? ''
+
+    setRepositoryId(nextRepositoryId)
+  }, [open, initialRepositoryId, repositories])
+
+  function applyReleasePreparation(nextPreparation: RepositoryReleasePreparation, preserveTextFields: boolean): void {
+    const nextVersion = nextPreparation.plan.suggestedVersion
+    const nextTagName = nextPreparation.plan.suggestedTagName || createTagNameFromVersion(nextVersion)
+
+    setPreparation(nextPreparation)
+    setTargetVersion(nextVersion)
+    setTagName(nextTagName)
+
+    if (!preserveTextFields) {
+      setReleaseTitle(`${nextPreparation.plan.repositoryName} ${nextTagName || nextVersion}`)
+      setReleaseNotes(`发布 ${nextTagName || nextVersion}`)
+      setReleaseCommitMessage(`chore: release ${nextTagName || nextVersion}`)
+    }
+  }
+
+  async function loadReleasePreparation(targetVersionOverride?: string, preserveTextFields = false): Promise<RepositoryReleasePreparation | null> {
+    if (!selectedRepository || !window.forgeDesk) {
+      setPreparation(null)
+      return null
+    }
+
+    setLoadingPreparation(true)
+
+    try {
+      const firstPreparation = await window.forgeDesk.prepareRepositoryRelease(
+        selectedRepository.id,
+        targetVersionOverride?.trim() ? { targetVersion: targetVersionOverride.trim() } : undefined
+      )
+      const shouldRecheckSuggestedVersion =
+        !targetVersionOverride &&
+        firstPreparation.plan.needsVersionBump &&
+        firstPreparation.plan.suggestedVersion &&
+        firstPreparation.plan.suggestedVersion !== firstPreparation.plan.currentVersion
+      const nextPreparation = shouldRecheckSuggestedVersion
+        ? await window.forgeDesk.prepareRepositoryRelease(selectedRepository.id, { targetVersion: firstPreparation.plan.suggestedVersion })
+        : firstPreparation
+
+      applyReleasePreparation(nextPreparation, preserveTextFields)
+      return nextPreparation
+    } catch (error) {
+      message.error(getErrorMessage(error))
+      setPreparation(null)
+      return null
+    } finally {
+      setLoadingPreparation(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!open || !selectedRepository) {
+      return
+    }
+
+    setPreparation(null)
+    setReleaseTitle('')
+    setReleaseNotes('')
+    setReleaseCommitMessage('')
+    setPublishLog('')
+    loadReleasePreparation()
+  }, [open, selectedRepository?.id])
+
+  async function refreshReleaseAiSettings(): Promise<AiSettingsView | null> {
+    if (!window.forgeDesk) {
+      setAiSettings(null)
+      return null
+    }
+
+    setLoadingAiSettings(true)
+
+    try {
+      const settings = await window.forgeDesk.getAiSettings()
+      setAiSettings(settings)
+      populateAiSettingsForm(aiSettingsForm, settings)
+      return settings
+    } catch (error) {
+      message.error(getErrorMessage(error))
+      return null
+    } finally {
+      setLoadingAiSettings(false)
+    }
+  }
+
+  async function saveReleaseAiSettings(): Promise<void> {
+    const values = await aiSettingsForm.validateFields()
+
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中保存 AI 设置')
+      return
+    }
+
+    setSavingAiSettings(true)
+
+    try {
+      const apiKey = values.apiKey?.trim()
+      const settings = await window.forgeDesk.saveAiSettings({
+        enabled: values.enabled,
+        provider: values.provider,
+        baseUrl: values.baseUrl,
+        apiKey: apiKey || undefined,
+        model: values.model,
+        temperature: Number(values.temperature)
+      })
+      setAiSettings(settings)
+      aiSettingsForm.setFieldValue('apiKey', '')
+
+      if (isAiSettingsReady(settings)) {
+        setAiSettingsModalOpen(false)
+      }
+
+      message.success('AI 设置已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingAiSettings(false)
+    }
+  }
+
+  async function fillReleaseWithAi(): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) {
+      return
+    }
+
+    const settings = await refreshReleaseAiSettings()
+
+    if (!isAiSettingsReady(settings)) {
+      message.info('请先填写并启用 AI API Key')
+      setAiSettingsModalOpen(true)
+      return
+    }
+
+    setGeneratingRelease(true)
+
+    try {
+      const checkedPreparation = await loadReleasePreparation(targetVersion, true)
+      const suggestion: RepositoryReleaseSuggestion = await window.forgeDesk.suggestRepositoryRelease(selectedRepository.id, {
+        targetVersion: checkedPreparation?.plan.suggestedVersion || targetVersion
+      })
+
+      setTargetVersion(suggestion.version)
+      setTagName(suggestion.tagName)
+      setReleaseTitle(suggestion.releaseTitle)
+      setReleaseNotes(suggestion.releaseNotes)
+      setReleaseCommitMessage(suggestion.commitMessage)
+      message.success('AI 已填写发布信息')
+    } catch (error) {
+      const errorMessage = getErrorMessage(error)
+      message.error(errorMessage)
+
+      if (isAiCredentialErrorMessage(errorMessage)) {
+        setAiSettingsModalOpen(true)
+      }
+    } finally {
+      setGeneratingRelease(false)
+    }
+  }
+
+  function onTargetVersionChange(value: string): void {
+    setTargetVersion(value)
+    const nextTagName = createTagNameFromVersion(value)
+
+    if (nextTagName) {
+      setTagName(nextTagName)
+    }
+  }
+
+  async function publishReleaseAfterConfirm(): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) {
+      return
+    }
+
+    const version = targetVersion.trim()
+    const releaseTagName = tagName.trim()
+    const title = releaseTitle.trim()
+    const notes = releaseNotes.trim()
+    const commitMessage = releaseCommitMessage.trim()
+
+    if (!version || !releaseTagName || !title || !notes || !commitMessage) {
+      message.warning('请补全版本、Tag、标题、说明和版本提交信息')
+      return
+    }
+
+    setPublishing(true)
+    setPublishLog('')
+
+    try {
+      const checkedPreparation = await loadReleasePreparation(version, true)
+
+      if (!checkedPreparation?.plan.canPublish) {
+        message.warning(checkedPreparation?.plan.issues.join('；') || '发布前检查未通过')
+        return
+      }
+
+      const result: RepositoryReleasePublishResult = await window.forgeDesk.publishRepositoryRelease(selectedRepository.id, {
+        version,
+        tagName: releaseTagName,
+        releaseTitle: title,
+        releaseNotes: notes,
+        commitMessage,
+        githubToken: githubToken.trim() || undefined
+      })
+
+      setPublishLog([result.stdout, result.stderr].filter(Boolean).join('\n'))
+
+      if (result.ok) {
+        updateRepository(result.repository)
+        await onChanged(result.repository)
+        message.success(`${releaseTagName} 发布流程已完成`)
+      } else {
+        message.warning(result.stderr || result.stdout || '发布脚本没有成功完成')
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setPublishing(false)
+    }
+  }
+
+  function confirmPublishRelease(): void {
+    Modal.confirm({
+      title: `发布 ${tagName || targetVersion}？`,
+      width: 560,
+      content: (
+        <Space direction="vertical" size={8}>
+          <Typography.Text>将按当前仓库 package.json 中的 {preparation?.plan.selectedScript || '发布'} 脚本执行。</Typography.Text>
+          {targetVersion !== preparation?.plan.currentVersion ? (
+            <Typography.Text type="warning">
+              发布前会把版本从 {preparation?.plan.currentVersion} 更新到 {targetVersion}，并提交版本号改动。
+            </Typography.Text>
+          ) : null}
+          <Typography.Text type="secondary">执行过程可能需要几分钟，请保持网络可用。</Typography.Text>
+        </Space>
+      ),
+      okText: '开始发布',
+      cancelText: '取消',
+      onOk: publishReleaseAfterConfirm
+    })
+  }
+
+  const plan = preparation?.plan
+  const issues = plan?.issues ?? []
+  const warnings = plan?.warnings ?? []
+
+  return (
+    <Modal
+      title="发布版本"
+      open={open}
+      width="min(900px, calc(100vw - 48px))"
+      onCancel={onClose}
+      footer={[
+        <Button key="cancel" onClick={onClose}>
+          关闭
+        </Button>,
+        <Button key="refresh" icon={<ReloadOutlined />} loading={loadingPreparation} disabled={!selectedRepository} onClick={() => loadReleasePreparation(targetVersion, true)}>
+          重新检查
+        </Button>,
+        <Button key="ai" icon={<ThunderboltOutlined />} loading={generatingRelease} disabled={!selectedRepository} onClick={fillReleaseWithAi}>
+          AI 填写
+        </Button>,
+        <Button key="publish" type="primary" icon={<UploadOutlined />} loading={publishing} disabled={releaseView.primaryDisabled || publishing} onClick={confirmPublishRelease}>
+          {releaseView.primaryLabel}
+        </Button>
+      ]}
+    >
+      <Space direction="vertical" size={14} className="release-publish-modal">
+        <Space wrap className="git-action-modal-toolbar">
+          <Select
+            value={selectedRepository?.id}
+            className="git-action-repository-select"
+            options={repositories.map((repository) => ({ label: repository.name, value: repository.id }))}
+            onChange={setRepositoryId}
+          />
+          {plan ? <Tag color={plan.canPublish ? 'green' : 'red'}>{plan.canPublish ? '检查通过' : `${issues.length} 个问题`}</Tag> : null}
+          {plan?.selectedScript ? <Tag color="blue">{getReleaseScriptLabel(plan.selectedScript)}</Tag> : null}
+          {preparation ? <Typography.Text type="secondary">{preparation.packageManager}</Typography.Text> : null}
+        </Space>
+
+        {issues.length > 0 ? <Alert type="warning" showIcon message="发布前需要处理" description={issues.join('；')} /> : null}
+        {warnings.length > 0 ? <Alert type="info" showIcon message="发布提示" description={warnings.join('；')} /> : null}
+
+        <Descriptions size="small" bordered column={2}>
+          <Descriptions.Item label="当前版本">{plan?.currentVersion || '-'}</Descriptions.Item>
+          <Descriptions.Item label="目标 Tag">{tagName || '-'}</Descriptions.Item>
+          <Descriptions.Item label="项目路径" span={2}>{preparation?.localPath || '-'}</Descriptions.Item>
+          <Descriptions.Item label="文档来源" span={2}>
+            {plan?.documentationSources.length ? plan.documentationSources.join('、') : '未找到 README 或 docs 文档'}
+          </Descriptions.Item>
+        </Descriptions>
+
+        <Row gutter={[12, 12]}>
+          <Col xs={24} md={12}>
+            <Input value={targetVersion} addonBefore="版本" placeholder="1.0.3" onChange={(event) => onTargetVersionChange(event.target.value)} />
+          </Col>
+          <Col xs={24} md={12}>
+            <Input value={tagName} addonBefore="Tag" placeholder="v1.0.3" onChange={(event) => setTagName(event.target.value)} />
+          </Col>
+          <Col xs={24}>
+            <Input value={releaseTitle} addonBefore="标题" placeholder="ForgeDesk v1.0.3" onChange={(event) => setReleaseTitle(event.target.value)} />
+          </Col>
+          <Col xs={24}>
+            <Input.TextArea value={releaseNotes} rows={5} placeholder="发布说明" onChange={(event) => setReleaseNotes(event.target.value)} />
+          </Col>
+          <Col xs={24}>
+            <Input value={releaseCommitMessage} addonBefore="版本提交" placeholder="chore: release v1.0.3" onChange={(event) => setReleaseCommitMessage(event.target.value)} />
+          </Col>
+          {plan?.selectedScript === 'publish:mac' ? (
+            <Col xs={24}>
+              <Input.Password
+                value={githubToken}
+                addonBefore="GitHub Token"
+                placeholder="只用于本次发布，需要 Contents: Read and write"
+                onChange={(event) => setGithubToken(event.target.value)}
+              />
+            </Col>
+          ) : null}
+        </Row>
+
+        {publishLog ? (
+          <div className="release-publish-log">
+            <Typography.Text copyable>{publishLog}</Typography.Text>
+          </div>
+        ) : null}
+      </Space>
+      <Modal
+        title="AI 设置"
+        open={aiSettingsModalOpen}
+        footer={null}
+        width="min(760px, calc(100vw - 48px))"
+        onCancel={() => setAiSettingsModalOpen(false)}
+      >
+        <AiSettingsSection
+          form={aiSettingsForm}
+          settings={aiSettings}
+          loading={loadingAiSettings}
+          saving={savingAiSettings}
+          onRefresh={refreshReleaseAiSettings}
+          onSave={saveReleaseAiSettings}
         />
       </Modal>
     </Modal>
@@ -4306,14 +4847,17 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [commitMessage, setCommitMessage] = useState('')
   const [commitTag, setCommitTag] = useState('')
+  const [tagRecommendation, setTagRecommendation] = useState<RepositoryReleaseTagRecommendation | null>(null)
   const [pushRemote, setPushRemote] = useState('origin')
   const [pushBranch, setPushBranch] = useState('')
   const [mergeSource, setMergeSource] = useState('')
   const [working, setWorking] = useState(false)
   const [loadingStatus, setLoadingStatus] = useState(false)
+  const [loadingTagRecommendation, setLoadingTagRecommendation] = useState(false)
   const [suggestingFilePath, setSuggestingFilePath] = useState<string | null>(null)
   const [previewSuggestion, setPreviewSuggestion] = useState<AiConflictSuggestion | null>(null)
   const [applyingSuggestion, setApplyingSuggestion] = useState(false)
+  const [releaseModalOpen, setReleaseModalOpen] = useState(false)
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
 
   useEffect(() => {
@@ -4321,6 +4865,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
       setRepositoryId('')
       setStatus(null)
       setSelectedPaths([])
+      setTagRecommendation(null)
       return
     }
 
@@ -4349,10 +4894,29 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
     }
   }
 
+  async function refreshReleaseTagRecommendation(): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) {
+      setTagRecommendation(null)
+      return
+    }
+
+    setLoadingTagRecommendation(true)
+
+    try {
+      setTagRecommendation(await window.forgeDesk.recommendRepositoryReleaseTag(selectedRepository.id))
+    } catch (error) {
+      setTagRecommendation(null)
+      message.warning(getErrorMessage(error))
+    } finally {
+      setLoadingTagRecommendation(false)
+    }
+  }
+
   useEffect(() => {
     setStatus(null)
     setSelectedPaths([])
     setCommitMessage('')
+    setTagRecommendation(null)
     setMergeSource('')
     const target = getRepositoryDefaultPushTarget(selectedRepository)
     setPushRemote(target.remote)
@@ -4360,6 +4924,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
 
     if (selectedRepository) {
       refreshWorkspaceStatus()
+      refreshReleaseTagRecommendation()
     }
   }, [selectedRepository?.id])
 
@@ -4499,27 +5064,39 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
         <Col xs={24} lg={12}>
           <div className="git-operation-box">
             <Typography.Text strong>提交</Typography.Text>
-            <Space.Compact className="git-operation-compact">
-              <Input value={commitMessage} placeholder="feat: update workspace" onChange={(event) => setCommitMessage(event.target.value)} />
-              <Input className="git-operation-tag-input" value={commitTag} placeholder="Tag 可选，如 v1.2.3" allowClear onChange={(event) => setCommitTag(event.target.value)} />
-              <Button
-                type="primary"
-                loading={working}
-                disabled={!selectedRepository || !commitMessage.trim()}
-                onClick={() => {
-                  const tagName = commitTag.trim()
-                  return (
-                    selectedRepository &&
-                    runGitWrite(
-                      () => window.forgeDesk.gitCommit(selectedRepository.id, { message: commitMessage, tagName: tagName || undefined }),
-                      tagName ? `提交已创建，Tag ${tagName} 已设置` : '提交已创建'
-                    )
-                  )
-                }}
-              >
-                提交
+            <Space wrap>
+              <Space direction="vertical" size={8} className="git-operation-commit-form">
+                <Space.Compact className="git-operation-compact">
+                  <Input value={commitMessage} placeholder="feat: update workspace" onChange={(event) => setCommitMessage(event.target.value)} />
+                  <Button
+                    type="primary"
+                    loading={working}
+                    disabled={!selectedRepository || !commitMessage.trim()}
+                    onClick={() => {
+                      const tagName = commitTag.trim()
+                      return (
+                        selectedRepository &&
+                        runGitWrite(
+                          () => window.forgeDesk.gitCommit(selectedRepository.id, { message: commitMessage, tagName: tagName || undefined }),
+                          tagName ? `提交已创建，Tag ${tagName} 已设置` : '提交已创建'
+                        )
+                      )
+                    }}
+                  >
+                    提交
+                  </Button>
+                </Space.Compact>
+                <ReleaseTagPicker
+                  value={commitTag}
+                  recommendation={tagRecommendation}
+                  loading={loadingTagRecommendation}
+                  onChange={setCommitTag}
+                />
+              </Space>
+              <Button icon={<UploadOutlined />} disabled={!selectedRepository} onClick={() => setReleaseModalOpen(true)}>
+                发布版本
               </Button>
-            </Space.Compact>
+            </Space>
           </div>
         </Col>
         <Col xs={24} lg={12}>
@@ -4597,6 +5174,18 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
       >
         <Input.TextArea value={previewSuggestion?.suggestedContent ?? ''} readOnly autoSize={{ minRows: 14, maxRows: 26 }} />
       </Modal>
+      <RepositoryReleaseModal
+        open={releaseModalOpen}
+        repositories={repositories}
+        initialRepositoryId={selectedRepository?.id}
+        onClose={() => setReleaseModalOpen(false)}
+        onChanged={async (repository) => {
+          if (repository) {
+            updateRepository(repository)
+          }
+          await refreshWorkspaceStatus()
+        }}
+      />
     </div>
   )
 }

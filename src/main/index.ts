@@ -1,6 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
@@ -8,6 +8,7 @@ import Database from 'better-sqlite3'
 import simpleGit from 'simple-git'
 import { requestCommitMessageSuggestion, type CommitMessageSuggestion } from './ai-commit-message-assistant'
 import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion } from './ai-conflict-assistant'
+import { requestReleaseSuggestion, type ReleaseSuggestion } from './ai-release-assistant'
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
 import { registerAppUpdateIpc } from './app-updates'
 import { buildGitAuthorLookup, resolveGitAuthorDisplay, type GitAuthorLookup } from './git-author-mapping'
@@ -67,6 +68,14 @@ import {
 import { registerTerminalIpc } from './terminal-ipc'
 import { TerminalService, type TerminalDataEvent, type TerminalExitEvent } from './terminal-service'
 import { parseRemoteAlignment, summarizeRemoteAlignment, type GitRemote, type RemoteAlignmentSummary } from './remote-alignment'
+import {
+  createReleasePlan,
+  createReleaseTagName,
+  createReleaseVersionRecommendation,
+  type ReleasePlan,
+  type ReleaseScriptName,
+  type ReleaseVersionRecommendation
+} from './release-publishing'
 import {
   bindProjectService as bindProjectServiceRecord,
   checkServiceDomain,
@@ -161,6 +170,43 @@ type GitOperationResult = {
 
 type GitCommitMessageInput = {
   paths: string[]
+}
+
+type RepositoryReleasePrepareInput = {
+  targetVersion?: string
+}
+
+type RepositoryReleasePreparation = {
+  repositoryId: string
+  packageManager: 'pnpm' | 'npm' | 'yarn'
+  localPath: string
+  documentationContext: string
+  recentCommits: string[]
+  plan: ReleasePlan
+}
+
+type RepositoryReleaseSuggestionInput = {
+  targetVersion?: string
+}
+
+type RepositoryReleaseTagRecommendation = ReleaseVersionRecommendation
+
+type RepositoryReleasePublishInput = {
+  version: string
+  tagName: string
+  releaseTitle: string
+  releaseNotes: string
+  commitMessage: string
+  githubToken?: string
+}
+
+type RepositoryReleasePublishResult = {
+  ok: boolean
+  repository: RepositoryRecord
+  plan: ReleasePlan
+  stdout: string
+  stderr: string
+  exitCode: number | null
 }
 
 type GitMergeAnalysis = {
@@ -1965,6 +2011,349 @@ async function suggestRepositoryCommitMessage(repositoryId: string, input: GitCo
   })
 }
 
+async function readRepositoryPackageJson(localPath: string): Promise<{ version: string; scripts: Record<string, string>; raw: Record<string, unknown> }> {
+  const packagePath = join(localPath, 'package.json')
+
+  if (!existsSync(packagePath)) {
+    throw new Error('当前仓库没有 package.json，无法按项目脚本发布')
+  }
+
+  const raw = JSON.parse(await readFile(packagePath, 'utf8')) as Record<string, unknown>
+  const scripts = raw.scripts && typeof raw.scripts === 'object' ? raw.scripts as Record<string, string> : {}
+
+  return {
+    version: String(raw.version ?? '').trim(),
+    scripts,
+    raw
+  }
+}
+
+async function writeRepositoryPackageVersion(localPath: string, version: string): Promise<void> {
+  const packagePath = join(localPath, 'package.json')
+  const packageJson = JSON.parse(await readFile(packagePath, 'utf8')) as Record<string, unknown>
+
+  packageJson.version = version
+  await writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`, 'utf8')
+}
+
+function detectPackageManager(localPath: string): RepositoryReleasePreparation['packageManager'] {
+  if (existsSync(join(localPath, 'pnpm-lock.yaml'))) {
+    return 'pnpm'
+  }
+
+  if (existsSync(join(localPath, 'yarn.lock'))) {
+    return 'yarn'
+  }
+
+  return 'npm'
+}
+
+async function readRepositoryRemoteTagCommit(localPath: string, tagName: string): Promise<string> {
+  return withSavedSshPassphrases(async (env) => {
+    const result = await runGitInPathResult(localPath, ['ls-remote', '--tags', 'origin', `refs/tags/${tagName}`, `refs/tags/${tagName}^{}`], { env })
+
+    if (!result.ok) {
+      return ''
+    }
+
+    const rows = result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+    const peeled = rows.find((line) => line.endsWith(`refs/tags/${tagName}^{}`))
+    const selected = peeled ?? rows.find((line) => line.endsWith(`refs/tags/${tagName}`))
+
+    return selected?.split(/\s+/)[0] ?? ''
+  })
+}
+
+async function recommendRepositoryReleaseTag(repositoryId: string): Promise<RepositoryReleaseTagRecommendation> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const [packageInfo, tagOutput] = await Promise.all([
+    readRepositoryPackageJson(repository.localPath).catch(() => ({ version: '', scripts: {}, raw: {} })),
+    runGitInPathOptional(repository.localPath, ['tag', '--list'])
+  ])
+
+  return createReleaseVersionRecommendation({
+    currentVersion: packageInfo.version,
+    tagNames: tagOutput.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  })
+}
+
+async function readRepositoryDocumentation(localPath: string): Promise<{ context: string; sources: string[] }> {
+  const chunks: string[] = []
+  const sources: string[] = []
+  const maxFileChars = 4000
+  const maxTotalChars = 12000
+
+  async function appendTextSource(relativePath: string): Promise<void> {
+    const fullPath = join(localPath, relativePath)
+
+    if (!existsSync(fullPath)) {
+      return
+    }
+
+    try {
+      const content = await readFile(fullPath, 'utf8')
+      sources.push(relativePath)
+      chunks.push(`## ${relativePath}\n${content.slice(0, maxFileChars)}`)
+    } catch {
+      // Documentation is useful context, but missing or unreadable docs should not block publishing.
+    }
+  }
+
+  await appendTextSource('README.md')
+  await appendTextSource('readme.md')
+
+  const docsPath = join(localPath, 'docs')
+  if (existsSync(docsPath)) {
+    try {
+      const entries = await readdir(docsPath, { withFileTypes: true })
+
+      for (const entry of entries) {
+        if (!entry.isFile()) {
+          continue
+        }
+
+        const relativePath = join('docs', entry.name)
+
+        if (/\.(md|txt)$/i.test(entry.name)) {
+          await appendTextSource(relativePath)
+        } else if (/\.pdf$/i.test(entry.name)) {
+          sources.push(relativePath)
+        }
+      }
+    } catch {
+      // Ignore optional docs scan failures.
+    }
+  }
+
+  return {
+    context: chunks.join('\n\n').slice(0, maxTotalChars),
+    sources: Array.from(new Set(sources))
+  }
+}
+
+async function prepareRepositoryRelease(repositoryId: string, input: RepositoryReleasePrepareInput = {}): Promise<RepositoryReleasePreparation> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const packageInfo = await readRepositoryPackageJson(repository.localPath)
+  const targetVersion = input.targetVersion?.trim() || packageInfo.version
+  const tagName = createReleaseTagName(targetVersion)
+  const [headCommit, status, localTagCommit, remoteTagCommit, docs, recentCommitsOutput] = await Promise.all([
+    runGitInPathStrict(repository.localPath, ['rev-parse', 'HEAD']),
+    getRepositoryWorkspaceStatus(repositoryId),
+    runGitInPathOptional(repository.localPath, ['rev-parse', '-q', '--verify', `${tagName}^{}`]),
+    readRepositoryRemoteTagCommit(repository.localPath, tagName),
+    readRepositoryDocumentation(repository.localPath),
+    runGitInPathOptional(repository.localPath, ['log', '-n', '20', '--pretty=format:%s'])
+  ])
+  const plan = createReleasePlan({
+    repositoryName: repository.name,
+    currentVersion: packageInfo.version,
+    targetVersion: input.targetVersion,
+    headCommit,
+    statusFileCount: status.files.length,
+    localTagCommit,
+    remoteTagCommit,
+    scripts: packageInfo.scripts,
+    documentationSources: docs.sources
+  })
+
+  return {
+    repositoryId,
+    packageManager: detectPackageManager(repository.localPath),
+    localPath: repository.localPath,
+    documentationContext: docs.context,
+    recentCommits: recentCommitsOutput.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
+    plan
+  }
+}
+
+async function suggestRepositoryRelease(repositoryId: string, input: RepositoryReleaseSuggestionInput = {}): Promise<ReleaseSuggestion> {
+  const preparation = await prepareRepositoryRelease(repositoryId, input)
+  const settings = await readAiSettingsFile(app.getPath('userData'))
+
+  return requestReleaseSuggestion({
+    settings,
+    repositoryName: preparation.plan.repositoryName,
+    currentVersion: preparation.plan.currentVersion,
+    suggestedVersion: preparation.plan.suggestedVersion,
+    suggestedTagName: preparation.plan.suggestedTagName,
+    recentCommits: preparation.recentCommits,
+    documentationContext: preparation.documentationContext
+  })
+}
+
+function getReleaseScriptCommand(packageManager: RepositoryReleasePreparation['packageManager'], scriptName: ReleaseScriptName): string {
+  if (!scriptName) {
+    throw new Error('没有可执行的发布脚本')
+  }
+
+  if (packageManager === 'yarn') {
+    return `yarn ${scriptName}`
+  }
+
+  return `${packageManager} run ${scriptName}`
+}
+
+function runReleaseScript(localPath: string, packageManager: RepositoryReleasePreparation['packageManager'], scriptName: ReleaseScriptName, env: NodeJS.ProcessEnv): Promise<Pick<RepositoryReleasePublishResult, 'ok' | 'stdout' | 'stderr' | 'exitCode'>> {
+  const command = getReleaseScriptCommand(packageManager, scriptName)
+  const maxOutputLength = 1024 * 1024
+  let stdout = ''
+  let stderr = ''
+
+  function appendOutput(current: string, chunk: Buffer): string {
+    const next = current + chunk.toString()
+    return next.length > maxOutputLength ? next.slice(next.length - maxOutputLength) : next
+  }
+
+  return new Promise((resolveResult) => {
+    const child = spawn('/bin/zsh', ['-lc', command], {
+      cwd: localPath,
+      env: { ...process.env, ...env }
+    })
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout = appendOutput(stdout, chunk)
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr = appendOutput(stderr, chunk)
+    })
+    child.on('error', (error) => {
+      stderr = appendOutput(stderr, Buffer.from(error.message))
+      resolveResult({ ok: false, stdout, stderr, exitCode: null })
+    })
+    child.on('exit', (exitCode) => {
+      resolveResult({ ok: exitCode === 0, stdout: stdout.trimEnd(), stderr: stderr.trimEnd(), exitCode })
+    })
+  })
+}
+
+function parseGithubRemote(remoteUrl: string): { owner: string; repo: string } | null {
+  const trimmed = remoteUrl.trim()
+  const sshMatch = trimmed.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/)
+  const httpsMatch = trimmed.match(/^https:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/)
+  const match = sshMatch ?? httpsMatch
+
+  if (!match) {
+    return null
+  }
+
+  return {
+    owner: match[1],
+    repo: match[2].replace(/\.git$/, '')
+  }
+}
+
+async function updateGithubReleaseDetails(repository: RepositoryRecord, input: RepositoryReleasePublishInput): Promise<string> {
+  const token = input.githubToken?.trim()
+  const githubRepository = parseGithubRemote(repository.remoteUrl || repository.remotes.find((remote) => remote.name === 'origin')?.fetchUrl || '')
+
+  if (!token || !githubRepository) {
+    return ''
+  }
+
+  const headers = {
+    accept: 'application/vnd.github+json',
+    authorization: `Bearer ${token}`,
+    'content-type': 'application/json',
+    'x-github-api-version': '2022-11-28'
+  }
+  const tagName = input.tagName.trim()
+  const releaseResponse = await fetch(`https://api.github.com/repos/${githubRepository.owner}/${githubRepository.repo}/releases/tags/${encodeURIComponent(tagName)}`, { headers })
+
+  if (!releaseResponse.ok) {
+    return `GitHub Release ${tagName} 暂未更新说明：HTTP ${releaseResponse.status}`
+  }
+
+  const release = await releaseResponse.json() as { id?: number }
+
+  if (!release.id) {
+    return `GitHub Release ${tagName} 暂未更新说明：无法读取 Release ID`
+  }
+
+  const patchResponse = await fetch(`https://api.github.com/repos/${githubRepository.owner}/${githubRepository.repo}/releases/${release.id}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({
+      name: input.releaseTitle.trim() || tagName,
+      body: input.releaseNotes.trim() || `发布 ${tagName}`
+    })
+  })
+
+  if (!patchResponse.ok) {
+    return `GitHub Release ${tagName} 暂未更新说明：HTTP ${patchResponse.status}`
+  }
+
+  return `GitHub Release ${tagName} 标题和说明已更新`
+}
+
+async function publishRepositoryRelease(repositoryId: string, input: RepositoryReleasePublishInput): Promise<RepositoryReleasePublishResult> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const version = input.version.trim()
+  const tagName = input.tagName.trim()
+  const expectedTagName = createReleaseTagName(version)
+
+  if (tagName !== expectedTagName) {
+    throw new Error(`Tag 应为 ${expectedTagName}`)
+  }
+
+  const initialPreparation = await prepareRepositoryRelease(repositoryId, { targetVersion: version })
+
+  if (!initialPreparation.plan.canPublish) {
+    throw new Error(initialPreparation.plan.issues.join('\n') || '发布前检查未通过')
+  }
+
+  if (initialPreparation.plan.selectedScript === 'publish:mac' && !input.githubToken?.trim()) {
+    throw new Error('发布到 GitHub Releases 需要 GitHub Token')
+  }
+
+  if (initialPreparation.plan.currentVersion !== version) {
+    await writeRepositoryPackageVersion(repository.localPath, version)
+    await runGitInPathStrict(repository.localPath, ['add', 'package.json'])
+    await runGitInPathStrict(repository.localPath, ['commit', '-m', input.commitMessage.trim() || `chore: release ${tagName}`])
+  }
+
+  const finalPreparation = await prepareRepositoryRelease(repositoryId, { targetVersion: version })
+
+  if (!finalPreparation.plan.canPublish) {
+    throw new Error(finalPreparation.plan.issues.join('\n') || '版本提交后发布前检查未通过')
+  }
+
+  const branch = await runGitInPath(repository.localPath, ['branch', '--show-current'])
+
+  if (branch) {
+    await withSavedSshPassphrases((env) => runGitInPathStrict(repository.localPath, ['push', 'origin', branch], { env }))
+  }
+
+  const scriptResult = await withSavedSshPassphrases((env) =>
+    runReleaseScript(repository.localPath, finalPreparation.packageManager, finalPreparation.plan.selectedScript, {
+      ...env,
+      GH_TOKEN: input.githubToken?.trim() || process.env.GH_TOKEN || '',
+      GITHUB_TOKEN: input.githubToken?.trim() || process.env.GITHUB_TOKEN || ''
+    })
+  )
+  let stdout = scriptResult.stdout
+  let stderr = scriptResult.stderr
+
+  if (scriptResult.ok && finalPreparation.plan.selectedScript === 'publish:mac') {
+    const releaseUpdateMessage = await updateGithubReleaseDetails(repository, input)
+
+    if (releaseUpdateMessage) {
+      stdout = [stdout, releaseUpdateMessage].filter(Boolean).join('\n')
+    }
+  }
+
+  return {
+    ok: scriptResult.ok,
+    repository: await rescanRepositoryRecord(repository),
+    plan: finalPreparation.plan,
+    stdout,
+    stderr,
+    exitCode: scriptResult.exitCode
+  }
+}
+
 async function applyRepositoryConflictResolution(repositoryId: string, filePath: string, content: string): Promise<GitOperationResult> {
   const repository = getRepositoryOrThrow(repositoryId)
   const normalizedPath = resolveRepositoryFilePath(repository, filePath)
@@ -2324,6 +2713,22 @@ ipcMain.handle('repository:conflict:suggest', async (_event, repositoryId: strin
 
 ipcMain.handle('repository:commit-message:suggest', async (_event, repositoryId: string, input: GitCommitMessageInput): Promise<CommitMessageSuggestion> =>
   suggestRepositoryCommitMessage(repositoryId, input)
+)
+
+ipcMain.handle('repository:release:prepare', async (_event, repositoryId: string, input?: RepositoryReleasePrepareInput): Promise<RepositoryReleasePreparation> =>
+  prepareRepositoryRelease(repositoryId, input)
+)
+
+ipcMain.handle('repository:release-tag:recommend', async (_event, repositoryId: string): Promise<RepositoryReleaseTagRecommendation> =>
+  recommendRepositoryReleaseTag(repositoryId)
+)
+
+ipcMain.handle('repository:release:suggest', async (_event, repositoryId: string, input?: RepositoryReleaseSuggestionInput): Promise<ReleaseSuggestion> =>
+  suggestRepositoryRelease(repositoryId, input)
+)
+
+ipcMain.handle('repository:release:publish', async (_event, repositoryId: string, input: RepositoryReleasePublishInput): Promise<RepositoryReleasePublishResult> =>
+  publishRepositoryRelease(repositoryId, input)
 )
 
 ipcMain.handle('repository:conflict:apply', async (_event, repositoryId: string, filePath: string, content: string): Promise<GitOperationResult> =>

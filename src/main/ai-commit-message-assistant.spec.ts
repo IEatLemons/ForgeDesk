@@ -57,4 +57,33 @@ describe('ai commit message assistant', () => {
       /请先在公共设置里启用 AI/
     )
   })
+
+  it('explains expired API keys from the provider response', async () => {
+    await assert.rejects(
+      () =>
+        requestCommitMessageSuggestion({
+          settings: {
+            enabled: true,
+            provider: 'openai-compatible',
+            baseUrl: 'https://api.openai.com/v1',
+            apiKey: 'expired',
+            model: 'gpt-test',
+            temperature: 0.2
+          },
+          repositoryName: 'repo',
+          files: [{ path: 'src/App.tsx', status: 'M' }],
+          diffSummary: 'src/App.tsx | 1 +',
+          fetchImpl: async () => new Response(
+            JSON.stringify({
+              error: {
+                message: 'Incorrect API key provided',
+                code: 'invalid_api_key'
+              }
+            }),
+            { status: 401 }
+          )
+        }),
+      /AI API Key 无效、已过期/
+    )
+  })
 })

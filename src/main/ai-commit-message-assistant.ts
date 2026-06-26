@@ -1,3 +1,4 @@
+import { createAiNetworkError, createAiRequestError } from './ai-errors.js'
 import { buildAiRequestHeaders, type AiSettings } from './ai-settings.js'
 
 export type CommitMessageSuggestion = {
@@ -38,36 +39,42 @@ export async function requestCommitMessageSuggestion(input: {
   }
 
   const fetchImpl = input.fetchImpl ?? fetch
-  const response = await fetchImpl(`${input.settings.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: buildAiRequestHeaders(input.settings),
-    body: JSON.stringify({
-      model: input.settings.model,
-      temperature: input.settings.temperature,
-      messages: [
-        {
-          role: 'system',
-          content: 'You write concise Git commit messages. Return exactly one conventional commit message line, no markdown, no explanation.'
-        },
-        {
-          role: 'user',
-          content: [
-            `Repository: ${input.repositoryName}`,
-            'Changed files:',
-            ...input.files.map((file) => `- ${file.status} ${file.path}`),
-            '',
-            'Diff summary:',
-            input.diffSummary || '(no diff summary available)',
-            '',
-            'Write the best commit message for only these selected files.'
-          ].join('\n')
-        }
-      ]
+  let response: Response
+
+  try {
+    response = await fetchImpl(`${input.settings.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: buildAiRequestHeaders(input.settings),
+      body: JSON.stringify({
+        model: input.settings.model,
+        temperature: input.settings.temperature,
+        messages: [
+          {
+            role: 'system',
+            content: 'You write concise Git commit messages. Return exactly one conventional commit message line, no markdown, no explanation.'
+          },
+          {
+            role: 'user',
+            content: [
+              `Repository: ${input.repositoryName}`,
+              'Changed files:',
+              ...input.files.map((file) => `- ${file.status} ${file.path}`),
+              '',
+              'Diff summary:',
+              input.diffSummary || '(no diff summary available)',
+              '',
+              'Write the best commit message for only these selected files.'
+            ].join('\n')
+          }
+        ]
+      })
     })
-  })
+  } catch (error) {
+    throw createAiNetworkError(error)
+  }
 
   if (!response.ok) {
-    throw new Error(`AI 请求失败：HTTP ${response.status}`)
+    throw await createAiRequestError(response)
   }
 
   const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> }

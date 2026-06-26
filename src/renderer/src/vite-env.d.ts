@@ -117,6 +117,76 @@ type CommitMessageSuggestion = {
   message: string
 }
 
+type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
+
+type RepositoryReleasePlan = {
+  repositoryName: string
+  currentVersion: string
+  suggestedVersion: string
+  suggestedTagName: string
+  selectedScript: ReleaseScriptName
+  needsVersionBump: boolean
+  canPublish: boolean
+  issues: string[]
+  warnings: string[]
+  documentationSources: string[]
+}
+
+type RepositoryReleasePrepareInput = {
+  targetVersion?: string
+}
+
+type RepositoryReleasePreparation = {
+  repositoryId: string
+  packageManager: 'pnpm' | 'npm' | 'yarn'
+  localPath: string
+  documentationContext: string
+  recentCommits: string[]
+  plan: RepositoryReleasePlan
+}
+
+type RepositoryReleaseSuggestionInput = {
+  targetVersion?: string
+}
+
+type ReleaseTagHistoryEntry = {
+  tagName: string
+  version: string
+}
+
+type RepositoryReleaseTagRecommendation = {
+  currentVersion: string
+  suggestedVersion: string
+  suggestedTagName: string
+  historicalTags: ReleaseTagHistoryEntry[]
+}
+
+type RepositoryReleaseSuggestion = {
+  version: string
+  tagName: string
+  releaseTitle: string
+  releaseNotes: string
+  commitMessage: string
+}
+
+type RepositoryReleasePublishInput = {
+  version: string
+  tagName: string
+  releaseTitle: string
+  releaseNotes: string
+  commitMessage: string
+  githubToken?: string
+}
+
+type RepositoryReleasePublishResult = {
+  ok: boolean
+  repository: RepositoryRecord
+  plan: RepositoryReleasePlan
+  stdout: string
+  stderr: string
+  exitCode: number | null
+}
+
 type GitMergeAnalysisInput = {
   source: string
   target: string
@@ -567,6 +637,10 @@ interface Window {
     analyzeRepositoryMerge: (repositoryId: string, input: GitMergeAnalysisInput) => Promise<GitMergeAnalysis>
     gitMerge: (repositoryId: string, input: GitMergeInput) => Promise<GitOperationResult>
     suggestCommitMessage: (repositoryId: string, input: GitCommitMessageInput) => Promise<CommitMessageSuggestion>
+    prepareRepositoryRelease: (repositoryId: string, input?: RepositoryReleasePrepareInput) => Promise<RepositoryReleasePreparation>
+    recommendRepositoryReleaseTag: (repositoryId: string) => Promise<RepositoryReleaseTagRecommendation>
+    suggestRepositoryRelease: (repositoryId: string, input?: RepositoryReleaseSuggestionInput) => Promise<RepositoryReleaseSuggestion>
+    publishRepositoryRelease: (repositoryId: string, input: RepositoryReleasePublishInput) => Promise<RepositoryReleasePublishResult>
     suggestConflictResolution: (repositoryId: string, filePath: string) => Promise<AiConflictSuggestion>
     applyConflictResolution: (repositoryId: string, filePath: string, content: string) => Promise<GitOperationResult>
     listRepositoryCommitFiles: (repositoryId: string, commitHash: string) => Promise<GitCommitFileChange[]>

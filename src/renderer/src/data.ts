@@ -128,6 +128,76 @@ export type CommitMessageSuggestion = {
   message: string
 }
 
+export type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
+
+export type RepositoryReleasePlan = {
+  repositoryName: string
+  currentVersion: string
+  suggestedVersion: string
+  suggestedTagName: string
+  selectedScript: ReleaseScriptName
+  needsVersionBump: boolean
+  canPublish: boolean
+  issues: string[]
+  warnings: string[]
+  documentationSources: string[]
+}
+
+export type RepositoryReleasePrepareInput = {
+  targetVersion?: string
+}
+
+export type RepositoryReleasePreparation = {
+  repositoryId: string
+  packageManager: 'pnpm' | 'npm' | 'yarn'
+  localPath: string
+  documentationContext: string
+  recentCommits: string[]
+  plan: RepositoryReleasePlan
+}
+
+export type RepositoryReleaseSuggestionInput = {
+  targetVersion?: string
+}
+
+export type ReleaseTagHistoryEntry = {
+  tagName: string
+  version: string
+}
+
+export type RepositoryReleaseTagRecommendation = {
+  currentVersion: string
+  suggestedVersion: string
+  suggestedTagName: string
+  historicalTags: ReleaseTagHistoryEntry[]
+}
+
+export type RepositoryReleaseSuggestion = {
+  version: string
+  tagName: string
+  releaseTitle: string
+  releaseNotes: string
+  commitMessage: string
+}
+
+export type RepositoryReleasePublishInput = {
+  version: string
+  tagName: string
+  releaseTitle: string
+  releaseNotes: string
+  commitMessage: string
+  githubToken?: string
+}
+
+export type RepositoryReleasePublishResult = {
+  ok: boolean
+  repository: Repository
+  plan: RepositoryReleasePlan
+  stdout: string
+  stderr: string
+  exitCode: number | null
+}
+
 export type GitMergeAnalysisInput = {
   source: string
   target: string
