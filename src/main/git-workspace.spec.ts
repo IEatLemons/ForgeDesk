@@ -9,6 +9,10 @@ import {
   buildGitMergeBaseArgs,
   buildGitMergeTreeArgs,
   buildGitPushArgs,
+  buildGitPushOperationArgs,
+  buildGitPushTargetCommitCountArgs,
+  buildGitPushTargetRemoteRefArgs,
+  buildGitPushTargetRemoteRefVerifyArgs,
   buildGitRevListCountArgs,
   buildGitSwitchBranchArgs,
   buildGitTagArgs,
@@ -35,12 +39,25 @@ describe('git workspace operations', () => {
     assert.deepEqual(buildGitTagArgs('v1.2.3'), ['tag', 'v1.2.3'])
     assert.deepEqual(buildGitTagArgs(' release/1.2.3 '), ['tag', 'release/1.2.3'])
     assert.deepEqual(buildGitPushArgs({ remote: 'origin', branch: 'main' }), ['push', 'origin', 'main'])
+    assert.deepEqual(buildGitPushOperationArgs({ remotes: ['origin', 'backup'], branch: 'main' }), [
+      ['push', 'origin', 'main'],
+      ['push', 'backup', 'main']
+    ])
     assert.deepEqual(buildGitMergeArgs({ source: 'origin/main' }), ['merge', '--no-edit', 'origin/main'])
     assert.throws(() => buildGitCommitArgs({ message: '' }), /请输入提交信息/)
     assert.throws(() => buildGitCommitArgs({ message: 'feat: bad path', paths: ['src/main/index.ts;rm'] }), /不支持的文件路径/)
     assert.throws(() => buildGitTagArgs('v1.2.3;rm'), /不支持的Tag/)
     assert.throws(() => buildGitPushArgs({ remote: 'bad/name', branch: 'main' }), /远端名称/)
+    assert.throws(() => buildGitPushOperationArgs({ remotes: [], branch: 'main' }), /请选择要推送的远端/)
     assert.throws(() => buildGitMergeArgs({ source: 'main;rm' }), /不支持的分支/)
+  })
+
+  it('builds safe push target inspection args', () => {
+    assert.deepEqual(buildGitPushTargetRemoteRefArgs('origin', 'feature/search'), ['refs/remotes/origin/feature/search'])
+    assert.deepEqual(buildGitPushTargetRemoteRefVerifyArgs('origin', 'feature/search'), ['rev-parse', '--verify', 'refs/remotes/origin/feature/search'])
+    assert.deepEqual(buildGitPushTargetCommitCountArgs('origin', 'feature/search'), ['rev-list', '--count', 'refs/remotes/origin/feature/search..feature/search'])
+    assert.throws(() => buildGitPushTargetCommitCountArgs('bad/name', 'main'), /远端名称/)
+    assert.throws(() => buildGitPushTargetCommitCountArgs('origin', 'bad branch'), /不支持的分支/)
   })
 
   it('builds safe branch switch args', () => {

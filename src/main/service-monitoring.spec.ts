@@ -10,14 +10,24 @@ import {
   classifyServiceMonitorStatus,
   deleteOldServiceMonitorHistory,
   deleteServiceConnection,
+  deleteServiceEnvVar,
+  isMonitorableServiceDomain,
   listAllProjectServices,
   listProjectServices,
   listServiceConnections,
+  listServiceDeployments,
+  listServiceEnvironmentLogs,
+  listServiceEnvVars,
   listServiceMonitorHistory,
+  listServiceRuntimeLogs,
   migrateServiceMonitoringTables,
   recordServiceMonitorCheck,
+  revealServiceEnvVar,
+  runServiceDeploymentAction,
+  saveServiceExternalProjectAlias,
   saveProjectService,
   saveServiceConnection,
+  saveServiceEnvVar,
   upsertProviderServiceSnapshot
 } from './service-monitoring.js'
 
@@ -190,6 +200,8 @@ function createDatabase(): TestDatabase {
             repositoryId,
             name,
             externalProjectId,
+            externalProjectName,
+            externalProjectAlias,
             externalServiceId,
             defaultEnvironment,
             healthPath,
@@ -205,6 +217,8 @@ function createDatabase(): TestDatabase {
               repository_id: repositoryId,
               name,
               external_project_id: externalProjectId,
+              external_project_name: externalProjectName,
+              external_project_alias: externalProjectAlias,
               external_service_id: externalServiceId,
               default_environment: defaultEnvironment,
               health_path: healthPath,
@@ -213,6 +227,21 @@ function createDatabase(): TestDatabase {
               created_at: createdAt,
               updated_at: updatedAt
             })
+          }
+        }
+      }
+
+      if (sql.includes('SET external_project_alias')) {
+        return {
+          all: () => [],
+          get: () => undefined,
+          run: (alias, updatedAt, provider, externalProjectId) => {
+            for (const service of projectServices) {
+              if (service.provider === provider && service.external_project_id === externalProjectId) {
+                service.external_project_alias = alias
+                service.updated_at = updatedAt
+              }
+            }
           }
         }
       }
@@ -227,6 +256,8 @@ function createDatabase(): TestDatabase {
             repositoryId,
             name,
             externalProjectId,
+            externalProjectName,
+            externalProjectAlias,
             externalServiceId,
             defaultEnvironment,
             healthPath,
@@ -244,6 +275,8 @@ function createDatabase(): TestDatabase {
                 repository_id: repositoryId,
                 name,
                 external_project_id: externalProjectId,
+                external_project_name: externalProjectName,
+                external_project_alias: externalProjectAlias,
                 external_service_id: externalServiceId,
                 default_environment: defaultEnvironment,
                 health_path: healthPath,
@@ -545,6 +578,8 @@ describe('service monitoring storage', () => {
           repository_id TEXT NOT NULL DEFAULT '',
           name TEXT NOT NULL,
           external_project_id TEXT NOT NULL DEFAULT '',
+          external_project_name TEXT NOT NULL DEFAULT '',
+          external_project_alias TEXT NOT NULL DEFAULT '',
           external_service_id TEXT NOT NULL DEFAULT '',
           default_environment TEXT NOT NULL DEFAULT '',
           health_path TEXT NOT NULL DEFAULT '/',
@@ -609,6 +644,8 @@ describe('service monitoring storage', () => {
           repository_id TEXT NOT NULL DEFAULT '',
           name TEXT NOT NULL,
           external_project_id TEXT NOT NULL DEFAULT '',
+          external_project_name TEXT NOT NULL DEFAULT '',
+          external_project_alias TEXT NOT NULL DEFAULT '',
           external_service_id TEXT NOT NULL DEFAULT '',
           default_environment TEXT NOT NULL DEFAULT '',
           health_path TEXT NOT NULL DEFAULT '/',
@@ -749,6 +786,7 @@ describe('service monitoring storage', () => {
       repositoryId: 'repo-a',
       name: 'api',
       externalProjectId: 'railway-project',
+      externalProjectName: 'DataCentent',
       externalServiceId: 'railway-service',
       healthPath: '/healthz',
       enabled: true,
@@ -774,9 +812,38 @@ describe('service monitoring storage', () => {
 
     assert.equal(service.name, 'api')
     assert.equal(service.repositoryId, 'repo-a')
+    assert.equal(service.externalProjectName, 'DataCentent')
     assert.equal(service.environments[0].name, 'production')
     assert.equal(service.domains[0].domain, 'api.example.com')
     assert.equal(service.domains[0].url, 'https://api.example.com/healthz')
+  })
+
+  it('stores local display aliases for synced Railway projects', () => {
+    const db = createDatabase()
+
+    saveProjectService(db, {
+      provider: 'railway',
+      name: 'api',
+      externalProjectId: 'railway-project',
+      externalProjectName: 'Railway Synced Name',
+      externalServiceId: 'svc-api'
+    })
+    saveProjectService(db, {
+      provider: 'railway',
+      name: 'worker',
+      externalProjectId: 'railway-project',
+      externalProjectName: 'Railway Synced Name',
+      externalServiceId: 'svc-worker'
+    })
+
+    const services = saveServiceExternalProjectAlias(db, {
+      provider: 'railway',
+      externalProjectId: 'railway-project',
+      alias: '数据中心'
+    })
+
+    assert.equal(services.filter((service) => service.externalProjectId === 'railway-project').every((service) => service.externalProjectAlias === '数据中心'), true)
+    assert.equal(services.find((service) => service.name === 'api')?.externalProjectName, 'Railway Synced Name')
   })
 
   it('stores provider connections and synced services globally before project binding', () => {
@@ -878,6 +945,42 @@ describe('service monitoring storage', () => {
     )
   })
 
+  it('keeps Railway generated domains monitorable while filtering Vercel generated domains', () => {
+    const db = createDatabase()
+    const vercelConnection = saveServiceConnection(db, {
+      provider: 'vercel',
+      name: 'Vercel Team',
+      token: 'vercel-secret'
+    })
+    const railwayConnection = saveServiceConnection(db, {
+      provider: 'railway',
+      name: 'Railway Team',
+      token: 'railway-secret'
+    })
+
+    const vercelService = upsertProviderServiceSnapshot(db, vercelConnection.id, {
+      provider: 'vercel',
+      name: 'web',
+      externalProjectId: 'prj_1',
+      environments: [{ name: 'production', deploymentStatus: 'READY' }],
+      domains: [{ domain: 'web.vercel.app', environmentName: 'production', kind: 'generated', enabled: true }]
+    })
+    const railwayService = upsertProviderServiceSnapshot(db, railwayConnection.id, {
+      provider: 'railway',
+      name: 'api',
+      externalProjectId: 'railway-project',
+      externalServiceId: 'svc_1',
+      environments: [{ name: 'production', externalEnvironmentId: 'env_1', deploymentStatus: 'SUCCESS' }],
+      domains: [{ domain: 'api.up.railway.app', environmentName: 'production', kind: 'generated', enabled: true }]
+    })
+
+    assert.equal(vercelService.domains.length, 0)
+    assert.equal(railwayService.domains[0].kind, 'generated')
+    assert.equal(isMonitorableServiceDomain(railwayService.domains[0], railwayService.provider), true)
+    assert.equal(isMonitorableServiceDomain({ ...railwayService.domains[0], enabled: false }, railwayService.provider), false)
+    assert.equal(isMonitorableServiceDomain({ ...railwayService.domains[0], kind: 'generated' }, 'vercel'), false)
+  })
+
   it('classifies checks and prunes monitoring history beyond retention', () => {
     const db = createDatabase()
     const service = saveProjectService(db, {
@@ -920,5 +1023,246 @@ describe('service monitoring storage', () => {
     const history = listServiceMonitorHistory(db, 'project-a')
     assert.equal(history.length, 1)
     assert.equal(history[0].statusCode, 204)
+  })
+
+  it('dispatches readonly Railway service operations and rejects Railway writes', async () => {
+    const db = createDatabase()
+    const connection = saveServiceConnection(db, {
+      provider: 'railway',
+      name: 'Railway',
+      token: 'railway-token',
+      railwayTokenType: 'project'
+    })
+    const service = saveProjectService(db, {
+      provider: 'railway',
+      connectionId: connection.id,
+      name: 'api',
+      externalProjectId: 'railway-project',
+      externalServiceId: 'svc_1',
+      environments: [{ name: 'production', externalEnvironmentId: 'env_1', latestDeploymentId: 'dep_1' }]
+    })
+    const fetcher = async (_url: string | URL, init?: RequestInit): Promise<Response> => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { query: string; variables: Record<string, unknown> }
+
+      if (body.query.includes('deploymentLogs(')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ data: { deploymentLogs: [{ timestamp: '2026-06-23T00:00:00.000Z', severity: 'info', message: 'build ready' }] } }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (body.query.includes('environmentLogs(')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ data: { environmentLogs: [{ timestamp: '2026-06-23T00:01:00.000Z', severity: 'info', message: 'runtime ready' }] } }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (body.query.includes('variables(')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ data: { variables: { API_URL: 'https://api.example.com' } } }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          data: {
+            deployments: {
+              edges: [{ node: { id: 'dep_1', status: 'SUCCESS', url: 'api.up.railway.app', meta: { commitSha: 'abc123' } } }],
+              pageInfo: { hasNextPage: false, endCursor: null }
+            }
+          }
+        }),
+        text: async () => '{}'
+      } as Response
+    }
+
+    assert.equal((await listServiceDeployments(db, service.id, {}, fetcher))[0].id, 'dep_1')
+    assert.equal((await listServiceEnvVars(db, service.id, fetcher))[0].key, 'API_URL')
+    assert.equal((await listServiceEnvironmentLogs(db, service.id, 'production', fetcher))[0].message, 'build ready')
+    assert.equal((await listServiceRuntimeLogs(db, service.id, 'production', fetcher))[0].message, 'runtime ready')
+    await assert.rejects(() => revealServiceEnvVar(db, service.id, 'env_1', fetcher), /Railway 环境变量只支持只读查看/)
+    await assert.rejects(() => saveServiceEnvVar(db, service.id, { key: 'API_URL', value: 'next', type: 'plain' }, fetcher), /Railway 环境变量只支持只读查看/)
+    await assert.rejects(() => deleteServiceEnvVar(db, service.id, 'env_1', fetcher), /Railway 环境变量只支持只读查看/)
+    await assert.rejects(() => runServiceDeploymentAction(db, service.id, { action: 'redeploy', deploymentId: 'dep_1' }, fetcher), /Railway 部署操作暂不支持/)
+  })
+
+  it('rejects provider ops when service context is incomplete', async () => {
+    const db = createDatabase()
+    const connectionWithoutToken = saveServiceConnection(db, {
+      provider: 'vercel',
+      name: 'Vercel Team'
+    })
+    const missingProject = saveProjectService(db, {
+      provider: 'vercel',
+      connectionId: connectionWithoutToken.id,
+      name: 'missing-project'
+    })
+    const railwayConnection = saveServiceConnection(db, {
+      provider: 'railway',
+      name: 'Railway',
+      token: 'railway-token'
+    })
+    const railwayService = saveProjectService(db, {
+      provider: 'railway',
+      connectionId: railwayConnection.id,
+      name: 'api',
+      externalProjectId: 'railway-project'
+    })
+
+    await assert.rejects(() => listServiceDeployments(db, 'missing-service'), /服务不存在/)
+    await assert.rejects(() => listServiceDeployments(db, railwayService.id), /缺少 Railway Service ID/)
+    await assert.rejects(() => listServiceDeployments(db, missingProject.id), /缺少 Vercel 项目 ID/)
+
+    const serviceWithoutToken = saveProjectService(db, {
+      provider: 'vercel',
+      connectionId: connectionWithoutToken.id,
+      name: 'web',
+      externalProjectId: 'prj_1'
+    })
+
+    await assert.rejects(() => listServiceEnvVars(db, serviceWithoutToken.id), /请先配置 Vercel Token/)
+  })
+
+  it('runs Vercel deployment actions and refreshes the synced service', async () => {
+    const db = createDatabase()
+    const connection = saveServiceConnection(db, {
+      provider: 'vercel',
+      name: 'Vercel Team',
+      token: 'vercel-secret',
+      teamId: 'team_123'
+    })
+    const service = saveProjectService(db, {
+      provider: 'vercel',
+      connectionId: connection.id,
+      name: 'web',
+      externalProjectId: 'prj_1',
+      environments: [{ name: 'production', latestDeploymentId: 'dep_old' }]
+    })
+    const requests: Array<{ url: string; method: string }> = []
+    const fetcher = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+      requests.push({ url: String(url), method: String(init?.method ?? 'GET') })
+
+      if (String(url).includes('/v13/deployments')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ uid: 'dep_action', state: 'BUILDING', url: 'web.vercel.app' }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (String(url).includes('/v9/projects') && !String(url).includes('/domains') && !String(url).includes('/custom-environments')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ projects: [{ id: 'prj_1', name: 'web' }] }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (String(url).includes('/domains') || String(url).includes('/custom-environments')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => (String(url).includes('/domains') ? { domains: [] } : { environments: [] }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          deployments: [{ uid: 'dep_new', target: 'production', state: 'READY', url: 'web.vercel.app', meta: { githubCommitSha: 'abc123' } }]
+        }),
+        text: async () => '{}'
+      } as Response
+    }
+
+    const refreshed = await runServiceDeploymentAction(db, service.id, { action: 'redeploy', deploymentId: 'dep_old' }, fetcher)
+
+    assert.equal(refreshed.environments.find((environment) => environment.name === 'production')?.latestDeploymentId, 'dep_new')
+    assert.equal(requests.some((request) => request.method === 'POST' && new URL(request.url).pathname === '/v13/deployments'), true)
+    assert.equal(requests.some((request) => new URL(request.url).searchParams.get('teamId') === 'team_123'), true)
+  })
+
+  it('keeps revealed Vercel env values out of local service storage', async () => {
+    const db = createDatabase()
+    const connection = saveServiceConnection(db, {
+      provider: 'vercel',
+      name: 'Vercel Team',
+      token: 'vercel-secret'
+    })
+    const service = saveProjectService(db, {
+      provider: 'vercel',
+      connectionId: connection.id,
+      name: 'web',
+      externalProjectId: 'prj_1'
+    })
+    const fetcher = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+      if (String(url).includes('/env/env_1')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ id: 'env_1', key: 'API_TOKEN', value: 'secret-value', type: 'sensitive', target: ['production'], decrypted: true }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (init?.method === 'PATCH' || init?.method === 'POST') {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ id: 'env_1', key: 'API_TOKEN', type: 'sensitive', target: ['production'] }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (init?.method === 'DELETE') {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ ok: true }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ envs: [{ id: 'env_1', key: 'API_TOKEN', type: 'sensitive', target: ['production'] }] }),
+        text: async () => '{}'
+      } as Response
+    }
+
+    assert.equal((await listServiceEnvVars(db, service.id, fetcher))[0].value, undefined)
+    assert.equal((await revealServiceEnvVar(db, service.id, 'env_1', fetcher)).value, 'secret-value')
+    await saveServiceEnvVar(db, service.id, { id: 'env_1', key: 'API_TOKEN', value: 'next-secret', type: 'sensitive', target: ['production'] }, fetcher)
+    await deleteServiceEnvVar(db, service.id, 'env_1', fetcher)
+
+    assert.equal(JSON.stringify(listAllProjectServices(db)).includes('secret-value'), false)
+    assert.equal(JSON.stringify(listAllProjectServices(db)).includes('next-secret'), false)
   })
 })

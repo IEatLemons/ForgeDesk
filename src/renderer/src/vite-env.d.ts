@@ -11,6 +11,7 @@ type ScannedRepository = {
   remoteBranchCount: number
   branches: string[]
   remoteBranches: string[]
+  pushTargets: GitPushTarget[]
   defaultBranch: string
   currentBranch: string
   latestCommit: string
@@ -27,6 +28,13 @@ type GitRemote = {
   name: string
   fetchUrl: string
   pushUrl: string
+}
+
+type GitPushTarget = {
+  remote: string
+  branch: string
+  ahead: number
+  hasRemoteBranch: boolean
 }
 
 type RepositoryRemoteInput = {
@@ -57,6 +65,44 @@ type TerminalCreateInput = {
   reuseKey?: string
   cols?: number
   rows?: number
+  startupCommand?: string
+}
+
+type TerminalRemoteGroupRecord = {
+  id: string
+  name: string
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
+}
+
+type TerminalRemoteHostRecord = {
+  id: string
+  groupId: string
+  name: string
+  host: string
+  username: string
+  port: number
+  identityFile: string
+  notes: string
+  createdAt: string
+  updatedAt: string
+}
+
+type TerminalRemoteGroupInput = {
+  id?: string
+  name: string
+}
+
+type TerminalRemoteHostInput = {
+  id?: string
+  groupId: string
+  name: string
+  host: string
+  username?: string
+  port?: number
+  identityFile?: string
+  notes?: string
 }
 
 type TerminalSession = {
@@ -94,7 +140,8 @@ type GitCommitInput = {
 }
 
 type GitPushInput = {
-  remote: string
+  remote?: string
+  remotes?: string[]
   branch: string
 }
 
@@ -220,6 +267,7 @@ type GitWorkspaceStatus = {
   branch: string
   files: GitStatusFile[]
   conflicts: GitConflictFile[]
+  pushTargets: GitPushTarget[]
 }
 
 type GitOperationResult = {
@@ -421,6 +469,8 @@ type ProjectServiceRecord = {
   repositoryId: string
   name: string
   externalProjectId: string
+  externalProjectName: string
+  externalProjectAlias: string
   externalServiceId: string
   defaultEnvironment: string
   healthPath: string
@@ -440,12 +490,20 @@ type ProjectServiceInput = {
   repositoryId?: string
   name: string
   externalProjectId?: string
+  externalProjectName?: string
+  externalProjectAlias?: string
   externalServiceId?: string
   defaultEnvironment?: string
   healthPath?: string
   enabled?: boolean
   environments?: Array<Partial<ProjectServiceEnvironmentRecord> & { name: string }>
   domains?: Array<Partial<ProjectServiceDomainRecord> & { domain: string }>
+}
+
+type ServiceExternalProjectAliasInput = {
+  provider: ServiceProviderType
+  externalProjectId: string
+  alias?: string
 }
 
 type ServiceMonitorCheckRecord = {
@@ -465,6 +523,76 @@ type ServiceEnvironmentLogRecord = {
   level: string
   message: string
   source: string
+}
+
+type ServiceDeploymentSummary = {
+  id: string
+  url: string
+  target: string
+  state: string
+  createdAt: string
+  readyAt: string
+  creator: string
+  meta: Record<string, unknown>
+  commitSha: string
+}
+
+type VercelDeploymentSummary = ServiceDeploymentSummary
+
+type ServiceDeploymentListOptions = {
+  target?: string
+  limit?: number
+}
+
+type VercelDeploymentListOptions = ServiceDeploymentListOptions
+
+type VercelDeploymentActionInput = {
+  action: 'redeploy' | 'cancel' | 'promote' | 'rollback'
+  deploymentId: string
+  description?: string
+}
+
+type ServiceEnvVarRecord = {
+  id: string
+  key: string
+  type: string
+  target: string[]
+  gitBranch: string
+  customEnvironmentIds: string[]
+  comment: string
+  createdAt: string
+  updatedAt: string
+  decrypted: boolean
+  value?: string
+}
+
+type VercelEnvVarRecord = ServiceEnvVarRecord
+
+type VercelEnvVarInput = {
+  id?: string
+  key: string
+  value?: string
+  type: string
+  target?: string[]
+  customEnvironmentIds?: string[]
+  gitBranch?: string
+  comment?: string
+}
+
+type VercelDomainInput = {
+  name: string
+  environmentName?: string
+  gitBranch?: string
+  redirect?: string
+  redirectStatusCode?: number
+}
+
+type VercelDomainConfig = {
+  configured: boolean
+  misconfigured: boolean
+  acceptedChallenges: unknown[]
+  recommendedRecords: unknown[]
+  raw: Record<string, unknown>
 }
 
 type ProjectRecord = {
@@ -659,6 +787,7 @@ interface Window {
     listAllProjectServices: () => Promise<ProjectServiceRecord[]>
     listProjectServices: (projectId: string) => Promise<ProjectServiceRecord[]>
     saveProjectService: (input: ProjectServiceInput) => Promise<ProjectServiceRecord>
+    saveServiceExternalProjectAlias: (input: ServiceExternalProjectAliasInput) => Promise<ProjectServiceRecord[]>
     bindProjectService: (input: { projectId: string; serviceId: string; repositoryId?: string }) => Promise<ProjectServiceRecord[]>
     syncProjectServices: (connectionId?: string) => Promise<ProjectServiceRecord[]>
     checkProjectServices: (projectId?: string) => Promise<ProjectServiceRecord[]>
@@ -666,6 +795,17 @@ interface Window {
     listServiceMonitorHistory: (projectId: string) => Promise<ServiceMonitorCheckRecord[]>
     listAllServiceMonitorHistory: () => Promise<ServiceMonitorCheckRecord[]>
     listServiceEnvironmentLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
+    listServiceDeployments: (serviceId: string, options?: ServiceDeploymentListOptions) => Promise<ServiceDeploymentSummary[]>
+    runServiceDeploymentAction: (serviceId: string, input: VercelDeploymentActionInput) => Promise<ProjectServiceRecord>
+    listServiceEnvVars: (serviceId: string) => Promise<ServiceEnvVarRecord[]>
+    revealServiceEnvVar: (serviceId: string, envVarId: string) => Promise<ServiceEnvVarRecord>
+    saveServiceEnvVar: (serviceId: string, input: VercelEnvVarInput) => Promise<ServiceEnvVarRecord>
+    deleteServiceEnvVar: (serviceId: string, envVarId: string) => Promise<void>
+    addServiceDomain: (serviceId: string, input: VercelDomainInput) => Promise<ProjectServiceRecord>
+    removeServiceDomain: (serviceId: string, domain: string, removeRedirects?: boolean) => Promise<ProjectServiceRecord>
+    verifyServiceDomain: (serviceId: string, domain: string) => Promise<ProjectServiceRecord>
+    inspectServiceDomainConfig: (serviceId: string, domain: string) => Promise<VercelDomainConfig>
+    listServiceRuntimeLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
     saveProjectPerson: (input: { id?: string; projectId: string; displayName: string; role?: string; identities: Array<{ name: string; email: string }> }) => Promise<ProjectPersonRecord>
     deleteProjectPerson: (projectId: string, personId: string) => Promise<ProjectPersonRecord[]>
     scanRepositories: (paths: string[]) => Promise<ScannedRepository[]>
@@ -690,6 +830,13 @@ interface Window {
     readSshConfig: () => Promise<SshConfigFile>
     writeSshConfig: (content: string) => Promise<SshConfigFile>
     openSshDirectory: () => Promise<void>
+    listTerminalRemoteGroups: () => Promise<TerminalRemoteGroupRecord[]>
+    saveTerminalRemoteGroup: (input: TerminalRemoteGroupInput) => Promise<TerminalRemoteGroupRecord>
+    deleteTerminalRemoteGroup: (groupId: string) => Promise<TerminalRemoteGroupRecord[]>
+    listTerminalRemoteHosts: () => Promise<TerminalRemoteHostRecord[]>
+    saveTerminalRemoteHost: (input: TerminalRemoteHostInput) => Promise<TerminalRemoteHostRecord>
+    deleteTerminalRemoteHost: (hostId: string) => Promise<TerminalRemoteHostRecord[]>
+    getTerminalRemoteSshCommand: (hostId: string) => Promise<string>
     openTerminal: (input?: TerminalCreateInput) => Promise<TerminalSession>
     writeTerminal: (sessionId: string, data: string) => Promise<void>
     resizeTerminal: (sessionId: string, cols: number, rows: number) => Promise<void>

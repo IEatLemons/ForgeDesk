@@ -21,7 +21,10 @@ import {
   buildGitMergeArgs,
   buildGitMergeBaseArgs,
   buildGitMergeTreeArgs,
-  buildGitPushArgs,
+  buildGitPushOperationArgs,
+  buildGitPushTargetCommitCountArgs,
+  buildGitPushTargetLocalCommitCountArgs,
+  buildGitPushTargetRemoteRefVerifyArgs,
   buildGitRevListCountArgs,
   buildGitSwitchBranchArgs,
   buildGitTagArgs,
@@ -33,6 +36,7 @@ import {
   type GitMergeAnalysisInput,
   type GitMergeInput,
   type GitPushInput,
+  type GitPushTarget,
   type GitStatusFile
 } from './git-workspace'
 import { extractConflictSections, type ConflictSection } from './merge-conflicts'
@@ -46,6 +50,20 @@ import {
 } from './project-branch-tags'
 import { readSshConfigFile, writeSshConfigFile, type SshConfigFile } from './ssh-config'
 import { createNodePtyFactory } from './node-pty-factory'
+import {
+  buildTerminalRemoteSshCommand,
+  deleteTerminalRemoteGroup as deleteTerminalRemoteGroupRecord,
+  deleteTerminalRemoteHost as deleteTerminalRemoteHostRecord,
+  listTerminalRemoteGroups as listTerminalRemoteGroupRecords,
+  listTerminalRemoteHosts as listTerminalRemoteHostRecords,
+  migrateTerminalRemoteShortcutTables,
+  saveTerminalRemoteGroup as saveTerminalRemoteGroupRecord,
+  saveTerminalRemoteHost as saveTerminalRemoteHostRecord,
+  type TerminalRemoteGroupInput,
+  type TerminalRemoteGroupRecord,
+  type TerminalRemoteHostInput,
+  type TerminalRemoteHostRecord
+} from './terminal-remote-shortcuts'
 import {
   deleteSshKeyFile,
   fixSshPrivateKeyPermissions,
@@ -78,28 +96,48 @@ import {
 } from './release-publishing'
 import {
   bindProjectService as bindProjectServiceRecord,
+  addServiceDomain as addServiceDomainRecord,
   checkServiceDomain,
+  deleteServiceEnvVar as deleteServiceEnvVarRecord,
   deleteOldServiceMonitorHistory,
   deleteServiceConnection as deleteServiceConnectionRecord,
+  inspectServiceDomainConfig as inspectServiceDomainConfigRecord,
   isMonitorableServiceDomain,
   listAllProjectServices as listAllProjectServiceRecords,
   listAllServiceMonitorHistory as listAllServiceMonitorHistoryRecords,
   listLatestServiceMonitorChecks as listLatestServiceMonitorCheckRecords,
   listProjectServices as listProjectServiceRecords,
   listServiceConnections as listServiceConnectionRecords,
+  listServiceDeployments as listServiceDeploymentRecords,
   listServiceEnvironmentLogs as listServiceEnvironmentLogRecords,
+  listServiceEnvVars as listServiceEnvVarRecords,
   listServiceMonitorHistory as listServiceMonitorHistoryRecords,
+  listServiceRuntimeLogs as listServiceRuntimeLogRecords,
   migrateServiceMonitoringTables,
   recordServiceMonitorCheck,
+  removeServiceDomain as removeServiceDomainRecord,
+  revealServiceEnvVar as revealServiceEnvVarRecord,
+  runServiceDeploymentAction as runServiceDeploymentActionRecord,
+  saveServiceExternalProjectAlias as saveServiceExternalProjectAliasRecord,
+  saveServiceEnvVar as saveServiceEnvVarRecord,
   saveProjectService as saveProjectServiceRecord,
   saveServiceConnection as saveServiceConnectionRecord,
   syncServiceConnection,
+  verifyServiceDomain as verifyServiceDomainRecord,
   type ProjectServiceInput,
   type ProjectServiceRecord,
   type ServiceEnvironmentLogRecord,
   type ServiceConnectionInput,
   type ServiceConnectionRecord,
-  type ServiceMonitorCheckRecord
+  type ServiceDeploymentListOptions,
+  type ServiceDeploymentSummary,
+  type ServiceExternalProjectAliasInput,
+  type ServiceEnvVarRecord,
+  type ServiceMonitorCheckRecord,
+  type VercelDeploymentActionInput,
+  type VercelDomainConfig,
+  type VercelDomainInput,
+  type VercelEnvVarInput,
 } from './service-monitoring'
 
 type RepositoryScanResult = {
@@ -113,6 +151,7 @@ type RepositoryScanResult = {
   remoteBranchCount: number
   branches: string[]
   remoteBranches: string[]
+  pushTargets: GitPushTarget[]
   defaultBranch: string
   currentBranch: string
   latestCommit: string
@@ -158,6 +197,7 @@ type GitWorkspaceStatus = {
   branch: string
   files: GitStatusFile[]
   conflicts: GitConflictFile[]
+  pushTargets: GitPushTarget[]
 }
 
 type GitOperationResult = {
@@ -521,6 +561,37 @@ async function countExclusiveCommits(localPath: string, baseCommit: string, head
   return Number.isFinite(count) ? count : 0
 }
 
+async function inspectRepositoryPushTargets(localPath: string, remotes: GitRemote[], currentBranch: string): Promise<GitPushTarget[]> {
+  const branch = currentBranch.trim()
+
+  if (!branch || branch === 'detached' || remotes.length === 0) {
+    return []
+  }
+
+  const targets = await Promise.all(
+    remotes
+      .filter((remote) => remote.name)
+      .map(async (remote): Promise<GitPushTarget | null> => {
+        try {
+          const remoteRefResult = await runGitInPathResult(localPath, buildGitPushTargetRemoteRefVerifyArgs(remote.name, branch))
+          const countArgs = remoteRefResult.ok ? buildGitPushTargetCommitCountArgs(remote.name, branch) : buildGitPushTargetLocalCommitCountArgs(branch)
+          const countOutput = await runGitInPathOptional(localPath, countArgs)
+
+          return {
+            remote: remote.name,
+            branch,
+            ahead: parseGitCount(countOutput),
+            hasRemoteBranch: remoteRefResult.ok
+          }
+        } catch {
+          return null
+        }
+      })
+  )
+
+  return targets.filter((target): target is GitPushTarget => Boolean(target))
+}
+
 async function inspectRemoteAlignment(
   localPath: string,
   remotes: GitRemote[],
@@ -595,6 +666,7 @@ function migrateDatabase(db: Database.Database): void {
       remote_branch_count INTEGER NOT NULL DEFAULT 0,
       branches_json TEXT NOT NULL DEFAULT '[]',
       remote_branches_json TEXT NOT NULL DEFAULT '[]',
+      push_targets_json TEXT NOT NULL DEFAULT '[]',
       remote_alignment_json TEXT NOT NULL DEFAULT '{}',
       default_branch TEXT NOT NULL DEFAULT '',
       current_branch TEXT NOT NULL DEFAULT '',
@@ -669,6 +741,7 @@ function migrateDatabase(db: Database.Database): void {
 
   migrateProjectBranchTagTable(db)
   migrateServiceMonitoringTables(db)
+  migrateTerminalRemoteShortcutTables(db)
 
   addColumnIfMissing(db, 'repositories', 'remotes_json', "TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(db, 'repositories', 'remote_count', 'INTEGER NOT NULL DEFAULT 0')
@@ -676,6 +749,7 @@ function migrateDatabase(db: Database.Database): void {
   addColumnIfMissing(db, 'repositories', 'remote_branch_count', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(db, 'repositories', 'branches_json', "TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(db, 'repositories', 'remote_branches_json', "TEXT NOT NULL DEFAULT '[]'")
+  addColumnIfMissing(db, 'repositories', 'push_targets_json', "TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(db, 'repositories', 'remote_alignment_json', "TEXT NOT NULL DEFAULT '{}'")
   addColumnIfMissing(db, 'git_commits', 'branch_name', "TEXT NOT NULL DEFAULT ''")
 }
@@ -721,6 +795,7 @@ function mapRepositoryRow(row: Record<string, unknown>): RepositoryRecord {
   const remotes = parseJsonArray<GitRemote>(row.remotes_json)
   const branches = parseJsonArray<string>(row.branches_json)
   const remoteBranches = parseJsonArray<string>(row.remote_branches_json)
+  const pushTargets = parseJsonArray<GitPushTarget>(row.push_targets_json)
   const remoteAlignment = parseRemoteAlignment(row.remote_alignment_json)
 
   return {
@@ -735,6 +810,7 @@ function mapRepositoryRow(row: Record<string, unknown>): RepositoryRecord {
     remoteBranchCount: Number(row.remote_branch_count ?? remoteBranches.length),
     branches,
     remoteBranches,
+    pushTargets,
     defaultBranch: String(row.default_branch ?? ''),
     currentBranch: String(row.current_branch ?? ''),
     latestCommit: String(row.latest_commit ?? ''),
@@ -960,11 +1036,11 @@ function upsertRepository(projectId: string, repository: RepositoryScanResult): 
       `
       INSERT INTO repositories (
         id, project_id, name, local_path, remote_url, remotes_json, remote_count, local_branch_count,
-        remote_branch_count, branches_json, remote_branches_json, remote_alignment_json, default_branch, current_branch, latest_commit,
+        remote_branch_count, branches_json, remote_branches_json, push_targets_json, remote_alignment_json, default_branch, current_branch, latest_commit,
         has_changes, ahead, local_user_name, local_user_email, effective_user_name, effective_user_email,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         project_id = excluded.project_id,
         name = excluded.name,
@@ -976,6 +1052,7 @@ function upsertRepository(projectId: string, repository: RepositoryScanResult): 
         remote_branch_count = excluded.remote_branch_count,
         branches_json = excluded.branches_json,
         remote_branches_json = excluded.remote_branches_json,
+        push_targets_json = excluded.push_targets_json,
         remote_alignment_json = excluded.remote_alignment_json,
         default_branch = excluded.default_branch,
         current_branch = excluded.current_branch,
@@ -1001,6 +1078,7 @@ function upsertRepository(projectId: string, repository: RepositoryScanResult): 
       repository.remoteBranchCount,
       JSON.stringify(repository.branches),
       JSON.stringify(repository.remoteBranches),
+      JSON.stringify(repository.pushTargets),
       JSON.stringify(repository.remoteAlignment),
       repository.defaultBranch,
       repository.currentBranch,
@@ -1161,7 +1239,10 @@ async function scanRepository(localPath: string): Promise<RepositoryScanResult |
   const origin = remotes.find((remote) => remote.name === 'origin') ?? remotes[0]
   const currentBranch = status.current ?? 'detached'
   const defaultBranch = status.tracking ? status.tracking.replace(/^[^/]+\//, '') : currentBranch
-  const remoteAlignment = await inspectRemoteAlignment(normalizedPath, remotes, currentBranch, defaultBranch)
+  const [remoteAlignment, pushTargets] = await Promise.all([
+    inspectRemoteAlignment(normalizedPath, remotes, currentBranch, defaultBranch),
+    inspectRepositoryPushTargets(normalizedPath, remotes, currentBranch)
+  ])
 
   return {
     id: normalizedPath,
@@ -1174,6 +1255,7 @@ async function scanRepository(localPath: string): Promise<RepositoryScanResult |
     remoteBranchCount: branchInfo.remoteBranches.length,
     branches: branchInfo.branches,
     remoteBranches: branchInfo.remoteBranches,
+    pushTargets,
     defaultBranch,
     currentBranch,
     latestCommit: latest ? `${latest.hash.slice(0, 7)} ${latest.message}` : 'No commits yet',
@@ -1711,7 +1793,7 @@ async function checkProjectServicesNow(projectId?: string): Promise<ProjectServi
     }
 
     for (const domain of service.domains) {
-      if (!isMonitorableServiceDomain(domain)) {
+      if (!isMonitorableServiceDomain(domain, service.provider)) {
         continue
       }
 
@@ -1789,6 +1871,8 @@ async function getRepositoryWorkspaceStatus(repositoryId: string): Promise<GitWo
     runGitInPath(repository.localPath, ['branch', '--show-current'])
   ])
   const files = parsePorcelainStatus(statusOutput)
+  const currentBranch = branch || repository.currentBranch
+  const pushTargets = await inspectRepositoryPushTargets(repository.localPath, repository.remotes, currentBranch)
   const conflicts = await Promise.all(
     files
       .filter((file) => file.conflict)
@@ -1802,7 +1886,7 @@ async function getRepositoryWorkspaceStatus(repositoryId: string): Promise<GitWo
       })
   )
 
-  return { repositoryId, branch, files, conflicts }
+  return { repositoryId, branch, files, conflicts, pushTargets }
 }
 
 function parseGitCount(output: string): number {
@@ -1963,6 +2047,35 @@ async function commitRepositoryChanges(repositoryId: string, input: GitCommitInp
     stdout: [commitResult.stdout, tagResult.stdout].filter(Boolean).join('\n'),
     stderr: tagResult.ok ? commitResult.stderr : tagResult.stderr || tagResult.stdout || 'Tag 创建失败'
   }
+}
+
+async function pushRepositoryChanges(repositoryId: string, input: GitPushInput): Promise<GitOperationResult> {
+  return withSavedSshPassphrases(async (env) => {
+    const operationArgs = buildGitPushOperationArgs(input)
+
+    if (operationArgs.length === 1) {
+      return runRepositoryWriteOperation(repositoryId, operationArgs[0], { env })
+    }
+
+    const repository = getRepositoryOrThrow(repositoryId)
+    const results = []
+
+    for (const args of operationArgs) {
+      results.push(await runGitInPathResult(repository.localPath, args, { env }))
+    }
+
+    const rescannedRepository = await rescanRepositoryRecord(repository)
+    const status = await getRepositoryWorkspaceStatus(repositoryId)
+    const failedResult = results.find((result) => !result.ok)
+
+    return {
+      ok: results.every((result) => result.ok),
+      repository: rescannedRepository,
+      status,
+      stdout: results.map((result) => result.stdout).filter(Boolean).join('\n'),
+      stderr: failedResult ? failedResult.stderr || failedResult.stdout || '部分远端推送失败' : results.map((result) => result.stderr).filter(Boolean).join('\n')
+    }
+  })
 }
 
 async function suggestRepositoryConflictResolution(repositoryId: string, filePath: string): Promise<ConflictResolutionSuggestion> {
@@ -2696,7 +2809,7 @@ ipcMain.handle('repository:git-commit', async (_event, repositoryId: string, inp
 )
 
 ipcMain.handle('repository:git-push', async (_event, repositoryId: string, input: GitPushInput): Promise<GitOperationResult> =>
-  withSavedSshPassphrases((env) => runRepositoryWriteOperation(repositoryId, buildGitPushArgs(input), { env }))
+  pushRepositoryChanges(repositoryId, input)
 )
 
 ipcMain.handle('repository:merge-analysis', async (_event, repositoryId: string, input: GitMergeAnalysisInput): Promise<GitMergeAnalysis> =>
@@ -2788,6 +2901,10 @@ ipcMain.handle('project:services:list', async (_event, projectId: string): Promi
 
 ipcMain.handle('project:service:save', async (_event, input: ProjectServiceInput): Promise<ProjectServiceRecord> => saveProjectServiceRecord(getDatabase(), input))
 
+ipcMain.handle('service:external-project:alias:save', async (_event, input: ServiceExternalProjectAliasInput): Promise<ProjectServiceRecord[]> =>
+  saveServiceExternalProjectAliasRecord(getDatabase(), input)
+)
+
 ipcMain.handle('project:service:bind', async (_event, input: { projectId: string; serviceId: string; repositoryId?: string }): Promise<ProjectServiceRecord[]> =>
   bindProjectServiceRecord(getDatabase(), input)
 )
@@ -2814,6 +2931,57 @@ ipcMain.handle('service:monitor:history:all', async (): Promise<ServiceMonitorCh
 
 ipcMain.handle('service:environment:logs', async (_event, serviceId: string, environmentName: string): Promise<ServiceEnvironmentLogRecord[]> =>
   listServiceEnvironmentLogRecords(getDatabase(), serviceId, environmentName)
+)
+
+ipcMain.handle(
+  'service:deployments:list',
+  async (_event, serviceId: string, options?: ServiceDeploymentListOptions): Promise<ServiceDeploymentSummary[]> =>
+    listServiceDeploymentRecords(getDatabase(), serviceId, options)
+)
+
+ipcMain.handle(
+  'service:deployment:action',
+  async (_event, serviceId: string, input: VercelDeploymentActionInput): Promise<ProjectServiceRecord> =>
+    runServiceDeploymentActionRecord(getDatabase(), serviceId, input)
+)
+
+ipcMain.handle('service:env:list', async (_event, serviceId: string): Promise<ServiceEnvVarRecord[]> => listServiceEnvVarRecords(getDatabase(), serviceId))
+
+ipcMain.handle(
+  'service:env:reveal',
+  async (_event, serviceId: string, envVarId: string): Promise<ServiceEnvVarRecord> => revealServiceEnvVarRecord(getDatabase(), serviceId, envVarId)
+)
+
+ipcMain.handle(
+  'service:env:save',
+  async (_event, serviceId: string, input: VercelEnvVarInput): Promise<ServiceEnvVarRecord> => saveServiceEnvVarRecord(getDatabase(), serviceId, input)
+)
+
+ipcMain.handle('service:env:delete', async (_event, serviceId: string, envVarId: string): Promise<void> =>
+  deleteServiceEnvVarRecord(getDatabase(), serviceId, envVarId)
+)
+
+ipcMain.handle(
+  'service:domain:add',
+  async (_event, serviceId: string, input: VercelDomainInput): Promise<ProjectServiceRecord> => addServiceDomainRecord(getDatabase(), serviceId, input)
+)
+
+ipcMain.handle(
+  'service:domain:remove',
+  async (_event, serviceId: string, domain: string, removeRedirects?: boolean): Promise<ProjectServiceRecord> =>
+    removeServiceDomainRecord(getDatabase(), serviceId, domain, removeRedirects)
+)
+
+ipcMain.handle('service:domain:verify', async (_event, serviceId: string, domain: string): Promise<ProjectServiceRecord> =>
+  verifyServiceDomainRecord(getDatabase(), serviceId, domain)
+)
+
+ipcMain.handle('service:domain:config', async (_event, serviceId: string, domain: string): Promise<VercelDomainConfig> =>
+  inspectServiceDomainConfigRecord(getDatabase(), serviceId, domain)
+)
+
+ipcMain.handle('service:runtime:logs', async (_event, serviceId: string, environmentName: string): Promise<ServiceEnvironmentLogRecord[]> =>
+  listServiceRuntimeLogRecords(getDatabase(), serviceId, environmentName)
 )
 
 ipcMain.handle(
@@ -3028,6 +3196,37 @@ ipcMain.handle('ssh:open-directory', async (): Promise<void> => {
 })
 
 registerAppUpdateIpc()
+
+ipcMain.handle('terminal:remote-groups:list', async (): Promise<TerminalRemoteGroupRecord[]> => listTerminalRemoteGroupRecords(getDatabase()))
+
+ipcMain.handle('terminal:remote-group:save', async (_event, input: TerminalRemoteGroupInput): Promise<TerminalRemoteGroupRecord> => {
+  return saveTerminalRemoteGroupRecord(getDatabase(), input)
+})
+
+ipcMain.handle('terminal:remote-group:delete', async (_event, groupId: string): Promise<TerminalRemoteGroupRecord[]> => {
+  return deleteTerminalRemoteGroupRecord(getDatabase(), groupId)
+})
+
+ipcMain.handle('terminal:remote-hosts:list', async (): Promise<TerminalRemoteHostRecord[]> => listTerminalRemoteHostRecords(getDatabase()))
+
+ipcMain.handle('terminal:remote-host:save', async (_event, input: TerminalRemoteHostInput): Promise<TerminalRemoteHostRecord> => {
+  return saveTerminalRemoteHostRecord(getDatabase(), input)
+})
+
+ipcMain.handle('terminal:remote-host:delete', async (_event, hostId: string): Promise<TerminalRemoteHostRecord[]> => {
+  return deleteTerminalRemoteHostRecord(getDatabase(), hostId)
+})
+
+ipcMain.handle('terminal:remote-host:ssh-command', async (_event, hostId: string): Promise<string> => {
+  const host = listTerminalRemoteHostRecords(getDatabase()).find((item) => item.id === hostId)
+
+  if (!host) {
+    throw new Error('远程快捷连接不存在')
+  }
+
+  return buildTerminalRemoteSshCommand(host)
+})
+
 registerTerminalIpc(ipcMain, terminalService)
 
 ipcMain.handle('external:open-git-download', async (): Promise<void> => {

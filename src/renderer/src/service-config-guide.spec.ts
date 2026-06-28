@@ -21,5 +21,7 @@ describe('service config guide', () => {
     assert.equal(guide.projectTokenDocsUrl, 'https://docs.railway.com/integrations/api#project-token')
     assert.equal(guide.docsUrl, 'https://docs.railway.com/integrations/api')
     assert.ok(guide.steps.some((step) => step.includes('Project-Access-Token')))
+    assert.ok(guide.steps.some((step) => step.includes('Workspace Token') && step.includes('Workspace ID')))
+    assert.ok(guide.steps.some((step) => step.includes('Account Token') && step.includes('Workspace ID')))
   })
 })

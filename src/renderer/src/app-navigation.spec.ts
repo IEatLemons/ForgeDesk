@@ -3,10 +3,10 @@ import { describe, it } from 'node:test'
 import { APP_NAVIGATION_ITEMS } from './app-navigation.js'
 
 describe('app navigation', () => {
-  it('places services between projects and settings', () => {
+  it('places terminal directly above settings in the footer area', () => {
     assert.deepEqual(
       APP_NAVIGATION_ITEMS.map((item) => item.key),
-      ['overview', 'services', 'settings']
+      ['overview', 'services', 'tools', 'terminal', 'settings']
     )
   })
 })

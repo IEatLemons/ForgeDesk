@@ -5,4 +5,5 @@ export type TerminalOpenRequest = {
   requestId?: number
   title?: string
   reuseKey?: string
+  startupCommand?: string
 }

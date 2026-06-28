@@ -32,7 +32,9 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import {
   BranchesOutlined,
+  ArrowRightOutlined,
   CheckCircleOutlined,
+  CodeOutlined,
   CopyOutlined,
   DashboardOutlined,
   DeleteOutlined,
@@ -50,6 +52,7 @@ import {
   SaveOutlined,
   SettingOutlined,
   TeamOutlined,
+  ToolOutlined,
   UploadOutlined,
   ThunderboltOutlined,
   UserAddOutlined
@@ -71,6 +74,7 @@ import type {
   GitContributorIdentity,
   GitMergeAnalysis,
   GitOperationResult,
+  GitPushInput,
   GitRemote,
   GitStatusFile,
   GitWorkspaceStatus,
@@ -95,13 +99,42 @@ import type {
   ServiceMonitorCheck,
   ServiceMonitorStatus,
   ServiceProviderType,
-  RailwayTokenType
+  RailwayTokenType,
+  ServiceDeploymentSummary,
+  ServiceEnvVarRecord,
+  VercelDomainConfig,
+  VercelEnvVarInput,
 } from './data'
 import { APP_NAVIGATION_ITEMS, type AppNavigationKey } from './app-navigation'
 import { createAppUpdateViewModel } from './app-update-view'
 import { createDiffResultLines, createSourceDiffLines, type DiffDisplayLine } from './diff-view'
+import { compareEnvFiles, formatVariableNames, type EnvFileDiffResult } from './env-file-diff'
 import { getErrorMessage, isAiCredentialErrorMessage } from './error-messages'
+import {
+  PUSH_ALL_REMOTES_VALUE,
+  canCommitSelection,
+  canPushSelection,
+  createPushRemoteOptions,
+  getCurrentBranchName,
+  getPushableTargets,
+  hasProjectCommittableChanges,
+  hasProjectPushableTargets,
+  resolveSelectedPushRemoteNames
+} from './git-action-state'
 import { createGitErrorGuidance, type GitErrorGuidance } from './git-error-guidance'
+import {
+  DEFAULT_PASSWORD_GROUP_KEYS,
+  DEFAULT_PASSWORD_TOOL_ITEMS,
+  PASSWORD_CHARACTER_GROUPS,
+  createGeneratedPasswordRows,
+  formatEnvironmentVariableRows,
+  generatePasswordToolValue,
+  getPasswordToolItemLengthLabel,
+  type GeneratedPasswordRow,
+  type PasswordCharacterGroupKey,
+  type PasswordToolItem,
+  type PasswordToolMode
+} from './password-generator'
 import {
   buildBranchGroups,
   createGraphRows,
@@ -130,11 +163,25 @@ import {
 } from './project-settings-view'
 import { createReleasePublishViewModel } from './release-publish-view'
 import { getServiceProviderGuide, type ServiceProviderGuideProvider } from './service-config-guide'
-import { createServiceDetailSummary, getMonitorableServiceDomains, getProjectServiceStats } from './service-monitor-view'
+import {
+  createRailwayProjectEnvironmentGroups,
+  createServiceDetailSummary,
+  createServiceProviderOverview,
+  createServiceProviderSections,
+  getServiceEnvironmentLogActions,
+  getMonitorableServiceDomains,
+  getRailwayEnvironmentServiceTableScrollX,
+  getServiceProviderCapabilities,
+  getServiceProviderLabel,
+  getProjectServiceStats,
+  type RailwayProjectServiceGroup,
+  type ServiceLogMode
+} from './service-monitor-view'
 import { createEmptySshConfigEntry, parseSshConfigEntries, serializeSshConfigEntries, type SshConfigEntry } from './ssh-config-model'
 import { useForgeDeskStore } from './store'
 import { TerminalWorkspace } from './terminal-panel'
 import type { TerminalOpenRequest } from './terminal-panel-events'
+import { TerminalRemoteShortcuts } from './terminal-remote-shortcuts'
 
 type ImportForm = {
   projectName: string
@@ -267,6 +314,27 @@ type ProjectServiceBindingForm = {
   repositoryId?: string
 }
 
+type ServiceExternalProjectAliasForm = {
+  alias?: string
+}
+
+type VercelEnvVarForm = {
+  key: string
+  value?: string
+  type: string
+  target?: string[]
+  gitBranch?: string
+  comment?: string
+}
+
+type VercelDomainForm = {
+  name: string
+  environmentName?: string
+  gitBranch?: string
+  redirect?: string
+  redirectStatusCode?: number
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
@@ -381,10 +449,6 @@ function getRemoteAlignmentStatusMeta(status: RemoteAlignmentStatus | RemoteAlig
   }
 
   return status ? statusMap[status] : { label: '未检测', color: 'default', badgeStatus: 'default' }
-}
-
-function getServiceProviderLabel(provider: ServiceProviderType): string {
-  return provider === 'railway' ? 'Railway' : 'Vercel'
 }
 
 function getServiceMonitorStatusMeta(status: ServiceMonitorStatus): {
@@ -695,7 +759,8 @@ function CommitInlineDetail({
   selectedFile,
   loadingFiles,
   onSelectFile,
-  graphColumnWidth
+  graphColumnWidth,
+  branchTags
 }: {
   commit: GitGraphRow<GitCommit>
   files: GitCommitFileChange[]
@@ -703,6 +768,7 @@ function CommitInlineDetail({
   loadingFiles: boolean
   onSelectFile: (file: GitCommitFileChange) => void
   graphColumnWidth: number
+  branchTags: ProjectBranchTag[]
 }): JSX.Element {
   const author = getCommitAuthorDisplay(commit)
 
@@ -714,7 +780,12 @@ function CommitInlineDetail({
           <div>
             <Typography.Text strong>{commit.message}</Typography.Text>
             <div className="commit-meta">
-              <Tag>{commit.shortHash}</Tag>
+              <Tag className="commit-hash-full">{commit.hash}</Tag>
+              {commit.refs.map((ref) => (
+                <Tag key={ref} color={getRefColor(ref, branchTags)} className="source-tree-ref">
+                  {ref}
+                </Tag>
+              ))}
               <Typography.Text type="secondary">
                 {author.email ? `${author.name} · ${author.email}` : author.name} · {new Date(commit.committedAt).toLocaleString()}
               </Typography.Text>
@@ -2481,16 +2552,29 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
   const [deletingConnectionId, setDeletingConnectionId] = useState<string | null>(null)
   const [editingConnection, setEditingConnection] = useState<ServiceConnection | null>(null)
   const [editingService, setEditingService] = useState<ProjectService | null>(null)
+  const [editingRailwayProjectGroup, setEditingRailwayProjectGroup] = useState<RailwayProjectServiceGroup | null>(null)
+  const [serviceLogDrawer, setServiceLogDrawer] = useState<{
+    service: ProjectService
+    environment: ProjectServiceEnvironment
+    mode: ServiceLogMode
+  } | null>(null)
+  const [serviceLogLines, setServiceLogLines] = useState<ServiceEnvironmentLogLine[]>([])
+  const [serviceLogLoading, setServiceLogLoading] = useState(false)
+  const [serviceLogError, setServiceLogError] = useState('')
   const [detailServiceId, setDetailServiceId] = useState<string | null>(null)
+  const [bindingProvider, setBindingProvider] = useState<ServiceProviderType | null>(null)
+  const [selectedServiceProvider, setSelectedServiceProvider] = useState<ServiceProviderType | null>(null)
   const [connectionModalOpen, setConnectionModalOpen] = useState(false)
   const [serviceModalOpen, setServiceModalOpen] = useState(false)
   const [bindingModalOpen, setBindingModalOpen] = useState(false)
   const [savingConnection, setSavingConnection] = useState(false)
   const [savingService, setSavingService] = useState(false)
+  const [savingRailwayProjectAlias, setSavingRailwayProjectAlias] = useState(false)
   const [savingBinding, setSavingBinding] = useState(false)
   const [connectionForm] = Form.useForm<ServiceConnectionForm>()
   const [serviceForm] = Form.useForm<ProjectServiceForm>()
   const [bindingForm] = Form.useForm<ProjectServiceBindingForm>()
+  const [railwayProjectAliasForm] = Form.useForm<ServiceExternalProjectAliasForm>()
   const isProjectMode = Boolean(project)
 
   async function loadServiceSettings(): Promise<void> {
@@ -2520,10 +2604,10 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
     loadServiceSettings().catch((error) => message.error(getErrorMessage(error)))
   }, [project?.id])
 
-  function openConnectionModal(connection?: ServiceConnection): void {
+  function openConnectionModal(connection?: ServiceConnection, provider?: ServiceProviderType): void {
     setEditingConnection(connection ?? null)
     connectionForm.setFieldsValue({
-      provider: connection?.provider ?? 'vercel',
+      provider: connection?.provider ?? provider ?? 'vercel',
       name: connection?.name ?? '',
       token: '',
       teamId: connection?.teamId ?? '',
@@ -2636,8 +2720,9 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
     })
   }
 
-  function openBindingModal(): void {
+  function openBindingModal(provider?: ServiceProviderType): void {
     bindingForm.resetFields()
+    setBindingProvider(provider ?? null)
     setBindingModalOpen(true)
   }
 
@@ -2658,6 +2743,7 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
         })
       )
       setBindingModalOpen(false)
+      setBindingProvider(null)
       bindingForm.resetFields()
       message.success('服务已绑定到当前项目')
     } catch (error) {
@@ -2667,10 +2753,10 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
     }
   }
 
-  function openServiceModal(service?: ProjectService): void {
+  function openServiceModal(service?: ProjectService, provider?: ServiceProviderType): void {
     setEditingService(service ?? null)
     serviceForm.setFieldsValue({
-      provider: service?.provider ?? 'vercel',
+      provider: service?.provider ?? provider ?? 'vercel',
       connectionId: service?.connectionId || undefined,
       repositoryId: service?.repositoryId || undefined,
       name: service?.name ?? '',
@@ -2686,6 +2772,75 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
 
   function openServiceDetail(service: ProjectService): void {
     setDetailServiceId(service.id)
+  }
+
+  async function openServiceEnvironmentLogs(service: ProjectService, environmentName: string, mode: ServiceLogMode): Promise<void> {
+    const environment = service.environments.find((item) => item.name === environmentName)
+
+    if (!environment) {
+      message.warning('这个环境还没有同步到日志所需信息')
+      return
+    }
+
+    setServiceLogDrawer({ service, environment, mode })
+    setServiceLogLines([])
+    setServiceLogError('')
+
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setServiceLogLoading(true)
+
+    try {
+      const lines =
+        mode === 'runtime'
+          ? await window.forgeDesk.listServiceRuntimeLogs(service.id, environment.name)
+          : await window.forgeDesk.listServiceEnvironmentLogs(service.id, environment.name)
+      setServiceLogLines(lines)
+    } catch (error) {
+      setServiceLogError(getErrorMessage(error))
+    } finally {
+      setServiceLogLoading(false)
+    }
+  }
+
+  function openRailwayProjectAliasModal(projectGroup: RailwayProjectServiceGroup): void {
+    setEditingRailwayProjectGroup(projectGroup)
+    railwayProjectAliasForm.setFieldsValue({
+      alias: projectGroup.alias || projectGroup.externalProjectName || projectGroup.externalProjectId
+    })
+  }
+
+  async function saveRailwayProjectAlias(): Promise<void> {
+    if (!window.forgeDesk || !editingRailwayProjectGroup) {
+      return
+    }
+
+    const values = await railwayProjectAliasForm.validateFields()
+    setSavingRailwayProjectAlias(true)
+
+    try {
+      const nextAllServices = await window.forgeDesk.saveServiceExternalProjectAlias({
+        provider: 'railway',
+        externalProjectId: editingRailwayProjectGroup.externalProjectId,
+        alias: values.alias
+      })
+      setAllServices(nextAllServices)
+      setServices(project ? await window.forgeDesk.listProjectServices(project.id) : nextAllServices)
+      setEditingRailwayProjectGroup(null)
+      railwayProjectAliasForm.resetFields()
+      message.success('Railway 项目显示名已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingRailwayProjectAlias(false)
+    }
+  }
+
+  function updateServiceState(nextService: ProjectService): void {
+    setAllServices((currentServices) => currentServices.map((service) => (service.id === nextService.id ? nextService : service)))
+    setServices((currentServices) => currentServices.map((service) => (service.id === nextService.id ? nextService : service)))
   }
 
   async function saveService(): Promise<void> {
@@ -2705,6 +2860,8 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
         repositoryId: values.repositoryId,
         name: values.name.trim(),
         externalProjectId: values.externalProjectId,
+        externalProjectName: editingService?.externalProjectName,
+        externalProjectAlias: editingService?.externalProjectAlias,
         externalServiceId: values.externalServiceId,
         defaultEnvironment: values.defaultEnvironment,
         healthPath: values.healthPath || '/',
@@ -2865,16 +3022,129 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
     }
   ]
 
+  const railwayEnvironmentServiceColumns = (environmentName: string): ColumnsType<ProjectService> => [
+    {
+      title: '服务',
+      key: 'service',
+      width: 240,
+      render: (_, service) => {
+        const environment = service.environments.find((item) => item.name === environmentName)
+
+        return (
+          <Space direction="vertical" size={2}>
+            <Space size={6}>
+              <Button
+                type="link"
+                className="table-link-button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  openServiceDetail(service)
+                }}
+              >
+                {service.name}
+              </Button>
+              <Tag color={service.enabled ? 'green' : 'default'}>{service.enabled ? '启用' : '停用'}</Tag>
+            </Space>
+            <Typography.Text type="secondary">{environment?.deploymentStatus || '未同步部署'}</Typography.Text>
+          </Space>
+        )
+      }
+    },
+    {
+      title: '部署',
+      key: 'deployment',
+      render: (_, service) => {
+        const environment = service.environments.find((item) => item.name === environmentName)
+
+        return environment?.latestDeploymentUrl ? <TableText value={environment.latestDeploymentUrl} /> : <Typography.Text type="secondary">-</Typography.Text>
+      }
+    },
+    {
+      title: '域名',
+      key: 'domains',
+      render: (_, service) => {
+        const domains = getMonitorableServiceDomains(service).filter((domain) => !domain.environmentName || domain.environmentName === environmentName)
+
+        return (
+          <Space direction="vertical" size={2}>
+            {domains.length > 0 ? domains.map((domain) => <TableText key={domain.id} value={domain.domain} />) : <Typography.Text type="secondary">暂无域名</Typography.Text>}
+          </Space>
+        )
+      }
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 230,
+      render: (_, service) => {
+        const logActions = getServiceEnvironmentLogActions(service, environmentName)
+
+        return (
+          <Space wrap size={6}>
+            {logActions.map((action) => (
+              <Button
+                key={action.mode}
+                size="small"
+                icon={<FileTextOutlined />}
+                aria-label={action.label}
+                title={action.label}
+                disabled={action.disabled}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void openServiceEnvironmentLogs(service, environmentName, action.mode)
+                }}
+              >
+                {action.compactLabel}
+              </Button>
+            ))}
+            <Button
+              size="small"
+              icon={<FileTextOutlined />}
+              onClick={(event) => {
+                event.stopPropagation()
+                openServiceDetail(service)
+              }}
+            >
+              详情
+            </Button>
+            <Button
+              size="small"
+              icon={<EditOutlined />}
+              onClick={(event) => {
+                event.stopPropagation()
+                openServiceModal(service)
+              }}
+            >
+              编辑
+            </Button>
+          </Space>
+        )
+      }
+    }
+  ]
+
   const connectionProvider = Form.useWatch('provider', connectionForm) ?? editingConnection?.provider ?? 'vercel'
+  const connectionRailwayTokenType = Form.useWatch('railwayTokenType', connectionForm) ?? editingConnection?.railwayTokenType ?? 'workspace'
   const connectionGuide = getServiceProviderGuide(connectionProvider)
   const serviceProvider = Form.useWatch('provider', serviceForm) ?? editingService?.provider ?? 'vercel'
   const serviceGuide = getServiceProviderGuide(serviceProvider)
   const boundServiceIds = new Set(services.map((service) => service.id))
+  const connectionSections = createServiceProviderSections(connections)
+  const serviceSections = createServiceProviderSections(services)
+  const providerOverview = createServiceProviderOverview(connections, services)
+  const visibleConnectionSections = selectedServiceProvider
+    ? connectionSections.filter((section) => section.provider === selectedServiceProvider)
+    : connectionSections
+  const visibleServiceSections = selectedServiceProvider
+    ? serviceSections.filter((section) => section.provider === selectedServiceProvider)
+    : serviceSections
+  const selectedServiceProviderLabel = selectedServiceProvider ? getServiceProviderLabel(selectedServiceProvider) : ''
   const detailService = detailServiceId
     ? services.find((service) => service.id === detailServiceId) ?? allServices.find((service) => service.id === detailServiceId) ?? null
     : null
-  const bindableServiceOptions = allServices
-    .filter((service) => !boundServiceIds.has(service.id))
+  const bindableServices = allServices.filter((service) => !boundServiceIds.has(service.id))
+  const bindableServiceOptions = bindableServices
+    .filter((service) => !bindingProvider || service.provider === bindingProvider)
     .map((service) => ({
       label: `${getServiceProviderLabel(service.provider)} · ${service.name}`,
       value: service.id
@@ -2882,263 +3152,476 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
 
   return (
     <Space direction="vertical" size={16} className="project-service-settings">
-      {isProjectMode ? (
-        <Alert
-          type="info"
-          showIcon
-          message="项目只绑定服务，不保存平台 Token"
-          description="Vercel / Railway Token 和同步出来的服务在“设置 / 服务中心”维护；这里只选择哪些服务属于当前项目。"
-        />
+      {!isProjectMode && !selectedServiceProvider ? (
+        <div className="service-provider-entry-grid">
+          {providerOverview.map((entry) => (
+            <button key={entry.provider} type="button" className="service-provider-entry-card" onClick={() => setSelectedServiceProvider(entry.provider)}>
+              <div className="service-provider-entry-heading">
+                <Tag>{entry.label}</Tag>
+                <Typography.Title level={4}>{entry.label}</Typography.Title>
+              </div>
+              <div className="service-provider-entry-stats">
+                <Statistic title="平台连接" value={entry.connectionCount} />
+                <Statistic title="服务" value={entry.serviceCount} />
+              </div>
+              <span className="service-provider-entry-action">
+                进入 <ArrowRightOutlined />
+              </span>
+            </button>
+          ))}
+        </div>
       ) : (
         <>
-          <div className="service-guide-grid">
-            <ServiceProviderGuidePanel provider="vercel" />
-            <ServiceProviderGuidePanel provider="railway" />
-          </div>
+          {isProjectMode ? (
+            <Alert
+              type="info"
+              showIcon
+              message="项目只绑定服务，不保存平台 Token"
+              description="Vercel / Railway Token 和同步出来的服务在“设置 / 服务中心”维护；这里只选择哪些服务属于当前项目。"
+            />
+          ) : (
+            <>
+              <div className="service-provider-detail-heading">
+                <Button icon={<ArrowLeftOutlined />} onClick={() => setSelectedServiceProvider(null)}>
+                  平台入口
+                </Button>
+                <Space direction="vertical" size={2}>
+                  <Space size={8} wrap>
+                    <Tag>{selectedServiceProviderLabel}</Tag>
+                    <Typography.Title level={4}>{selectedServiceProviderLabel} 服务详情</Typography.Title>
+                  </Space>
+                  <Typography.Text type="secondary">配置说明、平台连接和同步服务都在这里维护。</Typography.Text>
+                </Space>
+              </div>
+
+              <div className="service-guide-grid service-guide-grid-single">
+                {selectedServiceProvider ? <ServiceProviderGuidePanel provider={selectedServiceProvider} /> : null}
+              </div>
+
+              <div className="remote-manager-toolbar service-settings-toolbar">
+                <Typography.Title level={4}>平台连接</Typography.Title>
+                <Space wrap>
+                  <Button icon={<ReloadOutlined />} loading={syncingConnectionId === 'all'} disabled={connections.length === 0} onClick={() => syncConnection()}>
+                    同步全部
+                  </Button>
+                </Space>
+              </div>
+              <div className="service-provider-section-list">
+                {visibleConnectionSections.map((section) => (
+                  <div key={section.provider} className="service-provider-section">
+                    <div className="service-provider-section-heading">
+                      <Space size={8} wrap>
+                        <Tag>{section.label}</Tag>
+                        <Typography.Text strong>{section.label} 平台连接</Typography.Text>
+                        <Typography.Text type="secondary">{section.items.length} 个连接</Typography.Text>
+                      </Space>
+                      <Button type="primary" icon={<PlusOutlined />} onClick={() => openConnectionModal(undefined, section.provider)}>
+                        新增 {section.label} 连接
+                      </Button>
+                    </div>
+                    <Table
+                      rowKey="id"
+                      size="small"
+                      loading={loading}
+                      columns={connectionColumns}
+                      dataSource={section.items}
+                      pagination={false}
+                      scroll={{ x: 920 }}
+                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无 ${section.label} 连接`} /> }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
 
           <div className="remote-manager-toolbar service-settings-toolbar">
-            <Typography.Title level={4}>平台连接</Typography.Title>
-            <Space wrap>
-              <Button icon={<ReloadOutlined />} loading={syncingConnectionId === 'all'} disabled={connections.length === 0} onClick={() => syncConnection()}>
-                同步全部
-              </Button>
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => openConnectionModal()}>
-                新增连接
-              </Button>
-            </Space>
+            <Typography.Title level={4}>{isProjectMode ? '已绑定服务' : `${selectedServiceProviderLabel} 服务`}</Typography.Title>
           </div>
-          <Table
-            rowKey="id"
-            size="small"
-            loading={loading}
-            columns={connectionColumns}
-            dataSource={connections}
-            pagination={false}
-            scroll={{ x: 920 }}
-            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无服务平台连接" /> }}
-          />
+          <div className="service-provider-section-list">
+            {visibleServiceSections.map((section) => {
+              const bindableCount = bindableServices.filter((service) => service.provider === section.provider).length
+              const railwayGroups = section.provider === 'railway' ? createRailwayProjectEnvironmentGroups(section.items) : []
+
+              return (
+                <div key={section.provider} className="service-provider-section">
+                  <div className="service-provider-section-heading">
+                    <Space size={8} wrap>
+                      <Tag>{section.label}</Tag>
+                      <Typography.Text strong>{section.label} 服务</Typography.Text>
+                      <Typography.Text type="secondary">{section.items.length} 个服务</Typography.Text>
+                    </Space>
+                    <Space wrap>
+                      {isProjectMode ? (
+                        <Button icon={<LinkOutlined />} disabled={bindableCount === 0} onClick={() => openBindingModal(section.provider)}>
+                          绑定已有服务
+                        </Button>
+                      ) : null}
+                      <Button type="primary" icon={<PlusOutlined />} onClick={() => openServiceModal(undefined, section.provider)}>
+                        {isProjectMode ? '新增并绑定' : `新增 ${section.label} 服务`}
+                      </Button>
+                    </Space>
+                  </div>
+                  {section.provider === 'railway' ? (
+                    railwayGroups.length > 0 ? (
+                      <Collapse
+                        className="railway-project-service-tree"
+                        items={railwayGroups.map((projectGroup) => ({
+                          key: projectGroup.id,
+                          label: (
+                            <Space size={8} wrap>
+                              <Typography.Text strong>{projectGroup.name}</Typography.Text>
+                              {projectGroup.alias ? <Tag color="purple">自定义</Tag> : null}
+                              <Tag>{projectGroup.environments.length} 环境</Tag>
+                              <Typography.Text type="secondary">{projectGroup.serviceCount} 个服务</Typography.Text>
+                              <Button
+                                size="small"
+                                icon={<EditOutlined />}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  openRailwayProjectAliasModal(projectGroup)
+                                }}
+                              >
+                                重命名
+                              </Button>
+                            </Space>
+                          ),
+                          children: (
+                            <Collapse
+                              ghost
+                              className="railway-environment-service-tree"
+                              items={projectGroup.environments.map((environmentGroup) => ({
+                                key: `${projectGroup.id}:${environmentGroup.id}`,
+                                label: (
+                                  <Space size={8} wrap>
+                                    <Tag color="blue">{environmentGroup.name}</Tag>
+                                    <Typography.Text type="secondary">{environmentGroup.services.length} 个服务</Typography.Text>
+                                  </Space>
+                                ),
+                                children: (
+                                  <Table
+                                    rowKey="id"
+                                    size="small"
+                                    loading={loading}
+                                    columns={railwayEnvironmentServiceColumns(environmentGroup.name)}
+                                    dataSource={environmentGroup.services}
+                                    pagination={false}
+                                    onRow={(service) => ({
+                                      className: 'clickable-table-row',
+                                      onClick: () => openServiceDetail(service)
+                                    })}
+                                    scroll={{ x: getRailwayEnvironmentServiceTableScrollX() }}
+                                  />
+                                )
+                              }))}
+                            />
+                          )
+                        }))}
+                      />
+                    ) : (
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={isProjectMode ? '当前项目还没有绑定 Railway 服务' : '暂无 Railway 服务配置'} />
+                    )
+                  ) : (
+                    <Table
+                      rowKey="id"
+                      size="small"
+                      loading={loading}
+                      columns={serviceColumns}
+                      dataSource={section.items}
+                      pagination={false}
+                      onRow={(service) => ({
+                        className: 'clickable-table-row',
+                        onClick: () => openServiceDetail(service)
+                      })}
+                      scroll={{ x: 980 }}
+                      locale={{
+                        emptyText: (
+                          <Empty
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                            description={isProjectMode ? `当前项目还没有绑定 ${section.label} 服务` : `暂无 ${section.label} 服务配置`}
+                          />
+                        )
+                      }}
+                    />
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </>
       )}
 
-      <div className="remote-manager-toolbar service-settings-toolbar">
-        <Typography.Title level={4}>{isProjectMode ? '已绑定服务' : '全部服务'}</Typography.Title>
-        <Space wrap>
-          {isProjectMode ? (
-            <Button icon={<LinkOutlined />} disabled={bindableServiceOptions.length === 0} onClick={openBindingModal}>
-              绑定已有服务
-            </Button>
-          ) : null}
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => openServiceModal()}>
-            {isProjectMode ? '新增并绑定' : '新增服务'}
-          </Button>
-        </Space>
-      </div>
-      <Table
-        rowKey="id"
-        size="small"
-        loading={loading}
-        columns={serviceColumns}
-        dataSource={services}
-        pagination={false}
-        onRow={(service) => ({
-          className: 'clickable-table-row',
-          onClick: () => openServiceDetail(service)
-        })}
-        scroll={{ x: 980 }}
-        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={isProjectMode ? '当前项目还没有绑定服务' : '暂无服务配置'} /> }}
-      />
+      {!isProjectMode && !selectedServiceProvider ? null : (
+        <>
+          <ServiceDetailDrawer
+            service={detailService}
+            open={Boolean(detailService)}
+            onClose={() => setDetailServiceId(null)}
+            onServiceChange={updateServiceState}
+            onEdit={(service) => {
+              setDetailServiceId(null)
+              openServiceModal(service)
+            }}
+          />
 
-      <ServiceDetailDrawer
-        service={detailService}
-        open={Boolean(detailService)}
-        onClose={() => setDetailServiceId(null)}
-        onEdit={(service) => {
-          setDetailServiceId(null)
-          openServiceModal(service)
-        }}
-      />
+          <Drawer
+            title={
+              serviceLogDrawer
+                ? `${serviceLogDrawer.service.name} / ${serviceLogDrawer.environment.name} ${serviceLogDrawer.mode === 'runtime' ? '运行日志' : '构建日志'}`
+                : '服务日志'
+            }
+            open={Boolean(serviceLogDrawer)}
+            width={760}
+            onClose={() => {
+              setServiceLogDrawer(null)
+              setServiceLogLines([])
+              setServiceLogError('')
+            }}
+          >
+            <Spin spinning={serviceLogLoading}>
+              {serviceLogError ? <Alert type="warning" showIcon message="日志暂不可用" description={serviceLogError} /> : null}
+              {!serviceLogError && serviceLogLines.length === 0 && !serviceLogLoading ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日志" /> : null}
+              <Space direction="vertical" size={8} className="service-log-lines">
+                {serviceLogLines.map((line, index) => (
+                  <div key={`${line.timestamp}-${index}`} className="service-log-line">
+                    <Typography.Text type="secondary">{formatDateTime(line.timestamp)}</Typography.Text>
+                    <Tag>{line.level || 'log'}</Tag>
+                    <Typography.Text>{line.message || '-'}</Typography.Text>
+                  </div>
+                ))}
+              </Space>
+            </Spin>
+          </Drawer>
 
-      <Modal
-        title="绑定已有服务"
-        open={bindingModalOpen}
-        okText="绑定"
-        cancelText="取消"
-        confirmLoading={savingBinding}
-        onOk={saveServiceBinding}
-        onCancel={() => {
-          setBindingModalOpen(false)
-          bindingForm.resetFields()
-        }}
-      >
-        <Form form={bindingForm} layout="vertical">
-          <Form.Item name="serviceId" label="服务" rules={[{ required: true, message: '请选择服务' }]}>
-            <Select
-              showSearch
-              placeholder="选择服务中心里的服务"
-              options={bindableServiceOptions}
-              optionFilterProp="label"
-              notFoundContent="没有可绑定的服务"
-            />
-          </Form.Item>
-          <Form.Item name="repositoryId" label="关联仓库">
-            <Select allowClear options={repositories.map((repository) => ({ label: repository.name, value: repository.id }))} />
-          </Form.Item>
-        </Form>
-      </Modal>
+          <Modal
+            title={editingRailwayProjectGroup ? `重命名 Railway 项目：${editingRailwayProjectGroup.externalProjectName || editingRailwayProjectGroup.externalProjectId}` : '重命名 Railway 项目'}
+            open={Boolean(editingRailwayProjectGroup)}
+            okText="保存"
+            cancelText="取消"
+            confirmLoading={savingRailwayProjectAlias}
+            onOk={saveRailwayProjectAlias}
+            onCancel={() => {
+              setEditingRailwayProjectGroup(null)
+              railwayProjectAliasForm.resetFields()
+            }}
+          >
+            <Form form={railwayProjectAliasForm} layout="vertical">
+              <Form.Item name="alias" label="本地显示名" extra="只影响 ForgeDesk 里的显示，不会修改 Railway 项目名称；留空会恢复同步名称或 Project ID。">
+                <Input placeholder={editingRailwayProjectGroup?.externalProjectName || editingRailwayProjectGroup?.externalProjectId || '例如 数据中心'} />
+              </Form.Item>
+            </Form>
+          </Modal>
 
-      <Modal
-        title={editingConnection ? `编辑连接：${editingConnection.name}` : '新增服务连接'}
-        open={connectionModalOpen}
-        okText="保存"
-        cancelText="取消"
-        confirmLoading={savingConnection}
-        onOk={saveConnection}
-        onCancel={() => {
-          setConnectionModalOpen(false)
-          setEditingConnection(null)
-          connectionForm.resetFields()
-        }}
-      >
-        <Form form={connectionForm} layout="vertical">
-          <Row gutter={[12, 0]}>
-            <Col span={12}>
-              <Form.Item name="provider" label="平台" rules={[{ required: true, message: '请选择平台' }]}>
+          <Modal
+            title={bindingProvider ? `绑定 ${getServiceProviderLabel(bindingProvider)} 服务` : '绑定已有服务'}
+            open={bindingModalOpen}
+            okText="绑定"
+            cancelText="取消"
+            confirmLoading={savingBinding}
+            onOk={saveServiceBinding}
+            onCancel={() => {
+              setBindingModalOpen(false)
+              setBindingProvider(null)
+              bindingForm.resetFields()
+            }}
+          >
+            <Form form={bindingForm} layout="vertical">
+              <Form.Item name="serviceId" label="服务" rules={[{ required: true, message: '请选择服务' }]}>
                 <Select
-                  options={[
-                    { label: 'Vercel', value: 'vercel' },
-                    { label: 'Railway', value: 'railway' }
-                  ]}
+                  showSearch
+                  placeholder="选择服务中心里的服务"
+                  options={bindableServiceOptions}
+                  optionFilterProp="label"
+                  notFoundContent={bindingProvider ? `没有可绑定的 ${getServiceProviderLabel(bindingProvider)} 服务` : '没有可绑定的服务'}
                 />
               </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="name" label="连接名称" rules={[{ required: true, message: '请输入连接名称' }]}>
-                <Input placeholder="Production" />
+              <Form.Item name="repositoryId" label="关联仓库">
+                <Select allowClear options={repositories.map((repository) => ({ label: repository.name, value: repository.id }))} />
               </Form.Item>
-            </Col>
-          </Row>
-          <Form.Item name="token" label="Token">
-            <Input.Password placeholder={editingConnection?.tokenConfigured ? '已保存，留空不变' : '平台 API Token'} />
-          </Form.Item>
-          <Alert
-            className="service-guide-alert"
-            type="info"
-            showIcon
-            message={`${connectionGuide.title} 配置提示`}
-            description={
-              <Space direction="vertical" size={8}>
-                <Typography.Text>{connectionGuide.steps[0]}</Typography.Text>
-                <Space wrap>
-                  <Button size="small" icon={<LinkOutlined />} href={connectionGuide.primaryTokenUrl} target="_blank" rel="noreferrer">
-                    打开 Token 页面
-                  </Button>
-                  <Button size="small" href={connectionGuide.docsUrl} target="_blank" rel="noreferrer">
-                    打开 API 文档
-                  </Button>
-                </Space>
-              </Space>
-            }
-          />
-          {connectionProvider === 'vercel' ? (
-            <Form.Item name="teamId" label="Vercel Team ID">
-              <Input placeholder="团队项目填写 team_xxx，个人项目可留空" />
-            </Form.Item>
-          ) : (
-            <Row gutter={[12, 0]}>
-              <Col span={12}>
-                <Form.Item name="railwayTokenType" label="Railway Token 类型">
-                  <Select
-                    options={[
-                      { label: 'Workspace', value: 'workspace' },
-                      { label: 'Account', value: 'account' },
-                      { label: 'Project', value: 'project' }
-                    ]}
-                  />
-                </Form.Item>
-              </Col>
-              <Col span={12}>
-                <Form.Item name="workspaceId" label="Workspace ID">
-                  <Input placeholder="可选" />
-                </Form.Item>
-              </Col>
-            </Row>
-          )}
-        </Form>
-      </Modal>
+            </Form>
+          </Modal>
 
-      <Modal
-        title={editingService ? `编辑服务：${editingService.name}` : '新增服务'}
-        open={serviceModalOpen}
-        okText="保存"
-        cancelText="取消"
-        confirmLoading={savingService}
-        onOk={saveService}
-        onCancel={() => {
-          setServiceModalOpen(false)
-          setEditingService(null)
-          serviceForm.resetFields()
-        }}
-      >
-        <Form form={serviceForm} layout="vertical">
-          <Row gutter={[12, 0]}>
-            <Col span={12}>
-              <Form.Item name="provider" label="平台" rules={[{ required: true, message: '请选择平台' }]}>
-                <Select
-                  options={[
-                    { label: 'Vercel', value: 'vercel' },
-                    { label: 'Railway', value: 'railway' }
-                  ]}
-                />
+          <Modal
+            title={editingConnection ? `编辑连接：${editingConnection.name}` : '新增服务连接'}
+            open={connectionModalOpen}
+            okText="保存"
+            cancelText="取消"
+            confirmLoading={savingConnection}
+            onOk={saveConnection}
+            onCancel={() => {
+              setConnectionModalOpen(false)
+              setEditingConnection(null)
+              connectionForm.resetFields()
+            }}
+          >
+            <Form form={connectionForm} layout="vertical">
+              <Row gutter={[12, 0]}>
+                <Col span={12}>
+                  <Form.Item name="provider" label="平台" rules={[{ required: true, message: '请选择平台' }]}>
+                    <Select
+                      options={[
+                        { label: 'Vercel', value: 'vercel' },
+                        { label: 'Railway', value: 'railway' }
+                      ]}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="name" label="连接名称" rules={[{ required: true, message: '请输入连接名称' }]}>
+                    <Input placeholder="Production" />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Form.Item name="token" label="Token">
+                <Input.Password placeholder={editingConnection?.tokenConfigured ? '已保存，留空不变' : '平台 API Token'} />
               </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="name" label="服务名称" rules={[{ required: true, message: '请输入服务名称' }]}>
-                <Input placeholder="web" />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Alert
-            className="service-guide-alert"
-            type="info"
-            showIcon
-            message={`${serviceGuide.title} 服务配置提示`}
-            description={
-              <Space direction="vertical" size={8}>
-                <Typography.Text>
-                  {serviceProvider === 'railway'
-                    ? 'Railway 项目里可用 Cmd/Ctrl+K 复制 Project、Service 或 Environment ID；Project Token 也在项目设置的 Tokens 页面创建。'
-                    : 'Vercel 通常同步后会自动带出项目和域名；团队项目请先在连接里填写 Team ID。'}
-                </Typography.Text>
-                <Space wrap>
-                  <Button size="small" href={serviceGuide.dashboardUrl} target="_blank" rel="noreferrer">
-                    打开控制台
-                  </Button>
-                  {serviceGuide.projectTokenDocsUrl ? (
-                    <Button size="small" href={serviceGuide.projectTokenDocsUrl} target="_blank" rel="noreferrer">
-                      Project Token
-                    </Button>
-                  ) : null}
-                  <Button size="small" href={serviceGuide.docsUrl} target="_blank" rel="noreferrer">
-                    API 文档
-                  </Button>
-                </Space>
-              </Space>
-            }
-          />
-          <Row gutter={[12, 0]}>
-            <Col span={isProjectMode ? 12 : 24}>
-              <Form.Item name="connectionId" label="平台连接">
-                <Select allowClear options={connections.map((connection) => ({ label: connection.name, value: connection.id }))} />
-              </Form.Item>
-            </Col>
-            {isProjectMode ? (
-              <Col span={12}>
-                <Form.Item name="repositoryId" label="关联仓库">
-                  <Select allowClear options={repositories.map((repository) => ({ label: repository.name, value: repository.id }))} />
+              <Alert
+                className="service-guide-alert"
+                type="info"
+                showIcon
+                message={`${connectionGuide.title} 配置提示`}
+                description={
+                  <Space direction="vertical" size={8}>
+                    {connectionGuide.steps.slice(0, connectionProvider === 'railway' ? 2 : 1).map((step) => (
+                      <Typography.Text key={step}>{step}</Typography.Text>
+                    ))}
+                    <Space wrap>
+                      <Button size="small" icon={<LinkOutlined />} href={connectionGuide.primaryTokenUrl} target="_blank" rel="noreferrer">
+                        打开 Token 页面
+                      </Button>
+                      <Button size="small" href={connectionGuide.docsUrl} target="_blank" rel="noreferrer">
+                        打开 API 文档
+                      </Button>
+                    </Space>
+                  </Space>
+                }
+              />
+              {connectionProvider === 'vercel' ? (
+                <Form.Item name="teamId" label="Vercel Team ID">
+                  <Input placeholder="团队项目填写 team_xxx，个人项目可留空" />
                 </Form.Item>
-              </Col>
-            ) : null}
-          </Row>
+              ) : (
+                <Row gutter={[12, 0]}>
+                  <Col span={12}>
+                    <Form.Item name="railwayTokenType" label="Railway Token 类型">
+                      <Select
+                        options={[
+                          { label: 'Workspace', value: 'workspace' },
+                          { label: 'Account', value: 'account' },
+                          { label: 'Project', value: 'project' }
+                        ]}
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item
+                      name="workspaceId"
+                      label="Workspace ID"
+                      rules={
+                        connectionProvider === 'railway' && connectionRailwayTokenType === 'workspace'
+                          ? [{ required: true, message: 'Workspace Token 需要填写 Workspace ID' }]
+                          : []
+                      }
+                      extra={
+                        connectionRailwayTokenType === 'account'
+                          ? '不填时会同步个人项目并尝试发现 Workspace；如果同步不到服务，请填写目标 Workspace ID。'
+                          : undefined
+                      }
+                    >
+                      <Input
+                        placeholder={
+                          connectionRailwayTokenType === 'workspace'
+                            ? 'Workspace Token 必填'
+                            : connectionRailwayTokenType === 'account'
+                              ? '个人项目可留空，Workspace 项目建议填写'
+                              : 'Project Token 可留空'
+                        }
+                      />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              )}
+            </Form>
+          </Modal>
+
+          <Modal
+            title={editingService ? `编辑服务：${editingService.name}` : '新增服务'}
+            open={serviceModalOpen}
+            okText="保存"
+            cancelText="取消"
+            confirmLoading={savingService}
+            onOk={saveService}
+            onCancel={() => {
+              setServiceModalOpen(false)
+              setEditingService(null)
+              serviceForm.resetFields()
+            }}
+          >
+            <Form form={serviceForm} layout="vertical">
+              <Row gutter={[12, 0]}>
+                <Col span={12}>
+                  <Form.Item name="provider" label="平台" rules={[{ required: true, message: '请选择平台' }]}>
+                    <Select
+                      options={[
+                        { label: 'Vercel', value: 'vercel' },
+                        { label: 'Railway', value: 'railway' }
+                      ]}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="name" label="服务名称" rules={[{ required: true, message: '请输入服务名称' }]}>
+                    <Input placeholder="web" />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Alert
+                className="service-guide-alert"
+                type="info"
+                showIcon
+                message={`${serviceGuide.title} 服务配置提示`}
+                description={
+                  <Space direction="vertical" size={8}>
+                    <Typography.Text>
+                      {serviceProvider === 'railway'
+                        ? 'Railway 项目里可用 Cmd/Ctrl+K 复制 Project、Service 或 Environment ID；Project Token 也在项目设置的 Tokens 页面创建。'
+                        : 'Vercel 通常同步后会自动带出项目和域名；团队项目请先在连接里填写 Team ID。'}
+                    </Typography.Text>
+                    <Space wrap>
+                      <Button size="small" href={serviceGuide.dashboardUrl} target="_blank" rel="noreferrer">
+                        打开控制台
+                      </Button>
+                      {serviceGuide.projectTokenDocsUrl ? (
+                        <Button size="small" href={serviceGuide.projectTokenDocsUrl} target="_blank" rel="noreferrer">
+                          Project Token
+                        </Button>
+                      ) : null}
+                      <Button size="small" href={serviceGuide.docsUrl} target="_blank" rel="noreferrer">
+                        API 文档
+                      </Button>
+                    </Space>
+                  </Space>
+                }
+              />
+              <Row gutter={[12, 0]}>
+                <Col span={isProjectMode ? 12 : 24}>
+                  <Form.Item name="connectionId" label="平台连接">
+                    <Select
+                      allowClear
+                      options={connections
+                        .filter((connection) => connection.provider === serviceProvider)
+                        .map((connection) => ({ label: connection.name, value: connection.id }))}
+                    />
+                  </Form.Item>
+                </Col>
+                {isProjectMode ? (
+                  <Col span={12}>
+                    <Form.Item name="repositoryId" label="关联仓库">
+                      <Select allowClear options={repositories.map((repository) => ({ label: repository.name, value: repository.id }))} />
+                    </Form.Item>
+                  </Col>
+                ) : null}
+              </Row>
           <Row gutter={[12, 0]}>
             <Col span={12}>
               <Form.Item name="externalProjectId" label="平台项目 ID">
@@ -3171,6 +3654,8 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
           </Form.Item>
         </Form>
       </Modal>
+        </>
+      )}
     </Space>
   )
 }
@@ -3179,36 +3664,98 @@ function ServiceDetailDrawer({
   service,
   open,
   onClose,
+  onServiceChange,
   onEdit
 }: {
   service: ProjectService | null
   open: boolean
   onClose: () => void
+  onServiceChange: (service: ProjectService) => void
   onEdit: (service: ProjectService) => void
 }): JSX.Element {
+  const [liveService, setLiveService] = useState<ProjectService | null>(null)
+  const activeService = liveService ?? service
   const [logEnvironment, setLogEnvironment] = useState<ProjectServiceEnvironment | null>(null)
+  const [logMode, setLogMode] = useState<'build' | 'runtime'>('build')
   const [logLines, setLogLines] = useState<ServiceEnvironmentLogLine[]>([])
   const [logLoading, setLogLoading] = useState(false)
   const [logError, setLogError] = useState('')
+  const [activeTab, setActiveTab] = useState('environments')
+  const [deployments, setDeployments] = useState<ServiceDeploymentSummary[]>([])
+  const [deploymentsLoading, setDeploymentsLoading] = useState(false)
+  const [deploymentsError, setDeploymentsError] = useState('')
+  const [envVars, setEnvVars] = useState<ServiceEnvVarRecord[]>([])
+  const [envVarsLoading, setEnvVarsLoading] = useState(false)
+  const [envVarsError, setEnvVarsError] = useState('')
+  const [envModalOpen, setEnvModalOpen] = useState(false)
+  const [editingEnvVar, setEditingEnvVar] = useState<ServiceEnvVarRecord | null>(null)
+  const [savingEnvVar, setSavingEnvVar] = useState(false)
+  const [revealedEnvValues, setRevealedEnvValues] = useState<Record<string, string>>({})
+  const [workingEnvVarId, setWorkingEnvVarId] = useState<string | null>(null)
+  const [domainModalOpen, setDomainModalOpen] = useState(false)
+  const [savingDomain, setSavingDomain] = useState(false)
+  const [workingDomain, setWorkingDomain] = useState<string | null>(null)
+  const [domainConfig, setDomainConfig] = useState<{ domain: string; config: VercelDomainConfig } | null>(null)
+  const [envForm] = Form.useForm<VercelEnvVarForm>()
+  const [domainForm] = Form.useForm<VercelDomainForm>()
+
+  function applyServiceUpdate(nextService: ProjectService): void {
+    setLiveService(nextService)
+    onServiceChange(nextService)
+  }
 
   useEffect(() => {
+    setLiveService(service)
+    setActiveTab('environments')
     setLogEnvironment(null)
+    setLogMode('build')
     setLogLines([])
     setLogError('')
+    setDeployments([])
+    setDeploymentsError('')
+    setEnvVars([])
+    setEnvVarsError('')
+    setEnvModalOpen(false)
+    setEditingEnvVar(null)
+    setRevealedEnvValues({})
+    setDomainModalOpen(false)
+    setDomainConfig(null)
   }, [service?.id, open])
 
-  async function loadEnvironmentLogs(environment: ProjectServiceEnvironment): Promise<void> {
-    if (!service || !window.forgeDesk) {
+  async function loadDeployments(): Promise<void> {
+    if (!activeService || !window.forgeDesk || !getServiceProviderCapabilities(activeService.provider).canListDeployments) {
+      return
+    }
+
+    setDeploymentsLoading(true)
+    setDeploymentsError('')
+
+    try {
+      setDeployments(await window.forgeDesk.listServiceDeployments(activeService.id, { limit: 20 }))
+    } catch (error) {
+      setDeploymentsError(getErrorMessage(error))
+    } finally {
+      setDeploymentsLoading(false)
+    }
+  }
+
+  async function loadEnvironmentLogs(environment: ProjectServiceEnvironment, mode: 'build' | 'runtime'): Promise<void> {
+    if (!activeService || !window.forgeDesk) {
       return
     }
 
     setLogEnvironment(environment)
+    setLogMode(mode)
     setLogLines([])
     setLogError('')
     setLogLoading(true)
 
     try {
-      setLogLines(await window.forgeDesk.listServiceEnvironmentLogs(service.id, environment.name))
+      setLogLines(
+        mode === 'runtime'
+          ? await window.forgeDesk.listServiceRuntimeLogs(activeService.id, environment.name)
+          : await window.forgeDesk.listServiceEnvironmentLogs(activeService.id, environment.name)
+      )
     } catch (error) {
       setLogError(getErrorMessage(error))
     } finally {
@@ -3216,8 +3763,252 @@ function ServiceDetailDrawer({
     }
   }
 
-  const summary = service ? createServiceDetailSummary(service) : null
-  const monitorableDomains = service ? getMonitorableServiceDomains(service) : []
+  function runDeploymentAction(deployment: ServiceDeploymentSummary, action: 'redeploy' | 'cancel' | 'promote' | 'rollback'): void {
+    if (!activeService || !window.forgeDesk) {
+      return
+    }
+
+    const actionLabels = {
+      redeploy: '重新部署',
+      cancel: '取消部署',
+      promote: '提升为生产',
+      rollback: '回滚到此部署'
+    }
+    const dangerous = action !== 'redeploy'
+
+    Modal.confirm({
+      title: `${actionLabels[action]} ${deployment.id}？`,
+      content: action === 'promote' || action === 'rollback' ? '这个操作会改变生产流量指向。' : '操作会提交到 Vercel。',
+      okText: actionLabels[action],
+      cancelText: '取消',
+      okButtonProps: { danger: dangerous },
+      onOk: async () => {
+        try {
+          const nextService = await window.forgeDesk.runServiceDeploymentAction(activeService.id, {
+            action,
+            deploymentId: deployment.id,
+            description: action === 'rollback' ? `Rollback from ForgeDesk to ${deployment.id}` : undefined
+          })
+          applyServiceUpdate(nextService)
+          await loadDeployments()
+          message.success(`${actionLabels[action]}已提交`)
+        } catch (error) {
+          message.error(getErrorMessage(error))
+        }
+      }
+    })
+  }
+
+  async function loadEnvVars(): Promise<void> {
+    if (!activeService || !window.forgeDesk || !getServiceProviderCapabilities(activeService.provider).canReadEnvVars) {
+      return
+    }
+
+    setEnvVarsLoading(true)
+    setEnvVarsError('')
+
+    try {
+      setEnvVars(await window.forgeDesk.listServiceEnvVars(activeService.id))
+    } catch (error) {
+      setEnvVarsError(getErrorMessage(error))
+    } finally {
+      setEnvVarsLoading(false)
+    }
+  }
+
+  function openEnvModal(envVar?: ServiceEnvVarRecord): void {
+    setEditingEnvVar(envVar ?? null)
+    envForm.setFieldsValue({
+      key: envVar?.key ?? '',
+      value: '',
+      type: envVar?.type || 'sensitive',
+      target: envVar?.target.length ? envVar.target : ['production'],
+      gitBranch: envVar?.gitBranch ?? '',
+      comment: envVar?.comment ?? ''
+    })
+    setEnvModalOpen(true)
+  }
+
+  async function saveEnvVar(): Promise<void> {
+    if (!activeService || !window.forgeDesk) {
+      return
+    }
+
+    const values = await envForm.validateFields()
+    const target = values.target?.filter(Boolean)
+    const input: VercelEnvVarInput = {
+      id: editingEnvVar?.id,
+      key: values.key.trim(),
+      value: values.value?.trim() || undefined,
+      type: values.type,
+      target: target?.length ? target : ['production'],
+      gitBranch: values.gitBranch?.trim() || undefined,
+      comment: values.comment?.trim() || undefined
+    }
+
+    setSavingEnvVar(true)
+
+    try {
+      await window.forgeDesk.saveServiceEnvVar(activeService.id, input)
+      setEnvModalOpen(false)
+      setEditingEnvVar(null)
+      envForm.resetFields()
+      await loadEnvVars()
+      message.success('环境变量已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingEnvVar(false)
+    }
+  }
+
+  async function revealEnvVar(envVar: ServiceEnvVarRecord): Promise<void> {
+    if (!activeService || !window.forgeDesk) {
+      return
+    }
+
+    setWorkingEnvVarId(envVar.id)
+
+    try {
+      const revealed = await window.forgeDesk.revealServiceEnvVar(activeService.id, envVar.id)
+      setRevealedEnvValues((values) => ({ ...values, [envVar.id]: revealed.value ?? '' }))
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setWorkingEnvVarId(null)
+    }
+  }
+
+  function confirmDeleteEnvVar(envVar: ServiceEnvVarRecord): void {
+    if (!activeService || !window.forgeDesk) {
+      return
+    }
+
+    Modal.confirm({
+      title: `删除环境变量 ${envVar.key}？`,
+      content: '这个操作会从 Vercel 项目中删除该变量。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setWorkingEnvVarId(envVar.id)
+
+        try {
+          await window.forgeDesk.deleteServiceEnvVar(activeService.id, envVar.id)
+          await loadEnvVars()
+          message.success('环境变量已删除')
+        } catch (error) {
+          message.error(getErrorMessage(error))
+        } finally {
+          setWorkingEnvVarId(null)
+        }
+      }
+    })
+  }
+
+  function openDomainModal(): void {
+    domainForm.setFieldsValue({
+      name: '',
+      environmentName: undefined,
+      gitBranch: '',
+      redirect: '',
+      redirectStatusCode: undefined
+    })
+    setDomainModalOpen(true)
+  }
+
+  async function saveDomain(): Promise<void> {
+    if (!activeService || !window.forgeDesk) {
+      return
+    }
+
+    const values = await domainForm.validateFields()
+    setSavingDomain(true)
+
+    try {
+      const nextService = await window.forgeDesk.addServiceDomain(activeService.id, {
+        name: values.name.trim(),
+        environmentName: values.environmentName,
+        gitBranch: values.gitBranch?.trim() || undefined,
+        redirect: values.redirect?.trim() || undefined,
+        redirectStatusCode: values.redirectStatusCode
+      })
+      applyServiceUpdate(nextService)
+      setDomainModalOpen(false)
+      domainForm.resetFields()
+      message.success('域名已添加')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingDomain(false)
+    }
+  }
+
+  function confirmRemoveDomain(domain: ProjectServiceDomain): void {
+    if (!activeService || !window.forgeDesk) {
+      return
+    }
+
+    Modal.confirm({
+      title: `从 Vercel 移除 ${domain.domain}？`,
+      content: '这个操作不会删除 DNS 服务商里的记录。',
+      okText: '移除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setWorkingDomain(domain.domain)
+
+        try {
+          const nextService = await window.forgeDesk.removeServiceDomain(activeService.id, domain.domain, false)
+          applyServiceUpdate(nextService)
+          message.success('域名已移除')
+        } catch (error) {
+          message.error(getErrorMessage(error))
+        } finally {
+          setWorkingDomain(null)
+        }
+      }
+    })
+  }
+
+  async function verifyDomain(domain: ProjectServiceDomain): Promise<void> {
+    if (!activeService || !window.forgeDesk) {
+      return
+    }
+
+    setWorkingDomain(domain.domain)
+
+    try {
+      const nextService = await window.forgeDesk.verifyServiceDomain(activeService.id, domain.domain)
+      applyServiceUpdate(nextService)
+      message.success('域名验证已提交')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setWorkingDomain(null)
+    }
+  }
+
+  async function inspectDomainConfig(domain: ProjectServiceDomain): Promise<void> {
+    if (!activeService || !window.forgeDesk) {
+      return
+    }
+
+    setWorkingDomain(domain.domain)
+
+    try {
+      setDomainConfig({ domain: domain.domain, config: await window.forgeDesk.inspectServiceDomainConfig(activeService.id, domain.domain) })
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setWorkingDomain(null)
+    }
+  }
+
+  const summary = activeService ? createServiceDetailSummary(activeService) : null
+  const monitorableDomains = activeService ? getMonitorableServiceDomains(activeService) : []
+  const serviceCapabilities = activeService ? getServiceProviderCapabilities(activeService.provider) : null
+  const isVercel = activeService?.provider === 'vercel'
   const environmentColumns: ColumnsType<ProjectServiceEnvironment> = [
     {
       title: '环境',
@@ -3247,13 +4038,123 @@ function ServiceDetailDrawer({
     {
       title: '操作',
       key: 'actions',
-      width: 100,
+      width: 190,
       render: (_, environment) => (
-        <Button size="small" icon={<FileTextOutlined />} disabled={!environment.latestDeploymentId} onClick={() => loadEnvironmentLogs(environment)}>
-          日志
-        </Button>
+        <Space wrap size={6}>
+          <Button size="small" icon={<FileTextOutlined />} disabled={!environment.latestDeploymentId} onClick={() => loadEnvironmentLogs(environment, 'build')}>
+            构建
+          </Button>
+          <Button
+            size="small"
+            icon={<FileTextOutlined />}
+            disabled={!serviceCapabilities?.canReadRuntimeLogs || (isVercel ? !environment.latestDeploymentId : !environment.externalEnvironmentId)}
+            onClick={() => loadEnvironmentLogs(environment, 'runtime')}
+          >
+            运行
+          </Button>
+        </Space>
       )
     }
+  ]
+  const deploymentColumns: ColumnsType<ServiceDeploymentSummary> = [
+    { title: '部署', key: 'id', width: 170, render: (_, deployment) => <TableText value={deployment.id || '-'} /> },
+    {
+      title: '状态',
+      key: 'state',
+      width: 150,
+      render: (_, deployment) => (
+        <Space direction="vertical" size={2}>
+          <Tag color={deployment.state === 'READY' ? 'green' : deployment.state === 'ERROR' ? 'red' : 'default'}>{deployment.state || '-'}</Tag>
+          <Typography.Text type="secondary">{deployment.target || '-'}</Typography.Text>
+        </Space>
+      )
+    },
+    { title: '提交', key: 'commit', width: 120, render: (_, deployment) => formatShortCommit(deployment.commitSha) },
+    { title: 'URL', key: 'url', render: (_, deployment) => <TableText value={deployment.url || '-'} /> },
+    { title: '创建时间', key: 'createdAt', width: 170, render: (_, deployment) => formatDateTime(deployment.createdAt) },
+    ...(serviceCapabilities?.canRunDeploymentActions
+      ? [
+          {
+            title: '操作',
+            key: 'actions',
+            width: 300,
+            render: (_: unknown, deployment: ServiceDeploymentSummary) => (
+              <Space wrap size={6}>
+                <Button size="small" icon={<ReloadOutlined />} onClick={() => runDeploymentAction(deployment, 'redeploy')}>
+                  Redeploy
+                </Button>
+                <Button size="small" danger onClick={() => runDeploymentAction(deployment, 'cancel')}>
+                  Cancel
+                </Button>
+                <Button size="small" onClick={() => runDeploymentAction(deployment, 'promote')}>
+                  Promote
+                </Button>
+                <Button size="small" danger onClick={() => runDeploymentAction(deployment, 'rollback')}>
+                  Rollback
+                </Button>
+              </Space>
+            )
+          }
+        ]
+      : [])
+  ]
+  const envColumns: ColumnsType<ServiceEnvVarRecord> = [
+    { title: 'Key', key: 'key', width: 220, render: (_, envVar) => <TableText value={envVar.key} /> },
+    { title: '类型', dataIndex: 'type', key: 'type', width: 120, render: (type) => <Tag>{type}</Tag> },
+    {
+      title: '环境',
+      key: 'target',
+      width: 160,
+      render: (_, envVar) => (envVar.target.length ? envVar.target.join(', ') : envVar.customEnvironmentIds.join(', ') || '-')
+    },
+    { title: '分支', key: 'gitBranch', width: 130, render: (_, envVar) => envVar.gitBranch || '-' },
+    {
+      title: '值',
+      key: 'value',
+      width: 340,
+      render: (_, envVar) => {
+        if (!serviceCapabilities?.canManageEnvVars) {
+          return <Typography.Text type="secondary">只读列表</Typography.Text>
+        }
+
+        const value = revealedEnvValues[envVar.id]
+        const displayValue = value || '••••••••'
+
+        return (
+          <Typography.Text
+            className={value ? 'service-env-value revealed' : 'service-env-value'}
+            code={Boolean(value)}
+            type={value ? undefined : 'secondary'}
+            ellipsis={{ tooltip: displayValue }}
+          >
+            {displayValue}
+          </Typography.Text>
+        )
+      }
+    },
+    { title: '更新时间', key: 'updatedAt', width: 170, render: (_, envVar) => formatDateTime(envVar.updatedAt) },
+    ...(serviceCapabilities?.canManageEnvVars
+      ? [
+          {
+            title: '操作',
+            key: 'actions',
+            width: 230,
+            render: (_: unknown, envVar: ServiceEnvVarRecord) => (
+              <Space wrap size={6}>
+                <Button size="small" loading={workingEnvVarId === envVar.id} onClick={() => revealEnvVar(envVar)}>
+                  查看值
+                </Button>
+                <Button size="small" icon={<EditOutlined />} onClick={() => openEnvModal(envVar)}>
+                  编辑
+                </Button>
+                <Button size="small" danger icon={<DeleteOutlined />} onClick={() => confirmDeleteEnvVar(envVar)}>
+                  删除
+                </Button>
+              </Space>
+            )
+          }
+        ]
+      : [])
   ]
   const domainColumns: ColumnsType<ProjectServiceDomain> = [
     {
@@ -3294,22 +4195,43 @@ function ServiceDetailDrawer({
         ) : (
           '-'
         )
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 220,
+      render: (_, domain) =>
+        serviceCapabilities?.canManageDomains ? (
+          <Space wrap size={6}>
+            <Button size="small" loading={workingDomain === domain.domain} onClick={() => verifyDomain(domain)}>
+              验证
+            </Button>
+            <Button size="small" loading={workingDomain === domain.domain} onClick={() => inspectDomainConfig(domain)}>
+              DNS
+            </Button>
+            <Button size="small" danger icon={<DeleteOutlined />} loading={workingDomain === domain.domain} onClick={() => confirmRemoveDomain(domain)}>
+              移除
+            </Button>
+          </Space>
+        ) : (
+          '-'
+        )
     }
   ]
 
   return (
     <Drawer
-      title={service ? `${service.name} 详情` : '服务详情'}
+      title={activeService ? `${activeService.name} 详情` : '服务详情'}
       open={open}
-      width={860}
+      width={980}
       onClose={onClose}
-      extra={service ? (
-        <Button icon={<EditOutlined />} onClick={() => onEdit(service)}>
+      extra={activeService ? (
+        <Button icon={<EditOutlined />} onClick={() => onEdit(activeService)}>
           编辑
         </Button>
       ) : null}
     >
-      {service && summary ? (
+      {activeService && summary ? (
         <Space direction="vertical" size={16} className="service-detail-drawer">
           <Row gutter={[12, 12]}>
             <Col xs={12} md={6}><div className="metric-tile"><Statistic title="环境" value={summary.environmentCount} /></div></Col>
@@ -3318,16 +4240,26 @@ function ServiceDetailDrawer({
             <Col xs={12} md={6}><div className="metric-tile"><Statistic title="异常 / 离线" value={`${summary.degraded} / ${summary.offline}`} /></div></Col>
           </Row>
           <Descriptions column={2} size="small" bordered>
-            <Descriptions.Item label="平台">{getServiceProviderLabel(service.provider)}</Descriptions.Item>
-            <Descriptions.Item label="状态">{service.enabled ? '启用' : '停用'}</Descriptions.Item>
-            <Descriptions.Item label="平台项目 ID">{service.externalProjectId || '-'}</Descriptions.Item>
-            <Descriptions.Item label="平台服务 ID">{service.externalServiceId || '-'}</Descriptions.Item>
-            <Descriptions.Item label="默认环境">{service.defaultEnvironment || '-'}</Descriptions.Item>
-            <Descriptions.Item label="Health Path">{service.healthPath || '/'}</Descriptions.Item>
-            <Descriptions.Item label="上次同步">{formatDateTime(service.lastSyncedAt)}</Descriptions.Item>
-            <Descriptions.Item label="生成域名">{summary.generatedDomainCount > 0 ? `${summary.generatedDomainCount} 个已隐藏` : '-'}</Descriptions.Item>
+            <Descriptions.Item label="平台">{getServiceProviderLabel(activeService.provider)}</Descriptions.Item>
+            <Descriptions.Item label="状态">{activeService.enabled ? '启用' : '停用'}</Descriptions.Item>
+            <Descriptions.Item label="平台项目 ID">{activeService.externalProjectId || '-'}</Descriptions.Item>
+            <Descriptions.Item label="平台服务 ID">{activeService.externalServiceId || '-'}</Descriptions.Item>
+            <Descriptions.Item label="默认环境">{activeService.defaultEnvironment || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Health Path">{activeService.healthPath || '/'}</Descriptions.Item>
+            <Descriptions.Item label="上次同步">{formatDateTime(activeService.lastSyncedAt)}</Descriptions.Item>
+            <Descriptions.Item label="生成域名">
+              {summary.generatedDomainCount > 0 ? `${summary.generatedDomainCount} 个${activeService.provider === 'railway' ? '可监控' : '已隐藏'}` : '-'}
+            </Descriptions.Item>
           </Descriptions>
           <Tabs
+            activeKey={activeTab}
+            onChange={(key) => {
+              setActiveTab(key)
+
+              if (key === 'env' && envVars.length === 0) {
+                void loadEnvVars()
+              }
+            }}
             items={[
               {
                 key: 'environments',
@@ -3338,14 +4270,35 @@ function ServiceDetailDrawer({
                       rowKey="id"
                       size="small"
                       columns={environmentColumns}
-                      dataSource={service.environments}
+                      dataSource={activeService.environments}
                       pagination={false}
                       scroll={{ x: 920 }}
                       locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无环境数据" /> }}
                     />
+                    {serviceCapabilities?.canListDeployments ? (
+                      <div className="service-detail-log-panel">
+                        <div className="service-detail-toolbar">
+                          <Typography.Title level={5}>部署历史</Typography.Title>
+                          <Button icon={<ReloadOutlined />} loading={deploymentsLoading} onClick={loadDeployments}>
+                            刷新历史
+                          </Button>
+                        </div>
+                        {deploymentsError ? <Alert type="warning" showIcon message="部署历史暂不可用" description={deploymentsError} /> : null}
+                        <Table
+                          rowKey="id"
+                          size="small"
+                          columns={deploymentColumns}
+                          dataSource={deployments}
+                          loading={deploymentsLoading}
+                          pagination={{ pageSize: 5 }}
+                          scroll={{ x: 1040 }}
+                          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无部署历史" /> }}
+                        />
+                      </div>
+                    ) : null}
                     {logEnvironment ? (
                       <div className="service-detail-log-panel">
-                        <Typography.Title level={5}>{logEnvironment.name} 部署日志</Typography.Title>
+                        <Typography.Title level={5}>{logEnvironment.name} {logMode === 'runtime' ? '运行日志' : '构建日志'}</Typography.Title>
                         <Spin spinning={logLoading}>
                           {logError ? <Alert type="warning" showIcon message="日志暂不可用" description={logError} /> : null}
                           {!logError && logLines.length === 0 && !logLoading ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日志" /> : null}
@@ -3365,22 +4318,188 @@ function ServiceDetailDrawer({
                 )
               },
               {
+                key: 'env',
+                label: '环境变量',
+                children: serviceCapabilities?.canReadEnvVars ? (
+                  <Space direction="vertical" size={12} className="service-detail-tab">
+                    <div className="service-detail-toolbar">
+                      <Typography.Title level={5}>环境变量</Typography.Title>
+                      <Space>
+                        <Button icon={<ReloadOutlined />} loading={envVarsLoading} onClick={loadEnvVars}>
+                          刷新
+                        </Button>
+                        {serviceCapabilities.canManageEnvVars ? (
+                          <Button type="primary" icon={<PlusOutlined />} onClick={() => openEnvModal()}>
+                            新增变量
+                          </Button>
+                        ) : null}
+                      </Space>
+                    </div>
+                    {!serviceCapabilities.canManageEnvVars ? <Alert type="info" showIcon message="Railway 环境变量为只读列表" /> : null}
+                    {envVarsError ? <Alert type="warning" showIcon message="环境变量暂不可用" description={envVarsError} /> : null}
+                    <Table
+                      rowKey="id"
+                      size="small"
+                      columns={envColumns}
+                      dataSource={envVars}
+                      loading={envVarsLoading}
+                      pagination={{ pageSize: 8 }}
+                      scroll={{ x: 1350 }}
+                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无环境变量" /> }}
+                    />
+                  </Space>
+                ) : (
+                  <Alert type="info" showIcon message="当前平台暂不支持环境变量读取" />
+                )
+              },
+              {
                 key: 'domains',
                 label: '域名监控',
                 children: (
-                  <Table
-                    rowKey="id"
-                    size="small"
-                    columns={domainColumns}
-                    dataSource={monitorableDomains}
-                    pagination={false}
-                    scroll={{ x: 980 }}
-                    locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无自定义域名" /> }}
-                  />
+                  <Space direction="vertical" size={12} className="service-detail-tab">
+                    {serviceCapabilities?.canManageDomains ? (
+                      <div className="service-detail-toolbar">
+                        <Typography.Title level={5}>项目域名</Typography.Title>
+                        <Button type="primary" icon={<PlusOutlined />} onClick={openDomainModal}>
+                          新增域名
+                        </Button>
+                      </div>
+                    ) : null}
+                    <Table
+                      rowKey="id"
+                      size="small"
+                      columns={domainColumns}
+                      dataSource={monitorableDomains}
+                      pagination={false}
+                      scroll={{ x: 1120 }}
+                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无自定义域名" /> }}
+                    />
+                  </Space>
                 )
               }
             ]}
           />
+          <Modal
+            title={editingEnvVar ? `编辑变量：${editingEnvVar.key}` : '新增环境变量'}
+            open={envModalOpen}
+            okText="保存"
+            cancelText="取消"
+            confirmLoading={savingEnvVar}
+            onOk={saveEnvVar}
+            onCancel={() => {
+              setEnvModalOpen(false)
+              setEditingEnvVar(null)
+              envForm.resetFields()
+            }}
+          >
+            <Form form={envForm} layout="vertical">
+              <Form.Item name="key" label="Key" rules={[{ required: true, message: '请输入 Key' }]}>
+                <Input placeholder="API_TOKEN" />
+              </Form.Item>
+              <Form.Item
+                name="value"
+                label={editingEnvVar ? 'Value（留空不修改）' : 'Value'}
+                rules={editingEnvVar ? [] : [{ required: true, message: '请输入 Value' }]}
+              >
+                <Input.Password placeholder={editingEnvVar ? '留空保持原值' : '变量值'} />
+              </Form.Item>
+              <Row gutter={[12, 0]}>
+                <Col span={12}>
+                  <Form.Item name="type" label="类型" rules={[{ required: true, message: '请选择类型' }]}>
+                    <Select
+                      options={[
+                        { label: 'sensitive', value: 'sensitive' },
+                        { label: 'encrypted', value: 'encrypted' },
+                        { label: 'plain', value: 'plain' }
+                      ]}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="target" label="环境" rules={[{ required: true, message: '请选择环境' }]}>
+                    <Select
+                      mode="multiple"
+                      options={[
+                        { label: 'production', value: 'production' },
+                        { label: 'preview', value: 'preview' },
+                        { label: 'development', value: 'development' }
+                      ]}
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Form.Item name="gitBranch" label="Git Branch">
+                <Input placeholder="preview 分支可填" />
+              </Form.Item>
+              <Form.Item name="comment" label="备注">
+                <Input.TextArea rows={2} />
+              </Form.Item>
+            </Form>
+          </Modal>
+          <Modal
+            title="新增 Vercel 域名"
+            open={domainModalOpen}
+            okText="添加"
+            cancelText="取消"
+            confirmLoading={savingDomain}
+            onOk={saveDomain}
+            onCancel={() => {
+              setDomainModalOpen(false)
+              domainForm.resetFields()
+            }}
+          >
+            <Form form={domainForm} layout="vertical">
+              <Form.Item name="name" label="域名" rules={[{ required: true, message: '请输入域名' }]}>
+                <Input placeholder="app.example.com" />
+              </Form.Item>
+              <Form.Item name="environmentName" label="绑定环境">
+                <Select
+                  allowClear
+                  options={activeService.environments.map((environment) => ({ label: environment.name, value: environment.name }))}
+                />
+              </Form.Item>
+              <Form.Item name="gitBranch" label="Git Branch">
+                <Input placeholder="可选" />
+              </Form.Item>
+              <Row gutter={[12, 0]}>
+                <Col span={14}>
+                  <Form.Item name="redirect" label="跳转目标">
+                    <Input placeholder="可选" />
+                  </Form.Item>
+                </Col>
+                <Col span={10}>
+                  <Form.Item name="redirectStatusCode" label="状态码">
+                    <Select
+                      allowClear
+                      options={[
+                        { label: '301', value: 301 },
+                        { label: '302', value: 302 },
+                        { label: '307', value: 307 },
+                        { label: '308', value: 308 }
+                      ]}
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
+            </Form>
+          </Modal>
+          <Modal
+            title={domainConfig ? `${domainConfig.domain} DNS 配置` : 'DNS 配置'}
+            open={Boolean(domainConfig)}
+            footer={<Button onClick={() => setDomainConfig(null)}>关闭</Button>}
+            onCancel={() => setDomainConfig(null)}
+          >
+            {domainConfig ? (
+              <Space direction="vertical" size={12} className="full-width-control">
+                <Descriptions column={1} size="small" bordered>
+                  <Descriptions.Item label="Configured">{domainConfig.config.configured ? '是' : '否'}</Descriptions.Item>
+                  <Descriptions.Item label="Misconfigured">{domainConfig.config.misconfigured ? '是' : '否'}</Descriptions.Item>
+                  <Descriptions.Item label="Recommended Records">{domainConfig.config.recommendedRecords.length}</Descriptions.Item>
+                </Descriptions>
+                <pre className="service-domain-config-json">{JSON.stringify(domainConfig.config.raw, null, 2)}</pre>
+              </Space>
+            ) : null}
+          </Modal>
         </Space>
       ) : null}
     </Drawer>
@@ -3535,6 +4654,23 @@ function createBranchOptions(branches: string[]): Array<{ label: string; value: 
   return Array.from(new Set(branches.filter(Boolean))).map((branch) => ({ label: branch, value: branch }))
 }
 
+function getPreferredPushTarget(repository: Repository | null, status: GitWorkspaceStatus | null = null): { remote: string; branch: string } {
+  const pushableTarget = getPushableTargets(status?.pushTargets ?? repository?.pushTargets ?? [])[0]
+
+  if (pushableTarget) {
+    return {
+      remote: pushableTarget.remote,
+      branch: pushableTarget.branch
+    }
+  }
+
+  return getRepositoryDefaultPushTarget(repository, status?.branch)
+}
+
+function createGitPushInput(remoteNames: string[], branch: string): GitPushInput {
+  return remoteNames.length > 1 ? { remotes: remoteNames, branch } : { remote: remoteNames[0], branch }
+}
+
 function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionModalProps): JSX.Element {
   const { updateRepository } = useForgeDeskStore()
   const [aiSettingsForm] = Form.useForm<AiSettingsForm>()
@@ -3555,6 +4691,8 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
   const [releaseModalOpen, setReleaseModalOpen] = useState(false)
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
   const files = status?.files ?? []
+  const currentBranch = getCurrentBranchName(selectedRepository, status)
+  const commitReady = canCommitSelection(files, selectedPaths, commitMessage)
 
   useEffect(() => {
     if (!open) {
@@ -3875,7 +5013,7 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
         <Button key="release" icon={<UploadOutlined />} disabled={!selectedRepository} onClick={() => setReleaseModalOpen(true)}>
           发布版本
         </Button>,
-        <Button key="commit" type="primary" loading={working} disabled={selectedPaths.length === 0 || !commitMessage.trim()} onClick={commitSelectedFiles}>
+        <Button key="commit" type="primary" loading={working} disabled={!commitReady} onClick={commitSelectedFiles}>
           提交选中文件
         </Button>
       ]}
@@ -3895,6 +5033,7 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
             清空
           </Button>
           <Typography.Text type="secondary">已选择 {selectedPaths.length} 个文件</Typography.Text>
+          <Tag color={currentBranch ? 'blue' : 'default'}>当前分支：{currentBranch || '未检测'}</Tag>
         </Space>
 
         <Input
@@ -4383,7 +5522,11 @@ function GitPushModal({ open, repositories, onClose, onChanged }: GitActionModal
   const [loadingStatus, setLoadingStatus] = useState(false)
   const [working, setWorking] = useState(false)
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
-  const remoteOptions = selectedRepository?.remotes.map((remote) => ({ label: remote.name, value: remote.name })) ?? []
+  const pushTargets = status?.pushTargets ?? selectedRepository?.pushTargets ?? []
+  const pushableTargets = getPushableTargets(pushTargets)
+  const remoteOptions = createPushRemoteOptions(selectedRepository?.remotes ?? [], pushTargets)
+  const currentBranch = getCurrentBranchName(selectedRepository, status)
+  const pushReady = Boolean(selectedRepository && pushBranch.trim() && canPushSelection(pushRemote, pushTargets))
 
   useEffect(() => {
     if (!open) {
@@ -4410,7 +5553,7 @@ function GitPushModal({ open, repositories, onClose, onChanged }: GitActionModal
 
     try {
       const nextStatus = await window.forgeDesk.getRepositoryWorkspaceStatus(selectedRepository.id)
-      const target = getRepositoryDefaultPushTarget(selectedRepository, nextStatus.branch)
+      const target = getPreferredPushTarget(selectedRepository, nextStatus)
       setStatus(nextStatus)
       setPushRemote(target.remote)
       setPushBranch(target.branch)
@@ -4426,7 +5569,7 @@ function GitPushModal({ open, repositories, onClose, onChanged }: GitActionModal
       return
     }
 
-    const target = getRepositoryDefaultPushTarget(selectedRepository)
+    const target = getPreferredPushTarget(selectedRepository)
     setStatus(null)
     setPushRemote(target.remote)
     setPushBranch(target.branch)
@@ -4442,7 +5585,9 @@ function GitPushModal({ open, repositories, onClose, onChanged }: GitActionModal
     const remote = pushRemote.trim()
     const branch = pushBranch.trim()
 
-    if (!remote || !branch) {
+    const remoteNames = resolveSelectedPushRemoteNames(remote, selectedRepository.remotes)
+
+    if (remoteNames.length === 0 || !branch) {
       message.warning('请选择远端并填写分支')
       return
     }
@@ -4450,7 +5595,7 @@ function GitPushModal({ open, repositories, onClose, onChanged }: GitActionModal
     setWorking(true)
 
     try {
-      const result = await window.forgeDesk.gitPush(selectedRepository.id, { remote, branch })
+      const result = await window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, branch))
       updateRepository(result.repository)
       setStatus(result.status)
 
@@ -4459,7 +5604,7 @@ function GitPushModal({ open, repositories, onClose, onChanged }: GitActionModal
         return
       }
 
-      message.success('分支已推送')
+      message.success(remoteNames.length > 1 ? '分支已推送到所有远端' : '分支已推送')
       await onChanged(result.repository)
       onClose()
     } catch (error) {
@@ -4482,7 +5627,7 @@ function GitPushModal({ open, repositories, onClose, onChanged }: GitActionModal
         <Button key="refresh" icon={<ReloadOutlined />} loading={loadingStatus} onClick={refreshWorkspaceStatus}>
           刷新状态
         </Button>,
-        <Button key="push" type="primary" icon={<UploadOutlined />} loading={working} disabled={!selectedRepository || !pushRemote.trim() || !pushBranch.trim()} onClick={pushBranchToRemote}>
+        <Button key="push" type="primary" icon={<UploadOutlined />} loading={working} disabled={!pushReady} onClick={pushBranchToRemote}>
           推送
         </Button>
       ]}
@@ -4495,16 +5640,21 @@ function GitPushModal({ open, repositories, onClose, onChanged }: GitActionModal
             options={repositories.map((repository) => ({ label: repository.name, value: repository.id }))}
             onChange={setRepositoryId}
           />
-          {selectedRepository && <Tag color={selectedRepository.ahead > 0 ? 'orange' : 'default'}>{selectedRepository.ahead} 个未推送提交</Tag>}
+          {selectedRepository && <Tag color={pushableTargets.length > 0 ? 'orange' : 'default'}>{pushableTargets.reduce((sum, target) => sum + target.ahead, 0)} 个未推送提交</Tag>}
+          <Tag color={currentBranch ? 'blue' : 'default'}>当前分支：{currentBranch || '未检测'}</Tag>
         </Space>
         <Space.Compact className="git-operation-compact">
           <Select value={pushRemote} options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]} onChange={setPushRemote} />
-          <Input value={pushBranch} placeholder={status?.branch || selectedRepository?.currentBranch || 'main'} onChange={(event) => setPushBranch(event.target.value)} />
+          <Input value={pushBranch} placeholder={currentBranch || 'main'} onChange={(event) => setPushBranch(event.target.value)} />
         </Space.Compact>
         <Alert
-          type={selectedRepository?.ahead ? 'info' : 'warning'}
+          type={pushReady ? 'info' : 'warning'}
           showIcon
-          message={selectedRepository?.ahead ? `将推送 ${selectedRepository.name} 的 ${pushBranch || selectedRepository.currentBranch} 到 ${pushRemote || 'origin'}` : '当前仓库未显示待推送提交'}
+          message={
+            pushReady
+              ? `将推送 ${selectedRepository?.name} 的 ${pushBranch || currentBranch} 到 ${pushRemote === PUSH_ALL_REMOTES_VALUE ? '所有远端' : pushRemote || 'origin'}`
+              : '当前分支没有待推送到任一远端的提交'
+          }
           description="推送会使用当前仓库配置的 Git 远端和 SSH/HTTPS 认证。"
         />
       </Space>
@@ -4883,7 +6033,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
 
     try {
       const nextStatus = await window.forgeDesk.getRepositoryWorkspaceStatus(selectedRepository.id)
-      const target = getRepositoryDefaultPushTarget(selectedRepository, nextStatus.branch)
+      const target = getPreferredPushTarget(selectedRepository, nextStatus)
       setStatus(nextStatus)
       setPushBranch((current) => current || target.branch)
       setPushRemote((current) => current || target.remote)
@@ -4918,7 +6068,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
     setCommitMessage('')
     setTagRecommendation(null)
     setMergeSource('')
-    const target = getRepositoryDefaultPushTarget(selectedRepository)
+    const target = getPreferredPushTarget(selectedRepository)
     setPushRemote(target.remote)
     setPushBranch(target.branch)
 
@@ -4936,7 +6086,9 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
       updateRepository(result.repository)
       setStatus(result.status)
       setSelectedPaths([])
-      setPushBranch(result.status.branch || result.repository.currentBranch)
+      const target = getPreferredPushTarget(result.repository, result.status)
+      setPushBranch(target.branch)
+      setPushRemote(target.remote)
 
       if (result.ok) {
         message.success(successText)
@@ -4948,6 +6100,24 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
     } finally {
       setWorking(false)
     }
+  }
+
+  async function pushSelectedBranch(): Promise<void> {
+    if (!selectedRepository) {
+      return
+    }
+
+    const remoteNames = resolveSelectedPushRemoteNames(pushRemote, selectedRepository.remotes)
+
+    if (remoteNames.length === 0) {
+      message.warning('请选择远端')
+      return
+    }
+
+    await runGitWrite(
+      () => window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, pushBranch)),
+      remoteNames.length > 1 ? '分支已推送到所有远端' : '分支已推送'
+    )
   }
 
   async function suggestConflictResolution(conflict: GitConflictFile): Promise<void> {
@@ -5025,7 +6195,11 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
 
   const conflicts = status?.conflicts ?? []
   const files = status?.files ?? []
-  const remoteOptions = selectedRepository?.remotes.map((remote) => ({ label: remote.name, value: remote.name })) ?? []
+  const pushTargets = status?.pushTargets ?? selectedRepository?.pushTargets ?? []
+  const remoteOptions = createPushRemoteOptions(selectedRepository?.remotes ?? [], pushTargets)
+  const currentBranch = getCurrentBranchName(selectedRepository, status)
+  const commitReady = canCommitSelection(files, files.map((file) => file.path), commitMessage)
+  const pushReady = Boolean(selectedRepository && pushBranch.trim() && canPushSelection(pushRemote, pushTargets))
 
   return (
     <div className="git-workspace-panel">
@@ -5066,12 +6240,13 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
             <Typography.Text strong>提交</Typography.Text>
             <Space wrap>
               <Space direction="vertical" size={8} className="git-operation-commit-form">
+                <Tag color={currentBranch ? 'blue' : 'default'}>当前分支：{currentBranch || '未检测'}</Tag>
                 <Space.Compact className="git-operation-compact">
                   <Input value={commitMessage} placeholder="feat: update workspace" onChange={(event) => setCommitMessage(event.target.value)} />
                   <Button
                     type="primary"
                     loading={working}
-                    disabled={!selectedRepository || !commitMessage.trim()}
+                    disabled={!selectedRepository || !commitReady}
                     onClick={() => {
                       const tagName = commitTag.trim()
                       return (
@@ -5104,8 +6279,8 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
             <Typography.Text strong>推送</Typography.Text>
             <Space.Compact className="git-operation-compact">
               <Select value={pushRemote} options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]} onChange={setPushRemote} />
-              <Input value={pushBranch} placeholder={status?.branch || selectedRepository?.currentBranch || 'main'} onChange={(event) => setPushBranch(event.target.value)} />
-              <Button loading={working} disabled={!selectedRepository || !pushRemote || !pushBranch} onClick={() => selectedRepository && runGitWrite(() => window.forgeDesk.gitPush(selectedRepository.id, { remote: pushRemote, branch: pushBranch }), '分支已推送')}>
+              <Input value={pushBranch} placeholder={currentBranch || 'main'} onChange={(event) => setPushBranch(event.target.value)} />
+              <Button loading={working} disabled={!pushReady} onClick={pushSelectedBranch}>
                 推送
               </Button>
             </Space.Compact>
@@ -5658,6 +6833,7 @@ function ProjectServiceMonitorPanel({ projectId }: { projectId: string }): JSX.E
   }
 
   const stats = getProjectServiceStats(services)
+  const serviceSections = createServiceProviderSections(services)
   const monitorableDomainRows = services.flatMap((service) =>
     getMonitorableServiceDomains(service).map((domain) => ({
       key: domain.id,
@@ -5785,53 +6961,69 @@ function ProjectServiceMonitorPanel({ projectId }: { projectId: string }): JSX.E
         <Col xs={24} md={6}><div className="metric-tile"><Statistic title="异常 / 离线" value={`${stats.degraded} / ${stats.offline}`} /></div></Col>
       </Row>
       {services.length > 0 ? (
-        <Collapse
-          className="service-monitor-services"
-          items={services.map((service) => {
-            const serviceDomains = getMonitorableServiceDomains(service)
-            const statusSummary = getProjectServiceStats([{ ...service, domains: serviceDomains }])
-
-            return {
-              key: service.id,
-              label: (
-                <div className="service-monitor-service-header">
-                  <Space wrap size={8}>
-                    <Tag>{getServiceProviderLabel(service.provider)}</Tag>
-                    <Typography.Text strong>{service.name}</Typography.Text>
-                    <Tag color={service.enabled ? 'green' : 'default'}>{service.enabled ? '启用' : '停用'}</Tag>
-                    <Typography.Text type="secondary">{service.environments.length} 环境</Typography.Text>
-                    <Typography.Text type="secondary">{serviceDomains.length} 自定义域名</Typography.Text>
-                    <Typography.Text type={statusSummary.offline || statusSummary.degraded ? 'danger' : 'secondary'}>
-                      在线 {statusSummary.online} / 异常 {statusSummary.degraded} / 离线 {statusSummary.offline}
-                    </Typography.Text>
-                  </Space>
-                </div>
-              ),
-              children: (
-                <Space direction="vertical" size={12} className="service-monitor-service-body">
-                  <Table
-                    rowKey="id"
-                    size="small"
-                    columns={environmentColumns(service)}
-                    dataSource={service.environments}
-                    pagination={false}
-                    scroll={{ x: 720 }}
-                    locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无环境数据" /> }}
-                  />
-                  <Table
-                    rowKey="id"
-                    size="small"
-                    columns={domainColumns}
-                    dataSource={serviceDomains}
-                    pagination={false}
-                    scroll={{ x: 920 }}
-                    locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无自定义域名" /> }}
-                  />
+        <div className="service-provider-section-list">
+          {serviceSections.map((section) => (
+            <div key={section.provider} className="service-provider-section">
+              <div className="service-provider-section-heading">
+                <Space size={8} wrap>
+                  <Tag>{section.label}</Tag>
+                  <Typography.Text strong>{section.label} 服务监控</Typography.Text>
+                  <Typography.Text type="secondary">{section.items.length} 个服务</Typography.Text>
                 </Space>
-              )
-            }
-          })}
-        />
+              </div>
+              {section.items.length > 0 ? (
+                <Collapse
+                  className="service-monitor-services"
+                  items={section.items.map((service) => {
+                    const serviceDomains = getMonitorableServiceDomains(service)
+                    const statusSummary = getProjectServiceStats([{ ...service, domains: serviceDomains }])
+
+                    return {
+                      key: service.id,
+                      label: (
+                        <div className="service-monitor-service-header">
+                          <Space wrap size={8}>
+                            <Typography.Text strong>{service.name}</Typography.Text>
+                            <Tag color={service.enabled ? 'green' : 'default'}>{service.enabled ? '启用' : '停用'}</Tag>
+                            <Typography.Text type="secondary">{service.environments.length} 环境</Typography.Text>
+                            <Typography.Text type="secondary">{serviceDomains.length} 自定义域名</Typography.Text>
+                            <Typography.Text type={statusSummary.offline || statusSummary.degraded ? 'danger' : 'secondary'}>
+                              在线 {statusSummary.online} / 异常 {statusSummary.degraded} / 离线 {statusSummary.offline}
+                            </Typography.Text>
+                          </Space>
+                        </div>
+                      ),
+                      children: (
+                        <Space direction="vertical" size={12} className="service-monitor-service-body">
+                          <Table
+                            rowKey="id"
+                            size="small"
+                            columns={environmentColumns(service)}
+                            dataSource={service.environments}
+                            pagination={false}
+                            scroll={{ x: 720 }}
+                            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无环境数据" /> }}
+                          />
+                          <Table
+                            rowKey="id"
+                            size="small"
+                            columns={domainColumns}
+                            dataSource={serviceDomains}
+                            pagination={false}
+                            scroll={{ x: 920 }}
+                            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无自定义域名" /> }}
+                          />
+                        </Space>
+                      )
+                    }
+                  })}
+                />
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`当前项目还没有绑定 ${section.label} 服务`} />
+              )}
+            </div>
+          ))}
+        </div>
       ) : (
         <Spin spinning={loading}>
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前项目还没有绑定服务" />
@@ -6147,6 +7339,8 @@ function ProjectOverview({
   const selectedProjectGitRepository = projectRepositories.find((repository) => repository.id === projectGitRepositoryId) ?? projectRepositories[0] ?? null
   const changedRepositories = projectRepositories.filter((repository) => repository.hasChanges).length
   const aheadRepositories = projectRepositories.filter((repository) => repository.ahead > 0).length
+  const projectHasCommittableChanges = hasProjectCommittableChanges(projectRepositories)
+  const projectHasPushableTargets = hasProjectPushableTargets(projectRepositories)
   const remoteCount = projectRepositories.reduce((sum, repository) => sum + (repository.remoteCount || repository.remotes?.length || (repository.remoteUrl ? 1 : 0)), 0)
   const remoteAlignmentStats = getProjectRemoteAlignmentStats(projectRepositories)
   const summary = selectedProject ? summaries[selectedProject.id] ?? createEmptySummary(selectedProject.id) : null
@@ -6421,10 +7615,10 @@ function ProjectOverview({
                 <Button icon={<SettingOutlined />} onClick={() => setProjectSettingsDrawerOpen(true)}>
                   设置
                 </Button>
-                <Button icon={<SaveOutlined />} disabled={projectRepositories.length === 0} onClick={() => setCommitModalOpen(true)}>
+                <Button icon={<SaveOutlined />} disabled={!projectHasCommittableChanges} onClick={() => setCommitModalOpen(true)}>
                   提交
                 </Button>
-                <Button icon={<UploadOutlined />} disabled={projectRepositories.length === 0} onClick={() => setPushModalOpen(true)}>
+                <Button icon={<UploadOutlined />} disabled={!projectHasPushableTargets} onClick={() => setPushModalOpen(true)}>
                   推送
                 </Button>
                 <Button icon={<BranchesOutlined />} disabled={projectRepositories.length === 0} onClick={() => setMergeModalOpen(true)}>
@@ -7797,6 +8991,7 @@ function RepositoryLogTree({
                     selectedFile={selectedFile}
                     loadingFiles={loadingFiles}
                     graphColumnWidth={graphColumnWidth}
+                    branchTags={branchTags}
                     onSelectFile={(file) => {
                       selectCommitFile(file)
                     }}
@@ -8155,10 +9350,507 @@ function RepositoryTable({ repositories, branchTagRefreshToken = 0 }: { reposito
   )
 }
 
+function normalizeEnvironmentVariableName(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, '_').replace(/[^A-Za-z0-9_]/g, '_').toUpperCase()
+  return normalized || 'CUSTOM_SECRET'
+}
+
+function createCustomPasswordToolItem(input: {
+  mode: PasswordToolMode
+  variableName: string
+  length: number
+  byteLength: number
+  groups: PasswordCharacterGroupKey[]
+}): PasswordToolItem {
+  const variableName = normalizeEnvironmentVariableName(input.variableName)
+
+  if (input.mode === 'hex') {
+    return {
+      id: 'custom-secret',
+      label: '自定义密钥',
+      variableName,
+      description: '十六进制随机密钥',
+      mode: 'hex',
+      byteLength: input.byteLength
+    }
+  }
+
+  return {
+    id: 'custom-password',
+    label: '自定义密码',
+    variableName,
+    description: '自定义字符集密码',
+    mode: 'password',
+    length: input.length,
+    groups: input.groups
+  }
+}
+
+type PasswordWorkflowMode = 'preset' | 'custom'
+type ToolKey = 'password' | 'file'
+
+type LoadedTextFile = {
+  name: string
+  size: number
+  content: string
+}
+
+async function copyText(text: string, successText: string, emptyText = '没有可复制的内容'): Promise<void> {
+  if (!text.trim()) {
+    message.warning(emptyText)
+    return
+  }
+
+  if (!navigator.clipboard?.writeText) {
+    message.error('当前环境不支持剪贴板复制')
+    return
+  }
+
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success(successText)
+  } catch (error) {
+    message.error(getErrorMessage(error, '复制失败'))
+  }
+}
+
+async function readTextFile(file: File): Promise<LoadedTextFile> {
+  return {
+    name: file.name,
+    size: file.size,
+    content: await file.text()
+  }
+}
+
+function formatFileSize(size: number): string {
+  if (size < 1024) {
+    return `${size} B`
+  }
+
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`
+  }
+
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+function ToolsPanel(): JSX.Element {
+  const [activeTool, setActiveTool] = useState<ToolKey | null>(null)
+
+  if (activeTool === 'password') {
+    return <PasswordGeneratorTool onBack={() => setActiveTool(null)} />
+  }
+
+  if (activeTool === 'file') {
+    return <FileDiffTool onBack={() => setActiveTool(null)} />
+  }
+
+  return (
+    <section className="workspace-section tools-workspace">
+      <div className="section-heading">
+        <div>
+          <Typography.Title level={2}>工具</Typography.Title>
+          <Typography.Text type="secondary">处理日常小事务。</Typography.Text>
+        </div>
+      </div>
+
+      <div className="tool-entry-grid">
+        <button className="tool-entry-card" type="button" onClick={() => setActiveTool('password')}>
+          <span className="password-tool-icon">
+            <KeyOutlined />
+          </span>
+          <span className="tool-entry-copy">
+            <Typography.Text strong>密码工具</Typography.Text>
+            <Typography.Text type="secondary">API Key、Secret、管理员密码。</Typography.Text>
+          </span>
+        </button>
+        <button className="tool-entry-card" type="button" onClick={() => setActiveTool('file')}>
+          <span className="password-tool-icon">
+            <DiffOutlined />
+          </span>
+          <span className="tool-entry-copy">
+            <Typography.Text strong>文件工具</Typography.Text>
+            <Typography.Text type="secondary">对比两个环境配置文件缺少的变量。</Typography.Text>
+          </span>
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
+  const [sourceFile, setSourceFile] = useState<LoadedTextFile | null>(null)
+  const [targetFile, setTargetFile] = useState<LoadedTextFile | null>(null)
+  const diffResult: EnvFileDiffResult | null = useMemo(
+    () => (sourceFile && targetFile ? compareEnvFiles(sourceFile.content, targetFile.content) : null),
+    [sourceFile, targetFile]
+  )
+  const missingVariablesText = diffResult ? formatVariableNames(diffResult.missingInTarget) : ''
+
+  async function chooseFile(file: File | undefined, target: 'source' | 'target'): Promise<void> {
+    if (!file) {
+      return
+    }
+
+    try {
+      const loadedFile = await readTextFile(file)
+
+      if (target === 'source') {
+        setSourceFile(loadedFile)
+      } else {
+        setTargetFile(loadedFile)
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error, '读取文件失败'))
+    }
+  }
+
+  return (
+    <section className="workspace-section tools-workspace">
+      <div className="section-heading">
+        <div>
+          <Button className="tool-back-button" icon={<ArrowLeftOutlined />} onClick={onBack}>
+            工具
+          </Button>
+          <Typography.Title level={2}>文件工具</Typography.Title>
+          <Typography.Text type="secondary">对比两个环境配置文件，找出 B 比 A 少的变量名。</Typography.Text>
+        </div>
+      </div>
+
+      <div className="file-tool-layout">
+        <div className="panel file-picker-panel">
+          <div className="password-tool-heading">
+            <span className="password-tool-icon">
+              <UploadOutlined />
+            </span>
+            <div>
+              <Typography.Title level={3}>选择文件</Typography.Title>
+              <Typography.Text type="secondary">A 是基准，B 是要检查的目标。</Typography.Text>
+            </div>
+          </div>
+
+          <div className="file-picker-grid">
+            <label className="file-picker-card">
+              <span className="file-picker-title">A 基准文件</span>
+              <span className="file-picker-description">变量完整的一份配置。</span>
+              <input
+                accept=".env,.txt,.config,.conf,.local,.development,.production,.staging,.yaml,.yml"
+                type="file"
+                onChange={(event) => {
+                  void chooseFile(event.target.files?.[0], 'source')
+                }}
+              />
+              {sourceFile ? (
+                <span className="file-picker-selected">
+                  {sourceFile.name} · {formatFileSize(sourceFile.size)}
+                </span>
+              ) : (
+                <span className="file-picker-empty">选择 A 文件</span>
+              )}
+            </label>
+
+            <label className="file-picker-card">
+              <span className="file-picker-title">B 目标文件</span>
+              <span className="file-picker-description">需要检查是否缺变量的一份配置。</span>
+              <input
+                accept=".env,.txt,.config,.conf,.local,.development,.production,.staging,.yaml,.yml"
+                type="file"
+                onChange={(event) => {
+                  void chooseFile(event.target.files?.[0], 'target')
+                }}
+              />
+              {targetFile ? (
+                <span className="file-picker-selected">
+                  {targetFile.name} · {formatFileSize(targetFile.size)}
+                </span>
+              ) : (
+                <span className="file-picker-empty">选择 B 文件</span>
+              )}
+            </label>
+          </div>
+        </div>
+
+        <div className="panel file-diff-panel">
+          <div className="password-tool-heading">
+            <span className="password-tool-icon">
+              <DiffOutlined />
+            </span>
+            <div>
+              <Typography.Title level={3}>对比结果</Typography.Title>
+              <Typography.Text type="secondary">重点看 B 缺少的环境变量名称。</Typography.Text>
+            </div>
+          </div>
+
+          {!diffResult ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择 A 和 B 后显示结果" />
+          ) : (
+            <div className="file-diff-result">
+              <div className="file-diff-summary">
+                <Statistic title="A 变量数" value={diffResult.sourceVariables.length} />
+                <Statistic title="B 变量数" value={diffResult.targetVariables.length} />
+                <Statistic title="B 缺少" value={diffResult.missingInTarget.length} valueStyle={{ color: diffResult.missingInTarget.length > 0 ? '#cf1322' : '#389e0d' }} />
+              </div>
+
+              {diffResult.missingInTarget.length > 0 ? (
+                <div className="file-missing-panel">
+                  <div className="file-missing-heading">
+                    <Typography.Text strong>B 文件缺少这些变量名</Typography.Text>
+                    <Button type="primary" icon={<CopyOutlined />} onClick={() => copyText(missingVariablesText, '缺少变量名已复制')}>
+                      复制变量名
+                    </Button>
+                  </div>
+                  <pre className="file-variable-list">{missingVariablesText}</pre>
+                </div>
+              ) : (
+                <Alert type="success" showIcon message="B 文件没有缺少 A 文件中的变量名" />
+              )}
+
+              {diffResult.extraInTarget.length > 0 && (
+                <div className="file-extra-panel">
+                  <Typography.Text type="secondary">B 额外多出的变量</Typography.Text>
+                  <pre className="file-variable-list secondary">{formatVariableNames(diffResult.extraInTarget)}</pre>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function PasswordGeneratorTool({ onBack }: { onBack: () => void }): JSX.Element {
+  const [workflowMode, setWorkflowMode] = useState<PasswordWorkflowMode>('preset')
+  const [presetRows, setPresetRows] = useState<GeneratedPasswordRow[]>([])
+  const [customMode, setCustomMode] = useState<PasswordToolMode>('password')
+  const [customVariableName, setCustomVariableName] = useState('CUSTOM_PASSWORD')
+  const [customLength, setCustomLength] = useState(24)
+  const [customByteLength, setCustomByteLength] = useState(32)
+  const [customGroups, setCustomGroups] = useState<PasswordCharacterGroupKey[]>(DEFAULT_PASSWORD_GROUP_KEYS)
+  const [customValue, setCustomValue] = useState('')
+
+  const customItem = useMemo(
+    () =>
+      createCustomPasswordToolItem({
+        mode: customMode,
+        variableName: customVariableName,
+        length: customLength,
+        byteLength: customByteLength,
+        groups: customGroups
+      }),
+    [customByteLength, customGroups, customLength, customMode, customVariableName]
+  )
+  const presetEnvText = formatEnvironmentVariableRows(presetRows)
+  const customEnvText = `${customItem.variableName}=${customValue}`
+  const customGenerationDisabled = customMode === 'password' && customGroups.length === 0
+
+  function regeneratePresetRows(): void {
+    try {
+      setPresetRows(createGeneratedPasswordRows(DEFAULT_PASSWORD_TOOL_ITEMS))
+      setWorkflowMode('preset')
+      message.success('常用密码已生成')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    }
+  }
+
+  function generateCustomValue(): void {
+    try {
+      setCustomValue(generatePasswordToolValue(customItem))
+      setWorkflowMode('custom')
+      message.success('已生成新值')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    }
+  }
+
+  function generateCurrentMode(): void {
+    if (workflowMode === 'preset') {
+      regeneratePresetRows()
+      return
+    }
+
+    generateCustomValue()
+  }
+
+  return (
+    <section className="workspace-section tools-workspace">
+      <div className="section-heading">
+        <div>
+          <Button className="tool-back-button" icon={<ArrowLeftOutlined />} onClick={onBack}>
+            工具
+          </Button>
+          <Typography.Title level={2}>密码工具</Typography.Title>
+          <Typography.Text type="secondary">选择生成方式，生成后直接显示结果。</Typography.Text>
+        </div>
+      </div>
+
+      <div className="password-tool-layout">
+        <div className="panel password-options-panel">
+          <div className="password-tool-heading">
+            <span className="password-tool-icon">
+              <KeyOutlined />
+            </span>
+            <div>
+              <Typography.Title level={3}>生成选项</Typography.Title>
+              <Typography.Text type="secondary">先选类型，再生成。</Typography.Text>
+            </div>
+          </div>
+
+          <Segmented
+            block
+            value={workflowMode}
+            options={[
+              { label: '常用密码', value: 'preset' },
+              { label: '自定义', value: 'custom' }
+            ]}
+            onChange={(value) => setWorkflowMode(value as PasswordWorkflowMode)}
+          />
+
+          {workflowMode === 'preset' ? (
+            <div className="password-preset-summary">
+              {DEFAULT_PASSWORD_TOOL_ITEMS.map((item) => (
+                <div className="password-preset-summary-row" key={item.id}>
+                  <Typography.Text strong>{item.variableName}</Typography.Text>
+                  <Tag>{getPasswordToolItemLengthLabel(item)}</Tag>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <Form layout="vertical" className="password-custom-form">
+              <Form.Item label="类型">
+                <Segmented
+                  block
+                  value={customMode}
+                  options={[
+                    { label: '强密码', value: 'password' },
+                    { label: '十六进制密钥', value: 'hex' }
+                  ]}
+                  onChange={(value) => setCustomMode(value as PasswordToolMode)}
+                />
+              </Form.Item>
+              <div className="password-custom-grid">
+                <Form.Item label="变量名">
+                  <Input value={customVariableName} onChange={(event) => setCustomVariableName(event.target.value)} />
+                </Form.Item>
+                <Form.Item label={customMode === 'hex' ? '随机字节数' : '长度'}>
+                  <InputNumber
+                    className="full-width-control"
+                    min={customMode === 'hex' ? 16 : 8}
+                    max={customMode === 'hex' ? 64 : 128}
+                    value={customMode === 'hex' ? customByteLength : customLength}
+                    onChange={(value) => {
+                      const nextValue = Number(value)
+
+                      if (customMode === 'hex') {
+                        setCustomByteLength(Number.isFinite(nextValue) ? nextValue : 32)
+                      } else {
+                        setCustomLength(Number.isFinite(nextValue) ? nextValue : 24)
+                      }
+                    }}
+                  />
+                </Form.Item>
+              </div>
+              {customMode === 'password' && (
+                <Form.Item label="字符范围">
+                  <Checkbox.Group
+                    value={customGroups}
+                    options={PASSWORD_CHARACTER_GROUPS.map((group) => ({ label: group.label, value: group.key }))}
+                    onChange={(values) => setCustomGroups(values as PasswordCharacterGroupKey[])}
+                  />
+                </Form.Item>
+              )}
+            </Form>
+          )}
+
+          <Button type="primary" block icon={<ReloadOutlined />} disabled={workflowMode === 'custom' && customGenerationDisabled} onClick={generateCurrentMode}>
+            生成密码
+          </Button>
+        </div>
+
+        <div className="panel password-output-panel">
+          <div className="password-tool-heading">
+            <span className="password-tool-icon">
+              <FileTextOutlined />
+            </span>
+            <div>
+              <Typography.Title level={3}>生成结果</Typography.Title>
+              <Typography.Text type="secondary">明文显示，直接复制。</Typography.Text>
+            </div>
+          </div>
+
+          {workflowMode === 'preset' && presetRows.length > 0 && (
+            <div className="password-output-list">
+              {presetRows.map((row) => (
+                <div className="password-output-row" key={row.id}>
+                  <div className="password-output-meta">
+                    <Space size={8} wrap>
+                      <Typography.Text strong>{row.variableName}</Typography.Text>
+                      <Tag>{getPasswordToolItemLengthLabel(row)}</Tag>
+                    </Space>
+                    <Typography.Text type="secondary">{row.description}</Typography.Text>
+                  </div>
+                  <div className="password-plain-value">{row.value}</div>
+                  <Space wrap className="password-copy-row">
+                    <Button icon={<CopyOutlined />} onClick={() => copyText(row.value, `${row.variableName} 已复制`)}>
+                      复制值
+                    </Button>
+                    <Button icon={<FileTextOutlined />} onClick={() => copyText(`${row.variableName}=${row.value}`, `${row.variableName} 变量行已复制`)}>
+                      复制变量
+                    </Button>
+                  </Space>
+                </div>
+              ))}
+              <div className="password-env-block">
+                <pre>{presetEnvText}</pre>
+                <Button type="primary" icon={<CopyOutlined />} onClick={() => copyText(presetEnvText, '环境变量已复制')}>
+                  复制全部
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {workflowMode === 'custom' && customValue && (
+            <div className="password-output-list">
+              <div className="password-output-row">
+                <div className="password-output-meta">
+                  <Space size={8} wrap>
+                    <Typography.Text strong>{customItem.variableName}</Typography.Text>
+                    <Tag>{getPasswordToolItemLengthLabel(customItem)}</Tag>
+                  </Space>
+                  <Typography.Text type="secondary">{customItem.description}</Typography.Text>
+                </div>
+                <div className="password-plain-value">{customValue}</div>
+                <div className="password-env-block compact">
+                  <pre>{customEnvText}</pre>
+                </div>
+                <Space wrap className="password-copy-row">
+                  <Button icon={<CopyOutlined />} onClick={() => copyText(customValue, '自定义值已复制')}>
+                    复制值
+                  </Button>
+                  <Button type="primary" icon={<FileTextOutlined />} onClick={() => copyText(customEnvText, '自定义变量行已复制')}>
+                    复制变量
+                  </Button>
+                </Space>
+              </div>
+            </div>
+          )}
+
+          {((workflowMode === 'preset' && presetRows.length === 0) || (workflowMode === 'custom' && !customValue)) && (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有生成结果" />
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
 function App(): JSX.Element {
   const { loadingWorkspace, loadWorkspace } = useForgeDeskStore()
   const [activeKey, setActiveKey] = useState<AppNavigationKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
+  const [terminalOpenRequest, setTerminalOpenRequest] = useState<TerminalOpenRequest | null>(null)
+  const terminalOpenRequestIdRef = useRef(0)
 
   useEffect(() => {
     let cancelled = false
@@ -8183,12 +9875,45 @@ function App(): JSX.Element {
   const navigationIcons: Record<AppNavigationKey, JSX.Element> = {
     overview: <DashboardOutlined />,
     services: <ThunderboltOutlined />,
+    tools: <ToolOutlined />,
+    terminal: <CodeOutlined />,
     settings: <SettingOutlined />
   }
-  const menuItems = APP_NAVIGATION_ITEMS.map((item) => ({
+  const menuItems = APP_NAVIGATION_ITEMS.filter((item) => item.key !== 'terminal' && item.key !== 'settings').map((item) => ({
     ...item,
     icon: navigationIcons[item.key]
   }))
+  const footerMenuItems = APP_NAVIGATION_ITEMS.filter((item) => item.key === 'terminal' || item.key === 'settings').map((item) => ({
+    ...item,
+    icon: navigationIcons[item.key]
+  }))
+
+  function openTerminalRequest(request: Omit<TerminalOpenRequest, 'requestId'>): void {
+    terminalOpenRequestIdRef.current += 1
+    setTerminalOpenRequest({ ...request, requestId: terminalOpenRequestIdRef.current })
+  }
+
+  if (activeKey === 'terminal') {
+    return (
+      <Layout className="terminal-mode-shell">
+        <div className="terminal-mode-header">
+          <Space direction="vertical" size={0}>
+            <Typography.Text strong>ForgeDesk</Typography.Text>
+            <Typography.Text type="secondary">命令行工具</Typography.Text>
+          </Space>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => setActiveKey('overview')}>
+            返回控制台
+          </Button>
+        </div>
+        <div className="terminal-mode-body terminal-mode-body-with-remotes">
+          <TerminalRemoteShortcuts onOpenTerminalRequest={openTerminalRequest} />
+          <div className="terminal-mode-terminal">
+            <TerminalWorkspace defaultTitle="ForgeDesk CLI" openRequest={terminalOpenRequest} />
+          </div>
+        </div>
+      </Layout>
+    )
+  }
 
   return (
     <Layout className="app-shell">
@@ -8203,7 +9928,16 @@ function App(): JSX.Element {
               <Typography.Text type="secondary">Local First Console</Typography.Text>
             </div>
           </div>
-          <Menu mode="inline" selectedKeys={[activeKey]} items={menuItems} onClick={({ key }) => setActiveKey(key as AppNavigationKey)} />
+          <Menu className="sidebar-nav" mode="inline" selectedKeys={activeKey === 'settings' ? [] : [activeKey]} items={menuItems} onClick={({ key }) => setActiveKey(key as AppNavigationKey)} />
+          <div className="sidebar-footer">
+            <Menu
+              className="sidebar-footer-menu"
+              mode="inline"
+              selectedKeys={activeKey === 'settings' ? ['settings'] : []}
+              items={footerMenuItems}
+              onClick={({ key }) => setActiveKey(key as AppNavigationKey)}
+            />
+          </div>
         </div>
       </Layout.Sider>
       <Layout className="app-main">
@@ -8226,6 +9960,7 @@ function App(): JSX.Element {
               <GlobalServiceCenterPanel />
             </section>
           )}
+          {!loadingWorkspace && activeKey === 'tools' && <ToolsPanel />}
           {!loadingWorkspace && activeKey === 'overview' && (
             <ProjectOverview
               onCreateProject={() => setCreatingProject(true)}

@@ -22,6 +22,7 @@ export type Repository = {
   remoteBranchCount: number
   branches: string[]
   remoteBranches: string[]
+  pushTargets: GitPushTarget[]
   defaultBranch: string
   currentBranch: string
   latestCommit: string
@@ -38,6 +39,13 @@ export type GitRemote = {
   name: string
   fetchUrl: string
   pushUrl: string
+}
+
+export type GitPushTarget = {
+  remote: string
+  branch: string
+  ahead: number
+  hasRemoteBranch: boolean
 }
 
 export type RepositoryRemoteInput = {
@@ -105,7 +113,8 @@ export type GitCommitInput = {
 }
 
 export type GitPushInput = {
-  remote: string
+  remote?: string
+  remotes?: string[]
   branch: string
 }
 
@@ -231,6 +240,7 @@ export type GitWorkspaceStatus = {
   branch: string
   files: GitStatusFile[]
   conflicts: GitConflictFile[]
+  pushTargets: GitPushTarget[]
 }
 
 export type GitOperationResult = {
@@ -457,6 +467,8 @@ export type ProjectService = {
   repositoryId: string
   name: string
   externalProjectId: string
+  externalProjectName: string
+  externalProjectAlias: string
   externalServiceId: string
   defaultEnvironment: string
   healthPath: string
@@ -476,12 +488,20 @@ export type ProjectServiceInput = {
   repositoryId?: string
   name: string
   externalProjectId?: string
+  externalProjectName?: string
+  externalProjectAlias?: string
   externalServiceId?: string
   defaultEnvironment?: string
   healthPath?: string
   enabled?: boolean
   environments?: Array<Partial<ProjectServiceEnvironment> & { name: string }>
   domains?: Array<Partial<ProjectServiceDomain> & { domain: string }>
+}
+
+export type ServiceExternalProjectAliasInput = {
+  provider: ServiceProviderType
+  externalProjectId: string
+  alias?: string
 }
 
 export type ServiceMonitorCheck = {
@@ -501,6 +521,76 @@ export type ServiceEnvironmentLogLine = {
   level: string
   message: string
   source: string
+}
+
+export type ServiceDeploymentSummary = {
+  id: string
+  url: string
+  target: string
+  state: string
+  createdAt: string
+  readyAt: string
+  creator: string
+  meta: Record<string, unknown>
+  commitSha: string
+}
+
+export type VercelDeploymentSummary = ServiceDeploymentSummary
+
+export type ServiceDeploymentListOptions = {
+  target?: string
+  limit?: number
+}
+
+export type VercelDeploymentListOptions = ServiceDeploymentListOptions
+
+export type VercelDeploymentActionInput = {
+  action: 'redeploy' | 'cancel' | 'promote' | 'rollback'
+  deploymentId: string
+  description?: string
+}
+
+export type ServiceEnvVarRecord = {
+  id: string
+  key: string
+  type: string
+  target: string[]
+  gitBranch: string
+  customEnvironmentIds: string[]
+  comment: string
+  createdAt: string
+  updatedAt: string
+  decrypted: boolean
+  value?: string
+}
+
+export type VercelEnvVarRecord = ServiceEnvVarRecord
+
+export type VercelEnvVarInput = {
+  id?: string
+  key: string
+  value?: string
+  type: string
+  target?: string[]
+  customEnvironmentIds?: string[]
+  gitBranch?: string
+  comment?: string
+}
+
+export type VercelDomainInput = {
+  name: string
+  environmentName?: string
+  gitBranch?: string
+  redirect?: string
+  redirectStatusCode?: number
+}
+
+export type VercelDomainConfig = {
+  configured: boolean
+  misconfigured: boolean
+  acceptedChallenges: unknown[]
+  recommendedRecords: unknown[]
+  raw: Record<string, unknown>
 }
 
 export type ContributorSummary = {

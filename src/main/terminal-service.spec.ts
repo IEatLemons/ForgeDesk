@@ -147,6 +147,30 @@ describe('terminal service', () => {
     }
   })
 
+  it('writes a startup command to newly created terminal sessions', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'forgedesk-terminal-home-'))
+    const spawned: FakePty[] = []
+    const service = new TerminalService({
+      env: { SHELL: '/bin/zsh', PATH: '/usr/bin' },
+      homeDirectory: home,
+      idFactory: () => `term-${spawned.length + 1}`,
+      platform: 'darwin',
+      ptyFactory: (_file, _args, options) => {
+        const pty = new FakePty(options.cols ?? 80, options.rows ?? 24)
+        spawned.push(pty)
+        return pty
+      }
+    })
+
+    try {
+      service.create({ cwd: home, startupCommand: 'ssh deploy@example.com\r', title: 'remote' })
+
+      assert.deepEqual(spawned[0]?.writes, ['ssh deploy@example.com\r'])
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('maps low-level node-pty spawn failures to a readable runtime error', async () => {
     const home = await mkdtemp(join(tmpdir(), 'forgedesk-terminal-home-'))
     const service = new TerminalService({

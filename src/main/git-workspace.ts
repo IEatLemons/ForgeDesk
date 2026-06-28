@@ -15,8 +15,16 @@ export type GitCommitInput = {
 }
 
 export type GitPushInput = {
+  remote?: string
+  remotes?: string[]
+  branch: string
+}
+
+export type GitPushTarget = {
   remote: string
   branch: string
+  ahead: number
+  hasRemoteBranch: boolean
 }
 
 export type GitMergeInput = {
@@ -114,7 +122,43 @@ export function buildGitTagArgs(tagName: string): string[] {
 }
 
 export function buildGitPushArgs(input: GitPushInput): string[] {
-  return ['push', assertRemoteName(input.remote), assertSafeRef(input.branch, '分支')]
+  const args = buildGitPushOperationArgs(input)
+
+  if (args.length !== 1) {
+    throw new Error('请选择一个远端')
+  }
+
+  return args[0]
+}
+
+export function buildGitPushOperationArgs(input: GitPushInput): string[][] {
+  const branch = assertSafeRef(input.branch, '分支')
+  const remoteNames = input.remotes?.length ? input.remotes : input.remote ? [input.remote] : []
+  const uniqueRemoteNames = Array.from(new Set(remoteNames.map(assertRemoteName)))
+
+  if (uniqueRemoteNames.length === 0) {
+    throw new Error('请选择要推送的远端')
+  }
+
+  return uniqueRemoteNames.map((remote) => ['push', remote, branch])
+}
+
+export function buildGitPushTargetRemoteRefArgs(remote: string, branch: string): string[] {
+  return [`refs/remotes/${assertRemoteName(remote)}/${assertSafeRef(branch, '分支')}`]
+}
+
+export function buildGitPushTargetRemoteRefVerifyArgs(remote: string, branch: string): string[] {
+  return ['rev-parse', '--verify', ...buildGitPushTargetRemoteRefArgs(remote, branch)]
+}
+
+export function buildGitPushTargetCommitCountArgs(remote: string, branch: string): string[] {
+  const safeBranch = assertSafeRef(branch, '分支')
+  const [remoteRef] = buildGitPushTargetRemoteRefArgs(remote, safeBranch)
+  return ['rev-list', '--count', `${remoteRef}..${safeBranch}`]
+}
+
+export function buildGitPushTargetLocalCommitCountArgs(branch: string): string[] {
+  return ['rev-list', '--count', assertSafeRef(branch, '分支')]
 }
 
 export function buildGitMergeArgs(input: GitMergeInput): string[] {

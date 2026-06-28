@@ -37,6 +37,7 @@ export type TerminalCreateInput = {
   reuseKey?: string
   cols?: number
   rows?: number
+  startupCommand?: string
 }
 
 export type TerminalSession = {
@@ -246,6 +247,10 @@ export class TerminalService {
       })
     )
     this.sessions.set(id, record)
+
+    if (input.startupCommand) {
+      pty.write(input.startupCommand)
+    }
 
     return { ...session }
   }

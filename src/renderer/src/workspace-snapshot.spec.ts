@@ -31,6 +31,7 @@ const repositoryA = {
   remoteBranchCount: 0,
   branches: [],
   remoteBranches: [],
+  pushTargets: [],
   defaultBranch: '',
   currentBranch: '',
   latestCommit: '',

@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module'
 import { chmodSync, existsSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import type { TerminalPtyFactory } from './terminal-service'
 
 type NodePtyModule = {
@@ -22,8 +22,41 @@ export type SpawnHelperPermissionOptions = {
   platform?: NodeJS.Platform
 }
 
+const ASAR_SEGMENT = `${sep}app.asar${sep}`
+const ASAR_UNPACKED_SEGMENT = `${sep}app.asar.unpacked${sep}`
+
+export function resolveNodePtyPackageJsonPath(nodePtyPackagePath?: string): string {
+  const packageJsonPath = nodePtyPackagePath ?? require.resolve('node-pty/package.json')
+
+  if (packageJsonPath.includes(ASAR_SEGMENT)) {
+    return packageJsonPath.replace(ASAR_SEGMENT, ASAR_UNPACKED_SEGMENT)
+  }
+
+  return packageJsonPath
+}
+
 export function getNodePtySpawnHelperPath(packageJsonPath: string, arch = process.arch): string {
   return join(dirname(packageJsonPath), 'prebuilds', `darwin-${arch}`, 'spawn-helper')
+}
+
+export function getNodePtySpawnHelperPaths(packageJsonPath: string, arch = process.arch): string[] {
+  const packageDir = dirname(packageJsonPath)
+
+  return [
+    getNodePtySpawnHelperPath(packageJsonPath, arch),
+    join(packageDir, 'build', 'Release', 'spawn-helper')
+  ]
+}
+
+function repairSpawnHelperPermissions(helperPath: string, fs: SpawnHelperPermissionFs): string {
+  const mode = fs.statSync(helperPath).mode
+  const executableMode = mode | 0o755
+
+  if ((mode & 0o755) !== 0o755) {
+    fs.chmodSync(helperPath, executableMode)
+  }
+
+  return helperPath
 }
 
 export function ensureNodePtySpawnHelperPermissions({
@@ -36,21 +69,18 @@ export function ensureNodePtySpawnHelperPermissions({
     return null
   }
 
-  const packageJsonPath = nodePtyPackagePath ?? require.resolve('node-pty/package.json')
-  const helperPath = getNodePtySpawnHelperPath(packageJsonPath, arch)
+  const packageJsonPath = resolveNodePtyPackageJsonPath(nodePtyPackagePath)
+  let repairedPath: string | null = null
 
-  if (!fs.existsSync(helperPath)) {
-    return null
+  for (const helperPath of getNodePtySpawnHelperPaths(packageJsonPath, arch)) {
+    if (!fs.existsSync(helperPath)) {
+      continue
+    }
+
+    repairedPath = repairSpawnHelperPermissions(helperPath, fs)
   }
 
-  const mode = fs.statSync(helperPath).mode
-  const executableMode = mode | 0o755
-
-  if ((mode & 0o755) !== 0o755) {
-    fs.chmodSync(helperPath, executableMode)
-  }
-
-  return helperPath
+  return repairedPath
 }
 
 export function createNodePtyFactory(): TerminalPtyFactory {

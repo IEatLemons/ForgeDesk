@@ -1,17 +1,57 @@
 import {
+  addVercelProjectDomain,
+  cancelVercelDeployment,
+  inspectVercelDomainConfig,
+  listRailwayDeployments,
+  listRailwayProjectEnvVars,
+  listVercelDeployments,
+  listVercelProjectEnvVars,
+  promoteVercelDeployment,
+  readRailwayDeploymentLogs,
+  readRailwayEnvironmentLogs,
   readVercelDeploymentLogs,
+  readVercelEnvVar,
+  readVercelRuntimeLogs,
+  redeployVercelDeployment,
+  removeVercelProjectDomain,
+  removeVercelProjectEnvVar,
+  rollbackVercelDeployment,
+  saveVercelProjectEnvVar,
   syncRailwayProviderServices,
   syncVercelProviderServices,
+  verifyVercelProjectDomain,
   type ProviderDeploymentLogLine,
   type ProviderServiceDomainSnapshot,
   type ProviderServiceEnvironmentSnapshot,
   type ProviderServiceSnapshot,
   type RailwayTokenType,
+  type ServiceDeploymentListOptions,
+  type ServiceDeploymentSummary,
+  type ServiceEnvVarRecord,
   type ServiceProviderFetch,
-  type ServiceProviderType
+  type ServiceProviderType,
+  type VercelDeploymentListOptions,
+  type VercelDeploymentSummary,
+  type VercelDomainConfig,
+  type VercelDomainInput,
+  type VercelEnvVarInput,
+  type VercelEnvVarRecord
 } from './service-provider-adapters.js'
 
-export type { RailwayTokenType, ServiceProviderFetch, ServiceProviderType }
+export type {
+  RailwayTokenType,
+  ServiceDeploymentListOptions,
+  ServiceDeploymentSummary,
+  ServiceEnvVarRecord,
+  ServiceProviderFetch,
+  ServiceProviderType,
+  VercelDeploymentListOptions,
+  VercelDeploymentSummary,
+  VercelDomainConfig,
+  VercelDomainInput,
+  VercelEnvVarInput,
+  VercelEnvVarRecord
+}
 
 export type ServiceMonitorStatus = 'online' | 'degraded' | 'offline' | 'unknown'
 
@@ -56,6 +96,8 @@ export type ProjectServiceInput = {
   repositoryId?: string
   name: string
   externalProjectId?: string
+  externalProjectName?: string
+  externalProjectAlias?: string
   externalServiceId?: string
   defaultEnvironment?: string
   healthPath?: string
@@ -113,6 +155,8 @@ export type ProjectServiceRecord = {
   repositoryId: string
   name: string
   externalProjectId: string
+  externalProjectName: string
+  externalProjectAlias: string
   externalServiceId: string
   defaultEnvironment: string
   healthPath: string
@@ -148,6 +192,18 @@ export type ServiceMonitorCheckRecord = {
 }
 
 export type ServiceEnvironmentLogRecord = ProviderDeploymentLogLine
+
+export type VercelDeploymentActionInput = {
+  action: 'redeploy' | 'cancel' | 'promote' | 'rollback'
+  deploymentId: string
+  description?: string
+}
+
+export type ServiceExternalProjectAliasInput = {
+  provider: ServiceProviderType
+  externalProjectId: string
+  alias?: string
+}
 
 type DatabaseStatement = {
   all: (...params: any[]) => unknown[]
@@ -212,8 +268,8 @@ function normalizeDomainKind(value: unknown): ProjectServiceDomainRecord['kind']
   return value === 'custom' || value === 'generated' || value === 'manual' ? value : 'manual'
 }
 
-export function isMonitorableServiceDomain(domain: Pick<ProjectServiceDomainRecord, 'enabled' | 'kind'>): boolean {
-  return domain.enabled && (domain.kind === 'custom' || domain.kind === 'manual')
+export function isMonitorableServiceDomain(domain: Pick<ProjectServiceDomainRecord, 'enabled' | 'kind'>, provider?: ServiceProviderType): boolean {
+  return domain.enabled && (domain.kind === 'custom' || domain.kind === 'manual' || (provider === 'railway' && domain.kind === 'generated'))
 }
 
 export function buildServiceHealthUrl(domain: string, healthPath = '/'): string {
@@ -255,6 +311,8 @@ export function migrateServiceMonitoringTables(db: DatabaseLike): void {
       repository_id TEXT NOT NULL DEFAULT '',
       name TEXT NOT NULL,
       external_project_id TEXT NOT NULL DEFAULT '',
+      external_project_name TEXT NOT NULL DEFAULT '',
+      external_project_alias TEXT NOT NULL DEFAULT '',
       external_service_id TEXT NOT NULL DEFAULT '',
       default_environment TEXT NOT NULL DEFAULT '',
       health_path TEXT NOT NULL DEFAULT '/',
@@ -339,6 +397,8 @@ export function migrateServiceMonitoringTables(db: DatabaseLike): void {
       repository_id TEXT NOT NULL DEFAULT '',
       name TEXT NOT NULL,
       external_project_id TEXT NOT NULL DEFAULT '',
+      external_project_name TEXT NOT NULL DEFAULT '',
+      external_project_alias TEXT NOT NULL DEFAULT '',
       external_service_id TEXT NOT NULL DEFAULT '',
       default_environment TEXT NOT NULL DEFAULT '',
       health_path TEXT NOT NULL DEFAULT '/',
@@ -459,6 +519,21 @@ export function migrateServiceMonitoringTables(db: DatabaseLike): void {
     CREATE INDEX IF NOT EXISTS idx_global_service_monitor_checks_checked ON global_service_monitor_checks(checked_at);
     CREATE INDEX IF NOT EXISTS idx_project_service_bindings_project ON project_service_bindings(project_id);
   `)
+
+  addColumnIfMissing(db, 'project_services', 'external_project_name', "TEXT NOT NULL DEFAULT ''")
+  addColumnIfMissing(db, 'project_services', 'external_project_alias', "TEXT NOT NULL DEFAULT ''")
+  addColumnIfMissing(db, 'global_services', 'external_project_name', "TEXT NOT NULL DEFAULT ''")
+  addColumnIfMissing(db, 'global_services', 'external_project_alias', "TEXT NOT NULL DEFAULT ''")
+}
+
+function addColumnIfMissing(db: DatabaseLike, table: string, column: string, definition: string): void {
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+  } catch (error) {
+    if (!String(error).toLowerCase().includes('duplicate column')) {
+      throw error
+    }
+  }
 }
 
 function mapConnectionRow(row: Record<string, unknown>): ServiceConnectionRecord {
@@ -614,6 +689,8 @@ function mapServiceRow(db: DatabaseLike, row: Record<string, unknown>): ProjectS
     repositoryId: boundRepositoryId,
     name: String(row.name ?? ''),
     externalProjectId: String(row.external_project_id ?? ''),
+    externalProjectName: String(row.external_project_name ?? ''),
+    externalProjectAlias: String(row.external_project_alias ?? ''),
     externalServiceId: String(row.external_service_id ?? ''),
     defaultEnvironment: String(row.default_environment ?? ''),
     healthPath: String(row.health_path ?? '/'),
@@ -746,13 +823,14 @@ export function saveProjectService(db: DatabaseLike, input: ProjectServiceInput)
   const id = editing?.id ?? input.id ?? createId('project-service')
   const now = nowIso()
   const healthPath = normalizeHealthPath(input.healthPath)
+  const externalProjectAlias = input.externalProjectAlias === undefined ? editing?.externalProjectAlias ?? '' : trimText(input.externalProjectAlias)
 
   if (editing) {
     db.prepare(
       `
       UPDATE global_services
       SET provider = ?, connection_id = ?, repository_id = ?, name = ?, external_project_id = ?,
-          external_service_id = ?, default_environment = ?, health_path = ?, enabled = ?, last_synced_at = ?, updated_at = ?
+          external_project_name = ?, external_project_alias = ?, external_service_id = ?, default_environment = ?, health_path = ?, enabled = ?, last_synced_at = ?, updated_at = ?
       WHERE id = ?
     `
     ).run(
@@ -761,6 +839,8 @@ export function saveProjectService(db: DatabaseLike, input: ProjectServiceInput)
       trimText(input.repositoryId),
       name,
       trimText(input.externalProjectId),
+      trimText(input.externalProjectName),
+      externalProjectAlias,
       trimText(input.externalServiceId),
       trimText(input.defaultEnvironment),
       healthPath,
@@ -773,10 +853,10 @@ export function saveProjectService(db: DatabaseLike, input: ProjectServiceInput)
     db.prepare(
       `
       INSERT INTO global_services (
-        id, provider, connection_id, repository_id, name, external_project_id, external_service_id,
+        id, provider, connection_id, repository_id, name, external_project_id, external_project_name, external_project_alias, external_service_id,
         default_environment, health_path, enabled, last_synced_at, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
     ).run(
       id,
@@ -785,6 +865,8 @@ export function saveProjectService(db: DatabaseLike, input: ProjectServiceInput)
       trimText(input.repositoryId),
       name,
       trimText(input.externalProjectId),
+      trimText(input.externalProjectName),
+      externalProjectAlias,
       trimText(input.externalServiceId),
       trimText(input.defaultEnvironment),
       healthPath,
@@ -830,6 +912,25 @@ export function bindProjectService(db: DatabaseLike, input: ProjectServiceBindin
   ).run(input.projectId, input.serviceId, trimText(input.repositoryId), now, now)
 
   return listProjectServices(db, input.projectId)
+}
+
+export function saveServiceExternalProjectAlias(db: DatabaseLike, input: ServiceExternalProjectAliasInput): ProjectServiceRecord[] {
+  const provider = normalizeProvider(input.provider)
+  const externalProjectId = trimText(input.externalProjectId)
+
+  if (!externalProjectId) {
+    throw new Error('缺少平台项目 ID')
+  }
+
+  db.prepare(
+    `
+    UPDATE global_services
+    SET external_project_alias = ?, updated_at = ?
+    WHERE provider = ? AND external_project_id = ?
+  `
+  ).run(trimText(input.alias), nowIso(), provider, externalProjectId)
+
+  return listAllProjectServices(db)
 }
 
 export function recordServiceMonitorCheck(db: DatabaseLike, input: ServiceMonitorCheckInput): ServiceMonitorCheckRecord {
@@ -951,13 +1052,15 @@ function providerSnapshotToProjectServiceInput(
     repositoryId: existing?.repositoryId,
     name: snapshot.name,
     externalProjectId: snapshot.externalProjectId,
+    externalProjectName: snapshot.externalProjectName,
+    externalProjectAlias: existing?.externalProjectAlias,
     externalServiceId: snapshot.externalServiceId,
     defaultEnvironment: existing?.defaultEnvironment,
     healthPath: existing?.healthPath || '/',
     enabled: existing?.enabled ?? true,
     lastSyncedAt: nowIso(),
     environments: snapshot.environments,
-    domains: [...snapshot.domains.filter((domain) => domain.kind !== 'generated'), ...manualDomains]
+    domains: [...snapshot.domains.filter((domain) => snapshot.provider === 'railway' || domain.kind !== 'generated'), ...manualDomains]
   }
 }
 
@@ -996,6 +1099,298 @@ export async function syncServiceConnection(db: DatabaseLike, connectionId: stri
   return snapshots.map((snapshot) => upsertProviderServiceSnapshot(db, connectionId, snapshot))
 }
 
+type VercelServiceContext = {
+  service: ProjectServiceRecord
+  connection: ServiceConnectionRecord
+  projectId: string
+}
+
+type RailwayServiceContext = VercelServiceContext & {
+  serviceId: string
+}
+
+function getVercelServiceContext(db: DatabaseLike, serviceId: string): VercelServiceContext {
+  const service = getProjectService(db, serviceId)
+
+  if (!service) {
+    throw new Error('服务不存在')
+  }
+
+  if (service.provider !== 'vercel') {
+    throw new Error('仅支持 Vercel 服务')
+  }
+
+  const projectId = trimText(service.externalProjectId)
+
+  if (!projectId) {
+    throw new Error('缺少 Vercel 项目 ID')
+  }
+
+  const connection = getServiceConnectionSecret(db, service.connectionId)
+
+  if (!connection?.token) {
+    throw new Error('请先配置 Vercel Token')
+  }
+
+  return { service, connection, projectId }
+}
+
+function getRailwayServiceContext(db: DatabaseLike, serviceId: string): RailwayServiceContext {
+  const service = getProjectService(db, serviceId)
+
+  if (!service) {
+    throw new Error('服务不存在')
+  }
+
+  if (service.provider !== 'railway') {
+    throw new Error('仅支持 Railway 服务')
+  }
+
+  const projectId = trimText(service.externalProjectId)
+
+  if (!projectId) {
+    throw new Error('缺少 Railway Project ID')
+  }
+
+  const railwayServiceId = trimText(service.externalServiceId)
+
+  if (!railwayServiceId) {
+    throw new Error('缺少 Railway Service ID')
+  }
+
+  const connection = getServiceConnectionSecret(db, service.connectionId)
+
+  if (!connection?.token) {
+    throw new Error('请先配置 Railway Token')
+  }
+
+  return { service, connection, projectId, serviceId: railwayServiceId }
+}
+
+async function syncVercelServiceAndRead(db: DatabaseLike, service: ProjectServiceRecord, fetcher: ServiceProviderFetch): Promise<ProjectServiceRecord> {
+  await syncServiceConnection(db, service.connectionId, fetcher)
+
+  const refreshed = getProjectService(db, service.id)
+
+  if (!refreshed) {
+    throw new Error('服务同步后不存在')
+  }
+
+  return refreshed
+}
+
+export async function listServiceDeployments(
+  db: DatabaseLike,
+  serviceId: string,
+  options: ServiceDeploymentListOptions = {},
+  fetcher: ServiceProviderFetch = fetch
+): Promise<ServiceDeploymentSummary[]> {
+  const service = getProjectService(db, serviceId)
+
+  if (!service) {
+    throw new Error('服务不存在')
+  }
+
+  if (service.provider === 'railway') {
+    const context = getRailwayServiceContext(db, serviceId)
+    const targetEnvironments = options.target
+      ? context.service.environments.filter((environment) => environment.name === options.target || environment.externalEnvironmentId === options.target)
+      : context.service.environments
+
+    if (targetEnvironments.length === 0 && options.target) {
+      return []
+    }
+
+    const deployments = (
+      await Promise.all(
+        (targetEnvironments.length > 0 ? targetEnvironments : [{ externalEnvironmentId: '', name: '' }]).map((environment) =>
+          listRailwayDeployments(
+            context.connection,
+            context.projectId,
+            context.serviceId,
+            environment.externalEnvironmentId,
+            options,
+            fetcher
+          )
+        )
+      )
+    ).flat()
+
+    return deployments.sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+  }
+
+  const { connection, projectId } = getVercelServiceContext(db, serviceId)
+
+  return listVercelDeployments(connection, projectId, options, fetcher)
+}
+
+export async function runServiceDeploymentAction(
+  db: DatabaseLike,
+  serviceId: string,
+  input: VercelDeploymentActionInput,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<ProjectServiceRecord> {
+  const currentService = getProjectService(db, serviceId)
+
+  if (currentService?.provider === 'railway') {
+    throw new Error('Railway 部署操作暂不支持，当前版本只支持只读查看')
+  }
+
+  const { service, connection, projectId } = getVercelServiceContext(db, serviceId)
+  const deploymentId = trimText(input.deploymentId)
+
+  if (!deploymentId) {
+    throw new Error('缺少 Vercel 部署 ID')
+  }
+
+  if (input.action === 'redeploy') {
+    await redeployVercelDeployment(connection, deploymentId, fetcher)
+  } else if (input.action === 'cancel') {
+    await cancelVercelDeployment(connection, deploymentId, fetcher)
+  } else if (input.action === 'promote') {
+    await promoteVercelDeployment(connection, projectId, deploymentId, fetcher)
+  } else if (input.action === 'rollback') {
+    await rollbackVercelDeployment(connection, projectId, deploymentId, input.description ?? '', fetcher)
+  } else {
+    throw new Error('不支持的 Vercel 部署操作')
+  }
+
+  return syncVercelServiceAndRead(db, service, fetcher)
+}
+
+export async function listServiceEnvVars(
+  db: DatabaseLike,
+  serviceId: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<ServiceEnvVarRecord[]> {
+  const service = getProjectService(db, serviceId)
+
+  if (!service) {
+    throw new Error('服务不存在')
+  }
+
+  if (service.provider === 'railway') {
+    const context = getRailwayServiceContext(db, serviceId)
+
+    return listRailwayProjectEnvVars(context.connection, context.projectId, context.serviceId, context.service.environments, fetcher)
+  }
+
+  const { connection, projectId } = getVercelServiceContext(db, serviceId)
+
+  return listVercelProjectEnvVars(connection, projectId, fetcher)
+}
+
+export async function revealServiceEnvVar(
+  db: DatabaseLike,
+  serviceId: string,
+  envVarId: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<ServiceEnvVarRecord> {
+  const service = getProjectService(db, serviceId)
+
+  if (service?.provider === 'railway') {
+    throw new Error('Railway 环境变量只支持只读查看')
+  }
+
+  const { connection, projectId } = getVercelServiceContext(db, serviceId)
+
+  return readVercelEnvVar(connection, projectId, envVarId, fetcher)
+}
+
+export async function saveServiceEnvVar(
+  db: DatabaseLike,
+  serviceId: string,
+  input: VercelEnvVarInput,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<ServiceEnvVarRecord> {
+  const service = getProjectService(db, serviceId)
+
+  if (service?.provider === 'railway') {
+    throw new Error('Railway 环境变量只支持只读查看')
+  }
+
+  const { connection, projectId } = getVercelServiceContext(db, serviceId)
+
+  return saveVercelProjectEnvVar(connection, projectId, input, fetcher)
+}
+
+export async function deleteServiceEnvVar(
+  db: DatabaseLike,
+  serviceId: string,
+  envVarId: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<void> {
+  const service = getProjectService(db, serviceId)
+
+  if (service?.provider === 'railway') {
+    throw new Error('Railway 环境变量只支持只读查看')
+  }
+
+  const { connection, projectId } = getVercelServiceContext(db, serviceId)
+
+  await removeVercelProjectEnvVar(connection, projectId, envVarId, fetcher)
+}
+
+export async function addServiceDomain(
+  db: DatabaseLike,
+  serviceId: string,
+  input: VercelDomainInput,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<ProjectServiceRecord> {
+  const { service, connection, projectId } = getVercelServiceContext(db, serviceId)
+  const environment = input.environmentName ? service.environments.find((item) => item.name === input.environmentName) : null
+
+  await addVercelProjectDomain(
+    connection,
+    projectId,
+    {
+      ...input,
+      environmentName: environment?.externalEnvironmentId || input.environmentName
+    },
+    fetcher
+  )
+
+  return syncVercelServiceAndRead(db, service, fetcher)
+}
+
+export async function removeServiceDomain(
+  db: DatabaseLike,
+  serviceId: string,
+  domain: string,
+  removeRedirects = false,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<ProjectServiceRecord> {
+  const { service, connection, projectId } = getVercelServiceContext(db, serviceId)
+
+  await removeVercelProjectDomain(connection, projectId, domain, removeRedirects, fetcher)
+
+  return syncVercelServiceAndRead(db, service, fetcher)
+}
+
+export async function verifyServiceDomain(
+  db: DatabaseLike,
+  serviceId: string,
+  domain: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<ProjectServiceRecord> {
+  const { service, connection, projectId } = getVercelServiceContext(db, serviceId)
+
+  await verifyVercelProjectDomain(connection, projectId, domain, fetcher)
+
+  return syncVercelServiceAndRead(db, service, fetcher)
+}
+
+export async function inspectServiceDomainConfig(
+  db: DatabaseLike,
+  serviceId: string,
+  domain: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<VercelDomainConfig> {
+  const { connection, projectId } = getVercelServiceContext(db, serviceId)
+
+  return inspectVercelDomainConfig(connection, projectId, domain, fetcher)
+}
+
 export async function listServiceEnvironmentLogs(
   db: DatabaseLike,
   serviceId: string,
@@ -1008,13 +1403,23 @@ export async function listServiceEnvironmentLogs(
     throw new Error('服务不存在')
   }
 
-  if (service.provider !== 'vercel') {
-    return []
-  }
-
   const environment = service.environments.find((item) => item.name === environmentName)
 
   if (!environment?.latestDeploymentId) {
+    return []
+  }
+
+  if (service.provider === 'railway') {
+    const connection = getServiceConnectionSecret(db, service.connectionId)
+
+    if (!connection?.token) {
+      throw new Error('请先配置 Railway Token')
+    }
+
+    return readRailwayDeploymentLogs(connection, environment.latestDeploymentId, fetcher)
+  }
+
+  if (service.provider !== 'vercel') {
     return []
   }
 
@@ -1025,6 +1430,43 @@ export async function listServiceEnvironmentLogs(
   }
 
   return readVercelDeploymentLogs(connection, environment.latestDeploymentId, fetcher)
+}
+
+export async function listServiceRuntimeLogs(
+  db: DatabaseLike,
+  serviceId: string,
+  environmentName: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<ServiceEnvironmentLogRecord[]> {
+  const service = getProjectService(db, serviceId)
+
+  if (!service) {
+    throw new Error('服务不存在')
+  }
+
+  const environment = service.environments.find((item) => item.name === environmentName)
+
+  if (service.provider === 'railway') {
+    if (!environment?.externalEnvironmentId) {
+      return []
+    }
+
+    const connection = getServiceConnectionSecret(db, service.connectionId)
+
+    if (!connection?.token) {
+      throw new Error('请先配置 Railway Token')
+    }
+
+    return readRailwayEnvironmentLogs(connection, environment.externalEnvironmentId, fetcher)
+  }
+
+  const { connection, projectId } = getVercelServiceContext(db, serviceId)
+
+  if (!environment?.latestDeploymentId) {
+    return []
+  }
+
+  return readVercelRuntimeLogs(connection, projectId, environment.latestDeploymentId, fetcher)
 }
 
 export async function checkServiceDomain(

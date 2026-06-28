@@ -157,7 +157,7 @@ function getTerminalRequestKey(request: TerminalOpenRequest): string {
     return `id:${request.requestId}`
   }
 
-  return `value:${request.projectId ?? ''}:${request.repositoryId ?? ''}:${request.cwd ?? ''}:${request.reuseKey ?? ''}:${request.title ?? ''}`
+  return `value:${request.projectId ?? ''}:${request.repositoryId ?? ''}:${request.cwd ?? ''}:${request.reuseKey ?? ''}:${request.title ?? ''}:${request.startupCommand ?? ''}`
 }
 
 export function TerminalWorkspace({ defaultCwd, defaultTitle, openRequest }: TerminalWorkspaceProps): JSX.Element {
@@ -204,6 +204,7 @@ export function TerminalWorkspace({ defaultCwd, defaultTitle, openRequest }: Ter
           cwd: request.cwd ?? defaultCwd,
           reuseKey: request.reuseKey,
           rows: 24,
+          startupCommand: request.startupCommand,
           title: request.title ?? defaultTitle
         })
         setState((current) => upsertTerminalTab(current, session))

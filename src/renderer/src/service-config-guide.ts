@@ -32,6 +32,8 @@ const providerGuides: Record<ServiceProviderGuideProvider, ServiceProviderGuide>
     projectTokenDocsUrl: 'https://docs.railway.com/integrations/api#project-token',
     steps: [
       '账号或 Workspace Token 在 Account Tokens 页面创建，Token 类型选择 Account 或 Workspace。',
+      'Account Token 不填 Workspace ID 时会同步个人项目并尝试发现可访问 Workspace；同步指定 Workspace 项目时请填写 Workspace ID。',
+      'Workspace Token 必须同时填写 Workspace ID，否则 Railway API 无法确定要同步哪个工作区。',
       'Project Token 在项目设置的 Tokens 页面创建，类型选择 Project。',
       'Project Token 使用 Project-Access-Token 方式同步；账号和 Workspace Token 使用 Bearer Token。',
       '需要手动填 ID 时，可在 Railway 项目里用 Cmd/Ctrl+K 复制 Project、Service 或 Environment ID。'
