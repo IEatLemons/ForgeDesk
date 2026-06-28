@@ -220,6 +220,13 @@ body {
   align-items: flex-start;
   gap: 14px;
   min-width: 0;
+  max-width: 100%;
+}
+
+.project-title-content {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
 }
 
 .project-card {
@@ -249,8 +256,7 @@ body {
 }
 
 .project-card-heading,
-.project-card-metrics,
-.project-detail-heading {
+.project-card-metrics {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -269,12 +275,19 @@ body {
 }
 
 .project-detail-heading {
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px 24px;
   margin: 6px 0 16px;
 }
 
 .project-detail-actions {
+  display: flex;
   justify-content: flex-end;
+  justify-self: end;
+  align-self: start;
+  max-width: 100%;
 }
 
 .subsection-title {
@@ -2860,11 +2873,13 @@ body {
 
   .project-detail-heading {
     display: grid;
+    grid-template-columns: 1fr;
     justify-content: stretch;
   }
 
   .project-detail-actions {
-    justify-content: flex-start;
+    justify-content: flex-end;
+    justify-self: end;
     width: 100%;
   }
 }
@@ -2909,11 +2924,13 @@ body {
 
   .project-detail-heading {
     display: grid;
+    grid-template-columns: 1fr;
     justify-content: stretch;
   }
 
   .project-detail-actions {
-    justify-content: flex-start;
+    justify-content: flex-end;
+    justify-self: end;
     width: 100%;
   }
 

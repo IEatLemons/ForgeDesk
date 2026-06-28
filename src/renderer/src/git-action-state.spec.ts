@@ -9,10 +9,12 @@ import {
   getPushableTargets,
   hasProjectCommittableChanges,
   hasProjectPushableTargets,
+  mergeRepositoryWorkspaceStatus,
   resolveSelectedPushRemoteNames
 } from './git-action-state.js'
 
 const repository = {
+  ahead: 0,
   currentBranch: 'main',
   hasChanges: false,
   pushTargets: [
@@ -62,5 +64,19 @@ describe('git action state helpers', () => {
   it('uses the freshly detected workspace branch before the repository fallback', () => {
     assert.equal(getCurrentBranchName({ currentBranch: 'main' }, { branch: 'feature/git-actions' }), 'feature/git-actions')
     assert.equal(getCurrentBranchName({ currentBranch: 'main' }, { branch: '' }), 'main')
+  })
+
+  it('merges fresh workspace files and push targets into repository action state', () => {
+    const merged = mergeRepositoryWorkspaceStatus(repository, {
+      branch: 'main',
+      files: [{ path: 'Dockerfile' }, { path: 'apps/backend-go/.env.example' }],
+      pushTargets: [{ remote: 'origin', branch: 'main', ahead: 1, hasRemoteBranch: true }]
+    })
+
+    assert.equal(merged.hasChanges, true)
+    assert.equal(merged.ahead, 1)
+    assert.deepEqual(merged.pushTargets, [{ remote: 'origin', branch: 'main', ahead: 1, hasRemoteBranch: true }])
+    assert.equal(hasProjectCommittableChanges([merged]), true)
+    assert.equal(hasProjectPushableTargets([merged]), true)
   })
 })

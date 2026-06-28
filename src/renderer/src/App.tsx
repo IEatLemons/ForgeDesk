@@ -119,6 +119,7 @@ import {
   getPushableTargets,
   hasProjectCommittableChanges,
   hasProjectPushableTargets,
+  mergeRepositoryWorkspaceStatus,
   resolveSelectedPushRemoteNames
 } from './git-action-state'
 import { createGitErrorGuidance, type GitErrorGuidance } from './git-error-guidance'
@@ -149,8 +150,10 @@ import {
   type GitGraphRow
 } from './git-log-view'
 import {
+  createProjectDetailTabs,
   createProjectTerminalOpenRequest,
   createRepositorySummaryFields,
+  resolveProjectDetailTab,
   shouldShowRepositorySummary,
   type ProjectDetailTabKey
 } from './project-detail-view'
@@ -260,6 +263,8 @@ const AI_MODEL_OPTIONS: Record<AiSettingsForm['provider'], string[]> = {
     'qwen/qwen3-235b-a22b'
   ]
 }
+
+const projectWorkspaceStatusRefreshIntervalMs = 5000
 
 type SshConfigMode = 'guided' | 'raw'
 
@@ -7330,10 +7335,16 @@ function ProjectOverview({
   const [projectRepositoryCommitCounts, setProjectRepositoryCommitCounts] = useState<Record<string, number>>({})
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [branchTagRefreshToken, setBranchTagRefreshToken] = useState(0)
+  const [projectServiceCounts, setProjectServiceCounts] = useState<Record<string, number>>({})
   const [rangePreset, setRangePreset] = useState('30')
   const [range, setRange] = useState(createPresetRange(30))
   const terminalRequestSeqRef = useRef(0)
+  const projectWorkspaceStatusRefreshRef = useRef(false)
+  const projectRepositoriesRef = useRef<Repository[]>([])
   const selectedProject = projects.find((project) => project.id === detailProjectId) ?? null
+  const hasBoundProjectServices = selectedProject ? (projectServiceCounts[selectedProject.id] ?? 0) > 0 : false
+  const projectDetailTabs = createProjectDetailTabs(hasBoundProjectServices)
+  const activeProjectDetailTab = resolveProjectDetailTab(projectDetailTab, hasBoundProjectServices)
   const projectRepositories = selectedProject ? repositories.filter((repository) => repository.projectId === selectedProject.id) : []
   const projectRepositoryIds = projectRepositories.map((repository) => repository.id).join('|')
   const selectedProjectGitRepository = projectRepositories.find((repository) => repository.id === projectGitRepositoryId) ?? projectRepositories[0] ?? null
@@ -7348,7 +7359,7 @@ function ProjectOverview({
   const selectedProjectGitCommitCount = selectedProjectGitRepository
     ? projectRepositoryCommitCounts[selectedProjectGitRepository.id] ?? selectedProjectGitContribution?.commits ?? 0
     : 0
-  const showProjectRepositorySummary = shouldShowRepositorySummary(projectDetailTab, Boolean(selectedProjectGitRepository))
+  const showProjectRepositorySummary = shouldShowRepositorySummary(activeProjectDetailTab, Boolean(selectedProjectGitRepository))
   const summaryRange = rangePreset === 'all' ? undefined : range
   const dailyDates = summary?.dailyMetrics.map((metric) => metric.date) ?? []
   const hasGitData = Boolean(summary && summary.totalCommits > 0)
@@ -7374,6 +7385,56 @@ function ProjectOverview({
     setProjectSummary(await window.forgeDesk.getProjectSummary(projectId, nextRange))
   }
 
+  async function refreshProjectServiceBindings(projectId: string): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const services = await window.forgeDesk.listProjectServices(projectId)
+    setProjectServiceCounts((current) => {
+      if (current[projectId] === services.length) {
+        return current
+      }
+
+      return { ...current, [projectId]: services.length }
+    })
+  }
+
+  async function refreshProjectWorkspaceStatuses(): Promise<void> {
+    const repositoriesToRefresh = projectRepositoriesRef.current
+
+    if (!window.forgeDesk || repositoriesToRefresh.length === 0 || projectWorkspaceStatusRefreshRef.current) {
+      return
+    }
+
+    projectWorkspaceStatusRefreshRef.current = true
+
+    try {
+      await Promise.all(
+        repositoriesToRefresh.map(async (repository) => {
+          try {
+            const status = await window.forgeDesk.getRepositoryWorkspaceStatus(repository.id)
+            const nextRepository = mergeRepositoryWorkspaceStatus(repository, status)
+            const pushTargetsChanged = JSON.stringify(nextRepository.pushTargets) !== JSON.stringify(repository.pushTargets)
+
+            if (
+              nextRepository.hasChanges !== repository.hasChanges ||
+              nextRepository.currentBranch !== repository.currentBranch ||
+              nextRepository.ahead !== repository.ahead ||
+              pushTargetsChanged
+            ) {
+              updateRepository(nextRepository)
+            }
+          } catch (error) {
+            console.warn(`Failed to refresh repository workspace status for ${repository.name}`, error)
+          }
+        })
+      )
+    } finally {
+      projectWorkspaceStatusRefreshRef.current = false
+    }
+  }
+
   async function refreshProjectGitData(projectId: string, changedRepository?: Repository): Promise<void> {
     if (changedRepository) {
       setProjectGitRepositoryId(changedRepository.id)
@@ -7390,6 +7451,39 @@ function ProjectOverview({
 
     refreshSummary(selectedProject.id).catch((error) => setAnalysisGitError(createGitErrorGuidance(error, '读取 Git 数据')))
   }, [selectedProject?.id, rangePreset, range.startDate, range.endDate])
+
+  useEffect(() => {
+    if (!selectedProject || !window.forgeDesk) {
+      return
+    }
+
+    refreshProjectServiceBindings(selectedProject.id).catch((error) => message.error(getErrorMessage(error)))
+  }, [selectedProject?.id, projectSettingsDrawerOpen])
+
+  useEffect(() => {
+    projectRepositoriesRef.current = projectRepositories
+  }, [projectRepositories])
+
+  useEffect(() => {
+    if (!selectedProject || projectRepositories.length === 0 || !window.forgeDesk) {
+      return
+    }
+
+    refreshProjectWorkspaceStatuses()
+    const intervalId = window.setInterval(() => {
+      refreshProjectWorkspaceStatuses()
+    }, projectWorkspaceStatusRefreshIntervalMs)
+
+    return () => window.clearInterval(intervalId)
+  }, [selectedProject?.id, projectRepositoryIds])
+
+  useEffect(() => {
+    const nextTab = resolveProjectDetailTab(projectDetailTab, hasBoundProjectServices)
+
+    if (nextTab !== projectDetailTab) {
+      setProjectDetailTab(nextTab)
+    }
+  }, [hasBoundProjectServices, projectDetailTab])
 
   useEffect(() => {
     if (summary?.status === 'failed' && summary.errorMessage) {
@@ -7600,15 +7694,15 @@ function ProjectOverview({
           <div className="project-detail-panel">
             <div className="project-detail-heading">
               <div className="project-title-stack">
-                <div>
+                <div className="project-title-content">
                   <Typography.Title level={3}>{selectedProject.name}</Typography.Title>
                   <Typography.Text className="table-text" type="secondary" ellipsis={{ tooltip: selectedProject.workspacePath }}>
                     {selectedProject.workspacePath}
                   </Typography.Text>
+                  {summary?.lastAnalyzedAt && <Typography.Text type="secondary">上次分析：{new Date(summary.lastAnalyzedAt).toLocaleString()}</Typography.Text>}
                 </div>
               </div>
               <Space wrap className="project-detail-actions">
-                {summary?.lastAnalyzedAt && <Typography.Text type="secondary">上次分析：{new Date(summary.lastAnalyzedAt).toLocaleString()}</Typography.Text>}
                 <Button danger icon={<DeleteOutlined />} loading={deletingProjectId === selectedProject.id} onClick={() => confirmDeleteProject(selectedProject)}>
                   删除项目
                 </Button>
@@ -7685,7 +7779,7 @@ function ProjectOverview({
             )}
 
             <Tabs
-              activeKey={projectDetailTab}
+              activeKey={activeProjectDetailTab}
               onChange={(key) => setProjectDetailTab(key as ProjectDetailTabKey)}
               items={[
                 {
@@ -7808,7 +7902,7 @@ function ProjectOverview({
                     />
                   )
                 }
-              ]}
+              ].filter((item) => projectDetailTabs.some((tab) => tab.key === item.key))}
             />
           </div>
         </div>

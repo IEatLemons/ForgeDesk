@@ -2,10 +2,12 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   chooseTerminalShortcutProject,
+  createProjectDetailTabs,
   createProjectTerminalOpenRequest,
   createRepositorySummaryFields,
   createRepositoryTerminalOpenRequest,
   PROJECT_DETAIL_TABS,
+  resolveProjectDetailTab,
   shouldShowRepositorySummary,
   type ProjectDetailTabKey
 } from './project-detail-view.js'
@@ -55,6 +57,24 @@ describe('project detail view helpers', () => {
       PROJECT_DETAIL_TABS.map((tab) => tab.key),
       ['data', 'log-tree', 'remote-alignment', 'service-monitor', 'terminal']
     )
+  })
+
+  it('shows service monitoring only after the project has bound services', () => {
+    assert.deepEqual(
+      createProjectDetailTabs(false).map((tab) => tab.key),
+      ['data', 'log-tree', 'remote-alignment', 'terminal']
+    )
+
+    assert.deepEqual(
+      createProjectDetailTabs(true).map((tab) => tab.key),
+      ['data', 'log-tree', 'remote-alignment', 'service-monitor', 'terminal']
+    )
+  })
+
+  it('moves away from service monitoring when the project has no bound services', () => {
+    assert.equal(resolveProjectDetailTab('service-monitor', false), 'data')
+    assert.equal(resolveProjectDetailTab('service-monitor', true), 'service-monitor')
+    assert.equal(resolveProjectDetailTab('terminal', false), 'terminal')
   })
 
   it('omits duplicate repository name and local path fields from the summary strip', () => {

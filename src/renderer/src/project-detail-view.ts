@@ -3,13 +3,23 @@ import { createTerminalReuseKey } from './terminal-panel-state.js'
 
 export type ProjectDetailTabKey = 'data' | 'log-tree' | 'remote-alignment' | 'service-monitor' | 'terminal'
 
-export const PROJECT_DETAIL_TABS: Array<{ key: ProjectDetailTabKey; label: string }> = [
+export type ProjectDetailTab = { key: ProjectDetailTabKey; label: string }
+
+export const PROJECT_DETAIL_TABS: ProjectDetailTab[] = [
   { key: 'data', label: '数据' },
   { key: 'log-tree', label: 'Log 树' },
   { key: 'remote-alignment', label: '多端对齐' },
   { key: 'service-monitor', label: '服务监控' },
   { key: 'terminal', label: '终端' }
 ]
+
+export function createProjectDetailTabs(hasBoundServices: boolean): ProjectDetailTab[] {
+  return PROJECT_DETAIL_TABS.filter((tab) => tab.key !== 'service-monitor' || hasBoundServices)
+}
+
+export function resolveProjectDetailTab(tab: ProjectDetailTabKey, hasBoundServices: boolean): ProjectDetailTabKey {
+  return createProjectDetailTabs(hasBoundServices).some((item) => item.key === tab) ? tab : 'data'
+}
 
 export type RepositorySummarySource = {
   currentBranch: string

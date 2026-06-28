@@ -10,6 +10,7 @@ type PushTargetLike = {
 type RepositoryLike = {
   currentBranch?: string
   hasChanges?: boolean
+  ahead?: number
   pushTargets?: PushTargetLike[]
 }
 
@@ -19,6 +20,8 @@ type RemoteLike = {
 
 type WorkspaceStatusLike = {
   branch?: string
+  files?: unknown[]
+  pushTargets?: PushTargetLike[]
 }
 
 export type PushRemoteOption = {
@@ -36,6 +39,18 @@ export function hasProjectCommittableChanges(repositories: RepositoryLike[]): bo
 
 export function hasProjectPushableTargets(repositories: RepositoryLike[]): boolean {
   return repositories.some((repository) => getPushableTargets(repository.pushTargets).length > 0)
+}
+
+export function mergeRepositoryWorkspaceStatus<T extends RepositoryLike>(repository: T, status: WorkspaceStatusLike): T {
+  const pushTargets = status.pushTargets ?? repository.pushTargets ?? []
+
+  return {
+    ...repository,
+    currentBranch: status.branch || repository.currentBranch,
+    hasChanges: (status.files ?? []).length > 0,
+    pushTargets,
+    ahead: Math.max(0, ...pushTargets.map((target) => target.ahead))
+  }
 }
 
 export function canCommitSelection(files: unknown[], selectedPaths: string[], commitMessage: string): boolean {
