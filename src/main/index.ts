@@ -105,6 +105,7 @@ import {
   isMonitorableServiceDomain,
   listAllProjectServices as listAllProjectServiceRecords,
   listAllServiceMonitorHistory as listAllServiceMonitorHistoryRecords,
+  listCachedServiceDeployments as listCachedServiceDeploymentRecords,
   listLatestServiceMonitorChecks as listLatestServiceMonitorCheckRecords,
   listProjectServices as listProjectServiceRecords,
   listServiceConnections as listServiceConnectionRecords,
@@ -2937,6 +2938,12 @@ ipcMain.handle(
   'service:deployments:list',
   async (_event, serviceId: string, options?: ServiceDeploymentListOptions): Promise<ServiceDeploymentSummary[]> =>
     listServiceDeploymentRecords(getDatabase(), serviceId, options)
+)
+
+ipcMain.handle(
+  'service:deployments:cached:list',
+  async (_event, serviceId: string, options?: ServiceDeploymentListOptions): Promise<ServiceDeploymentSummary[]> =>
+    listCachedServiceDeploymentRecords(getDatabase(), serviceId, options)
 )
 
 ipcMain.handle(

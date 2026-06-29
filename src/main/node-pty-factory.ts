@@ -59,6 +59,20 @@ function repairSpawnHelperPermissions(helperPath: string, fs: SpawnHelperPermiss
   return helperPath
 }
 
+function assertPackagedSpawnHelperPermissions(helperPath: string, fs: SpawnHelperPermissionFs): string {
+  const mode = fs.statSync(helperPath).mode
+
+  if ((mode & 0o755) !== 0o755) {
+    throw new Error('node-pty spawn-helper 缺少执行权限。请重新打包应用，确保签名前修复 helper 权限。')
+  }
+
+  return helperPath
+}
+
+function isPackagedAppPath(path: string): boolean {
+  return path.includes(ASAR_SEGMENT) || path.includes(ASAR_UNPACKED_SEGMENT)
+}
+
 export function ensureNodePtySpawnHelperPermissions({
   arch = process.arch,
   fs = { chmodSync, existsSync, statSync },
@@ -69,7 +83,9 @@ export function ensureNodePtySpawnHelperPermissions({
     return null
   }
 
-  const packageJsonPath = resolveNodePtyPackageJsonPath(nodePtyPackagePath)
+  const rawPackageJsonPath = nodePtyPackagePath ?? require.resolve('node-pty/package.json')
+  const packageJsonPath = resolveNodePtyPackageJsonPath(rawPackageJsonPath)
+  const packagedApp = isPackagedAppPath(rawPackageJsonPath) || isPackagedAppPath(packageJsonPath)
   let repairedPath: string | null = null
 
   for (const helperPath of getNodePtySpawnHelperPaths(packageJsonPath, arch)) {
@@ -77,7 +93,7 @@ export function ensureNodePtySpawnHelperPermissions({
       continue
     }
 
-    repairedPath = repairSpawnHelperPermissions(helperPath, fs)
+    repairedPath = packagedApp ? assertPackagedSpawnHelperPermissions(helperPath, fs) : repairSpawnHelperPermissions(helperPath, fs)
   }
 
   return repairedPath

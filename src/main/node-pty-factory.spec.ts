@@ -36,26 +36,48 @@ describe('node pty factory helpers', () => {
     assert.deepEqual(chmods, [{ path: helperPath, mode: 0o100755 }])
   })
 
-  it('repairs spawn-helper inside app.asar.unpacked in packaged builds', () => {
+  it('does not mutate packaged app bundles when spawn-helper permissions are missing', () => {
     const packagePath =
       '/Applications/ForgeDesk.app/Contents/Resources/app.asar/node_modules/node-pty/package.json'
     const helperPath =
       '/Applications/ForgeDesk.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper'
     const chmods: Array<{ path: string; mode: number }> = []
 
+    assert.throws(
+      () =>
+        ensureNodePtySpawnHelperPermissions({
+          arch: 'arm64',
+          fs: {
+            chmodSync: (path, mode) => chmods.push({ path, mode }),
+            existsSync: (path) => path === helperPath,
+            statSync: () => ({ mode: 0o100644 })
+          },
+          nodePtyPackagePath: packagePath,
+          platform: 'darwin'
+        }),
+      /重新打包应用/
+    )
+    assert.deepEqual(chmods, [])
+  })
+
+  it('accepts executable spawn-helper permissions inside packaged app bundles', () => {
+    const packagePath =
+      '/Applications/ForgeDesk.app/Contents/Resources/app.asar/node_modules/node-pty/package.json'
+    const helperPath =
+      '/Applications/ForgeDesk.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper'
+
     const repairedPath = ensureNodePtySpawnHelperPermissions({
       arch: 'arm64',
       fs: {
-        chmodSync: (path, mode) => chmods.push({ path, mode }),
+        chmodSync: () => assert.fail('packaged app bundles should not be mutated at runtime'),
         existsSync: (path) => path === helperPath,
-        statSync: () => ({ mode: 0o100644 })
+        statSync: () => ({ mode: 0o100755 })
       },
       nodePtyPackagePath: packagePath,
       platform: 'darwin'
     })
 
     assert.equal(repairedPath, helperPath)
-    assert.deepEqual(chmods, [{ path: helperPath, mode: 0o100755 }])
   })
 
   it('skips safely outside macOS or when the helper is absent', () => {

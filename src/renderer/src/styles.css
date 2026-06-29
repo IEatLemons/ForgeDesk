@@ -694,6 +694,156 @@ body {
   margin-bottom: 14px;
 }
 
+.deployment-center {
+  width: 100%;
+  min-width: 0;
+}
+
+.deployment-center-toolbar,
+.deployment-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.deployment-filter-bar {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  padding: 10px;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.deployment-date-range {
+  width: 230px;
+}
+
+.deployment-search {
+  width: 220px;
+}
+
+.deployment-filter-select {
+  min-width: 170px;
+  max-width: 240px;
+  flex: 1 1 170px;
+}
+
+.deployment-status-filter {
+  min-width: 150px;
+  max-width: 220px;
+  flex: 0 1 170px;
+}
+
+.deployment-error-text {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+}
+
+.deployment-list {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #e6eaf1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.deployment-row {
+  display: grid;
+  grid-template-columns:
+    minmax(220px, 2fr)
+    92px
+    80px
+    minmax(120px, 0.82fr)
+    82px
+    60px
+    minmax(72px, 0.42fr)
+    92px;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 9px 12px;
+  border-bottom: 1px solid #eef1f5;
+}
+
+.deployment-row:last-child {
+  border-bottom: 0;
+}
+
+.deployment-list-footer {
+  display: flex;
+  justify-content: center;
+  padding: 10px 12px;
+}
+
+.deployment-row:hover {
+  background: #fafcff;
+}
+
+.deployment-row-message,
+.deployment-row-project,
+.deployment-row-git {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.deployment-row-message .ant-typography,
+.deployment-row-project .ant-typography,
+.deployment-row-git .ant-typography,
+.deployment-row-author .ant-typography {
+  min-width: 0;
+}
+
+.deployment-row-submeta {
+  min-width: 0;
+}
+
+.deployment-url-button {
+  height: auto;
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.deployment-row-status,
+.deployment-row-author {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.deployment-row-status .ant-typography-secondary {
+  font-size: 12px;
+}
+
+.deployment-environment-tag {
+  width: max-content;
+  max-width: 100%;
+  margin-inline-end: 0;
+}
+
+.deployment-row-time {
+  white-space: nowrap;
+}
+
+.deployment-row-actions {
+  justify-content: flex-end;
+}
+
+.deployment-row-actions .ant-btn {
+  width: 22px;
+  height: 24px;
+}
+
 .git-browser {
   width: 100%;
   min-width: 0;

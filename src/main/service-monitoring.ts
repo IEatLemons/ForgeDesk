@@ -193,6 +193,8 @@ export type ServiceMonitorCheckRecord = {
 
 export type ServiceEnvironmentLogRecord = ProviderDeploymentLogLine
 
+export type CachedServiceDeploymentRecord = ServiceDeploymentSummary
+
 export type VercelDeploymentActionInput = {
   action: 'redeploy' | 'cancel' | 'promote' | 'rollback'
   deploymentId: string
@@ -457,6 +459,22 @@ export function migrateServiceMonitoringTables(db: DatabaseLike): void {
       FOREIGN KEY (domain_id) REFERENCES global_service_domains(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS global_service_deployments (
+      id TEXT NOT NULL,
+      service_id TEXT NOT NULL,
+      url TEXT NOT NULL DEFAULT '',
+      target TEXT NOT NULL DEFAULT '',
+      state TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT '',
+      ready_at TEXT NOT NULL DEFAULT '',
+      creator TEXT NOT NULL DEFAULT '',
+      meta_json TEXT NOT NULL DEFAULT '{}',
+      commit_sha TEXT NOT NULL DEFAULT '',
+      cached_at TEXT NOT NULL,
+      PRIMARY KEY (service_id, id),
+      FOREIGN KEY (service_id) REFERENCES global_services(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS project_service_bindings (
       project_id TEXT NOT NULL,
       service_id TEXT NOT NULL,
@@ -517,6 +535,7 @@ export function migrateServiceMonitoringTables(db: DatabaseLike): void {
     CREATE INDEX IF NOT EXISTS idx_global_services_connection ON global_services(connection_id);
     CREATE INDEX IF NOT EXISTS idx_global_service_domains_service ON global_service_domains(service_id);
     CREATE INDEX IF NOT EXISTS idx_global_service_monitor_checks_checked ON global_service_monitor_checks(checked_at);
+    CREATE INDEX IF NOT EXISTS idx_global_service_deployments_service_created ON global_service_deployments(service_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_project_service_bindings_project ON project_service_bindings(project_id);
   `)
 
@@ -611,6 +630,7 @@ export function saveServiceConnection(db: DatabaseLike, input: ServiceConnection
 function deleteGlobalService(db: DatabaseLike, serviceId: string): void {
   db.prepare('DELETE FROM project_service_bindings WHERE service_id = ?').run(serviceId)
   db.prepare('DELETE FROM global_service_monitor_checks WHERE service_id = ?').run(serviceId)
+  db.prepare('DELETE FROM global_service_deployments WHERE service_id = ?').run(serviceId)
   db.prepare('DELETE FROM global_service_domains WHERE service_id = ?').run(serviceId)
   db.prepare('DELETE FROM global_service_environments WHERE service_id = ?').run(serviceId)
   db.prepare('DELETE FROM global_services WHERE id = ?').run(serviceId)
@@ -707,6 +727,124 @@ function mapServiceRow(db: DatabaseLike, row: Record<string, unknown>): ProjectS
       .all(serviceId)
       .map((domainRow) => mapDomainRow(domainRow as Record<string, unknown>))
   }
+}
+
+function parseDeploymentMeta(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+
+  if (typeof value !== 'string' || !value.trim()) {
+    return {}
+  }
+
+  try {
+    const parsed = JSON.parse(value)
+
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function mapDeploymentCacheRow(row: Record<string, unknown>): CachedServiceDeploymentRecord {
+  return {
+    id: String(row.id ?? ''),
+    url: String(row.url ?? ''),
+    target: String(row.target ?? ''),
+    state: String(row.state ?? ''),
+    createdAt: String(row.created_at ?? ''),
+    readyAt: String(row.ready_at ?? ''),
+    creator: String(row.creator ?? ''),
+    meta: parseDeploymentMeta(row.meta_json),
+    commitSha: String(row.commit_sha ?? '')
+  }
+}
+
+function getDeploymentLimit(options: ServiceDeploymentListOptions = {}): number {
+  const limit = Number(options.limit ?? 20)
+
+  return Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 100) : 20
+}
+
+function cacheServiceDeployments(db: DatabaseLike, serviceId: string, deployments: ServiceDeploymentSummary[]): void {
+  const cachedAt = nowIso()
+  const statement = db.prepare(
+    `
+    INSERT INTO global_service_deployments (
+      id, service_id, url, target, state, created_at, ready_at, creator, meta_json, commit_sha, cached_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(service_id, id) DO UPDATE SET
+      url = excluded.url,
+      target = excluded.target,
+      state = excluded.state,
+      created_at = excluded.created_at,
+      ready_at = excluded.ready_at,
+      creator = excluded.creator,
+      meta_json = excluded.meta_json,
+      commit_sha = excluded.commit_sha,
+      cached_at = excluded.cached_at
+  `
+  )
+
+  for (const deployment of deployments) {
+    if (!deployment.id) {
+      continue
+    }
+
+    statement.run(
+      deployment.id,
+      serviceId,
+      deployment.url,
+      deployment.target,
+      deployment.state,
+      deployment.createdAt,
+      deployment.readyAt,
+      deployment.creator,
+      JSON.stringify(deployment.meta ?? {}),
+      deployment.commitSha,
+      cachedAt
+    )
+  }
+}
+
+export function listCachedServiceDeployments(
+  db: DatabaseLike,
+  serviceId: string,
+  options: ServiceDeploymentListOptions = {}
+): CachedServiceDeploymentRecord[] {
+  const service = getProjectService(db, serviceId)
+
+  if (!service) {
+    throw new Error('服务不存在')
+  }
+
+  const limit = getDeploymentLimit(options)
+  const target = trimText(options.target)
+  const rows = target
+    ? db
+        .prepare(
+          `
+          SELECT * FROM global_service_deployments
+          WHERE service_id = ? AND target = ?
+          ORDER BY created_at DESC
+          LIMIT ?
+        `
+        )
+        .all(serviceId, target, limit)
+    : db
+        .prepare(
+          `
+          SELECT * FROM global_service_deployments
+          WHERE service_id = ?
+          ORDER BY created_at DESC
+          LIMIT ?
+        `
+        )
+        .all(serviceId, limit)
+
+  return rows.map((row) => mapDeploymentCacheRow(row as Record<string, unknown>))
 }
 
 export function listProjectServices(db: DatabaseLike, projectId: string): ProjectServiceRecord[] {
@@ -1215,13 +1353,20 @@ export async function listServiceDeployments(
         )
       )
     ).flat()
+    const sortedDeployments = deployments.sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 
-    return deployments.sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    cacheServiceDeployments(db, serviceId, sortedDeployments)
+
+    return sortedDeployments
   }
 
   const { connection, projectId } = getVercelServiceContext(db, serviceId)
 
-  return listVercelDeployments(connection, projectId, options, fetcher)
+  const deployments = (await listVercelDeployments(connection, projectId, options, fetcher)).sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+
+  cacheServiceDeployments(db, serviceId, deployments)
+
+  return deployments
 }
 
 export async function runServiceDeploymentAction(

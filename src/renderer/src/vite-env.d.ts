@@ -795,6 +795,7 @@ interface Window {
     listServiceMonitorHistory: (projectId: string) => Promise<ServiceMonitorCheckRecord[]>
     listAllServiceMonitorHistory: () => Promise<ServiceMonitorCheckRecord[]>
     listServiceEnvironmentLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
+    listCachedServiceDeployments: (serviceId: string, options?: ServiceDeploymentListOptions) => Promise<ServiceDeploymentSummary[]>
     listServiceDeployments: (serviceId: string, options?: ServiceDeploymentListOptions) => Promise<ServiceDeploymentSummary[]>
     runServiceDeploymentAction: (serviceId: string, input: VercelDeploymentActionInput) => Promise<ProjectServiceRecord>
     listServiceEnvVars: (serviceId: string) => Promise<ServiceEnvVarRecord[]>

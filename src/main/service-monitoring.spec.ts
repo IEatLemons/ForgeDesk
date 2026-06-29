@@ -12,6 +12,7 @@ import {
   deleteServiceConnection,
   deleteServiceEnvVar,
   isMonitorableServiceDomain,
+  listCachedServiceDeployments,
   listAllProjectServices,
   listProjectServices,
   listServiceConnections,
@@ -60,6 +61,7 @@ function createDatabase(): TestDatabase {
   const serviceEnvironments: Array<Record<string, unknown>> = []
   const serviceDomains: Array<Record<string, unknown>> = []
   const serviceMonitorChecks: Array<Record<string, unknown>> = []
+  const serviceDeployments: Array<Record<string, unknown>> = []
   const db: TestDatabase = {
     exec: () => undefined,
     prepare: (sql: string) => {
@@ -498,6 +500,68 @@ function createDatabase(): TestDatabase {
               }
             }
           }
+        }
+      }
+
+      if (sql.includes('DELETE FROM global_service_deployments WHERE service_id = ?')) {
+        return {
+          all: () => [],
+          get: () => undefined,
+          run: (serviceId) => {
+            for (let index = serviceDeployments.length - 1; index >= 0; index -= 1) {
+              if (serviceDeployments[index].service_id === serviceId) {
+                serviceDeployments.splice(index, 1)
+              }
+            }
+          }
+        }
+      }
+
+      if (sql.includes('INSERT INTO global_service_deployments')) {
+        return {
+          all: () => [],
+          get: () => undefined,
+          run: (id, serviceId, url, target, state, createdAt, readyAt, creator, metaJson, commitSha, cachedAt) => {
+            const existing = serviceDeployments.find((deployment) => deployment.service_id === serviceId && deployment.id === id)
+            const nextDeployment = {
+              id,
+              service_id: serviceId,
+              url,
+              target,
+              state,
+              created_at: createdAt,
+              ready_at: readyAt,
+              creator,
+              meta_json: metaJson,
+              commit_sha: commitSha,
+              cached_at: cachedAt
+            }
+
+            if (existing) {
+              Object.assign(existing, nextDeployment)
+            } else {
+              serviceDeployments.push(nextDeployment)
+            }
+          }
+        }
+      }
+
+      if (sql.includes('SELECT * FROM global_service_deployments')) {
+        return {
+          all: (...params) => {
+            const [serviceId, maybeTargetOrLimit, maybeLimit] = params
+            const hasTarget = sql.includes('AND target = ?')
+            const target = hasTarget ? maybeTargetOrLimit : undefined
+            const limit = Number(hasTarget ? maybeLimit : maybeTargetOrLimit)
+
+            return serviceDeployments
+              .filter((deployment) => deployment.service_id === serviceId)
+              .filter((deployment) => !hasTarget || deployment.target === target)
+              .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+              .slice(0, Number.isFinite(limit) ? limit : 20)
+          },
+          get: () => undefined,
+          run: () => undefined
         }
       }
 
@@ -1098,6 +1162,62 @@ describe('service monitoring storage', () => {
     await assert.rejects(() => saveServiceEnvVar(db, service.id, { key: 'API_URL', value: 'next', type: 'plain' }, fetcher), /Railway 环境变量只支持只读查看/)
     await assert.rejects(() => deleteServiceEnvVar(db, service.id, 'env_1', fetcher), /Railway 环境变量只支持只读查看/)
     await assert.rejects(() => runServiceDeploymentAction(db, service.id, { action: 'redeploy', deploymentId: 'dep_1' }, fetcher), /Railway 部署操作暂不支持/)
+  })
+
+  it('stores fetched deployments locally for cache-first reads', async () => {
+    const db = createDatabase()
+    const connection = saveServiceConnection(db, {
+      provider: 'vercel',
+      name: 'Vercel',
+      token: 'vercel-token'
+    })
+    const service = saveProjectService(db, {
+      provider: 'vercel',
+      connectionId: connection.id,
+      name: 'web',
+      externalProjectId: 'prj_1'
+    })
+    const fetcher = async (): Promise<Response> =>
+      ({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          deployments: [
+            {
+              uid: 'dep_old',
+              url: 'old.vercel.app',
+              target: 'production',
+              state: 'READY',
+              createdAt: '2026-06-29T01:00:00.000Z',
+              ready: '2026-06-29T01:00:05.000Z',
+              creator: { username: 'stone' },
+              meta: { githubCommitSha: 'abcdef123456', githubCommitMessage: 'fix: checkout' }
+            },
+            {
+              uid: 'dep_new',
+              url: 'new.vercel.app',
+              target: 'preview',
+              state: 'BUILDING',
+              createdAt: '2026-06-29T02:00:00.000Z',
+              creator: { username: 'alex' },
+              meta: { githubCommitSha: '123456abcdef', githubCommitMessage: 'feat: search' }
+            }
+          ]
+        }),
+        text: async () => '{}'
+      }) as Response
+
+    assert.deepEqual(listCachedServiceDeployments(db, service.id), [])
+
+    const fresh = await listServiceDeployments(db, service.id, { limit: 20 }, fetcher)
+    const cached = listCachedServiceDeployments(db, service.id, { limit: 20 })
+
+    assert.deepEqual(
+      cached.map((deployment) => deployment.id),
+      ['dep_new', 'dep_old']
+    )
+    assert.deepEqual(cached, fresh)
   })
 
   it('rejects provider ops when service context is incomplete', async () => {

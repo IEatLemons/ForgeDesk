@@ -1,11 +1,13 @@
 import {
   Alert,
   AutoComplete,
+  Avatar,
   Badge,
   Button,
   Checkbox,
   Col,
   Collapse,
+  DatePicker,
   Descriptions,
   Drawer,
   Empty,
@@ -22,6 +24,7 @@ import {
   Space,
   Spin,
   Statistic,
+  Switch,
   Table,
   Tabs,
   Tag,
@@ -34,6 +37,7 @@ import {
   BranchesOutlined,
   ArrowRightOutlined,
   CheckCircleOutlined,
+  CloseCircleOutlined,
   CodeOutlined,
   CopyOutlined,
   DashboardOutlined,
@@ -50,6 +54,7 @@ import {
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
+  SearchOutlined,
   SettingOutlined,
   TeamOutlined,
   ToolOutlined,
@@ -165,6 +170,26 @@ import {
   type ProjectSettingsModuleKey
 } from './project-settings-view'
 import { createReleasePublishViewModel } from './release-publish-view'
+import {
+  createDeploymentFilterOptions,
+  createDeploymentRows,
+  createDeploymentStatusSummary,
+  deploymentAutoRefreshIntervalMs,
+  deploymentRateLimitFallbackMs,
+  filterDeploymentRows,
+  getDeploymentRateLimitRetryMs,
+  getNextDeploymentVisibleCount,
+  getVisibleDeploymentRows,
+  initialDeploymentVisibleCount,
+  isDeploymentRateLimitMessage,
+  railwayDeploymentRefreshBatchSize,
+  selectDeploymentRefreshServices,
+  summarizeDeploymentRefreshErrors,
+  type DeploymentDashboardFilters,
+  type DeploymentDashboardRow,
+  type DeploymentRefreshCursor,
+  type DeploymentRefreshError
+} from './service-deployments-view'
 import { getServiceProviderGuide, type ServiceProviderGuideProvider } from './service-config-guide'
 import {
   createRailwayProjectEnvironmentGroups,
@@ -528,6 +553,44 @@ function formatShortCommit(commitHash: string): string {
 
 function formatDateTime(value: string): string {
   return value ? new Date(value).toLocaleString() : '-'
+}
+
+function formatRelativeTime(value: string): string {
+  const timestamp = Date.parse(value)
+
+  if (!Number.isFinite(timestamp)) {
+    return '-'
+  }
+
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000))
+
+  if (seconds < 60) {
+    return `${seconds}s ago`
+  }
+
+  const minutes = Math.floor(seconds / 60)
+
+  if (minutes < 60) {
+    return `${minutes}m ago`
+  }
+
+  const hours = Math.floor(minutes / 60)
+
+  if (hours < 24) {
+    return `${hours}h ago`
+  }
+
+  return `${Math.floor(hours / 24)}d ago`
+}
+
+function getAvatarLabel(value: string): string {
+  const trimmed = value.trim()
+
+  if (!trimmed) {
+    return '?'
+  }
+
+  return trimmed.slice(0, 1).toUpperCase()
 }
 
 function getRemoteAlignmentDetail(alignment: RemoteAlignmentSummary): string {
@@ -3736,6 +3799,12 @@ function ServiceDetailDrawer({
     setDeploymentsError('')
 
     try {
+      const cachedDeployments = await window.forgeDesk.listCachedServiceDeployments(activeService.id, { limit: 20 })
+
+      if (cachedDeployments.length > 0) {
+        setDeployments(cachedDeployments)
+      }
+
       setDeployments(await window.forgeDesk.listServiceDeployments(activeService.id, { limit: 20 }))
     } catch (error) {
       setDeploymentsError(getErrorMessage(error))
@@ -4511,19 +4580,488 @@ function ServiceDetailDrawer({
   )
 }
 
+type ServiceCenterView = 'deployments' | 'services'
+
 function GlobalServiceCenterPanel({ onBack }: { onBack?: () => void }): JSX.Element {
+  const [centerView, setCenterView] = useState<ServiceCenterView>(onBack ? 'services' : 'deployments')
+  const [services, setServices] = useState<ProjectService[]>([])
+  const [deploymentsByServiceId, setDeploymentsByServiceId] = useState<Record<string, ServiceDeploymentSummary[]>>({})
+  const [deploymentFilters, setDeploymentFilters] = useState<DeploymentDashboardFilters>({})
+  const [deploymentsLoading, setDeploymentsLoading] = useState(false)
+  const [deploymentsError, setDeploymentsError] = useState('')
+  const [lastDeploymentRefreshAt, setLastDeploymentRefreshAt] = useState('')
+  const [autoRefreshDeployments, setAutoRefreshDeployments] = useState(true)
+  const [deploymentDatePickerKey, setDeploymentDatePickerKey] = useState(0)
+  const [visibleDeploymentCount, setVisibleDeploymentCount] = useState(initialDeploymentVisibleCount)
+  const deploymentRefreshInFlightRef = useRef(false)
+  const deploymentRefreshCursorRef = useRef<DeploymentRefreshCursor>({})
+  const deploymentProviderBackoffUntilRef = useRef<Partial<Record<ServiceProviderType, number>>>({})
+  const deploymentRows = useMemo(() => createDeploymentRows(services, deploymentsByServiceId), [deploymentsByServiceId, services])
+  const filteredDeploymentRows = useMemo(() => filterDeploymentRows(deploymentRows, deploymentFilters), [deploymentFilters, deploymentRows])
+  const visibleDeploymentRows = useMemo(
+    () => getVisibleDeploymentRows(filteredDeploymentRows, visibleDeploymentCount),
+    [filteredDeploymentRows, visibleDeploymentCount]
+  )
+  const deploymentFilterOptions = useMemo(() => createDeploymentFilterOptions(deploymentRows), [deploymentRows])
+  const deploymentSummary = useMemo(() => createDeploymentStatusSummary(deploymentRows), [deploymentRows])
+  const selectedStatusSummary = useMemo(() => createDeploymentStatusSummary(filteredDeploymentRows), [filteredDeploymentRows])
+  const hiddenDeploymentRowCount = Math.max(0, selectedStatusSummary.total - visibleDeploymentRows.length)
+  const hasDeploymentFilters = Boolean(
+    deploymentFilters.query?.trim() ||
+      deploymentFilters.dateRange ||
+      deploymentFilters.authors?.length ||
+      deploymentFilters.environments?.length ||
+      deploymentFilters.repositories?.length ||
+      deploymentFilters.branches?.length ||
+      deploymentFilters.statuses?.length
+  )
+
+  function updateDeploymentFilters(patch: DeploymentDashboardFilters): void {
+    setVisibleDeploymentCount(initialDeploymentVisibleCount)
+    setDeploymentFilters((current) => ({ ...current, ...patch }))
+  }
+
+  async function loadDeploymentCenter(options: { silent?: boolean } = {}): Promise<void> {
+    if (!window.forgeDesk || deploymentRefreshInFlightRef.current) {
+      return
+    }
+
+    deploymentRefreshInFlightRef.current = true
+
+    if (!options.silent) {
+      setDeploymentsLoading(true)
+    }
+
+    try {
+      const nextServices = await window.forgeDesk.listAllProjectServices()
+      const deployableServices = nextServices.filter((service) => getServiceProviderCapabilities(service.provider).canListDeployments)
+      const refreshErrors: DeploymentRefreshError[] = []
+      const providerServiceCounts = deployableServices.reduce<Partial<Record<ServiceProviderType, number>>>((counts, service) => {
+        counts[service.provider] = (counts[service.provider] ?? 0) + 1
+        return counts
+      }, {})
+      const cachedEntries = await Promise.all(
+        deployableServices.map(async (service) => {
+          try {
+            return [service.id, await window.forgeDesk.listCachedServiceDeployments(service.id, { limit: 20 })] as const
+          } catch {
+            return [service.id, []] as const
+          }
+        })
+      )
+      const cachedDeploymentsByServiceId = Object.fromEntries(cachedEntries)
+
+      if (!options.silent && cachedEntries.some(([, deployments]) => deployments.length > 0)) {
+        setServices(nextServices)
+        setDeploymentsByServiceId(cachedDeploymentsByServiceId)
+      }
+
+      const now = Date.now()
+      const skippedBackoffProviders = new Set<ServiceProviderType>()
+      const refreshableServices = deployableServices.filter((service) => {
+        const backoffUntil = deploymentProviderBackoffUntilRef.current[service.provider] ?? 0
+
+        if (backoffUntil > now) {
+          skippedBackoffProviders.add(service.provider)
+          return false
+        }
+
+        return true
+      })
+      const refreshPlan = selectDeploymentRefreshServices(refreshableServices, deploymentRefreshCursorRef.current, {
+        railway: railwayDeploymentRefreshBatchSize
+      })
+      const nextDeploymentsByServiceId = { ...cachedDeploymentsByServiceId }
+      const providerBackedOffThisRun = new Set<ServiceProviderType>()
+
+      deploymentRefreshCursorRef.current = {
+        ...deploymentRefreshCursorRef.current,
+        ...refreshPlan.nextCursorByProvider
+      }
+
+      for (const provider of skippedBackoffProviders) {
+        const backoffUntil = deploymentProviderBackoffUntilRef.current[provider] ?? 0
+        const retrySeconds = Math.max(1, Math.ceil((backoffUntil - now) / 1000))
+
+        refreshErrors.push({
+          provider,
+          serviceName: provider,
+          message: `Rate limit exceeded, please try again in ${retrySeconds} seconds.`
+        })
+      }
+
+      for (const service of refreshPlan.services) {
+        if (providerBackedOffThisRun.has(service.provider)) {
+          continue
+        }
+
+        try {
+          nextDeploymentsByServiceId[service.id] = await window.forgeDesk.listServiceDeployments(service.id, { limit: 20 })
+        } catch (error) {
+          const errorMessage = getErrorMessage(error)
+
+          refreshErrors.push({ provider: service.provider, serviceName: service.name, message: errorMessage })
+
+          if (isDeploymentRateLimitMessage(errorMessage)) {
+            const retryMs = getDeploymentRateLimitRetryMs(errorMessage) || deploymentRateLimitFallbackMs
+
+            deploymentProviderBackoffUntilRef.current = {
+              ...deploymentProviderBackoffUntilRef.current,
+              [service.provider]: Date.now() + retryMs
+            }
+            providerBackedOffThisRun.add(service.provider)
+          }
+        }
+      }
+
+      setServices(nextServices)
+      setDeploymentsByServiceId(nextDeploymentsByServiceId)
+      setDeploymentsError(
+        summarizeDeploymentRefreshErrors(refreshErrors, providerServiceCounts)
+      )
+      setLastDeploymentRefreshAt(new Date().toISOString())
+    } catch (error) {
+      setDeploymentsError(getErrorMessage(error))
+    } finally {
+      deploymentRefreshInFlightRef.current = false
+
+      if (!options.silent) {
+        setDeploymentsLoading(false)
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (centerView === 'deployments') {
+      loadDeploymentCenter().catch((error) => message.error(getErrorMessage(error)))
+    }
+  }, [centerView])
+
+  useEffect(() => {
+    if (centerView !== 'deployments' || !autoRefreshDeployments) {
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      loadDeploymentCenter({ silent: true }).catch((error) => message.error(getErrorMessage(error)))
+    }, deploymentAutoRefreshIntervalMs)
+
+    return () => window.clearInterval(timer)
+  }, [autoRefreshDeployments, centerView])
+
+  useEffect(() => {
+    setVisibleDeploymentCount(initialDeploymentVisibleCount)
+  }, [deploymentFilters])
+
+  function clearDeploymentFilters(): void {
+    setVisibleDeploymentCount(initialDeploymentVisibleCount)
+    setDeploymentFilters({})
+    setDeploymentDatePickerKey((current) => current + 1)
+  }
+
+  function getDeploymentUrl(row: DeploymentDashboardRow): string {
+    if (!row.deploymentUrl) {
+      return ''
+    }
+
+    return /^https?:\/\//i.test(row.deploymentUrl) ? row.deploymentUrl : `https://${row.deploymentUrl}`
+  }
+
+  function runDeploymentAction(row: DeploymentDashboardRow, action: 'redeploy' | 'cancel' | 'promote' | 'rollback'): void {
+    if (!window.forgeDesk || row.provider !== 'vercel') {
+      return
+    }
+
+    const actionLabels = {
+      redeploy: '重新部署',
+      cancel: '取消部署',
+      promote: '提升为生产',
+      rollback: '回滚到此部署'
+    }
+    const dangerous = action !== 'redeploy'
+
+    Modal.confirm({
+      title: `${actionLabels[action]} ${row.deploymentId}？`,
+      content: action === 'promote' || action === 'rollback' ? '这个操作会改变生产流量指向。' : '操作会提交到 Vercel。',
+      okText: actionLabels[action],
+      cancelText: '取消',
+      okButtonProps: { danger: dangerous },
+      onOk: async () => {
+        try {
+          await window.forgeDesk.runServiceDeploymentAction(row.serviceId, {
+            action,
+            deploymentId: row.deploymentId,
+            description: action === 'rollback' ? `Rollback from ForgeDesk to ${row.deploymentId}` : undefined
+          })
+          await loadDeploymentCenter()
+          message.success(`${actionLabels[action]}已提交`)
+        } catch (error) {
+          message.error(getErrorMessage(error))
+        }
+      }
+    })
+  }
+
+  function renderDeploymentActionButtons(row: DeploymentDashboardRow): JSX.Element | null {
+    if (row.provider !== 'vercel') {
+      return null
+    }
+
+    const cancelable = ['BUILDING', 'DEPLOYING', 'INITIALIZING', 'QUEUED', 'PENDING'].includes(row.state.toUpperCase())
+
+    return (
+      <Space size={2} className="deployment-row-actions">
+        <Tooltip title="Redeploy">
+          <Button
+            type="text"
+            size="small"
+            aria-label={`Redeploy ${row.deploymentId}`}
+            icon={<ReloadOutlined />}
+            onClick={(event) => {
+              event.stopPropagation()
+              runDeploymentAction(row, 'redeploy')
+            }}
+          />
+        </Tooltip>
+        <Tooltip title="Promote to production">
+          <Button
+            type="text"
+            size="small"
+            aria-label={`Promote ${row.deploymentId}`}
+            icon={<UploadOutlined />}
+            onClick={(event) => {
+              event.stopPropagation()
+              runDeploymentAction(row, 'promote')
+            }}
+          />
+        </Tooltip>
+        <Tooltip title="Rollback to this deployment">
+          <Button
+            type="text"
+            size="small"
+            aria-label={`Rollback to ${row.deploymentId}`}
+            icon={<ArrowLeftOutlined />}
+            onClick={(event) => {
+              event.stopPropagation()
+              runDeploymentAction(row, 'rollback')
+            }}
+          />
+        </Tooltip>
+        <Tooltip title={cancelable ? 'Cancel deployment' : 'Only running deployments can be canceled'}>
+          <Button
+            type="text"
+            size="small"
+            danger
+            disabled={!cancelable}
+            aria-label={`Cancel ${row.deploymentId}`}
+            icon={<CloseCircleOutlined />}
+            onClick={(event) => {
+              event.stopPropagation()
+              runDeploymentAction(row, 'cancel')
+            }}
+          />
+        </Tooltip>
+      </Space>
+    )
+  }
+
+  function renderDeploymentRow(row: DeploymentDashboardRow): JSX.Element {
+    const deploymentUrl = getDeploymentUrl(row)
+
+    return (
+      <div key={row.key} className="deployment-row">
+        <div className="deployment-row-message">
+          <Typography.Text strong ellipsis={{ tooltip: row.commitMessage }}>
+            {row.commitMessage}
+          </Typography.Text>
+          <Space size={8} wrap className="deployment-row-submeta">
+            <Typography.Text type="secondary">{row.deploymentId}</Typography.Text>
+            {deploymentUrl ? (
+              <Button type="link" className="deployment-url-button" href={deploymentUrl} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+                {row.deploymentUrl}
+              </Button>
+            ) : null}
+          </Space>
+        </div>
+        <div className="deployment-row-status">
+          <Badge status={row.statusMeta.badgeStatus} />
+          <Typography.Text>{row.statusMeta.label}</Typography.Text>
+          {row.readyDurationLabel ? <Typography.Text type="secondary">{row.readyDurationLabel}</Typography.Text> : null}
+        </div>
+        <Tag className="deployment-environment-tag" color={row.environmentName === 'production' ? 'blue' : 'default'}>
+          {row.environmentName}
+        </Tag>
+        <div className="deployment-row-project">
+          <Typography.Text strong ellipsis={{ tooltip: row.projectName }}>
+            {row.projectName}
+          </Typography.Text>
+          <Typography.Text type="secondary" ellipsis={{ tooltip: row.repositoryName }}>
+            {row.repositoryName}
+          </Typography.Text>
+        </div>
+        <div className="deployment-row-git">
+          <Typography.Text code>{row.shortCommit || '-'}</Typography.Text>
+          <Typography.Text type="secondary">{row.branchName || '-'}</Typography.Text>
+        </div>
+        <Typography.Text className="deployment-row-time" type="secondary" title={formatDateTime(row.createdAt)}>
+          {formatRelativeTime(row.createdAt)}
+        </Typography.Text>
+        <div className="deployment-row-author">
+          <Avatar size={24}>{getAvatarLabel(row.authorName || row.creator)}</Avatar>
+          <Typography.Text type="secondary" ellipsis={{ tooltip: row.authorName || row.creator || 'Unknown' }}>
+            {row.authorName || row.creator || 'Unknown'}
+          </Typography.Text>
+        </div>
+        {renderDeploymentActionButtons(row)}
+      </div>
+    )
+  }
+
+  const selectFilterOptions = {
+    authors: deploymentFilterOptions.authors.map((value) => ({ label: value, value })),
+    environments: deploymentFilterOptions.environments.map((value) => ({ label: value, value })),
+    repositories: deploymentFilterOptions.repositories.map((value) => ({ label: value, value })),
+    branches: deploymentFilterOptions.branches.map((value) => ({ label: value, value })),
+    statuses: deploymentFilterOptions.statuses.map((value) => ({ label: value, value }))
+  }
+
   return (
     <div className="panel settings-module-panel">
       <div className="settings-module-header">
         <Space direction="vertical" size={2}>
           <Typography.Title level={3}>服务中心</Typography.Title>
-          <Typography.Text type="secondary">全局维护 Vercel / Railway Token、同步出来的服务和自定义域名。</Typography.Text>
+          <Typography.Text type="secondary">实时查看部署状态，维护 Vercel / Railway Token、同步服务和自定义域名。</Typography.Text>
         </Space>
-        {onBack ? (
-          <Button onClick={onBack}>返回总览</Button>
-        ) : null}
+        <Space wrap>
+          <Segmented
+            value={centerView}
+            onChange={(value) => setCenterView(value as ServiceCenterView)}
+            options={[
+              { label: 'Deployments', value: 'deployments' },
+              { label: '服务配置', value: 'services' }
+            ]}
+          />
+          {onBack ? <Button onClick={onBack}>返回总览</Button> : null}
+        </Space>
       </div>
-      <ProjectServiceSettings />
+      {centerView === 'deployments' ? (
+        <Space direction="vertical" size={14} className="deployment-center">
+          <div className="deployment-center-toolbar">
+            <Space size={10} wrap>
+              <Tag color="green">Ready {deploymentSummary.ready}</Tag>
+              <Tag color="blue">Building {deploymentSummary.building}</Tag>
+              <Tag color="red">Error {deploymentSummary.error}</Tag>
+              <Typography.Text type="secondary">
+                Showing {visibleDeploymentRows.length} / {deploymentSummary.total}
+              </Typography.Text>
+            </Space>
+            <Space wrap>
+              <Space size={6}>
+                <Typography.Text type="secondary">实时刷新</Typography.Text>
+                <Switch size="small" checked={autoRefreshDeployments} onChange={setAutoRefreshDeployments} />
+              </Space>
+              <Typography.Text type="secondary">上次刷新：{formatDateTime(lastDeploymentRefreshAt)}</Typography.Text>
+              <Button icon={<ReloadOutlined />} loading={deploymentsLoading} onClick={() => loadDeploymentCenter()}>
+                刷新
+              </Button>
+            </Space>
+          </div>
+          <div className="deployment-filter-bar">
+            <DatePicker.RangePicker
+              key={deploymentDatePickerKey}
+              className="deployment-date-range"
+              placeholder={['开始日期', '结束日期']}
+              onChange={(_, dateStrings) =>
+                updateDeploymentFilters({
+                  dateRange: dateStrings[0] && dateStrings[1] ? [`${dateStrings[0]}T00:00:00.000Z`, `${dateStrings[1]}T23:59:59.999Z`] : null
+                })
+              }
+            />
+            <Input
+              allowClear
+              className="deployment-search"
+              prefix={<SearchOutlined />}
+              placeholder="Search deployments..."
+              value={deploymentFilters.query}
+              onChange={(event) => updateDeploymentFilters({ query: event.target.value })}
+            />
+            <Select
+              mode="multiple"
+              maxTagCount={1}
+              maxTagTextLength={18}
+              className="deployment-filter-select"
+              placeholder="All Authors..."
+              options={selectFilterOptions.authors}
+              value={deploymentFilters.authors ?? []}
+              onChange={(authors) => updateDeploymentFilters({ authors })}
+            />
+            <Select
+              mode="multiple"
+              maxTagCount={1}
+              maxTagTextLength={18}
+              className="deployment-filter-select"
+              placeholder="All Environments"
+              options={selectFilterOptions.environments}
+              value={deploymentFilters.environments ?? []}
+              onChange={(environments) => updateDeploymentFilters({ environments })}
+            />
+            <Select
+              mode="multiple"
+              maxTagCount={1}
+              maxTagTextLength={18}
+              className="deployment-filter-select"
+              placeholder="All Repositories"
+              options={selectFilterOptions.repositories}
+              value={deploymentFilters.repositories ?? []}
+              onChange={(repositories) => updateDeploymentFilters({ repositories })}
+            />
+            <Select
+              mode="multiple"
+              maxTagCount={1}
+              maxTagTextLength={18}
+              className="deployment-filter-select"
+              placeholder="All Branches..."
+              options={selectFilterOptions.branches}
+              value={deploymentFilters.branches ?? []}
+              onChange={(branches) => updateDeploymentFilters({ branches })}
+            />
+            <Select
+              mode="multiple"
+              maxTagCount={1}
+              maxTagTextLength={18}
+              className="deployment-status-filter"
+              placeholder={`Status ${deploymentSummary.ready}/${deploymentSummary.total}`}
+              options={selectFilterOptions.statuses}
+              value={deploymentFilters.statuses ?? []}
+              onChange={(statuses) => updateDeploymentFilters({ statuses })}
+            />
+            <Button disabled={!hasDeploymentFilters} onClick={clearDeploymentFilters}>
+              重置
+            </Button>
+          </div>
+          {deploymentsError ? <Alert type="warning" showIcon message="部分部署暂不可用" description={<pre className="deployment-error-text">{deploymentsError}</pre>} /> : null}
+          <Spin spinning={deploymentsLoading && deploymentRows.length === 0}>
+            <div className="deployment-list">
+              {filteredDeploymentRows.length > 0 ? (
+                <>
+                  {visibleDeploymentRows.map((row) => renderDeploymentRow(row))}
+                  {hiddenDeploymentRowCount > 0 ? (
+                    <div className="deployment-list-footer">
+                      <Button onClick={() => setVisibleDeploymentCount((current) => getNextDeploymentVisibleCount(current, selectedStatusSummary.total))}>
+                        Load More ({hiddenDeploymentRowCount})
+                      </Button>
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={deploymentsLoading ? '正在加载部署' : '暂无部署记录'} />
+              )}
+            </div>
+          </Spin>
+        </Space>
+      ) : (
+        <ProjectServiceSettings />
+      )}
     </div>
   )
 }

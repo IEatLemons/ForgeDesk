@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   listServiceMonitorHistory: (projectId: string) => ipcRenderer.invoke('service:monitor:history', projectId),
   listAllServiceMonitorHistory: () => ipcRenderer.invoke('service:monitor:history:all'),
   listServiceEnvironmentLogs: (serviceId: string, environmentName: string) => ipcRenderer.invoke('service:environment:logs', serviceId, environmentName),
+  listCachedServiceDeployments: (serviceId: string, options?: ServiceDeploymentListOptions) => ipcRenderer.invoke('service:deployments:cached:list', serviceId, options),
   listServiceDeployments: (serviceId: string, options?: ServiceDeploymentListOptions) => ipcRenderer.invoke('service:deployments:list', serviceId, options),
   runServiceDeploymentAction: (serviceId: string, input: VercelDeploymentActionInput) => ipcRenderer.invoke('service:deployment:action', serviceId, input),
   listServiceEnvVars: (serviceId: string) => ipcRenderer.invoke('service:env:list', serviceId),

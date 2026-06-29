@@ -54,6 +54,7 @@
       "buildResources": "resources",
       "output": "dist"
     },
+    "afterPack": "scripts/after-pack.cjs",
     "files": [
       "out/**/*",
       "node_modules/**/*",
@@ -70,6 +71,7 @@
       "node_modules/node-pty/**/*"
     ],
     "npmRebuild": false,
+    "afterSign": "scripts/after-sign.cjs",
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "resources/forgedesk.icns",
