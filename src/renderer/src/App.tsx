@@ -51,6 +51,7 @@ import {
   GithubOutlined,
   KeyOutlined,
   LinkOutlined,
+  LockOutlined,
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
@@ -58,6 +59,7 @@ import {
   SettingOutlined,
   TeamOutlined,
   ToolOutlined,
+  UnlockOutlined,
   UploadOutlined,
   ThunderboltOutlined,
   UserAddOutlined
@@ -90,6 +92,14 @@ import type {
   ProjectService,
   ProjectServiceDomain,
   ProjectServiceEnvironment,
+  PlaneConnectionTestResult,
+  PlaneCycle,
+  PlaneModule,
+  PlaneProject,
+  PlaneProjectBinding,
+  PlaneProjectContent,
+  PlaneSettings,
+  PlaneWorkItem,
   RemoteAlignmentBranch,
   RemoteAlignmentBranchStatus,
   RemoteAlignmentStatus,
@@ -99,6 +109,8 @@ import type {
   RepositoryReleasePublishResult,
   RepositoryReleaseSuggestion,
   RepositoryReleaseTagRecommendation,
+  RsaPrivateKeyRecord,
+  RsaPrivateKeySize,
   ServiceConnection,
   ServiceEnvironmentLogLine,
   ServiceMonitorCheck,
@@ -144,17 +156,22 @@ import {
 import {
   buildBranchGroups,
   createGraphRows,
+  getWorkspaceFileChangeStatus,
   getCommitAuthorDisplay,
   getCommitAuthorFilterValue,
   getGraphCellBottomLaneIndexes,
   getGitGraphColumnWidth,
+  isWorkingTreeCommit,
   getNextVisibleCommitCount,
   getRefColor,
   getRepositoryDefaultPushTarget,
+  prependWorkingTreeCommit,
   gitGraphLaneWidth,
+  workingTreeCommitHash,
   type GitGraphRow
 } from './git-log-view'
 import {
+  DEFAULT_PROJECT_DETAIL_TAB,
   createProjectDetailTabs,
   createProjectTerminalOpenRequest,
   createRepositorySummaryFields,
@@ -169,7 +186,7 @@ import {
   PROJECT_SETTINGS_MODULES,
   type ProjectSettingsModuleKey
 } from './project-settings-view'
-import { createReleasePublishViewModel } from './release-publish-view'
+import { createReleasePlatformOptions, createReleasePublishViewModel, getUnresolvedReleaseIssues, type ReleasePublishActionKey } from './release-publish-view'
 import {
   createDeploymentFilterOptions,
   createDeploymentRows,
@@ -236,7 +253,7 @@ type SshPassphraseForm = {
   confirmPassphrase: string
 }
 
-type SettingsModuleKey = 'overview' | 'git' | 'private' | 'public' | 'config' | 'services' | 'ai' | 'updates'
+type SettingsModuleKey = 'overview' | 'git' | 'private' | 'public' | 'config' | 'services' | 'plane' | 'ai' | 'updates'
 
 type AiSettingsForm = {
   enabled: boolean
@@ -245,6 +262,12 @@ type AiSettingsForm = {
   apiKey?: string
   model: string
   temperature: number
+}
+
+type PlaneSettingsForm = {
+  apiBaseUrl: string
+  webBaseUrl: string
+  apiToken?: string
 }
 
 const AI_PROVIDER_PRESETS: Record<AiSettingsForm['provider'], { label: string; baseUrl: string; model: string; apiKeyPlaceholder: string }> = {
@@ -303,6 +326,11 @@ type ProjectSettingsForm = {
   workspacePath: string
   description: string
   owner: string
+}
+
+type PlaneBindingForm = {
+  workspaceSlug: string
+  planeProjectId: string
 }
 
 type BranchTagForm = {
@@ -459,7 +487,9 @@ function getFileStatusLabel(status: string): { label: string; color: string } {
     M: { label: '修改', color: 'blue' },
     D: { label: '删除', color: 'red' },
     R: { label: '重命名', color: 'purple' },
-    C: { label: '复制', color: 'cyan' }
+    C: { label: '复制', color: 'cyan' },
+    U: { label: '冲突', color: 'red' },
+    '?': { label: '未跟踪', color: 'default' }
   }
 
   return statusMap[status] ?? { label: status || '变更', color: 'default' }
@@ -654,6 +684,11 @@ const graphLineOverflow = 2
 const graphCurveOffset = 12
 const commitGraphBatchSize = 60
 
+type RepositoryLogCommit = GitCommit & {
+  isWorkingTreeCommit?: boolean
+  worktreeFiles?: GitCommitFileChange[]
+}
+
 function getGraphLaneColor(index: number): string {
   return graphLaneColors[index % graphLaneColors.length]
 }
@@ -677,8 +712,9 @@ function createGraphParentPath({
   ].join(' ')
 }
 
-function CommitGraphCell({ commit }: { commit: GitGraphRow<GitCommit> }): JSX.Element {
+function CommitGraphCell({ commit }: { commit: GitGraphRow<RepositoryLogCommit> }): JSX.Element {
   const isMerge = commit.parentHashes.length > 1
+  const isWorkingTree = isWorkingTreeCommit(commit)
   const graphCellBottomLaneIndexes = getGraphCellBottomLaneIndexes(commit)
   const allLaneIndexes = [
     commit.graphLaneIndex,
@@ -690,9 +726,10 @@ function CommitGraphCell({ commit }: { commit: GitGraphRow<GitCommit> }): JSX.El
   const svgWidth = Math.max(42, laneCount * gitGraphLaneWidth)
   const xForLane = (index: number): number => index * gitGraphLaneWidth + gitGraphLaneWidth / 2
   const parentEdges = commit.graphParentEdges.filter((edge) => edge.fromLaneIndex !== edge.toLaneIndex)
+  const getLaneColor = (laneIndex: number): string => (isWorkingTree ? '#98a2b3' : getGraphLaneColor(laneIndex))
 
   return (
-    <div className="commit-graph-cell">
+    <div className={isWorkingTree ? 'commit-graph-cell is-working-tree' : 'commit-graph-cell'}>
       <svg
         aria-hidden="true"
         className="commit-graph-svg"
@@ -706,7 +743,7 @@ function CommitGraphCell({ commit }: { commit: GitGraphRow<GitCommit> }): JSX.El
           <line
             key={`top-${laneIndex}`}
             className={laneIndex === commit.graphLaneIndex ? 'commit-graph-line is-active' : 'commit-graph-line'}
-            stroke={getGraphLaneColor(laneIndex)}
+            stroke={getLaneColor(laneIndex)}
             x1={xForLane(laneIndex)}
             x2={xForLane(laneIndex)}
             y1={-graphLineOverflow}
@@ -717,7 +754,7 @@ function CommitGraphCell({ commit }: { commit: GitGraphRow<GitCommit> }): JSX.El
           <line
             key={`bottom-${laneIndex}`}
             className={laneIndex === commit.graphLaneIndex ? 'commit-graph-line is-active' : 'commit-graph-line'}
-            stroke={getGraphLaneColor(laneIndex)}
+            stroke={getLaneColor(laneIndex)}
             x1={xForLane(laneIndex)}
             x2={xForLane(laneIndex)}
             y1={graphRowMiddle}
@@ -732,14 +769,14 @@ function CommitGraphCell({ commit }: { commit: GitGraphRow<GitCommit> }): JSX.El
               fromX: xForLane(edge.fromLaneIndex),
               toX: xForLane(edge.toLaneIndex)
             })}
-            stroke={getGraphLaneColor(edge.toLaneIndex)}
+            stroke={getLaneColor(edge.toLaneIndex)}
           />
         ))}
         <circle
           className={isMerge ? 'commit-graph-dot merge' : 'commit-graph-dot'}
           cx={xForLane(commit.graphLaneIndex)}
           cy={graphRowMiddle}
-          fill={getGraphLaneColor(commit.graphLaneIndex)}
+          fill={getLaneColor(commit.graphLaneIndex)}
           r={isMerge ? 4.5 : 3.8}
           stroke="#ffffff"
         />
@@ -752,16 +789,17 @@ function CommitGraphContinuation({
   commit,
   columnWidth
 }: {
-  commit: GitGraphRow<GitCommit>
+  commit: GitGraphRow<RepositoryLogCommit>
   columnWidth: number
 }): JSX.Element {
+  const isWorkingTree = isWorkingTreeCommit(commit)
   const allLaneIndexes = [...commit.graphBottomLaneIndexes, ...commit.graphParentEdges.map((edge) => edge.toLaneIndex)]
   const laneCount = Math.max(commit.graphLanes.length, ...allLaneIndexes.map((index) => index + 1), 1)
   const svgWidth = Math.max(42, laneCount * gitGraphLaneWidth)
   const xForLane = (index: number): number => index * gitGraphLaneWidth + gitGraphLaneWidth / 2
 
   return (
-    <div className="commit-expanded-graph-cell" style={{ width: columnWidth }}>
+    <div className={isWorkingTree ? 'commit-expanded-graph-cell is-working-tree' : 'commit-expanded-graph-cell'} style={{ width: columnWidth }}>
       <svg
         aria-hidden="true"
         className="commit-expanded-graph-svg"
@@ -775,7 +813,7 @@ function CommitGraphContinuation({
           <line
             key={`expanded-bottom-${laneIndex}`}
             className={laneIndex === commit.graphLaneIndex ? 'commit-graph-line is-active' : 'commit-graph-line'}
-            stroke={getGraphLaneColor(laneIndex)}
+            stroke={isWorkingTree ? '#98a2b3' : getGraphLaneColor(laneIndex)}
             x1={xForLane(laneIndex)}
             x2={xForLane(laneIndex)}
             y1={-graphLineOverflow}
@@ -787,7 +825,7 @@ function CommitGraphContinuation({
   )
 }
 
-function CommitAuthorCell({ commit }: { commit: GitCommit }): JSX.Element {
+function CommitAuthorCell({ commit }: { commit: RepositoryLogCommit }): JSX.Element {
   const author = getCommitAuthorDisplay(commit)
 
   return (
@@ -798,16 +836,22 @@ function CommitAuthorCell({ commit }: { commit: GitCommit }): JSX.Element {
   )
 }
 
-function CommitMessageCell({ commit, branchTags }: { commit: GitCommit; branchTags: ProjectBranchTag[] }): JSX.Element {
+function CommitMessageCell({ commit, branchTags }: { commit: RepositoryLogCommit; branchTags: ProjectBranchTag[] }): JSX.Element {
+  const isWorkingTree = isWorkingTreeCommit(commit)
+
   return (
-    <div className="source-tree-commit-message">
+    <div className={isWorkingTree ? 'source-tree-commit-message is-working-tree' : 'source-tree-commit-message'}>
       <div className="source-tree-commit-line">
-        <Tag className="source-tree-hash">{commit.shortHash}</Tag>
+        <Tag className={isWorkingTree ? 'source-tree-hash source-tree-worktree-hash' : 'source-tree-hash'}>{commit.shortHash}</Tag>
         <Typography.Text className="source-tree-message-text" ellipsis={{ tooltip: commit.message }}>
           {commit.message}
         </Typography.Text>
       </div>
-      {commit.refs.length > 0 && (
+      {isWorkingTree ? (
+        <div className="source-tree-ref-strip">
+          <Tag className="source-tree-ref source-tree-worktree-ref">工作区</Tag>
+        </div>
+      ) : commit.refs.length > 0 && (
         <div className="source-tree-ref-strip">
           {commit.refs.slice(0, 6).map((ref) => (
             <Tag key={ref} color={getRefColor(ref, branchTags)} className="source-tree-ref">
@@ -828,17 +872,20 @@ function CommitInlineDetail({
   loadingFiles,
   onSelectFile,
   graphColumnWidth,
-  branchTags
+  branchTags,
+  canOpenDiff
 }: {
-  commit: GitGraphRow<GitCommit>
+  commit: GitGraphRow<RepositoryLogCommit>
   files: GitCommitFileChange[]
   selectedFile: GitCommitFileChange | null
   loadingFiles: boolean
   onSelectFile: (file: GitCommitFileChange) => void
   graphColumnWidth: number
   branchTags: ProjectBranchTag[]
+  canOpenDiff: boolean
 }): JSX.Element {
   const author = getCommitAuthorDisplay(commit)
+  const isWorkingTree = isWorkingTreeCommit(commit)
 
   return (
     <div className="commit-expanded-detail-row">
@@ -848,14 +895,18 @@ function CommitInlineDetail({
           <div>
             <Typography.Text strong>{commit.message}</Typography.Text>
             <div className="commit-meta">
-              <Tag className="commit-hash-full">{commit.hash}</Tag>
-              {commit.refs.map((ref) => (
-                <Tag key={ref} color={getRefColor(ref, branchTags)} className="source-tree-ref">
-                  {ref}
-                </Tag>
-              ))}
+              <Tag className="commit-hash-full">{isWorkingTree ? '未提交' : commit.hash}</Tag>
+              {isWorkingTree ? (
+                <Tag className="source-tree-ref source-tree-worktree-ref">工作区</Tag>
+              ) : (
+                commit.refs.map((ref) => (
+                  <Tag key={ref} color={getRefColor(ref, branchTags)} className="source-tree-ref">
+                    {ref}
+                  </Tag>
+                ))
+              )}
               <Typography.Text type="secondary">
-                {author.email ? `${author.name} · ${author.email}` : author.name} · {new Date(commit.committedAt).toLocaleString()}
+                {isWorkingTree ? '当前工作区' : `${author.email ? `${author.name} · ${author.email}` : author.name} · ${new Date(commit.committedAt).toLocaleString()}`}
               </Typography.Text>
             </div>
           </div>
@@ -868,7 +919,7 @@ function CommitInlineDetail({
           dataSource={files}
           pagination={false}
           rowClassName={(file) => (file.id === selectedFile?.id ? 'selected-row' : '')}
-          onRow={(file) => ({ onClick: () => onSelectFile(file) })}
+          onRow={(file) => (canOpenDiff ? { onClick: () => onSelectFile(file) } : {})}
           columns={[
             {
               title: '状态',
@@ -902,14 +953,17 @@ function CommitInlineDetail({
               title: '对比',
               key: 'diff',
               width: 92,
-              render: (_, file) => (
-                <Button size="small" icon={<DiffOutlined />} onClick={(event) => {
-                  event.stopPropagation()
-                  onSelectFile(file)
-                }}>
-                  查看
-                </Button>
-              )
+              render: (_, file) =>
+                canOpenDiff ? (
+                  <Button size="small" icon={<DiffOutlined />} onClick={(event) => {
+                    event.stopPropagation()
+                    onSelectFile(file)
+                  }}>
+                    查看
+                  </Button>
+                ) : (
+                  <Typography.Text type="secondary">-</Typography.Text>
+                )
             }
           ]}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="这个提交没有文件变更" /> }}
@@ -1234,15 +1288,96 @@ function AiSettingsSection({ form, settings, loading, saving, onRefresh, onSave,
   )
 }
 
+function isPlaneSettingsReady(settings: PlaneSettings | null): boolean {
+  return Boolean(settings?.apiBaseUrl && settings.webBaseUrl && settings.tokenConfigured)
+}
+
+function populatePlaneSettingsForm(form: FormInstance<PlaneSettingsForm>, settings: PlaneSettings): void {
+  form.setFieldsValue({
+    apiBaseUrl: settings.apiBaseUrl,
+    webBaseUrl: settings.webBaseUrl,
+    apiToken: ''
+  })
+}
+
+type PlaneSettingsSectionProps = {
+  form: FormInstance<PlaneSettingsForm>
+  settings: PlaneSettings | null
+  loading: boolean
+  saving: boolean
+  testing: boolean
+  testResult: PlaneConnectionTestResult | null
+  onRefresh: () => void | Promise<unknown>
+  onSave: () => void | Promise<void>
+  onTest: () => void | Promise<void>
+  onOpen: () => void | Promise<void>
+  onBack?: () => void
+}
+
+function PlaneSettingsSection({ form, settings, loading, saving, testing, testResult, onRefresh, onSave, onTest, onOpen, onBack }: PlaneSettingsSectionProps): JSX.Element {
+  const planeReady = isPlaneSettingsReady(settings)
+
+  return (
+    <div className="panel settings-module-panel">
+      <div className="settings-module-header">
+        <Space direction="vertical" size={2}>
+          <Typography.Title level={3}>Plane 集成</Typography.Title>
+          <Typography.Text type="secondary">配置 Plane API / Web 地址和 API Token，用于在 ForgeDesk 中只读查看 Plane 内容。</Typography.Text>
+        </Space>
+        <Space wrap>
+          {onBack && <Button onClick={onBack}>返回总览</Button>}
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={onRefresh}>
+            重新读取
+          </Button>
+          <Button icon={<LinkOutlined />} onClick={onOpen}>
+            打开 Plane
+          </Button>
+        </Space>
+      </div>
+      <Alert
+        className="settings-module-alert"
+        type={testResult ? (testResult.ok ? 'success' : 'error') : planeReady ? 'success' : 'info'}
+        showIcon
+        message={testResult?.message ?? (planeReady ? 'Plane 已配置' : '保存 API Token 后，可以绑定项目并读取 Plane 内容')}
+        description={settings?.tokenConfigured ? 'API Token 已保存在本机，界面不会回显明文。' : '在 Plane 个人设置的 API tokens 页面生成 token 后粘贴到这里。'}
+      />
+      <Form form={form} layout="vertical" className="settings-management-form">
+        <div className="ai-settings-grid">
+          <Form.Item name="apiBaseUrl" label="API Base URL" rules={[{ required: true, message: '请输入 Plane API 地址' }]}>
+            <Input placeholder="http://localhost:8000" />
+          </Form.Item>
+          <Form.Item name="webBaseUrl" label="Web Base URL" rules={[{ required: true, message: '请输入 Plane Web 地址' }]}>
+            <Input placeholder="http://localhost:3000" />
+          </Form.Item>
+        </div>
+        <Form.Item name="apiToken" label="API Token">
+          <Input.Password placeholder={settings?.tokenConfigured ? '已保存，留空不变' : 'plane_api_...'} />
+        </Form.Item>
+        <Space wrap>
+          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave}>
+            保存 Plane 设置
+          </Button>
+          <Button icon={<CheckCircleOutlined />} loading={testing} onClick={onTest}>
+            测试连接
+          </Button>
+        </Space>
+      </Form>
+    </div>
+  )
+}
+
 function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JSX.Element {
   const [gitIdentityForm] = Form.useForm<GitIdentityForm>()
   const [sshKeyForm] = Form.useForm<SshKeyForm>()
   const [sshImportForm] = Form.useForm<SshKeyImportForm>()
   const [sshPassphraseForm] = Form.useForm<SshPassphraseForm>()
   const [aiSettingsForm] = Form.useForm<AiSettingsForm>()
+  const [planeSettingsForm] = Form.useForm<PlaneSettingsForm>()
   const [gitStatus, setGitStatus] = useState<GitSetupStatus | null>(null)
   const [sshConfig, setSshConfig] = useState<SshConfigFile | null>(null)
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
+  const [planeSettings, setPlaneSettings] = useState<PlaneSettings | null>(null)
+  const [planeTestResult, setPlaneTestResult] = useState<PlaneConnectionTestResult | null>(null)
   const [sshConfigContent, setSshConfigContent] = useState('')
   const [activeSettingsModule, setActiveSettingsModule] = useState<SettingsModuleKey>('overview')
   const [sshConfigMode, setSshConfigMode] = useState<SshConfigMode>('guided')
@@ -1253,9 +1388,12 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
   const [loadingGit, setLoadingGit] = useState(false)
   const [loadingSshConfig, setLoadingSshConfig] = useState(false)
   const [loadingAiSettings, setLoadingAiSettings] = useState(false)
+  const [loadingPlaneSettings, setLoadingPlaneSettings] = useState(false)
   const [savingIdentity, setSavingIdentity] = useState(false)
   const [savingSshConfig, setSavingSshConfig] = useState(false)
   const [savingAiSettings, setSavingAiSettings] = useState(false)
+  const [savingPlaneSettings, setSavingPlaneSettings] = useState(false)
+  const [testingPlaneSettings, setTestingPlaneSettings] = useState(false)
   const [generatingSsh, setGeneratingSsh] = useState(false)
   const [importingSshKey, setImportingSshKey] = useState(false)
   const [savingSshPassphrase, setSavingSshPassphrase] = useState(false)
@@ -1363,16 +1501,38 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     }
   }
 
+  async function refreshPlaneSettings(): Promise<void> {
+    if (!window.forgeDesk) {
+      setPlaneSettings(null)
+      return
+    }
+
+    setLoadingPlaneSettings(true)
+
+    try {
+      const settings = await window.forgeDesk.getPlaneSettings()
+      setPlaneSettings(settings)
+      populatePlaneSettingsForm(planeSettingsForm, settings)
+      setPlaneTestResult(null)
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingPlaneSettings(false)
+    }
+  }
+
   useEffect(() => {
     refreshGitStatus()
     refreshSshConfig()
     refreshAiSettings()
+    refreshPlaneSettings()
   }, [])
 
   const sshPrivateKeys = gitStatus?.sshPrivateKeys ?? []
   const sshPublicKeys = gitStatus?.sshPublicKeys ?? []
   const gitReady = Boolean(gitStatus?.gitAvailable && gitStatus.userName && gitStatus.userEmail)
   const aiReady = isAiSettingsReady(aiSettings)
+  const planeReady = isPlaneSettingsReady(planeSettings)
   const sshReady = sshPrivateKeys.length + sshPublicKeys.length > 0
   const sshPassphraseCount = sshPrivateKeys.filter((key) => key.hasPassphrase).length
   const sshIssueCount =
@@ -1462,6 +1622,73 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     } finally {
       setSavingAiSettings(false)
     }
+  }
+
+  async function savePlaneSettings(): Promise<void> {
+    const values = await planeSettingsForm.validateFields()
+
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中保存 Plane 设置')
+      return
+    }
+
+    setSavingPlaneSettings(true)
+
+    try {
+      const apiToken = values.apiToken?.trim()
+      const settings = await window.forgeDesk.savePlaneSettings({
+        apiBaseUrl: values.apiBaseUrl,
+        webBaseUrl: values.webBaseUrl,
+        apiToken: apiToken || undefined
+      })
+      setPlaneSettings(settings)
+      setPlaneTestResult(null)
+      planeSettingsForm.setFieldValue('apiToken', '')
+      message.success('Plane 设置已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingPlaneSettings(false)
+    }
+  }
+
+  async function testPlaneSettings(): Promise<void> {
+    const values = await planeSettingsForm.validateFields()
+
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中测试 Plane 连接')
+      return
+    }
+
+    setTestingPlaneSettings(true)
+
+    try {
+      const apiToken = values.apiToken?.trim()
+      const result = await window.forgeDesk.testPlaneSettings({
+        apiBaseUrl: values.apiBaseUrl,
+        webBaseUrl: values.webBaseUrl,
+        apiToken: apiToken || undefined
+      })
+      setPlaneTestResult(result)
+
+      if (result.ok) {
+        message.success(result.message)
+      } else {
+        message.error(result.message)
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setTestingPlaneSettings(false)
+    }
+  }
+
+  async function openPlaneHome(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    await window.forgeDesk.openPlane()
   }
 
   async function generateSshKey(): Promise<void> {
@@ -1844,6 +2071,14 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
       icon: <ThunderboltOutlined />,
       meta: '全局',
       tone: 'neutral'
+    },
+    {
+      key: 'plane',
+      title: 'Plane 集成',
+      description: '配置 Plane URL、API Token 和项目内容读取能力。',
+      icon: <LinkOutlined />,
+      meta: planeReady ? '已配置' : '需要配置',
+      tone: planeReady ? 'ok' : 'warning'
     },
     {
       key: 'updates',
@@ -2259,6 +2494,24 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     return <GlobalServiceCenterPanel onBack={() => setActiveSettingsModule('overview')} />
   }
 
+  function renderPlaneModule(): JSX.Element {
+    return (
+      <PlaneSettingsSection
+        form={planeSettingsForm}
+        settings={planeSettings}
+        loading={loadingPlaneSettings}
+        saving={savingPlaneSettings}
+        testing={testingPlaneSettings}
+        testResult={planeTestResult}
+        onRefresh={refreshPlaneSettings}
+        onSave={savePlaneSettings}
+        onTest={testPlaneSettings}
+        onOpen={openPlaneHome}
+        onBack={() => setActiveSettingsModule('overview')}
+      />
+    )
+  }
+
   function renderUpdatesModule(): JSX.Element {
     const view = createAppUpdateViewModel(appUpdateState)
     const isBusy = view.primaryAction === 'busy' || checkingAppUpdate || installingAppUpdate
@@ -2313,10 +2566,21 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
           >
             <span className="settings-entry-icon">{module.icon}</span>
             <span className="settings-entry-copy">
-              <Typography.Text strong>{module.title}</Typography.Text>
-              <Typography.Text type="secondary">{module.description}</Typography.Text>
+              <span className="settings-entry-title-row">
+                <Typography.Text strong className="settings-entry-title">
+                  {module.title}
+                </Typography.Text>
+                <Tag
+                  className="settings-entry-meta"
+                  color={module.tone === 'ok' ? 'green' : module.tone === 'warning' ? 'gold' : module.tone === 'danger' ? 'red' : 'default'}
+                >
+                  {module.meta}
+                </Tag>
+              </span>
+              <Typography.Text className="settings-entry-description" type="secondary">
+                {module.description}
+              </Typography.Text>
             </span>
-            <Tag color={module.tone === 'ok' ? 'green' : module.tone === 'warning' ? 'gold' : module.tone === 'danger' ? 'red' : 'default'}>{module.meta}</Tag>
           </button>
         ))}
       </div>
@@ -2335,6 +2599,8 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
         return renderConfigModule()
       case 'services':
         return renderServicesModule()
+      case 'plane':
+        return renderPlaneModule()
       case 'ai':
         return renderAiModule()
       case 'updates':
@@ -2345,7 +2611,7 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
   }
 
   return (
-    <section className="workspace-section">
+    <section className="workspace-section settings-workspace">
       <div className="section-heading">
         <div>
           <Typography.Title level={2}>设置</Typography.Title>
@@ -5688,6 +5954,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const [releaseNotes, setReleaseNotes] = useState('')
   const [releaseCommitMessage, setReleaseCommitMessage] = useState('')
   const [githubToken, setGithubToken] = useState('')
+  const [selectedReleaseActions, setSelectedReleaseActions] = useState<ReleasePublishActionKey[]>([])
   const [publishLog, setPublishLog] = useState('')
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
   const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
@@ -5698,8 +5965,12 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const [savingAiSettings, setSavingAiSettings] = useState(false)
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
   const releaseView = useMemo(
-    () => createReleasePublishViewModel({ plan: preparation?.plan ?? null, githubToken }),
-    [githubToken, preparation]
+    () => createReleasePublishViewModel({ plan: preparation?.plan ?? null, githubToken, selectedActions: selectedReleaseActions }),
+    [githubToken, preparation, selectedReleaseActions]
+  )
+  const releasePlatformOptions = useMemo(
+    () => createReleasePlatformOptions({ plan: preparation?.plan ?? null }),
+    [preparation]
   )
 
   useEffect(() => {
@@ -5721,6 +5992,10 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     setPreparation(nextPreparation)
     setTargetVersion(nextVersion)
     setTagName(nextTagName)
+    setSelectedReleaseActions((current) => {
+      const availableActionKeys = new Set(nextPreparation.plan.availableActions.map((action) => action.key))
+      return current.filter((action) => availableActionKeys.has(action))
+    })
 
     if (!preserveTextFields) {
       setReleaseTitle(`${nextPreparation.plan.repositoryName} ${nextTagName || nextVersion}`)
@@ -5771,6 +6046,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     setReleaseTitle('')
     setReleaseNotes('')
     setReleaseCommitMessage('')
+    setSelectedReleaseActions([])
     setPublishLog('')
     loadReleasePreparation()
   }, [open, selectedRepository?.id])
@@ -5900,9 +6176,10 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
 
     try {
       const checkedPreparation = await loadReleasePreparation(version, true)
+      const unresolvedIssues = checkedPreparation ? getUnresolvedReleaseIssues(checkedPreparation.plan, selectedReleaseActions) : []
 
-      if (!checkedPreparation?.plan.canPublish) {
-        message.warning(checkedPreparation?.plan.issues.join('；') || '发布前检查未通过')
+      if (!checkedPreparation || (!checkedPreparation.plan.canPublish && unresolvedIssues.length > 0)) {
+        message.warning(unresolvedIssues.join('；') || '发布前检查未通过')
         return
       }
 
@@ -5912,7 +6189,8 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
         releaseTitle: title,
         releaseNotes: notes,
         commitMessage,
-        githubToken: githubToken.trim() || undefined
+        githubToken: githubToken.trim() || undefined,
+        releaseActions: selectedReleaseActions
       })
 
       setPublishLog([result.stdout, result.stderr].filter(Boolean).join('\n'))
@@ -5943,6 +6221,18 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
               发布前会把版本从 {preparation?.plan.currentVersion} 更新到 {targetVersion}，并提交版本号改动。
             </Typography.Text>
           ) : null}
+          {selectedReleaseActions.length > 0 ? (
+            <Space direction="vertical" size={2}>
+              <Typography.Text type="warning">发布时还会处理：</Typography.Text>
+              {(preparation?.plan.availableActions ?? [])
+                .filter((action) => selectedReleaseActions.includes(action.key))
+                .map((action) => (
+                  <Typography.Text key={action.key} type="secondary">
+                    {action.label}
+                  </Typography.Text>
+                ))}
+            </Space>
+          ) : null}
           <Typography.Text type="secondary">执行过程可能需要几分钟，请保持网络可用。</Typography.Text>
         </Space>
       ),
@@ -5955,6 +6245,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const plan = preparation?.plan
   const issues = plan?.issues ?? []
   const warnings = plan?.warnings ?? []
+  const availableReleaseActions = plan?.availableActions ?? []
 
   return (
     <Modal
@@ -5990,7 +6281,54 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
           {preparation ? <Typography.Text type="secondary">{preparation.packageManager}</Typography.Text> : null}
         </Space>
 
+        <div className="release-platform-section">
+          <Typography.Text strong>已对接平台</Typography.Text>
+          <div className="release-platform-list">
+            {releasePlatformOptions.map((platform) => (
+              <div
+                key={platform.key}
+                className={['release-platform-card', platform.disabled ? 'release-platform-card-disabled' : 'release-platform-card-active'].join(' ')}
+              >
+                <span className="release-platform-icon">
+                  <GithubOutlined />
+                </span>
+                <span className="release-platform-body">
+                  <span className="release-platform-title-row">
+                    <Typography.Text strong>{platform.name}</Typography.Text>
+                    <Tag color={platform.statusColor}>{platform.statusLabel}</Tag>
+                  </span>
+                  <Typography.Text type="secondary">{platform.description}</Typography.Text>
+                  <Typography.Text type="secondary">{platform.detail}</Typography.Text>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {issues.length > 0 ? <Alert type="warning" showIcon message="发布前需要处理" description={issues.join('；')} /> : null}
+        {availableReleaseActions.length > 0 ? (
+          <Alert
+            type="info"
+            showIcon
+            message="可在发布时处理"
+            description={
+              <Checkbox.Group
+                className="release-action-options"
+                value={selectedReleaseActions}
+                onChange={(checkedValues) => setSelectedReleaseActions(checkedValues as ReleasePublishActionKey[])}
+              >
+                {availableReleaseActions.map((action) => (
+                  <Checkbox key={action.key} value={action.key}>
+                    <Space direction="vertical" size={0}>
+                      <Typography.Text strong>{action.label}</Typography.Text>
+                      <Typography.Text type="secondary">{action.description}</Typography.Text>
+                    </Space>
+                  </Checkbox>
+                ))}
+              </Checkbox.Group>
+            }
+          />
+        ) : null}
         {warnings.length > 0 ? <Alert type="info" showIcon message="发布提示" description={warnings.join('；')} /> : null}
 
         <Descriptions size="small" bordered column={2}>
@@ -7086,6 +7424,7 @@ function ProjectSettingsPanel({
     repositories: <GithubOutlined />,
     remotes: <BranchesOutlined />,
     services: <ThunderboltOutlined />,
+    plane: <LinkOutlined />,
     commands: <FileTextOutlined />
   }
   const activeModule = PROJECT_SETTINGS_MODULES.find((module) => module.key === settingsView.activeModuleKey) ?? PROJECT_SETTINGS_MODULES[0]
@@ -7145,6 +7484,8 @@ function ProjectSettingsPanel({
         return <RepositoryRemoteManager repositories={repositories} />
       case 'services':
         return <ProjectServiceSettings project={project} repositories={repositories} />
+      case 'plane':
+        return <ProjectPlaneSettings project={project} />
       case 'commands':
         return <GitCommandConsole repositories={repositories} />
     }
@@ -7181,6 +7522,251 @@ function ProjectSettingsPanel({
       </div>
       <div className="project-settings-section">{renderSettingsModuleContent(activeModule.key)}</div>
     </Space>
+  )
+}
+
+function ProjectPlaneSettings({ project }: { project: Project }): JSX.Element {
+  const [form] = Form.useForm<PlaneBindingForm>()
+  const [settings, setSettings] = useState<PlaneSettings | null>(null)
+  const [binding, setBinding] = useState<PlaneProjectBinding | null>(null)
+  const [planeProjects, setPlaneProjects] = useState<PlaneProject[]>([])
+  const [loadingSettings, setLoadingSettings] = useState(false)
+  const [loadingBinding, setLoadingBinding] = useState(false)
+  const [loadingProjects, setLoadingProjects] = useState(false)
+  const [savingBinding, setSavingBinding] = useState(false)
+  const [deletingBinding, setDeletingBinding] = useState(false)
+  const workspaceSlug = Form.useWatch('workspaceSlug', form)
+  const selectedPlaneProjectId = Form.useWatch('planeProjectId', form)
+  const selectedPlaneProject = planeProjects.find((item) => item.id === selectedPlaneProjectId)
+
+  async function refreshPlaneSettings(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLoadingSettings(true)
+
+    try {
+      setSettings(await window.forgeDesk.getPlaneSettings())
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingSettings(false)
+    }
+  }
+
+  async function refreshBinding(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLoadingBinding(true)
+
+    try {
+      const nextBinding = await window.forgeDesk.getProjectPlaneBinding(project.id)
+      setBinding(nextBinding)
+      form.setFieldsValue({
+        workspaceSlug: nextBinding?.workspaceSlug ?? '',
+        planeProjectId: nextBinding?.planeProjectId ?? ''
+      })
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingBinding(false)
+    }
+  }
+
+  async function loadPlaneProjects(): Promise<void> {
+    const slug = String(workspaceSlug ?? '').trim()
+
+    if (!slug) {
+      form.setFields([{ name: 'workspaceSlug', errors: ['请输入 Plane workspace slug'] }])
+      return
+    }
+
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLoadingProjects(true)
+
+    try {
+      const projects = await window.forgeDesk.listPlaneProjects(slug)
+      setPlaneProjects(projects)
+
+      if (projects.length === 0) {
+        message.info('这个 workspace 下没有可绑定的 Plane 项目')
+      } else if (!projects.some((item) => item.id === form.getFieldValue('planeProjectId'))) {
+        form.setFieldValue('planeProjectId', projects[0].id)
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingProjects(false)
+    }
+  }
+
+  async function saveBinding(): Promise<void> {
+    const values = await form.validateFields()
+    const selected = planeProjects.find((item) => item.id === values.planeProjectId)
+    const fallbackName = selected?.name ?? binding?.planeProjectName ?? ''
+    const fallbackIdentifier = selected?.identifier ?? binding?.planeProjectIdentifier ?? ''
+
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setSavingBinding(true)
+
+    try {
+      const nextBinding = await window.forgeDesk.saveProjectPlaneBinding({
+        projectId: project.id,
+        workspaceSlug: values.workspaceSlug.trim(),
+        planeProjectId: values.planeProjectId,
+        planeProjectName: fallbackName,
+        planeProjectIdentifier: fallbackIdentifier
+      })
+      setBinding(nextBinding)
+      message.success('Plane 项目绑定已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingBinding(false)
+    }
+  }
+
+  function confirmDeleteBinding(): void {
+    Modal.confirm({
+      title: '解除 Plane 绑定？',
+      content: '只会删除 ForgeDesk 中的绑定记录，不会修改 Plane 项目。',
+      okText: '解除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      async onOk() {
+        if (!window.forgeDesk) {
+          return
+        }
+
+        setDeletingBinding(true)
+
+        try {
+          await window.forgeDesk.deleteProjectPlaneBinding(project.id)
+          setBinding(null)
+          setPlaneProjects([])
+          form.setFieldsValue({ planeProjectId: '' })
+          message.success('Plane 绑定已解除')
+        } catch (error) {
+          message.error(getErrorMessage(error))
+        } finally {
+          setDeletingBinding(false)
+        }
+      }
+    })
+  }
+
+  async function openPlaneProject(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    await window.forgeDesk.openPlane(project.id)
+  }
+
+  useEffect(() => {
+    refreshPlaneSettings()
+    refreshBinding()
+  }, [project.id])
+
+  useEffect(() => {
+    if (binding?.workspaceSlug) {
+      loadPlaneProjects()
+    }
+  }, [binding?.workspaceSlug, binding?.planeProjectId])
+
+  const projectOptions = planeProjects.map((item) => ({
+    label: `${item.identifier ? `${item.identifier} · ` : ''}${item.name}`,
+    value: item.id
+  }))
+
+  return (
+    <div className="panel project-plane-settings">
+      <div className="panel-title">
+        <Space direction="vertical" size={2}>
+          <Typography.Title level={4}>Plane 绑定</Typography.Title>
+          <Typography.Text type="secondary">把当前 ForgeDesk 项目和一个 Plane 项目关联起来。</Typography.Text>
+        </Space>
+        <Space wrap>
+          <Button icon={<ReloadOutlined />} loading={loadingSettings || loadingBinding} onClick={() => {
+            refreshPlaneSettings()
+            refreshBinding()
+          }}>
+            重新读取
+          </Button>
+          <Button icon={<LinkOutlined />} disabled={!binding} onClick={openPlaneProject}>
+            打开 Plane
+          </Button>
+        </Space>
+      </div>
+
+      <Alert
+        type={isPlaneSettingsReady(settings) ? 'info' : 'warning'}
+        showIcon
+        message={isPlaneSettingsReady(settings) ? '选择 workspace 和 Plane 项目后保存绑定' : '请先在全局设置里配置 Plane API Token'}
+        description={
+          binding
+            ? `当前绑定：${binding.workspaceSlug} / ${binding.planeProjectIdentifier ? `${binding.planeProjectIdentifier} · ` : ''}${binding.planeProjectName || binding.planeProjectId}`
+            : 'Plane 内容会显示在项目详情的 Plane 标签页。'
+        }
+      />
+
+      <Form form={form} layout="vertical" className="project-settings-form">
+        <Row gutter={[16, 0]}>
+          <Col xs={24} md={10}>
+            <Form.Item name="workspaceSlug" label="Workspace slug" rules={[{ required: true, message: '请输入 Plane workspace slug' }]}>
+              <Input placeholder="例如 forgedesk" />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={4}>
+            <Form.Item label="项目列表">
+              <Button block icon={<ReloadOutlined />} loading={loadingProjects} onClick={loadPlaneProjects}>
+                拉取
+              </Button>
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={10}>
+            <Form.Item name="planeProjectId" label="Plane 项目" rules={[{ required: true, message: '请选择 Plane 项目' }]}>
+              <Select
+                showSearch
+                placeholder="先拉取项目列表"
+                options={projectOptions}
+                optionFilterProp="label"
+                loading={loadingProjects}
+                notFoundContent={loadingProjects ? <Spin size="small" /> : null}
+              />
+            </Form.Item>
+          </Col>
+        </Row>
+      </Form>
+
+      {selectedPlaneProject && (
+        <Descriptions column={1} size="small" className="setup-description">
+          <Descriptions.Item label="Plane 项目">{selectedPlaneProject.name}</Descriptions.Item>
+          <Descriptions.Item label="Identifier">{selectedPlaneProject.identifier || '-'}</Descriptions.Item>
+          <Descriptions.Item label="Cycles / Modules">
+            {formatNumber(selectedPlaneProject.totalCycles)} / {formatNumber(selectedPlaneProject.totalModules)}
+          </Descriptions.Item>
+        </Descriptions>
+      )}
+
+      <Space wrap>
+        <Button type="primary" icon={<SaveOutlined />} loading={savingBinding} onClick={saveBinding}>
+          保存绑定
+        </Button>
+        <Button danger icon={<DeleteOutlined />} disabled={!binding} loading={deletingBinding} onClick={confirmDeleteBinding}>
+          解除绑定
+        </Button>
+      </Space>
+    </div>
   )
 }
 
@@ -7859,12 +8445,13 @@ function ProjectOverview({
 }): JSX.Element {
   const { projects, repositories, selectedProjectId, summaries, deleteProject, setProjectSummary, setSelectedProjectId, updateRepository } = useForgeDeskStore()
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null)
-  const [projectDetailTab, setProjectDetailTab] = useState<ProjectDetailTabKey>('data')
+  const [projectDetailTab, setProjectDetailTab] = useState<ProjectDetailTabKey>(DEFAULT_PROJECT_DETAIL_TAB)
   const [terminalOpenRequest, setTerminalOpenRequest] = useState<TerminalOpenRequest | null>(null)
   const [analysisGitError, setAnalysisGitError] = useState<GitErrorGuidance | null>(null)
   const [commitModalOpen, setCommitModalOpen] = useState(false)
   const [pushModalOpen, setPushModalOpen] = useState(false)
   const [mergeModalOpen, setMergeModalOpen] = useState(false)
+  const [releaseModalOpen, setReleaseModalOpen] = useState(false)
   const [projectSettingsDrawerOpen, setProjectSettingsDrawerOpen] = useState(false)
   const [projectGitRepositoryId, setProjectGitRepositoryId] = useState('')
   const [syncingProjectRepositoryId, setSyncingProjectRepositoryId] = useState<string | null>(null)
@@ -8215,7 +8802,7 @@ function ProjectOverview({
                   onSelect={() => {
                     setSelectedProjectId(project.id)
                     setDetailProjectId(project.id)
-                    setProjectDetailTab('data')
+                    setProjectDetailTab(DEFAULT_PROJECT_DETAIL_TAB)
                     setProjectSettingsDrawerOpen(false)
                   }}
                   onDelete={() => confirmDeleteProject(project)}
@@ -8249,6 +8836,9 @@ function ProjectOverview({
                 </Button>
                 <Button icon={<SaveOutlined />} disabled={!projectHasCommittableChanges} onClick={() => setCommitModalOpen(true)}>
                   提交
+                </Button>
+                <Button icon={<GithubOutlined />} disabled={projectRepositories.length === 0} onClick={() => setReleaseModalOpen(true)}>
+                  发布版本
                 </Button>
                 <Button icon={<UploadOutlined />} disabled={!projectHasPushableTargets} onClick={() => setPushModalOpen(true)}>
                   推送
@@ -8284,6 +8874,13 @@ function ProjectOverview({
               open={mergeModalOpen}
               repositories={projectRepositories}
               onClose={() => setMergeModalOpen(false)}
+              onChanged={(repository) => selectedProject && refreshProjectGitData(selectedProject.id, repository)}
+            />
+            <RepositoryReleaseModal
+              open={releaseModalOpen}
+              repositories={projectRepositories}
+              initialRepositoryId={selectedProjectGitRepository?.id}
+              onClose={() => setReleaseModalOpen(false)}
               onChanged={(repository) => selectedProject && refreshProjectGitData(selectedProject.id, repository)}
             />
             <Drawer
@@ -8425,6 +9022,17 @@ function ProjectOverview({
                   )
                 },
                 {
+                  key: 'plane',
+                  label: 'Plane',
+                  children: (
+                    <ProjectPlanePanel
+                      project={selectedProject}
+                      onOpenGlobalSettings={onOpenSettings}
+                      onOpenProjectSettings={() => setProjectSettingsDrawerOpen(true)}
+                    />
+                  )
+                },
+                {
                   key: 'service-monitor',
                   label: '服务监控',
                   children: <ProjectServiceMonitorPanel projectId={selectedProject.id} />
@@ -8440,12 +9048,371 @@ function ProjectOverview({
                     />
                   )
                 }
-              ].filter((item) => projectDetailTabs.some((tab) => tab.key === item.key))}
+              ]
+                .filter((item) => projectDetailTabs.some((tab) => tab.key === item.key))
+                .sort(
+                  (left, right) =>
+                    projectDetailTabs.findIndex((tab) => tab.key === left.key) -
+                    projectDetailTabs.findIndex((tab) => tab.key === right.key)
+                )}
             />
           </div>
         </div>
       )}
     </section>
+  )
+}
+
+function getPlaneStateColor(group: string): string {
+  const normalized = group.toLowerCase()
+
+  if (normalized === 'completed') {
+    return 'green'
+  }
+
+  if (normalized === 'cancelled') {
+    return 'red'
+  }
+
+  if (normalized === 'started') {
+    return 'blue'
+  }
+
+  if (normalized === 'unstarted') {
+    return 'default'
+  }
+
+  return 'gold'
+}
+
+function getPlanePriorityColor(priority: string): string {
+  const normalized = priority.toLowerCase()
+
+  if (normalized === 'urgent') {
+    return 'red'
+  }
+
+  if (normalized === 'high') {
+    return 'orange'
+  }
+
+  if (normalized === 'medium') {
+    return 'blue'
+  }
+
+  if (normalized === 'low') {
+    return 'default'
+  }
+
+  return 'default'
+}
+
+function getPlaneProgressText(total: number, completed: number, cancelled: number): string {
+  const activeTotal = Math.max(0, total - cancelled)
+
+  if (activeTotal === 0) {
+    return '0%'
+  }
+
+  return `${Math.round((completed / activeTotal) * 100)}%`
+}
+
+function ProjectPlanePanel({
+  project,
+  onOpenGlobalSettings,
+  onOpenProjectSettings
+}: {
+  project: Project
+  onOpenGlobalSettings: () => void
+  onOpenProjectSettings: () => void
+}): JSX.Element {
+  const [settings, setSettings] = useState<PlaneSettings | null>(null)
+  const [binding, setBinding] = useState<PlaneProjectBinding | null>(null)
+  const [content, setContent] = useState<PlaneProjectContent | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function refreshPlaneContent(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLoading(true)
+    setError('')
+
+    try {
+      const [nextSettings, nextBinding] = await Promise.all([window.forgeDesk.getPlaneSettings(), window.forgeDesk.getProjectPlaneBinding(project.id)])
+      setSettings(nextSettings)
+      setBinding(nextBinding)
+
+      if (!isPlaneSettingsReady(nextSettings) || !nextBinding) {
+        setContent(null)
+        return
+      }
+
+      setContent(await window.forgeDesk.getPlaneProjectContent(project.id))
+    } catch (nextError) {
+      setError(getErrorMessage(nextError))
+      setContent(null)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function openPlaneProject(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    await window.forgeDesk.openPlane(project.id)
+  }
+
+  useEffect(() => {
+    refreshPlaneContent()
+  }, [project.id])
+
+  const workItemColumns: ColumnsType<PlaneWorkItem> = [
+    {
+      title: '编号',
+      dataIndex: 'identifier',
+      key: 'identifier',
+      width: 120,
+      render: (value) => value || '-'
+    },
+    {
+      title: '标题',
+      dataIndex: 'name',
+      key: 'name',
+      width: 280,
+      render: (_, item) => (
+        <Typography.Text className="table-text" ellipsis={{ tooltip: item.name }}>
+          {item.name || '-'}
+        </Typography.Text>
+      )
+    },
+    {
+      title: '状态',
+      key: 'state',
+      width: 130,
+      render: (_, item) => <Tag color={getPlaneStateColor(item.stateGroup)}>{item.stateName || item.stateGroup || '未设置'}</Tag>
+    },
+    {
+      title: '优先级',
+      dataIndex: 'priority',
+      key: 'priority',
+      width: 100,
+      render: (value) => <Tag color={getPlanePriorityColor(String(value))}>{value || 'none'}</Tag>
+    },
+    {
+      title: '负责人',
+      dataIndex: 'assigneeNames',
+      key: 'assigneeNames',
+      width: 180,
+      render: (value: string[]) => (value.length > 0 ? value.join(', ') : '-')
+    },
+    { title: '截止', dataIndex: 'targetDate', key: 'targetDate', width: 120, render: (value) => value || '-' },
+    { title: '更新', dataIndex: 'updatedAt', key: 'updatedAt', width: 180, render: (value) => formatDateTime(value) },
+    {
+      title: '操作',
+      key: 'action',
+      fixed: 'right',
+      width: 90,
+      render: (_, item) => (
+        <Button size="small" icon={<LinkOutlined />} href={item.url} target="_blank" rel="noreferrer">
+          打开
+        </Button>
+      )
+    }
+  ]
+
+  const cycleColumns: ColumnsType<PlaneCycle> = [
+    {
+      title: 'Cycle',
+      dataIndex: 'name',
+      key: 'name',
+      render: (_, cycle) => (
+        <Typography.Text className="table-text" ellipsis={{ tooltip: cycle.name }}>
+          {cycle.name || '-'}
+        </Typography.Text>
+      )
+    },
+    { title: '时间', key: 'range', width: 220, render: (_, cycle) => `${cycle.startDate || '-'} → ${cycle.endDate || '-'}` },
+    { title: '工作项', dataIndex: 'totalIssues', key: 'totalIssues', width: 90, render: (value) => formatNumber(value) },
+    {
+      title: '完成',
+      key: 'progress',
+      width: 120,
+      render: (_, cycle) => getPlaneProgressText(cycle.totalIssues, cycle.completedIssues, cycle.cancelledIssues)
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 90,
+      render: (_, cycle) => (
+        <Button size="small" icon={<LinkOutlined />} href={cycle.url} target="_blank" rel="noreferrer">
+          打开
+        </Button>
+      )
+    }
+  ]
+
+  const moduleColumns: ColumnsType<PlaneModule> = [
+    {
+      title: 'Module',
+      dataIndex: 'name',
+      key: 'name',
+      render: (_, module) => (
+        <Typography.Text className="table-text" ellipsis={{ tooltip: module.name }}>
+          {module.name || '-'}
+        </Typography.Text>
+      )
+    },
+    { title: '状态', dataIndex: 'status', key: 'status', width: 120, render: (value) => value || '-' },
+    { title: '目标日期', dataIndex: 'targetDate', key: 'targetDate', width: 130, render: (value) => value || '-' },
+    { title: '工作项', dataIndex: 'totalIssues', key: 'totalIssues', width: 90, render: (value) => formatNumber(value) },
+    {
+      title: '完成',
+      key: 'progress',
+      width: 120,
+      render: (_, module) => getPlaneProgressText(module.totalIssues, module.completedIssues, module.cancelledIssues)
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 90,
+      render: (_, module) => (
+        <Button size="small" icon={<LinkOutlined />} href={module.url} target="_blank" rel="noreferrer">
+          打开
+        </Button>
+      )
+    }
+  ]
+
+  if (loading && !content) {
+    return (
+      <div className="panel loading-panel">
+        <Spin />
+      </div>
+    )
+  }
+
+  if (!isPlaneSettingsReady(settings)) {
+    return (
+      <div className="panel empty-project-panel">
+        <Empty description="Plane 尚未配置" />
+        <Button type="primary" icon={<SettingOutlined />} onClick={onOpenGlobalSettings}>
+          配置 Plane
+        </Button>
+      </div>
+    )
+  }
+
+  if (!binding) {
+    return (
+      <div className="panel empty-project-panel">
+        <Empty description="当前项目还没有绑定 Plane 项目" />
+        <Button type="primary" icon={<LinkOutlined />} onClick={onOpenProjectSettings}>
+          绑定 Plane 项目
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <Space direction="vertical" size={16} className="plane-project-panel">
+      <div className="panel plane-project-header">
+        <div className="panel-title">
+          <Space direction="vertical" size={2}>
+            <Typography.Title level={4}>{content?.summary.name || binding.planeProjectName || 'Plane 项目'}</Typography.Title>
+            <Typography.Text type="secondary">
+              {binding.workspaceSlug} / {content?.summary.identifier || binding.planeProjectIdentifier || binding.planeProjectId}
+            </Typography.Text>
+          </Space>
+          <Space wrap>
+            <Button icon={<ReloadOutlined />} loading={loading} onClick={refreshPlaneContent}>
+              刷新
+            </Button>
+            <Button type="primary" icon={<LinkOutlined />} onClick={openPlaneProject}>
+              打开 Plane
+            </Button>
+          </Space>
+        </div>
+        {error && <Alert type="error" showIcon message={error} />}
+        <Row gutter={[16, 16]}>
+          <Col xs={24} md={6}>
+            <div className="metric-tile">
+              <Statistic title="工作项" value={content?.summary.counts.issues ?? 0} />
+            </div>
+          </Col>
+          <Col xs={24} md={6}>
+            <div className="metric-tile">
+              <Statistic title="Cycles" value={content?.summary.counts.cycles ?? 0} />
+            </div>
+          </Col>
+          <Col xs={24} md={6}>
+            <div className="metric-tile">
+              <Statistic title="Modules" value={content?.summary.counts.modules ?? 0} />
+            </div>
+          </Col>
+          <Col xs={24} md={6}>
+            <div className="metric-tile">
+              <Statistic title="成员" value={content?.summary.counts.members ?? 0} />
+            </div>
+          </Col>
+        </Row>
+      </div>
+
+      <div className="panel plane-table-panel">
+        <div className="panel-title">
+          <Typography.Title level={4}>工作项</Typography.Title>
+          <Tag>{formatNumber(content?.workItems.length ?? 0)}</Tag>
+        </div>
+        <Table
+          rowKey="id"
+          columns={workItemColumns}
+          dataSource={content?.workItems ?? []}
+          loading={loading}
+          scroll={{ x: 1200 }}
+          pagination={{ pageSize: 10, hideOnSinglePage: true }}
+          locale={{ emptyText: <Empty description="暂无工作项" /> }}
+        />
+      </div>
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} xl={12}>
+          <div className="panel plane-table-panel">
+            <div className="panel-title">
+              <Typography.Title level={4}>Cycles</Typography.Title>
+              <Tag>{formatNumber(content?.cycles.length ?? 0)}</Tag>
+            </div>
+            <Table
+              rowKey="id"
+              columns={cycleColumns}
+              dataSource={content?.cycles ?? []}
+              loading={loading}
+              pagination={{ pageSize: 6, hideOnSinglePage: true }}
+              locale={{ emptyText: <Empty description="暂无 Cycle" /> }}
+            />
+          </div>
+        </Col>
+        <Col xs={24} xl={12}>
+          <div className="panel plane-table-panel">
+            <div className="panel-title">
+              <Typography.Title level={4}>Modules</Typography.Title>
+              <Tag>{formatNumber(content?.modules.length ?? 0)}</Tag>
+            </div>
+            <Table
+              rowKey="id"
+              columns={moduleColumns}
+              dataSource={content?.modules ?? []}
+              loading={loading}
+              pagination={{ pageSize: 6, hideOnSinglePage: true }}
+              locale={{ emptyText: <Empty description="暂无 Module" /> }}
+            />
+          </div>
+        </Col>
+      </Row>
+    </Space>
   )
 }
 
@@ -9248,10 +10215,11 @@ function RepositoryLogTree({
   const { setProjectSummary, updateRepository } = useForgeDeskStore()
   const [detailRepository, setDetailRepository] = useState<Repository | null>(repository)
   const [commits, setCommits] = useState<GitCommit[]>([])
+  const [workspaceStatus, setWorkspaceStatus] = useState<GitWorkspaceStatus | null>(null)
   const [commitRange, setCommitRange] = useState({ startDate: '', endDate: '' })
   const [commitBranch, setCommitBranch] = useState('')
   const [commitAuthor, setCommitAuthor] = useState('')
-  const [selectedCommit, setSelectedCommit] = useState<GitCommit | null>(null)
+  const [selectedCommit, setSelectedCommit] = useState<RepositoryLogCommit | null>(null)
   const [commitFiles, setCommitFiles] = useState<GitCommitFileChange[]>([])
   const [selectedFile, setSelectedFile] = useState<GitCommitFileChange | null>(null)
   const [commitDiff, setCommitDiff] = useState<GitCommitDiff | null>(null)
@@ -9266,12 +10234,54 @@ function RepositoryLogTree({
   const [branchTags, setBranchTags] = useState<ProjectBranchTag[]>([])
   const commitLoadMoreRef = useRef<HTMLDivElement | null>(null)
   const activeProjectId = (detailRepository ?? repository)?.projectId ?? ''
+  const activeRepositoryForLog = detailRepository ?? repository
 
   const filteredCommits = useMemo(
     () => commits.filter((commit) => !commitAuthor || getCommitAuthorFilterValue(commit) === commitAuthor),
     [commitAuthor, commits]
   )
-  const graphRows = useMemo(() => createGraphRows(filteredCommits), [filteredCommits])
+  const workspaceCommitFiles = useMemo<GitCommitFileChange[]>(
+    () =>
+      (workspaceStatus?.files ?? []).map((file) => ({
+        id: `worktree:${file.path}:${file.oldPath}:${file.indexStatus}${file.worktreeStatus}`,
+        status: getWorkspaceFileChangeStatus(file),
+        path: file.path,
+        oldPath: file.oldPath,
+        additions: 0,
+        deletions: 0,
+        binary: false
+      })),
+    [workspaceStatus]
+  )
+  const graphCommits = useMemo<RepositoryLogCommit[]>(
+    () =>
+      activeRepositoryForLog
+        ? prependWorkingTreeCommit<RepositoryLogCommit>(filteredCommits, workspaceStatus, ({ parentHashes, fileCount }) => ({
+            id: `${activeRepositoryForLog.id}:${workingTreeCommitHash}`,
+            repositoryId: activeRepositoryForLog.id,
+            repositoryName: activeRepositoryForLog.name,
+            hash: workingTreeCommitHash,
+            shortHash: '未提交',
+            parentHashes,
+            refs: [],
+            authorName: '',
+            authorEmail: '',
+            authorDisplayName: '工作区',
+            authorDisplayEmail: '',
+            mappedPersonId: '',
+            committedAt: new Date().toISOString(),
+            message: `未提交更改（${formatNumber(fileCount)} 个文件）`,
+            branchName: workspaceStatus?.branch || activeRepositoryForLog.currentBranch || commitBranch || '',
+            additions: 0,
+            deletions: 0,
+            filesChanged: fileCount,
+            isWorkingTreeCommit: true,
+            worktreeFiles: workspaceCommitFiles
+          }))
+        : filteredCommits,
+    [activeRepositoryForLog, commitBranch, filteredCommits, workspaceCommitFiles, workspaceStatus]
+  )
+  const graphRows = useMemo(() => createGraphRows(graphCommits), [graphCommits])
   const visibleGraphRows = useMemo(() => graphRows.slice(0, visibleCommitCount), [graphRows, visibleCommitCount])
   const graphColumnWidth = useMemo(() => getGitGraphColumnWidth(visibleGraphRows), [visibleGraphRows])
   const hasMoreCommits = visibleCommitCount < graphRows.length
@@ -9352,6 +10362,7 @@ function RepositoryLogTree({
       if (!repository) {
         setDetailRepository(null)
         setCommits([])
+        setWorkspaceStatus(null)
         return
       }
 
@@ -9360,6 +10371,7 @@ function RepositoryLogTree({
       setCommitBranch('')
       setCommitAuthor('')
       setCommitRange({ startDate: '', endDate: '' })
+      setWorkspaceStatus(null)
       setSelectedCommit(null)
       setCommitFiles([])
       setSelectedFile(null)
@@ -9371,7 +10383,10 @@ function RepositoryLogTree({
       try {
         if (window.forgeDesk) {
           const detail = await window.forgeDesk.getRepositoryDetail(repository.id)
-          const nextCommits = await window.forgeDesk.getRepositoryCommitGraph(detail.id)
+          const [nextCommits, nextWorkspaceStatus] = await Promise.all([
+            window.forgeDesk.getRepositoryCommitGraph(detail.id),
+            window.forgeDesk.getRepositoryWorkspaceStatus(detail.id)
+          ])
 
           if (cancelled) {
             return
@@ -9380,6 +10395,7 @@ function RepositoryLogTree({
           updateRepository(detail)
           setDetailRepository(detail)
           setCommits(nextCommits)
+          setWorkspaceStatus(nextWorkspaceStatus)
           onCommitCountChange?.(detail.id, nextCommits.length)
           setGitError(null)
         }
@@ -9415,12 +10431,16 @@ function RepositoryLogTree({
     setVisibleCommitCount(commitGraphBatchSize)
 
     try {
-      const nextCommits = await window.forgeDesk.getRepositoryCommitGraph(targetRepository.id, {
-        ...nextRange,
-        branchName: nextBranch || undefined
-      })
+      const [nextCommits, nextWorkspaceStatus] = await Promise.all([
+        window.forgeDesk.getRepositoryCommitGraph(targetRepository.id, {
+          ...nextRange,
+          branchName: nextBranch || undefined
+        }),
+        window.forgeDesk.getRepositoryWorkspaceStatus(targetRepository.id)
+      ])
 
       setCommits(nextCommits)
+      setWorkspaceStatus(nextWorkspaceStatus)
       onCommitCountChange?.(targetRepository.id, nextCommits.length)
       setGitError(null)
     } catch (error) {
@@ -9464,7 +10484,7 @@ function RepositoryLogTree({
     }
   }
 
-  async function selectCommit(commit: GitCommit): Promise<void> {
+  async function selectCommit(commit: RepositoryLogCommit): Promise<void> {
     if (!detailRepository || !window.forgeDesk) {
       return
     }
@@ -9484,6 +10504,13 @@ function RepositoryLogTree({
     setDiffModalOpen(false)
     setLoadingFiles(true)
 
+    if (isWorkingTreeCommit(commit)) {
+      setCommitFiles(commit.worktreeFiles ?? [])
+      setLoadingFiles(false)
+      setGitError(null)
+      return
+    }
+
     try {
       setCommitFiles(await window.forgeDesk.listRepositoryCommitFiles(detailRepository.id, commit.hash))
       setGitError(null)
@@ -9495,7 +10522,7 @@ function RepositoryLogTree({
   }
 
   async function selectCommitFile(file: GitCommitFileChange): Promise<void> {
-    if (!detailRepository || !selectedCommit || !window.forgeDesk) {
+    if (!detailRepository || !selectedCommit || isWorkingTreeCommit(selectedCommit) || !window.forgeDesk) {
       return
     }
 
@@ -9589,7 +10616,14 @@ function RepositoryLogTree({
             loading={loadingDetail}
             size="small"
             className="commit-table source-tree-table"
-            rowClassName={(commit) => (commit.hash === selectedCommit?.hash ? 'selected-row' : '')}
+            rowClassName={(commit) =>
+              [
+                isWorkingTreeCommit(commit) ? 'working-tree-row' : '',
+                commit.hash === selectedCommit?.hash ? 'selected-row' : ''
+              ]
+                .filter(Boolean)
+                .join(' ')
+            }
             onRow={(commit) => ({ onClick: () => selectCommit(commit) })}
             columns={[
               {
@@ -9608,8 +10642,19 @@ function RepositoryLogTree({
                 render: (_, commit) => <CommitMessageCell commit={commit} branchTags={branchTags} />
               },
               { title: '提交人', key: 'author', width: 210, render: (_, commit) => <CommitAuthorCell commit={commit} /> },
-              { title: '时间', dataIndex: 'committedAt', key: 'committedAt', width: 160, render: (value) => new Date(value).toLocaleString() },
-              { title: '+/-', key: 'lines', width: 96, render: (_, commit) => `${formatNumber(commit.additions)} / ${formatNumber(commit.deletions)}` }
+              {
+                title: '时间',
+                dataIndex: 'committedAt',
+                key: 'committedAt',
+                width: 160,
+                render: (value, commit) => (isWorkingTreeCommit(commit) ? <Typography.Text type="secondary">未提交</Typography.Text> : new Date(value).toLocaleString())
+              },
+              {
+                title: '+/-',
+                key: 'lines',
+                width: 96,
+                render: (_, commit) => (isWorkingTreeCommit(commit) ? `${formatNumber(commit.filesChanged)} 文件` : `${formatNumber(commit.additions)} / ${formatNumber(commit.deletions)}`)
+              }
             ]}
             dataSource={visibleGraphRows}
             tableLayout="fixed"
@@ -9624,6 +10669,7 @@ function RepositoryLogTree({
                     loadingFiles={loadingFiles}
                     graphColumnWidth={graphColumnWidth}
                     branchTags={branchTags}
+                    canOpenDiff={!isWorkingTreeCommit(commit)}
                     onSelectFile={(file) => {
                       selectCommitFile(file)
                     }}
@@ -10019,7 +11065,18 @@ function createCustomPasswordToolItem(input: {
 }
 
 type PasswordWorkflowMode = 'preset' | 'custom'
-type ToolKey = 'password' | 'file'
+type ToolKey = 'password' | 'file' | 'rsa'
+
+type RsaPrivateKeyGenerationForm = {
+  name: string
+  notes?: string
+  keySize: RsaPrivateKeySize
+}
+
+type RsaPrivateKeyEditForm = {
+  name: string
+  notes?: string
+}
 
 type LoadedTextFile = {
   name: string
@@ -10066,6 +11123,11 @@ function formatFileSize(size: number): string {
   return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
+function formatRsaPrivateKeyTime(value: string): string {
+  const timestamp = new Date(value)
+  return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString()
+}
+
 function ToolsPanel(): JSX.Element {
   const [activeTool, setActiveTool] = useState<ToolKey | null>(null)
 
@@ -10075,6 +11137,10 @@ function ToolsPanel(): JSX.Element {
 
   if (activeTool === 'file') {
     return <FileDiffTool onBack={() => setActiveTool(null)} />
+  }
+
+  if (activeTool === 'rsa') {
+    return <RsaPrivateKeyTool onBack={() => setActiveTool(null)} />
   }
 
   return (
@@ -10105,7 +11171,286 @@ function ToolsPanel(): JSX.Element {
             <Typography.Text type="secondary">对比两个环境配置文件缺少的变量。</Typography.Text>
           </span>
         </button>
+        <button className="tool-entry-card" type="button" onClick={() => setActiveTool('rsa')}>
+          <span className="password-tool-icon">
+            <KeyOutlined />
+          </span>
+          <span className="tool-entry-copy">
+            <Typography.Text strong>RSA 私钥</Typography.Text>
+            <Typography.Text type="secondary">生成并管理本地私钥记录。</Typography.Text>
+          </span>
+        </button>
       </div>
+    </section>
+  )
+}
+
+function RsaPrivateKeyTool({ onBack }: { onBack: () => void }): JSX.Element {
+  const [form] = Form.useForm<RsaPrivateKeyGenerationForm>()
+  const [editForm] = Form.useForm<RsaPrivateKeyEditForm>()
+  const [records, setRecords] = useState<RsaPrivateKeyRecord[]>([])
+  const [loadingRecords, setLoadingRecords] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [generationModalOpen, setGenerationModalOpen] = useState(false)
+  const [editingRecord, setEditingRecord] = useState<RsaPrivateKeyRecord | null>(null)
+  const [savingEdit, setSavingEdit] = useState(false)
+
+  async function refreshRecords(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLoadingRecords(true)
+
+    try {
+      setRecords(await window.forgeDesk.listRsaPrivateKeys())
+    } catch (error) {
+      message.error(getErrorMessage(error, '读取 RSA 私钥记录失败'))
+    } finally {
+      setLoadingRecords(false)
+    }
+  }
+
+  useEffect(() => {
+    void refreshRecords()
+  }, [])
+
+  async function generateRsaPrivateKey(values: RsaPrivateKeyGenerationForm): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setGenerating(true)
+
+    try {
+      const record = await window.forgeDesk.createRsaPrivateKey(values)
+      setRecords((current) => [record, ...current])
+      form.resetFields()
+      form.setFieldsValue({ keySize: 2048 })
+      setGenerationModalOpen(false)
+      message.success('RSA 私钥已生成')
+    } catch (error) {
+      message.error(getErrorMessage(error, '生成 RSA 私钥失败'))
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  function closeGenerationModal(): void {
+    if (generating) {
+      return
+    }
+
+    setGenerationModalOpen(false)
+    form.resetFields()
+    form.setFieldsValue({ keySize: 2048 })
+  }
+
+  function openEditRecord(record: RsaPrivateKeyRecord): void {
+    setEditingRecord(record)
+    editForm.setFieldsValue({
+      name: record.name,
+      notes: record.notes
+    })
+  }
+
+  async function saveEditedRecord(values: RsaPrivateKeyEditForm): Promise<void> {
+    if (!window.forgeDesk || !editingRecord) {
+      return
+    }
+
+    setSavingEdit(true)
+
+    try {
+      const updated = await window.forgeDesk.updateRsaPrivateKey({
+        id: editingRecord.id,
+        ...values
+      })
+      setRecords((current) => current.map((record) => (record.id === updated.id ? updated : record)))
+      setEditingRecord(null)
+      message.success('RSA 私钥记录已更新')
+    } catch (error) {
+      message.error(getErrorMessage(error, '更新 RSA 私钥记录失败'))
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
+  async function deleteRecord(record: RsaPrivateKeyRecord): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    try {
+      setRecords(await window.forgeDesk.deleteRsaPrivateKey(record.id))
+      message.success('RSA 私钥记录已删除')
+    } catch (error) {
+      message.error(getErrorMessage(error, '删除 RSA 私钥记录失败'))
+    }
+  }
+
+  const columns: ColumnsType<RsaPrivateKeyRecord> = useMemo(
+    () => [
+      {
+        title: '记录',
+        key: 'record',
+        width: 260,
+        render: (_, record) => (
+          <Space direction="vertical" size={2}>
+            <Typography.Text strong className="table-text" ellipsis={{ tooltip: record.name }}>
+              {record.name}
+            </Typography.Text>
+            <Typography.Text className="table-text" type="secondary" ellipsis={{ tooltip: record.notes || '无备注' }}>
+              {record.notes || '无备注'}
+            </Typography.Text>
+          </Space>
+        )
+      },
+      {
+        title: '位数',
+        dataIndex: 'keySize',
+        key: 'keySize',
+        width: 92,
+        render: (keySize: RsaPrivateKeySize) => <Tag color={keySize === 4096 ? 'blue' : 'default'}>{keySize}</Tag>
+      },
+      {
+        title: '指纹',
+        dataIndex: 'fingerprint',
+        key: 'fingerprint',
+        width: 300,
+        render: (fingerprint: string) => <Typography.Text code ellipsis={{ tooltip: fingerprint }}>{fingerprint}</Typography.Text>
+      },
+      {
+        title: '创建时间',
+        dataIndex: 'createdAt',
+        key: 'createdAt',
+        width: 180,
+        render: (createdAt: string) => formatRsaPrivateKeyTime(createdAt)
+      },
+      {
+        title: '操作',
+        key: 'actions',
+        width: 240,
+        render: (_, record) => (
+          <Space wrap>
+            <Tooltip title="复制公钥">
+              <Button size="small" icon={<UnlockOutlined />} onClick={() => copyText(record.publicKeyPem, 'RSA 公钥已复制')} />
+            </Tooltip>
+            <Tooltip title="复制私钥">
+              <Button size="small" icon={<LockOutlined />} onClick={() => copyText(record.privateKeyPem, 'RSA 私钥已复制')} />
+            </Tooltip>
+            <Tooltip title="命名和备注">
+              <Button size="small" icon={<EditOutlined />} onClick={() => openEditRecord(record)} />
+            </Tooltip>
+            <Popconfirm
+              title="删除这条 RSA 私钥记录？"
+              description="删除后无法从 ForgeDesk 记录中恢复。"
+              okText="删除"
+              cancelText="取消"
+              onConfirm={() => deleteRecord(record)}
+            >
+              <Tooltip title="删除">
+                <Button danger size="small" icon={<DeleteOutlined />} />
+              </Tooltip>
+            </Popconfirm>
+          </Space>
+        )
+      }
+    ],
+    []
+  )
+
+  return (
+    <section className="workspace-section tools-workspace">
+      <div className="section-heading">
+        <div>
+          <Button className="tool-back-button" icon={<ArrowLeftOutlined />} onClick={onBack}>
+            工具
+          </Button>
+          <Typography.Title level={2}>RSA 私钥</Typography.Title>
+          <Typography.Text type="secondary">生成 RSA 私钥，并保留可命名、可备注的本地记录。</Typography.Text>
+        </div>
+        <Space wrap>
+          <Button className="rsa-generate-action" type="primary" icon={<KeyOutlined />} onClick={() => setGenerationModalOpen(true)}>
+            生成 RSA 私钥
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={() => refreshRecords()} loading={loadingRecords}>
+            刷新
+          </Button>
+        </Space>
+      </div>
+
+      <div className="panel rsa-records-panel">
+        <div className="password-tool-heading">
+          <span className="password-tool-icon">
+            <FileTextOutlined />
+          </span>
+          <div>
+            <Typography.Title level={3}>已生成记录</Typography.Title>
+            <Typography.Text type="secondary">复制公钥或私钥，维护名称和备注。</Typography.Text>
+          </div>
+        </div>
+
+        <Table
+          className="content-table rsa-records-table"
+          rowKey="id"
+          columns={columns}
+          dataSource={records}
+          loading={loadingRecords}
+          pagination={false}
+          scroll={{ x: 1080 }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有生成 RSA 私钥" /> }}
+        />
+      </div>
+
+      <Modal
+        title="生成 RSA 私钥"
+        open={generationModalOpen}
+        confirmLoading={generating}
+        okText="生成"
+        cancelText="取消"
+        closable={!generating}
+        maskClosable={!generating}
+        onOk={() => form.submit()}
+        onCancel={closeGenerationModal}
+      >
+        <Alert type="info" showIcon message="私钥完整内容只保存在本机应用数据库中。" />
+        <Form form={form} layout="vertical" className="rsa-generation-modal-form" initialValues={{ keySize: 2048 }} onFinish={generateRsaPrivateKey}>
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入记录名称' }]}>
+            <Input placeholder="例如：支付回调签名私钥" />
+          </Form.Item>
+          <Form.Item name="keySize" label="位数" rules={[{ required: true, message: '请选择 RSA 位数' }]}>
+            <Select
+              options={[
+                { label: '2048 位', value: 2048 },
+                { label: '4096 位', value: 4096 }
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="notes" label="备注">
+            <Input.TextArea rows={4} placeholder="用途、环境、轮换说明" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="编辑 RSA 私钥记录"
+        open={Boolean(editingRecord)}
+        confirmLoading={savingEdit}
+        okText="保存"
+        cancelText="取消"
+        onOk={() => editForm.submit()}
+        onCancel={() => setEditingRecord(null)}
+      >
+        <Form form={editForm} layout="vertical" onFinish={saveEditedRecord}>
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入记录名称' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="notes" label="备注">
+            <Input.TextArea rows={4} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </section>
   )
 }

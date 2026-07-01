@@ -105,6 +105,32 @@ type TerminalRemoteHostInput = {
   notes?: string
 }
 
+type RsaPrivateKeySize = 2048 | 4096
+
+type RsaPrivateKeyRecord = {
+  id: string
+  name: string
+  notes: string
+  keySize: RsaPrivateKeySize
+  privateKeyPem: string
+  publicKeyPem: string
+  fingerprint: string
+  createdAt: string
+  updatedAt: string
+}
+
+type RsaPrivateKeyCreateInput = {
+  name: string
+  notes?: string
+  keySize?: RsaPrivateKeySize
+}
+
+type RsaPrivateKeyUpdateInput = {
+  id: string
+  name: string
+  notes?: string
+}
+
 type TerminalSession = {
   id: string
   title: string
@@ -165,6 +191,14 @@ type CommitMessageSuggestion = {
 }
 
 type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
+type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
+
+type ReleasePublishAction = {
+  key: ReleasePublishActionKey
+  issue: string
+  label: string
+  description: string
+}
 
 type RepositoryReleasePlan = {
   repositoryName: string
@@ -176,6 +210,7 @@ type RepositoryReleasePlan = {
   canPublish: boolean
   issues: string[]
   warnings: string[]
+  availableActions: ReleasePublishAction[]
   documentationSources: string[]
 }
 
@@ -223,6 +258,7 @@ type RepositoryReleasePublishInput = {
   releaseNotes: string
   commitMessage: string
   githubToken?: string
+  releaseActions?: ReleasePublishActionKey[]
 }
 
 type RepositoryReleasePublishResult = {
@@ -742,6 +778,113 @@ type AppUpdateState = {
   error?: string
 }
 
+type PlaneSettingsInput = {
+  apiBaseUrl?: string
+  webBaseUrl?: string
+  apiToken?: string
+}
+
+type PlaneSettings = {
+  apiBaseUrl: string
+  webBaseUrl: string
+  apiToken: string
+  tokenConfigured: boolean
+}
+
+type PlaneConnectionTestResult = {
+  ok: boolean
+  message: string
+  userName: string
+  userEmail: string
+}
+
+type PlaneProject = {
+  id: string
+  name: string
+  identifier: string
+  description: string
+  totalMembers: number
+  totalCycles: number
+  totalModules: number
+}
+
+type PlaneProjectBindingInput = {
+  projectId: string
+  workspaceSlug: string
+  planeProjectId: string
+  planeProjectName: string
+  planeProjectIdentifier: string
+}
+
+type PlaneProjectBinding = PlaneProjectBindingInput & {
+  createdAt: string
+  updatedAt: string
+}
+
+type PlaneProjectSummary = {
+  id: string
+  name: string
+  identifier: string
+  counts: {
+    members: number
+    states: number
+    labels: number
+    cycles: number
+    modules: number
+    issues: number
+    intakes: number
+    pages: number
+  }
+}
+
+type PlaneWorkItem = {
+  id: string
+  name: string
+  identifier: string
+  sequenceId: string
+  priority: string
+  stateName: string
+  stateGroup: string
+  assigneeNames: string[]
+  targetDate: string
+  updatedAt: string
+  url: string
+}
+
+type PlaneCycle = {
+  id: string
+  name: string
+  startDate: string
+  endDate: string
+  totalIssues: number
+  completedIssues: number
+  cancelledIssues: number
+  updatedAt: string
+  url: string
+}
+
+type PlaneModule = {
+  id: string
+  name: string
+  status: string
+  targetDate: string
+  totalIssues: number
+  completedIssues: number
+  cancelledIssues: number
+  updatedAt: string
+  url: string
+}
+
+type PlaneProjectContent = {
+  binding: PlaneProjectBinding
+  projectUrl: string
+  summary: PlaneProjectSummary
+  workItems: PlaneWorkItem[]
+  cycles: PlaneCycle[]
+  modules: PlaneModule[]
+  fetchedAt: string
+}
+
 interface Window {
   forgeDesk: {
     listProjects: () => Promise<WorkspaceSnapshot>
@@ -780,6 +923,15 @@ interface Window {
     listProjectBranchTags: (projectId: string) => Promise<ProjectBranchTagRecord[]>
     saveProjectBranchTag: (input: { id?: string; projectId: string; label: string; branchName: string; color: string }) => Promise<ProjectBranchTagRecord>
     deleteProjectBranchTag: (projectId: string, tagId: string) => Promise<ProjectBranchTagRecord[]>
+    getPlaneSettings: () => Promise<PlaneSettings>
+    savePlaneSettings: (input: PlaneSettingsInput) => Promise<PlaneSettings>
+    testPlaneSettings: (input?: PlaneSettingsInput) => Promise<PlaneConnectionTestResult>
+    listPlaneProjects: (workspaceSlug: string) => Promise<PlaneProject[]>
+    getProjectPlaneBinding: (projectId: string) => Promise<PlaneProjectBinding | null>
+    saveProjectPlaneBinding: (input: PlaneProjectBindingInput) => Promise<PlaneProjectBinding>
+    deleteProjectPlaneBinding: (projectId: string) => Promise<void>
+    getPlaneProjectContent: (projectId: string) => Promise<PlaneProjectContent>
+    openPlane: (projectId?: string) => Promise<void>
     listServiceConnections: () => Promise<ServiceConnectionRecord[]>
     saveServiceConnection: (input: ServiceConnectionInput) => Promise<ServiceConnectionRecord>
     deleteServiceConnection: (connectionId: string) => Promise<ServiceConnectionRecord[]>
@@ -819,6 +971,10 @@ interface Window {
     configureGitIdentity: (identity: { userName: string; userEmail: string }) => Promise<GitSetupStatus>
     getAiSettings: () => Promise<AiSettingsView>
     saveAiSettings: (input: AiSettingsInput) => Promise<AiSettingsView>
+    listRsaPrivateKeys: () => Promise<RsaPrivateKeyRecord[]>
+    createRsaPrivateKey: (input: RsaPrivateKeyCreateInput) => Promise<RsaPrivateKeyRecord>
+    updateRsaPrivateKey: (input: RsaPrivateKeyUpdateInput) => Promise<RsaPrivateKeyRecord>
+    deleteRsaPrivateKey: (id: string) => Promise<RsaPrivateKeyRecord[]>
     generateSshKey: (input: string | SshKeyGenerationInput) => Promise<GitSetupStatus['sshPublicKeys'][number]>
     copySshPublicKey: (publicKeyPath: string) => Promise<void>
     copySshKeyPath: (path: string, kind: SshKeyKind) => Promise<void>

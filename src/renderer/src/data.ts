@@ -10,6 +10,139 @@ export type Project = {
   createdAt: string
 }
 
+export type RsaPrivateKeySize = 2048 | 4096
+
+export type RsaPrivateKeyRecord = {
+  id: string
+  name: string
+  notes: string
+  keySize: RsaPrivateKeySize
+  privateKeyPem: string
+  publicKeyPem: string
+  fingerprint: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type RsaPrivateKeyCreateInput = {
+  name: string
+  notes?: string
+  keySize?: RsaPrivateKeySize
+}
+
+export type RsaPrivateKeyUpdateInput = {
+  id: string
+  name: string
+  notes?: string
+}
+
+export type PlaneSettingsInput = {
+  apiBaseUrl?: string
+  webBaseUrl?: string
+  apiToken?: string
+}
+
+export type PlaneSettings = {
+  apiBaseUrl: string
+  webBaseUrl: string
+  apiToken: string
+  tokenConfigured: boolean
+}
+
+export type PlaneConnectionTestResult = {
+  ok: boolean
+  message: string
+  userName: string
+  userEmail: string
+}
+
+export type PlaneProject = {
+  id: string
+  name: string
+  identifier: string
+  description: string
+  totalMembers: number
+  totalCycles: number
+  totalModules: number
+}
+
+export type PlaneProjectBindingInput = {
+  projectId: string
+  workspaceSlug: string
+  planeProjectId: string
+  planeProjectName: string
+  planeProjectIdentifier: string
+}
+
+export type PlaneProjectBinding = PlaneProjectBindingInput & {
+  createdAt: string
+  updatedAt: string
+}
+
+export type PlaneProjectSummary = {
+  id: string
+  name: string
+  identifier: string
+  counts: {
+    members: number
+    states: number
+    labels: number
+    cycles: number
+    modules: number
+    issues: number
+    intakes: number
+    pages: number
+  }
+}
+
+export type PlaneWorkItem = {
+  id: string
+  name: string
+  identifier: string
+  sequenceId: string
+  priority: string
+  stateName: string
+  stateGroup: string
+  assigneeNames: string[]
+  targetDate: string
+  updatedAt: string
+  url: string
+}
+
+export type PlaneCycle = {
+  id: string
+  name: string
+  startDate: string
+  endDate: string
+  totalIssues: number
+  completedIssues: number
+  cancelledIssues: number
+  updatedAt: string
+  url: string
+}
+
+export type PlaneModule = {
+  id: string
+  name: string
+  status: string
+  targetDate: string
+  totalIssues: number
+  completedIssues: number
+  cancelledIssues: number
+  updatedAt: string
+  url: string
+}
+
+export type PlaneProjectContent = {
+  binding: PlaneProjectBinding
+  projectUrl: string
+  summary: PlaneProjectSummary
+  workItems: PlaneWorkItem[]
+  cycles: PlaneCycle[]
+  modules: PlaneModule[]
+  fetchedAt: string
+}
+
 export type Repository = {
   id: string
   projectId: string
@@ -138,6 +271,14 @@ export type CommitMessageSuggestion = {
 }
 
 export type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
+export type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
+
+export type ReleasePublishAction = {
+  key: ReleasePublishActionKey
+  issue: string
+  label: string
+  description: string
+}
 
 export type RepositoryReleasePlan = {
   repositoryName: string
@@ -149,6 +290,7 @@ export type RepositoryReleasePlan = {
   canPublish: boolean
   issues: string[]
   warnings: string[]
+  availableActions: ReleasePublishAction[]
   documentationSources: string[]
 }
 
@@ -196,6 +338,7 @@ export type RepositoryReleasePublishInput = {
   releaseNotes: string
   commitMessage: string
   githubToken?: string
+  releaseActions?: ReleasePublishActionKey[]
 }
 
 export type RepositoryReleasePublishResult = {

@@ -48,6 +48,16 @@ import {
   type ProjectBranchTagInput,
   type ProjectBranchTagRecord
 } from './project-branch-tags'
+import {
+  createRsaPrivateKeyRecord,
+  deleteRsaPrivateKeyRecord,
+  listRsaPrivateKeyRecords,
+  migrateRsaPrivateKeyTables,
+  updateRsaPrivateKeyRecord,
+  type RsaPrivateKeyCreateInput,
+  type RsaPrivateKeyRecord,
+  type RsaPrivateKeyUpdateInput
+} from './rsa-private-keys'
 import { readSshConfigFile, writeSshConfigFile, type SshConfigFile } from './ssh-config'
 import { createNodePtyFactory } from './node-pty-factory'
 import {
@@ -91,6 +101,7 @@ import {
   createReleaseTagName,
   createReleaseVersionRecommendation,
   type ReleasePlan,
+  type ReleasePublishActionKey,
   type ReleaseScriptName,
   type ReleaseVersionRecommendation
 } from './release-publishing'
@@ -140,6 +151,20 @@ import {
   type VercelDomainInput,
   type VercelEnvVarInput,
 } from './service-monitoring'
+import {
+  deleteProjectPlaneBinding as deleteProjectPlaneBindingRecord,
+  getPlaneProjectContent,
+  getPlaneProjectWebUrl,
+  getPlaneSettings,
+  getProjectPlaneBinding,
+  listPlaneProjects,
+  migratePlaneIntegrationTables,
+  savePlaneSettings,
+  saveProjectPlaneBinding,
+  testPlaneConnection,
+  type PlaneProjectBindingInput,
+  type PlaneSettingsInput
+} from './plane-integration'
 
 type RepositoryScanResult = {
   id: string
@@ -239,6 +264,7 @@ type RepositoryReleasePublishInput = {
   releaseNotes: string
   commitMessage: string
   githubToken?: string
+  releaseActions?: ReleasePublishActionKey[]
 }
 
 type RepositoryReleasePublishResult = {
@@ -742,7 +768,9 @@ function migrateDatabase(db: Database.Database): void {
 
   migrateProjectBranchTagTable(db)
   migrateServiceMonitoringTables(db)
+  migrateRsaPrivateKeyTables(db)
   migrateTerminalRemoteShortcutTables(db)
+  migratePlaneIntegrationTables(db)
 
   addColumnIfMissing(db, 'repositories', 'remotes_json', "TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(db, 'repositories', 'remote_count', 'INTEGER NOT NULL DEFAULT 0')
@@ -2402,36 +2430,61 @@ async function updateGithubReleaseDetails(repository: RepositoryRecord, input: R
   return `GitHub Release ${tagName} 标题和说明已更新`
 }
 
+function getUnresolvedReleaseIssues(plan: ReleasePlan, releaseActions: ReleasePublishActionKey[] = []): string[] {
+  const selectedActionSet = new Set(releaseActions)
+  const selectedIssueSet = new Set(plan.availableActions.filter((action) => selectedActionSet.has(action.key)).map((action) => action.issue))
+  return plan.issues.filter((issue) => !selectedIssueSet.has(issue))
+}
+
 async function publishRepositoryRelease(repositoryId: string, input: RepositoryReleasePublishInput): Promise<RepositoryReleasePublishResult> {
   const repository = getRepositoryOrThrow(repositoryId)
   const version = input.version.trim()
   const tagName = input.tagName.trim()
   const expectedTagName = createReleaseTagName(version)
+  const releaseActions = input.releaseActions ?? []
+  const selectedActionSet = new Set(releaseActions)
 
   if (tagName !== expectedTagName) {
     throw new Error(`Tag 应为 ${expectedTagName}`)
   }
 
   const initialPreparation = await prepareRepositoryRelease(repositoryId, { targetVersion: version })
+  const initialIssues = getUnresolvedReleaseIssues(initialPreparation.plan, releaseActions)
 
-  if (!initialPreparation.plan.canPublish) {
-    throw new Error(initialPreparation.plan.issues.join('\n') || '发布前检查未通过')
+  if (!initialPreparation.plan.canPublish && initialIssues.length > 0) {
+    throw new Error(initialIssues.join('\n') || '发布前检查未通过')
   }
 
   if (initialPreparation.plan.selectedScript === 'publish:mac' && !input.githubToken?.trim()) {
     throw new Error('发布到 GitHub Releases 需要 GitHub Token')
   }
 
+  const shouldCommitWorkspaceChanges = selectedActionSet.has('commit-workspace-changes')
+  const shouldReplaceLocalTag = selectedActionSet.has('replace-local-tag')
+
   if (initialPreparation.plan.currentVersion !== version) {
     await writeRepositoryPackageVersion(repository.localPath, version)
+  }
+
+  if (shouldCommitWorkspaceChanges) {
+    await runGitInPathStrict(repository.localPath, ['add', '--all'])
+  } else if (initialPreparation.plan.currentVersion !== version) {
     await runGitInPathStrict(repository.localPath, ['add', 'package.json'])
+  }
+
+  if (initialPreparation.plan.currentVersion !== version || shouldCommitWorkspaceChanges) {
     await runGitInPathStrict(repository.localPath, ['commit', '-m', input.commitMessage.trim() || `chore: release ${tagName}`])
   }
 
-  const finalPreparation = await prepareRepositoryRelease(repositoryId, { targetVersion: version })
+  if (shouldReplaceLocalTag) {
+    await runGitInPathStrict(repository.localPath, ['tag', '-d', tagName])
+  }
 
-  if (!finalPreparation.plan.canPublish) {
-    throw new Error(finalPreparation.plan.issues.join('\n') || '版本提交后发布前检查未通过')
+  const finalPreparation = await prepareRepositoryRelease(repositoryId, { targetVersion: version })
+  const finalIssues = getUnresolvedReleaseIssues(finalPreparation.plan, releaseActions)
+
+  if (!finalPreparation.plan.canPublish && finalIssues.length > 0) {
+    throw new Error(finalIssues.join('\n') || '版本提交后发布前检查未通过')
   }
 
   const branch = await runGitInPath(repository.localPath, ['branch', '--show-current'])
@@ -2875,6 +2928,26 @@ ipcMain.handle('project:branch-tag:delete', async (_event, projectId: string, ta
   deleteProjectBranchTagRecord(getDatabase(), projectId, tagId)
 )
 
+ipcMain.handle('plane:settings:get', async () => getPlaneSettings(getDatabase()))
+
+ipcMain.handle('plane:settings:save', async (_event, input: PlaneSettingsInput) => savePlaneSettings(getDatabase(), input))
+
+ipcMain.handle('plane:settings:test', async (_event, input?: PlaneSettingsInput) => testPlaneConnection(getDatabase(), input))
+
+ipcMain.handle('plane:projects:list', async (_event, workspaceSlug: string) => listPlaneProjects(getDatabase(), workspaceSlug))
+
+ipcMain.handle('plane:binding:get', async (_event, projectId: string) => getProjectPlaneBinding(getDatabase(), projectId))
+
+ipcMain.handle('plane:binding:save', async (_event, input: PlaneProjectBindingInput) => saveProjectPlaneBinding(getDatabase(), input))
+
+ipcMain.handle('plane:binding:delete', async (_event, projectId: string): Promise<void> => deleteProjectPlaneBindingRecord(getDatabase(), projectId))
+
+ipcMain.handle('plane:project-content:get', async (_event, projectId: string) => getPlaneProjectContent(getDatabase(), projectId))
+
+ipcMain.handle('plane:open', async (_event, projectId?: string): Promise<void> => {
+  await shell.openExternal(projectId ? getPlaneProjectWebUrl(getDatabase(), projectId) : getPlaneSettings(getDatabase()).webBaseUrl)
+})
+
 ipcMain.handle('service:connections:list', async (): Promise<ServiceConnectionRecord[]> => listServiceConnectionRecords(getDatabase()))
 
 ipcMain.handle('service:connection:save', async (_event, input: ServiceConnectionInput): Promise<ServiceConnectionRecord> => saveServiceConnectionRecord(getDatabase(), input))
@@ -3203,6 +3276,20 @@ ipcMain.handle('ssh:open-directory', async (): Promise<void> => {
 })
 
 registerAppUpdateIpc()
+
+ipcMain.handle('tools:rsa-private-keys:list', async (): Promise<RsaPrivateKeyRecord[]> => listRsaPrivateKeyRecords(getDatabase()))
+
+ipcMain.handle('tools:rsa-private-keys:create', async (_event, input: RsaPrivateKeyCreateInput): Promise<RsaPrivateKeyRecord> => {
+  return createRsaPrivateKeyRecord(getDatabase(), input)
+})
+
+ipcMain.handle('tools:rsa-private-keys:update', async (_event, input: RsaPrivateKeyUpdateInput): Promise<RsaPrivateKeyRecord> => {
+  return updateRsaPrivateKeyRecord(getDatabase(), input)
+})
+
+ipcMain.handle('tools:rsa-private-keys:delete', async (_event, id: string): Promise<RsaPrivateKeyRecord[]> => {
+  return deleteRsaPrivateKeyRecord(getDatabase(), id)
+})
 
 ipcMain.handle('terminal:remote-groups:list', async (): Promise<TerminalRemoteGroupRecord[]> => listTerminalRemoteGroupRecords(getDatabase()))
 

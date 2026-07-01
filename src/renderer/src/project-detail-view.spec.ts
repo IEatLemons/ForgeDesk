@@ -43,36 +43,38 @@ const repositorySummary = {
 
 describe('project detail view helpers', () => {
   it('keeps the repository summary visible across all project detail tabs', () => {
-    const tabs: ProjectDetailTabKey[] = ['data', 'log-tree', 'remote-alignment', 'service-monitor', 'terminal']
+    const tabs: ProjectDetailTabKey[] = ['data', 'log-tree', 'remote-alignment', 'plane', 'service-monitor', 'terminal']
 
     assert.deepEqual(
       tabs.map((tab) => shouldShowRepositorySummary(tab, true)),
-      [true, true, true, true, true]
+      [true, true, true, true, true, true]
     )
     assert.equal(shouldShowRepositorySummary('data', false), false)
   })
 
-  it('places the terminal tab after service monitoring', () => {
+  it('orders project detail tabs around the branch tree workflow', () => {
     assert.deepEqual(
       PROJECT_DETAIL_TABS.map((tab) => tab.key),
-      ['data', 'log-tree', 'remote-alignment', 'service-monitor', 'terminal']
+      ['log-tree', 'data', 'terminal', 'remote-alignment', 'plane', 'service-monitor']
     )
+
+    assert.equal(PROJECT_DETAIL_TABS[0]?.key, 'log-tree')
   })
 
   it('shows service monitoring only after the project has bound services', () => {
     assert.deepEqual(
       createProjectDetailTabs(false).map((tab) => tab.key),
-      ['data', 'log-tree', 'remote-alignment', 'terminal']
+      ['log-tree', 'data', 'terminal', 'remote-alignment', 'plane']
     )
 
     assert.deepEqual(
       createProjectDetailTabs(true).map((tab) => tab.key),
-      ['data', 'log-tree', 'remote-alignment', 'service-monitor', 'terminal']
+      ['log-tree', 'data', 'terminal', 'remote-alignment', 'plane', 'service-monitor']
     )
   })
 
   it('moves away from service monitoring when the project has no bound services', () => {
-    assert.equal(resolveProjectDetailTab('service-monitor', false), 'data')
+    assert.equal(resolveProjectDetailTab('service-monitor', false), 'log-tree')
     assert.equal(resolveProjectDetailTab('service-monitor', true), 'service-monitor')
     assert.equal(resolveProjectDetailTab('terminal', false), 'terminal')
   })

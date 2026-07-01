@@ -1,7 +1,15 @@
 export type ReleaseVersionBump = 'patch' | 'minor' | 'major'
 export type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
+export type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
 
 export type PackageScripts = Record<string, string>
+
+export type ReleasePublishAction = {
+  key: ReleasePublishActionKey
+  issue: string
+  label: string
+  description: string
+}
 
 export type ReleaseTagHistoryEntry = {
   tagName: string
@@ -43,6 +51,7 @@ export type ReleasePlan = {
   canPublish: boolean
   issues: string[]
   warnings: string[]
+  availableActions: ReleasePublishAction[]
   documentationSources: string[]
 }
 
@@ -145,6 +154,7 @@ export function selectReleaseScript(scripts: PackageScripts): ReleaseScriptName 
 export function createReleasePlan(input: ReleasePlanInput): ReleasePlan {
   const issues: string[] = []
   const warnings: string[] = []
+  const availableActions: ReleasePublishAction[] = []
   const selectedScript = selectReleaseScript(input.scripts)
   const currentVersion = input.currentVersion.trim()
   let suggestedVersion = input.targetVersion?.trim() || currentVersion
@@ -164,7 +174,14 @@ export function createReleasePlan(input: ReleasePlanInput): ReleasePlan {
   }
 
   if (input.statusFileCount > 0) {
-    issues.push(`工作区还有 ${input.statusFileCount} 个未提交改动，请先提交后再发布`)
+    const issue = `工作区还有 ${input.statusFileCount} 个未提交改动，请先提交后再发布`
+    issues.push(issue)
+    availableActions.push({
+      key: 'commit-workspace-changes',
+      issue,
+      label: '发布时提交当前工作区改动',
+      description: '会先暂存全部改动，并用版本提交信息创建提交。'
+    })
   }
 
   if (!selectedScript) {
@@ -180,7 +197,14 @@ export function createReleasePlan(input: ReleasePlanInput): ReleasePlan {
   if (suggestedTagName && normalizedHead) {
     if (normalizedLocalTagCommit && normalizedLocalTagCommit !== normalizedHead) {
       needsVersionBump = true
-      issues.push(`本地 ${suggestedTagName} 已存在，但不是当前提交。请确认版本号后再发布。`)
+      const issue = `本地 ${suggestedTagName} 已存在，但不是当前提交。请确认版本号后再发布。`
+      issues.push(issue)
+      availableActions.push({
+        key: 'replace-local-tag',
+        issue,
+        label: `发布时重建本地 ${suggestedTagName}`,
+        description: '会先删除本地旧 Tag，让发布脚本在当前提交上重新创建。'
+      })
     }
 
     if (normalizedRemoteTagCommit && normalizedRemoteTagCommit !== normalizedHead) {
@@ -212,6 +236,7 @@ export function createReleasePlan(input: ReleasePlanInput): ReleasePlan {
     canPublish: issues.length === 0,
     issues,
     warnings,
+    availableActions,
     documentationSources: input.documentationSources ?? []
   }
 }

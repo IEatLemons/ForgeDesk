@@ -89,8 +89,30 @@ describe('release publishing planning', () => {
     })
 
     assert.match(dirty.issues.join('\n'), /工作区还有 2 个未提交改动/)
+    assert.deepEqual(dirty.availableActions.map((action) => action.key), ['commit-workspace-changes'])
     assert.match(noScript.issues.join('\n'), /没有找到可用于发布的脚本/)
     assert.equal(dirty.canPublish, false)
     assert.equal(noScript.canPublish, false)
+  })
+
+  it('offers publish-time handling for dirty workspaces and stale local tags', () => {
+    const plan = createReleasePlan({
+      repositoryName: 'ForgeDesk',
+      currentVersion: '1.0.3',
+      targetVersion: '1.0.3',
+      headCommit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      statusFileCount: 19,
+      localTagCommit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      remoteTagCommit: '',
+      scripts: { 'publish:mac': 'node scripts/publish-mac.mjs' }
+    })
+
+    assert.equal(plan.canPublish, false)
+    assert.deepEqual(
+      plan.availableActions.map((action) => action.key),
+      ['commit-workspace-changes', 'replace-local-tag']
+    )
+    assert.match(plan.availableActions[0]?.label ?? '', /提交当前工作区改动/)
+    assert.match(plan.availableActions[1]?.label ?? '', /重建本地 v1\.0\.3/)
   })
 })

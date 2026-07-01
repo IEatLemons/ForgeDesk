@@ -1,24 +1,27 @@
 import type { TerminalOpenRequest } from './terminal-panel-events.js'
 import { createTerminalReuseKey } from './terminal-panel-state.js'
 
-export type ProjectDetailTabKey = 'data' | 'log-tree' | 'remote-alignment' | 'service-monitor' | 'terminal'
+export type ProjectDetailTabKey = 'data' | 'log-tree' | 'remote-alignment' | 'plane' | 'service-monitor' | 'terminal'
 
 export type ProjectDetailTab = { key: ProjectDetailTabKey; label: string }
 
 export const PROJECT_DETAIL_TABS: ProjectDetailTab[] = [
-  { key: 'data', label: '数据' },
   { key: 'log-tree', label: 'Log 树' },
+  { key: 'data', label: '数据' },
+  { key: 'terminal', label: '终端' },
   { key: 'remote-alignment', label: '多端对齐' },
-  { key: 'service-monitor', label: '服务监控' },
-  { key: 'terminal', label: '终端' }
+  { key: 'plane', label: 'Plane' },
+  { key: 'service-monitor', label: '服务监控' }
 ]
+
+export const DEFAULT_PROJECT_DETAIL_TAB: ProjectDetailTabKey = 'log-tree'
 
 export function createProjectDetailTabs(hasBoundServices: boolean): ProjectDetailTab[] {
   return PROJECT_DETAIL_TABS.filter((tab) => tab.key !== 'service-monitor' || hasBoundServices)
 }
 
 export function resolveProjectDetailTab(tab: ProjectDetailTabKey, hasBoundServices: boolean): ProjectDetailTabKey {
-  return createProjectDetailTabs(hasBoundServices).some((item) => item.key === tab) ? tab : 'data'
+  return createProjectDetailTabs(hasBoundServices).some((item) => item.key === tab) ? tab : DEFAULT_PROJECT_DETAIL_TAB
 }
 
 export type RepositorySummarySource = {

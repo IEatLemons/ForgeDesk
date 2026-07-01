@@ -19,7 +19,64 @@ export type GraphParentEdge = {
 
 export const gitGraphLaneWidth = 16
 export const gitGraphColumnMinWidth = 152
+export const workingTreeCommitHash = '__FORGEDESK_WORKING_TREE__'
 const gitGraphColumnPadding = 56
+
+export type WorkspaceStatusInput = {
+  files?: unknown[]
+}
+
+export type WorkspaceStatusFileInput = {
+  indexStatus: string
+  worktreeStatus: string
+  conflict?: boolean
+}
+
+export function getWorkspaceFileChangeStatus(file: WorkspaceStatusFileInput): string {
+  if (file.conflict) {
+    return 'U'
+  }
+
+  const indexStatus = file.indexStatus.trim()
+  const worktreeStatus = file.worktreeStatus.trim()
+
+  if (indexStatus === '?' || worktreeStatus === '?') {
+    return '?'
+  }
+
+  return worktreeStatus || indexStatus || 'M'
+}
+
+export function isWorkingTreeCommit(commit: { hash: string }): boolean {
+  return commit.hash === workingTreeCommitHash
+}
+
+export function createWorkingTreeCommit<TCommit extends GraphCommitInput>(
+  commits: TCommit[],
+  status: WorkspaceStatusInput | null | undefined,
+  createCommit: (input: { parentHashes: string[]; fileCount: number }) => TCommit
+): TCommit | null {
+  const fileCount = status?.files?.length ?? 0
+
+  if (fileCount === 0) {
+    return null
+  }
+
+  return createCommit({
+    parentHashes: commits[0]?.hash ? [commits[0].hash] : [],
+    fileCount
+  })
+}
+
+export function prependWorkingTreeCommit<TCommit extends GraphCommitInput>(
+  commits: TCommit[],
+  status: WorkspaceStatusInput | null | undefined,
+  createCommit: (input: { parentHashes: string[]; fileCount: number }) => TCommit
+): TCommit[] {
+  const workingTreeCommit = createWorkingTreeCommit(commits, status, createCommit)
+
+  return workingTreeCommit ? [workingTreeCommit, ...commits] : commits
+}
 
 export type BranchGroupItem = {
   name: string

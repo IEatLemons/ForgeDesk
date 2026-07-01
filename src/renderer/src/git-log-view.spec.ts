@@ -2,15 +2,20 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   buildBranchGroups,
+  createWorkingTreeCommit,
   createGraphRows,
   getCommitAuthorDisplay,
   getCommitAuthorFilterValue,
   getGraphCellBottomLaneIndexes,
   getGitGraphColumnWidth,
+  getWorkspaceFileChangeStatus,
+  isWorkingTreeCommit,
   getRefColor,
   getRepositoryDefaultPushTarget,
   getNextVisibleCommitCount,
-  getRefTone
+  getRefTone,
+  prependWorkingTreeCommit,
+  workingTreeCommitHash
 } from './git-log-view.js'
 
 describe('git log view helpers', () => {
@@ -142,6 +147,46 @@ describe('git log view helpers', () => {
     assert.equal(getNextVisibleCommitCount({ current: 60, total: 185, batchSize: 60 }), 120)
     assert.equal(getNextVisibleCommitCount({ current: 180, total: 185, batchSize: 60 }), 185)
     assert.equal(getNextVisibleCommitCount({ current: 185, total: 185, batchSize: 60 }), 185)
+  })
+
+  it('prepends a working tree commit when the repository has uncommitted files', () => {
+    const commits = [
+      { hash: 'head', parentHashes: ['root'], message: 'feat: latest' },
+      { hash: 'root', parentHashes: [], message: 'chore: root' }
+    ]
+    const rows = createGraphRows(
+      prependWorkingTreeCommit(commits, { files: [{ path: 'src/App.tsx' }, { path: 'README.md' }] }, ({ parentHashes, fileCount }) => ({
+        hash: workingTreeCommitHash,
+        parentHashes,
+        message: `${fileCount} uncommitted files`
+      }))
+    )
+
+    assert.equal(rows[0].hash, workingTreeCommitHash)
+    assert.equal(rows[0].message, '2 uncommitted files')
+    assert.deepEqual(rows[0].parentHashes, ['head'])
+    assert.equal(isWorkingTreeCommit(rows[0]), true)
+    assert.deepEqual(rows[0].graphParentEdges, [{ fromLaneIndex: 0, toLaneIndex: 0 }])
+    assert.equal(rows[1].hash, 'head')
+  })
+
+  it('does not prepend a working tree commit when the workspace is clean', () => {
+    const commits = [{ hash: 'head', parentHashes: [], message: 'feat: latest' }]
+    const workingTreeCommit = createWorkingTreeCommit(commits, { files: [] }, ({ parentHashes, fileCount }) => ({
+      hash: workingTreeCommitHash,
+      parentHashes,
+      message: `${fileCount} uncommitted files`
+    }))
+
+    assert.equal(workingTreeCommit, null)
+    assert.deepEqual(prependWorkingTreeCommit(commits, { files: [] }, () => commits[0]), commits)
+  })
+
+  it('normalizes workspace file status labels for the working tree row', () => {
+    assert.equal(getWorkspaceFileChangeStatus({ indexStatus: 'A', worktreeStatus: ' ', conflict: false }), 'A')
+    assert.equal(getWorkspaceFileChangeStatus({ indexStatus: ' ', worktreeStatus: 'M', conflict: false }), 'M')
+    assert.equal(getWorkspaceFileChangeStatus({ indexStatus: '?', worktreeStatus: '?', conflict: false }), '?')
+    assert.equal(getWorkspaceFileChangeStatus({ indexStatus: 'U', worktreeStatus: 'U', conflict: true }), 'U')
   })
 
   it('renders mapped author name with the email on the second line', () => {
