@@ -2254,6 +2254,99 @@ body {
   white-space: inherit;
 }
 
+.release-background-task-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.release-background-task-header,
+.release-task-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.release-task-dock {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1000;
+}
+
+.release-task-dock .ant-btn {
+  box-shadow: 0 10px 26px rgba(23, 32, 51, 0.14);
+}
+
+.release-task-drawer {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+}
+
+.release-task-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.release-task-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e4e8ef;
+  border-radius: 8px;
+  color: inherit;
+  background: #ffffff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.release-task-item:hover,
+.release-task-item.is-active {
+  border-color: #91caff;
+  background: #f0f7ff;
+}
+
+.release-task-item-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.release-task-item-main .ant-typography {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.release-task-detail {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.release-task-detail-header h4 {
+  margin: 0;
+}
+
+.release-task-log {
+  max-height: 420px;
+}
+
 .git-branch-select {
   width: 240px;
 }
@@ -3262,6 +3355,24 @@ body {
     width: 100%;
     width: 100vw !important;
     max-width: 100%;
+  }
+
+  .release-task-dock {
+    right: 16px;
+    bottom: 16px;
+  }
+
+  .release-task-drawer {
+    grid-template-columns: 1fr;
+  }
+
+  .release-task-list {
+    max-height: 180px;
+    overflow: auto;
+  }
+
+  .release-task-item-main .ant-typography {
+    max-width: calc(100vw - 180px);
   }
 
   .section-heading {

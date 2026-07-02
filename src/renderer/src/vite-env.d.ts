@@ -271,6 +271,29 @@ type RepositoryReleasePublishResult = {
   exitCode: number | null
 }
 
+type RepositoryReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed'
+
+type RepositoryReleasePublishTask = {
+  id: string
+  repositoryId: string
+  repositoryName: string
+  version: string
+  tagName: string
+  releaseTitle: string
+  selectedScript: ReleaseScriptName
+  status: RepositoryReleasePublishTaskStatus
+  startedAt: string
+  updatedAt: string
+  finishedAt?: string
+  log: string
+  stdout: string
+  stderr: string
+  exitCode: number | null
+  error?: string
+  plan?: RepositoryReleasePlan
+  repository?: RepositoryRecord
+}
+
 type GitMergeAnalysisInput = {
   source: string
   target: string
@@ -935,6 +958,9 @@ interface Window {
     recommendRepositoryReleaseTag: (repositoryId: string) => Promise<RepositoryReleaseTagRecommendation>
     suggestRepositoryRelease: (repositoryId: string, input?: RepositoryReleaseSuggestionInput) => Promise<RepositoryReleaseSuggestion>
     publishRepositoryRelease: (repositoryId: string, input: RepositoryReleasePublishInput) => Promise<RepositoryReleasePublishResult>
+    startRepositoryReleasePublishTask: (repositoryId: string, input: RepositoryReleasePublishInput) => Promise<RepositoryReleasePublishTask>
+    listRepositoryReleasePublishTasks: (repositoryId?: string) => Promise<RepositoryReleasePublishTask[]>
+    getRepositoryReleasePublishTask: (taskId: string) => Promise<RepositoryReleasePublishTask | null>
     suggestConflictResolution: (repositoryId: string, filePath: string) => Promise<AiConflictSuggestion>
     applyConflictResolution: (repositoryId: string, filePath: string, content: string) => Promise<GitOperationResult>
     listRepositoryCommitFiles: (repositoryId: string, commitHash: string) => Promise<GitCommitFileChange[]>

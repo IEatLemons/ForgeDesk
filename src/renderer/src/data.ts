@@ -351,6 +351,29 @@ export type RepositoryReleasePublishResult = {
   exitCode: number | null
 }
 
+export type RepositoryReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed'
+
+export type RepositoryReleasePublishTask = {
+  id: string
+  repositoryId: string
+  repositoryName: string
+  version: string
+  tagName: string
+  releaseTitle: string
+  selectedScript: ReleaseScriptName
+  status: RepositoryReleasePublishTaskStatus
+  startedAt: string
+  updatedAt: string
+  finishedAt?: string
+  log: string
+  stdout: string
+  stderr: string
+  exitCode: number | null
+  error?: string
+  plan?: RepositoryReleasePlan
+  repository?: Repository
+}
+
 export type GitMergeAnalysisInput = {
   source: string
   target: string

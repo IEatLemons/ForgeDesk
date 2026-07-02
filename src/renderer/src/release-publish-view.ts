@@ -28,6 +28,27 @@ export type ReleasePublishViewModel = {
   warningCount: number
 }
 
+export type ReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed'
+
+export type ReleasePublishTaskViewInput = {
+  repositoryName: string
+  tagName: string
+  status: ReleasePublishTaskStatus
+  log: string
+  stdout: string
+  stderr: string
+  exitCode: number | null
+  error?: string
+}
+
+export type ReleasePublishTaskViewModel = {
+  title: string
+  statusLabel: string
+  statusColor: string
+  active: boolean
+  log: string
+}
+
 export type ReleasePlatformOption = {
   key: 'github'
   name: string
@@ -103,5 +124,38 @@ export function createReleasePublishViewModel(input: {
     primaryDisabled: false,
     issueCount,
     warningCount
+  }
+}
+
+export function createReleasePublishTaskView(input: { task: ReleasePublishTaskViewInput | null }): ReleasePublishTaskViewModel {
+  if (!input.task) {
+    return {
+      title: '发布任务',
+      statusLabel: '无任务',
+      statusColor: 'default',
+      active: false,
+      log: '暂无发布日志'
+    }
+  }
+
+  const statusView = input.task.status === 'running'
+    ? { label: '发布中', color: 'processing', active: true }
+    : input.task.status === 'succeeded'
+      ? { label: '已完成', color: 'green', active: false }
+      : { label: '失败', color: 'red', active: false }
+  const fallbackLog = [
+    input.task.log,
+    input.task.stdout,
+    input.task.stderr,
+    input.task.error,
+    input.task.exitCode === null ? '' : `退出码：${input.task.exitCode}`
+  ].filter(Boolean).join('\n')
+
+  return {
+    title: `${input.task.repositoryName} ${input.task.tagName}`.trim(),
+    statusLabel: statusView.label,
+    statusColor: statusView.color,
+    active: statusView.active,
+    log: fallbackLog || '暂无发布日志'
   }
 }

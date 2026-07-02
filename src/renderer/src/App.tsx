@@ -107,7 +107,7 @@ import type {
   RemoteAlignmentSummary,
   Repository,
   RepositoryReleasePreparation,
-  RepositoryReleasePublishResult,
+  RepositoryReleasePublishTask,
   RepositoryReleaseSuggestion,
   RepositoryReleaseTagRecommendation,
   RsaPrivateKeyRecord,
@@ -187,7 +187,7 @@ import {
   PROJECT_SETTINGS_MODULES,
   type ProjectSettingsModuleKey
 } from './project-settings-view'
-import { createReleasePlatformOptions, createReleasePublishViewModel, getUnresolvedReleaseIssues, type ReleasePublishActionKey } from './release-publish-view'
+import { createReleasePlatformOptions, createReleasePublishTaskView, createReleasePublishViewModel, getUnresolvedReleaseIssues, type ReleasePublishActionKey } from './release-publish-view'
 import {
   createDeploymentFilterOptions,
   createDeploymentRows,
@@ -6226,7 +6226,8 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const [githubTokens, setGithubTokens] = useState<GithubTokenView[]>([])
   const [selectedGithubTokenId, setSelectedGithubTokenId] = useState('')
   const [selectedReleaseActions, setSelectedReleaseActions] = useState<ReleasePublishActionKey[]>([])
-  const [publishLog, setPublishLog] = useState('')
+  const [activePublishTaskId, setActivePublishTaskId] = useState('')
+  const [activePublishTask, setActivePublishTask] = useState<RepositoryReleasePublishTask | null>(null)
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
   const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
   const [loadingPreparation, setLoadingPreparation] = useState(false)
@@ -6235,6 +6236,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const [loadingAiSettings, setLoadingAiSettings] = useState(false)
   const [loadingGithubTokens, setLoadingGithubTokens] = useState(false)
   const [savingAiSettings, setSavingAiSettings] = useState(false)
+  const handledActivePublishTaskIdsRef = useRef<Set<string>>(new Set())
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
   const selectedGithubToken = githubTokens.find((token) => token.id === selectedGithubTokenId) ?? null
   const releaseView = useMemo(
@@ -6245,6 +6247,11 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     () => createReleasePlatformOptions({ plan: preparation?.plan ?? null }),
     [preparation]
   )
+  const activePublishTaskView = useMemo(
+    () => createReleasePublishTaskView({ task: activePublishTask }),
+    [activePublishTask]
+  )
+  const activePublishTaskRunning = activePublishTask?.status === 'running'
   const githubTokenOptions = useMemo(
     () => githubTokens.map((token) => ({
       label: `${token.name}${token.githubLogin ? ` · @${token.githubLogin}` : ''} · ****${token.tokenLastFour || '----'}`,
@@ -6354,10 +6361,47 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     setReleaseCommitMessage('')
     setGithubToken('')
     setSelectedReleaseActions([])
-    setPublishLog('')
+    setActivePublishTaskId('')
+    setActivePublishTask(null)
     loadReleasePreparation()
     refreshReleaseGithubTokens()
   }, [open, selectedRepository?.id])
+
+  useEffect(() => {
+    if (!activePublishTaskId || !window.forgeDesk) {
+      return
+    }
+
+    let cancelled = false
+
+    async function refreshActivePublishTask(): Promise<void> {
+      const task = await window.forgeDesk.getRepositoryReleasePublishTask(activePublishTaskId)
+
+      if (!cancelled) {
+        setActivePublishTask(task)
+      }
+    }
+
+    refreshActivePublishTask().catch((error) => message.error(getErrorMessage(error)))
+    const intervalId = window.setInterval(() => {
+      refreshActivePublishTask().catch((error) => message.error(getErrorMessage(error)))
+    }, activePublishTaskRunning ? 1500 : 4000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [activePublishTaskId, activePublishTaskRunning])
+
+  useEffect(() => {
+    if (!activePublishTask || activePublishTask.status === 'running' || !activePublishTask.repository || handledActivePublishTaskIdsRef.current.has(activePublishTask.id)) {
+      return
+    }
+
+    handledActivePublishTaskIdsRef.current.add(activePublishTask.id)
+    updateRepository(activePublishTask.repository)
+    Promise.resolve(onChanged(activePublishTask.repository)).catch((error) => message.error(getErrorMessage(error)))
+  }, [activePublishTask, onChanged, updateRepository])
 
   async function refreshReleaseAiSettings(): Promise<AiSettingsView | null> {
     if (!window.forgeDesk) {
@@ -6480,7 +6524,6 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     }
 
     setPublishing(true)
-    setPublishLog('')
 
     try {
       const checkedPreparation = await loadReleasePreparation(version, true)
@@ -6491,7 +6534,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
         return
       }
 
-      const result: RepositoryReleasePublishResult = await window.forgeDesk.publishRepositoryRelease(selectedRepository.id, {
+      const task = await window.forgeDesk.startRepositoryReleasePublishTask(selectedRepository.id, {
         version,
         tagName: releaseTagName,
         releaseTitle: title,
@@ -6502,15 +6545,9 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
         releaseActions: selectedReleaseActions
       })
 
-      setPublishLog([result.stdout, result.stderr].filter(Boolean).join('\n'))
-
-      if (result.ok) {
-        updateRepository(result.repository)
-        await onChanged(result.repository)
-        message.success(`${releaseTagName} 发布流程已完成`)
-      } else {
-        message.warning(result.stderr || result.stdout || '发布脚本没有成功完成')
-      }
+      setActivePublishTaskId(task.id)
+      setActivePublishTask(task)
+      message.success(`${releaseTagName} 已在后台发布，可关闭窗口继续操作`)
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
@@ -6542,7 +6579,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
                 ))}
             </Space>
           ) : null}
-          <Typography.Text type="secondary">执行过程可能需要几分钟，请保持网络可用。</Typography.Text>
+          <Typography.Text type="secondary">执行过程会进入后台任务，可以关闭窗口继续操作，并随时查看发布日志。</Typography.Text>
         </Space>
       ),
       okText: '开始发布',
@@ -6572,8 +6609,8 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
         <Button key="ai" icon={<ThunderboltOutlined />} loading={generatingRelease} disabled={!selectedRepository} onClick={fillReleaseWithAi}>
           AI 填写
         </Button>,
-        <Button key="publish" type="primary" icon={<UploadOutlined />} loading={publishing} disabled={releaseView.primaryDisabled || publishing} onClick={confirmPublishRelease}>
-          {releaseView.primaryLabel}
+        <Button key="publish" type="primary" icon={<UploadOutlined />} loading={publishing} disabled={releaseView.primaryDisabled || publishing || activePublishTaskRunning} onClick={confirmPublishRelease}>
+          {activePublishTaskRunning ? '发布中' : releaseView.primaryLabel}
         </Button>
       ]}
     >
@@ -6701,9 +6738,19 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
           ) : null}
         </Row>
 
-        {publishLog ? (
-          <div className="release-publish-log">
-            <Typography.Text copyable>{publishLog}</Typography.Text>
+        {activePublishTask ? (
+          <div className="release-background-task-card">
+            <div className="release-background-task-header">
+              <Space wrap>
+                <Typography.Text strong>后台发布任务</Typography.Text>
+                <Tag color={activePublishTaskView.statusColor}>{activePublishTaskView.statusLabel}</Tag>
+                <Typography.Text type="secondary">{activePublishTaskView.title}</Typography.Text>
+              </Space>
+              <Typography.Text type="secondary">更新：{new Date(activePublishTask.updatedAt).toLocaleString()}</Typography.Text>
+            </div>
+            <div className="release-publish-log">
+              <Typography.Text copyable>{activePublishTaskView.log}</Typography.Text>
+            </div>
           </div>
         ) : null}
       </Space>
@@ -7576,6 +7623,164 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
         }}
       />
     </div>
+  )
+}
+
+function formatReleaseTaskTime(value?: string): string {
+  return value ? new Date(value).toLocaleString() : '-'
+}
+
+function formatReleaseTaskToastError(task: RepositoryReleasePublishTask): string {
+  const message = task.error || task.stderr || '请查看发布日志'
+  return message.length > 160 ? `${message.slice(0, 160)}...` : message
+}
+
+function ReleasePublishTaskDock(): JSX.Element | null {
+  const { updateRepository } = useForgeDeskStore()
+  const [tasks, setTasks] = useState<RepositoryReleasePublishTask[]>([])
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [activeTaskId, setActiveTaskId] = useState('')
+  const activeTaskIdRef = useRef('')
+  const initializedRef = useRef(false)
+  const notifiedTaskIdsRef = useRef<Set<string>>(new Set())
+  const updatedRepositoryTaskIdsRef = useRef<Set<string>>(new Set())
+  const activeTask = tasks.find((task) => task.id === activeTaskId) ?? tasks[0] ?? null
+  const activeTaskView = createReleasePublishTaskView({ task: activeTask })
+  const runningTaskCount = tasks.filter((task) => task.status === 'running').length
+
+  useEffect(() => {
+    activeTaskIdRef.current = activeTaskId
+  }, [activeTaskId])
+
+  useEffect(() => {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    let cancelled = false
+
+    async function refreshReleaseTasks(): Promise<void> {
+      const nextTasks = await window.forgeDesk.listRepositoryReleasePublishTasks()
+
+      if (cancelled) {
+        return
+      }
+
+      setTasks(nextTasks)
+
+      if (!activeTaskIdRef.current && nextTasks[0]) {
+        setActiveTaskId(nextTasks[0].id)
+      }
+
+      for (const task of nextTasks) {
+        if (task.status === 'running') {
+          continue
+        }
+
+        if (task.repository && !updatedRepositoryTaskIdsRef.current.has(task.id)) {
+          updatedRepositoryTaskIdsRef.current.add(task.id)
+          updateRepository(task.repository)
+        }
+
+        if (!initializedRef.current || notifiedTaskIdsRef.current.has(task.id)) {
+          notifiedTaskIdsRef.current.add(task.id)
+          continue
+        }
+
+        notifiedTaskIdsRef.current.add(task.id)
+
+        if (task.status === 'succeeded') {
+          message.success(`${task.tagName} 发布流程已完成`)
+        } else {
+          message.error(`${task.tagName} 发布失败：${formatReleaseTaskToastError(task)}`)
+        }
+      }
+
+      initializedRef.current = true
+    }
+
+    refreshReleaseTasks().catch((error) => message.error(getErrorMessage(error)))
+    const intervalId = window.setInterval(() => {
+      refreshReleaseTasks().catch((error) => message.error(getErrorMessage(error)))
+    }, 2000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [updateRepository])
+
+  if (tasks.length === 0) {
+    return null
+  }
+
+  return (
+    <>
+      <div className="release-task-dock">
+        <Badge count={runningTaskCount} size="small">
+          <Button type={runningTaskCount > 0 ? 'primary' : 'default'} icon={<UploadOutlined />} onClick={() => setDrawerOpen(true)}>
+            发布任务
+          </Button>
+        </Badge>
+      </div>
+      <Drawer
+        title="发布任务"
+        open={drawerOpen}
+        width="min(960px, calc(100vw - 48px))"
+        onClose={() => setDrawerOpen(false)}
+      >
+        <div className="release-task-drawer">
+          <div className="release-task-list">
+            {tasks.map((task) => {
+              const taskView = createReleasePublishTaskView({ task })
+              return (
+                <button
+                  type="button"
+                  key={task.id}
+                  className={['release-task-item', activeTask?.id === task.id ? 'is-active' : ''].join(' ')}
+                  onClick={() => setActiveTaskId(task.id)}
+                >
+                  <span className="release-task-item-main">
+                    <Typography.Text strong>{taskView.title}</Typography.Text>
+                    <Typography.Text type="secondary">{formatReleaseTaskTime(task.startedAt)}</Typography.Text>
+                  </span>
+                  <Tag color={taskView.statusColor}>{taskView.statusLabel}</Tag>
+                </button>
+              )
+            })}
+          </div>
+          <div className="release-task-detail">
+            {activeTask ? (
+              <>
+                <div className="release-task-detail-header">
+                  <Space wrap>
+                    <Typography.Title level={4}>{activeTaskView.title}</Typography.Title>
+                    <Tag color={activeTaskView.statusColor}>{activeTaskView.statusLabel}</Tag>
+                  </Space>
+                  <Typography.Text type="secondary">更新：{formatReleaseTaskTime(activeTask.updatedAt)}</Typography.Text>
+                </div>
+                <Descriptions size="small" bordered column={2}>
+                  <Descriptions.Item label="仓库">{activeTask.repositoryName}</Descriptions.Item>
+                  <Descriptions.Item label="Tag">{activeTask.tagName}</Descriptions.Item>
+                  <Descriptions.Item label="版本">{activeTask.version}</Descriptions.Item>
+                  <Descriptions.Item label="脚本">{activeTask.selectedScript || activeTask.plan?.selectedScript || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="开始时间">{formatReleaseTaskTime(activeTask.startedAt)}</Descriptions.Item>
+                  <Descriptions.Item label="结束时间">{formatReleaseTaskTime(activeTask.finishedAt)}</Descriptions.Item>
+                  <Descriptions.Item label="退出码">{activeTask.exitCode ?? '-'}</Descriptions.Item>
+                  <Descriptions.Item label="标题">{activeTask.releaseTitle || '-'}</Descriptions.Item>
+                </Descriptions>
+                {activeTask.error ? <Alert type="error" showIcon message={activeTask.error} /> : null}
+                <div className="release-publish-log release-task-log">
+                  <Typography.Text copyable>{activeTaskView.log}</Typography.Text>
+                </div>
+              </>
+            ) : (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无发布任务" />
+            )}
+          </div>
+        </div>
+      </Drawer>
+    </>
   )
 }
 
@@ -12221,6 +12426,7 @@ function App(): JSX.Element {
             <TerminalWorkspace defaultTitle="ForgeDesk CLI" openRequest={terminalOpenRequest} />
           </div>
         </div>
+        <ReleasePublishTaskDock />
       </Layout>
     )
   }
@@ -12280,6 +12486,7 @@ function App(): JSX.Element {
           <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('overview')} />
         </Layout.Content>
       </Layout>
+      <ReleasePublishTaskDock />
     </Layout>
   )
 }
