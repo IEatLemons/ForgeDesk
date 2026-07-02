@@ -85,6 +85,7 @@ import type {
   GitRemote,
   GitStatusFile,
   GitWorkspaceStatus,
+  GithubTokenView,
   Project,
   ProjectBranchTag,
   ProjectGitSummary,
@@ -253,7 +254,7 @@ type SshPassphraseForm = {
   confirmPassphrase: string
 }
 
-type SettingsModuleKey = 'overview' | 'git' | 'private' | 'public' | 'config' | 'services' | 'plane' | 'ai' | 'updates'
+type SettingsModuleKey = 'overview' | 'git' | 'github' | 'private' | 'public' | 'config' | 'services' | 'plane' | 'ai' | 'updates'
 
 type AiSettingsForm = {
   enabled: boolean
@@ -262,6 +263,11 @@ type AiSettingsForm = {
   apiKey?: string
   model: string
   temperature: number
+}
+
+type GithubTokenForm = {
+  name: string
+  token?: string
 }
 
 type PlaneSettingsForm = {
@@ -716,6 +722,8 @@ function CommitGraphCell({ commit }: { commit: GitGraphRow<RepositoryLogCommit> 
   const isMerge = commit.parentHashes.length > 1
   const isWorkingTree = isWorkingTreeCommit(commit)
   const graphCellBottomLaneIndexes = getGraphCellBottomLaneIndexes(commit)
+  const graphCellBottomLaneIndexSet = new Set(graphCellBottomLaneIndexes)
+  const graphCellSideContinuationLaneIndexes = commit.graphBottomLaneIndexes.filter((laneIndex) => !graphCellBottomLaneIndexSet.has(laneIndex))
   const allLaneIndexes = [
     commit.graphLaneIndex,
     ...commit.graphParentLaneIndexes,
@@ -735,8 +743,6 @@ function CommitGraphCell({ commit }: { commit: GitGraphRow<RepositoryLogCommit> 
         className="commit-graph-svg"
         focusable="false"
         height="100%"
-        preserveAspectRatio="none"
-        viewBox={`0 0 ${svgWidth} ${graphRowHeight}`}
         width={svgWidth}
       >
         {commit.graphTopLaneIndexes.map((laneIndex) => (
@@ -758,7 +764,18 @@ function CommitGraphCell({ commit }: { commit: GitGraphRow<RepositoryLogCommit> 
             x1={xForLane(laneIndex)}
             x2={xForLane(laneIndex)}
             y1={graphRowMiddle}
-            y2={graphRowHeight + graphLineOverflow}
+            y2="100%"
+          />
+        ))}
+        {graphCellSideContinuationLaneIndexes.map((laneIndex) => (
+          <line
+            key={`side-continuation-${laneIndex}`}
+            className={laneIndex === commit.graphLaneIndex ? 'commit-graph-line is-active' : 'commit-graph-line'}
+            stroke={getLaneColor(laneIndex)}
+            x1={xForLane(laneIndex)}
+            x2={xForLane(laneIndex)}
+            y1={graphRowHeight - graphLineOverflow}
+            y2="100%"
           />
         ))}
         {parentEdges.map((edge) => (
@@ -805,8 +822,6 @@ function CommitGraphContinuation({
         className="commit-expanded-graph-svg"
         focusable="false"
         height="100%"
-        preserveAspectRatio="none"
-        viewBox={`0 0 ${svgWidth} ${graphRowHeight}`}
         width={svgWidth}
       >
         {commit.graphBottomLaneIndexes.map((laneIndex) => (
@@ -817,7 +832,7 @@ function CommitGraphContinuation({
             x1={xForLane(laneIndex)}
             x2={xForLane(laneIndex)}
             y1={-graphLineOverflow}
-            y2={graphRowHeight + graphLineOverflow}
+            y2="100%"
           />
         ))}
       </svg>
@@ -1184,6 +1199,42 @@ function populateAiSettingsForm(form: FormInstance<AiSettingsForm>, settings: Ai
   })
 }
 
+function getGithubTokenTypeLabel(token: GithubTokenView): string {
+  if (token.tokenType === 'classic') {
+    return 'Classic PAT'
+  }
+
+  if (token.tokenType === 'fine-grained-or-app') {
+    return 'Fine-grained / App'
+  }
+
+  return '未识别类型'
+}
+
+function formatGithubTokenCheckedAt(token: GithubTokenView): string {
+  if (!token.lastCheckedAt) {
+    return '未校验'
+  }
+
+  return new Date(token.lastCheckedAt).toLocaleString()
+}
+
+function renderGithubTokenScopes(token: GithubTokenView): JSX.Element {
+  if (token.scopes.length === 0) {
+    return <Tag color="default">{token.permissionSummary}</Tag>
+  }
+
+  return (
+    <>
+      {token.scopes.map((scope) => (
+        <Tag key={scope} color={scope.includes('repo') || scope.includes('workflow') ? 'blue' : 'default'}>
+          {scope}
+        </Tag>
+      ))}
+    </>
+  )
+}
+
 type AiSettingsSectionProps = {
   form: FormInstance<AiSettingsForm>
   settings: AiSettingsView | null
@@ -1372,10 +1423,13 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
   const [sshImportForm] = Form.useForm<SshKeyImportForm>()
   const [sshPassphraseForm] = Form.useForm<SshPassphraseForm>()
   const [aiSettingsForm] = Form.useForm<AiSettingsForm>()
+  const [githubTokenForm] = Form.useForm<GithubTokenForm>()
   const [planeSettingsForm] = Form.useForm<PlaneSettingsForm>()
   const [gitStatus, setGitStatus] = useState<GitSetupStatus | null>(null)
   const [sshConfig, setSshConfig] = useState<SshConfigFile | null>(null)
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
+  const [githubTokens, setGithubTokens] = useState<GithubTokenView[]>([])
+  const [editingGithubToken, setEditingGithubToken] = useState<GithubTokenView | null>(null)
   const [planeSettings, setPlaneSettings] = useState<PlaneSettings | null>(null)
   const [planeTestResult, setPlaneTestResult] = useState<PlaneConnectionTestResult | null>(null)
   const [sshConfigContent, setSshConfigContent] = useState('')
@@ -1388,10 +1442,13 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
   const [loadingGit, setLoadingGit] = useState(false)
   const [loadingSshConfig, setLoadingSshConfig] = useState(false)
   const [loadingAiSettings, setLoadingAiSettings] = useState(false)
+  const [loadingGithubTokens, setLoadingGithubTokens] = useState(false)
   const [loadingPlaneSettings, setLoadingPlaneSettings] = useState(false)
   const [savingIdentity, setSavingIdentity] = useState(false)
   const [savingSshConfig, setSavingSshConfig] = useState(false)
   const [savingAiSettings, setSavingAiSettings] = useState(false)
+  const [savingGithubToken, setSavingGithubToken] = useState(false)
+  const [checkingGithubTokenId, setCheckingGithubTokenId] = useState<string | null>(null)
   const [savingPlaneSettings, setSavingPlaneSettings] = useState(false)
   const [testingPlaneSettings, setTestingPlaneSettings] = useState(false)
   const [generatingSsh, setGeneratingSsh] = useState(false)
@@ -1501,6 +1558,23 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     }
   }
 
+  async function refreshGithubTokens(): Promise<void> {
+    if (!window.forgeDesk) {
+      setGithubTokens([])
+      return
+    }
+
+    setLoadingGithubTokens(true)
+
+    try {
+      setGithubTokens(await window.forgeDesk.listGithubTokens())
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingGithubTokens(false)
+    }
+  }
+
   async function refreshPlaneSettings(): Promise<void> {
     if (!window.forgeDesk) {
       setPlaneSettings(null)
@@ -1525,6 +1599,7 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     refreshGitStatus()
     refreshSshConfig()
     refreshAiSettings()
+    refreshGithubTokens()
     refreshPlaneSettings()
   }, [])
 
@@ -1532,6 +1607,7 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
   const sshPublicKeys = gitStatus?.sshPublicKeys ?? []
   const gitReady = Boolean(gitStatus?.gitAvailable && gitStatus.userName && gitStatus.userEmail)
   const aiReady = isAiSettingsReady(aiSettings)
+  const githubTokenReady = githubTokens.length > 0
   const planeReady = isPlaneSettingsReady(planeSettings)
   const sshReady = sshPrivateKeys.length + sshPublicKeys.length > 0
   const sshPassphraseCount = sshPrivateKeys.filter((key) => key.hasPassphrase).length
@@ -1621,6 +1697,91 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
       message.error(getErrorMessage(error))
     } finally {
       setSavingAiSettings(false)
+    }
+  }
+
+  async function saveGithubToken(): Promise<void> {
+    const values = await githubTokenForm.validateFields()
+
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中保存 GitHub Token')
+      return
+    }
+
+    const token = values.token?.trim()
+
+    if (!token && !editingGithubToken) {
+      message.warning('请填写 GitHub Token')
+      return
+    }
+
+    setSavingGithubToken(true)
+
+    try {
+      const tokens = await window.forgeDesk.saveGithubToken({
+        id: editingGithubToken?.id,
+        name: values.name.trim(),
+        token: token || undefined
+      })
+      setGithubTokens(tokens)
+      setEditingGithubToken(null)
+      githubTokenForm.resetFields()
+      message.success(token ? 'GitHub Token 已保存，权限范围已更新' : 'GitHub Token 已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingGithubToken(false)
+    }
+  }
+
+  function editGithubToken(token: GithubTokenView): void {
+    setEditingGithubToken(token)
+    githubTokenForm.setFieldsValue({
+      name: token.name,
+      token: ''
+    })
+  }
+
+  function cancelGithubTokenEdit(): void {
+    setEditingGithubToken(null)
+    githubTokenForm.resetFields()
+  }
+
+  async function refreshGithubTokenScopes(tokenId: string): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中刷新 GitHub Token')
+      return
+    }
+
+    setCheckingGithubTokenId(tokenId)
+
+    try {
+      setGithubTokens(await window.forgeDesk.refreshGithubToken(tokenId))
+      message.success('GitHub Token 权限范围已更新')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setCheckingGithubTokenId(null)
+    }
+  }
+
+  async function deleteGithubToken(tokenId: string): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中删除 GitHub Token')
+      return
+    }
+
+    try {
+      const tokens = await window.forgeDesk.deleteGithubToken(tokenId)
+      setGithubTokens(tokens)
+
+      if (editingGithubToken?.id === tokenId) {
+        cancelGithubTokenEdit()
+      }
+
+      message.success('GitHub Token 已删除')
+    } catch (error) {
+      message.error(getErrorMessage(error))
     }
   }
 
@@ -2037,6 +2198,14 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
       icon: <SettingOutlined />,
       meta: gitReady ? '已配置' : '需要配置',
       tone: gitReady ? 'ok' : 'danger'
+    },
+    {
+      key: 'github',
+      title: 'GitHub Token',
+      description: '保存发布用 Token，并读取 GitHub 返回的权限范围。',
+      icon: <GithubOutlined />,
+      meta: githubTokenReady ? `${githubTokens.length} 个` : '需要配置',
+      tone: githubTokenReady ? 'ok' : 'warning'
     },
     {
       key: 'private',
@@ -2476,6 +2645,104 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     )
   }
 
+  function renderGithubTokensModule(): JSX.Element {
+    const githubTokenColumns: ColumnsType<GithubTokenView> = [
+      {
+        title: '名称',
+        key: 'name',
+        render: (_, token) => (
+          <Space direction="vertical" size={2}>
+            <Typography.Text strong>{token.name}</Typography.Text>
+            <Typography.Text type="secondary">
+              {token.githubLogin ? `@${token.githubLogin}` : '未读取账号'} · ****{token.tokenLastFour || '----'}
+            </Typography.Text>
+          </Space>
+        )
+      },
+      {
+        title: '权限范围',
+        key: 'scopes',
+        render: (_, token) => <Space wrap size={[4, 4]}>{renderGithubTokenScopes(token)}</Space>
+      },
+      {
+        title: '类型',
+        key: 'type',
+        width: 150,
+        render: (_, token) => <Tag color={token.tokenType === 'classic' ? 'blue' : 'default'}>{getGithubTokenTypeLabel(token)}</Tag>
+      },
+      {
+        title: '校验时间',
+        key: 'checkedAt',
+        width: 190,
+        render: (_, token) => <Typography.Text type="secondary">{formatGithubTokenCheckedAt(token)}</Typography.Text>
+      },
+      {
+        title: '操作',
+        key: 'actions',
+        width: 250,
+        render: (_, token) => (
+          <Space wrap>
+            <Button size="small" icon={<EditOutlined />} onClick={() => editGithubToken(token)}>
+              编辑
+            </Button>
+            <Button size="small" icon={<ReloadOutlined />} loading={checkingGithubTokenId === token.id} onClick={() => refreshGithubTokenScopes(token.id)}>
+              刷新权限
+            </Button>
+            <Popconfirm title="删除这个 GitHub Token？" okText="删除" cancelText="取消" onConfirm={() => deleteGithubToken(token.id)}>
+              <Button size="small" danger icon={<DeleteOutlined />}>
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+        )
+      }
+    ]
+
+    return (
+      <div className="panel settings-module-panel">
+        {renderModuleHeader(
+          'GitHub Token',
+          '保存发布 GitHub Releases 使用的 Token，并在保存后读取 GitHub 返回的权限范围。',
+          <Button icon={<ReloadOutlined />} loading={loadingGithubTokens} onClick={refreshGithubTokens}>
+            重新读取
+          </Button>
+        )}
+        <Alert
+          className="settings-module-alert"
+          type={githubTokenReady ? 'success' : 'info'}
+          showIcon
+          message={githubTokenReady ? `已保存 ${githubTokens.length} 个 GitHub Token` : '保存 Token 后可以在发布时直接选择'}
+          description="Classic PAT 会显示 GitHub 返回的 OAuth scopes；fine-grained PAT 可能不会公开完整权限，请确保发布 Token 至少拥有 Contents: Read and write。"
+        />
+        <Form form={githubTokenForm} layout="vertical" className="settings-management-form github-token-form">
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入 Token 名称' }]}>
+            <Input placeholder="例如 ForgeDesk 发布 Token" />
+          </Form.Item>
+          <Form.Item name="token" label="GitHub Token">
+            <Input.Password placeholder={editingGithubToken ? '留空只更新名称' : 'github_pat_...'} />
+          </Form.Item>
+          <Space wrap>
+            <Button type="primary" icon={<SaveOutlined />} loading={savingGithubToken} onClick={saveGithubToken}>
+              {editingGithubToken ? '保存修改' : '保存 Token'}
+            </Button>
+            {editingGithubToken ? <Button onClick={cancelGithubTokenEdit}>取消编辑</Button> : null}
+          </Space>
+        </Form>
+        <Table
+          rowKey="id"
+          size="small"
+          className="github-token-table"
+          loading={loadingGithubTokens}
+          columns={githubTokenColumns}
+          dataSource={githubTokens}
+          pagination={false}
+          scroll={{ x: 860 }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无 GitHub Token" /> }}
+        />
+      </div>
+    )
+  }
+
   function renderAiModule(): JSX.Element {
     return (
       <AiSettingsSection
@@ -2591,6 +2858,8 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     switch (activeSettingsModule) {
       case 'git':
         return renderGitModule()
+      case 'github':
+        return renderGithubTokensModule()
       case 'private':
         return renderPrivateModule()
       case 'public':
@@ -5954,6 +6223,8 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const [releaseNotes, setReleaseNotes] = useState('')
   const [releaseCommitMessage, setReleaseCommitMessage] = useState('')
   const [githubToken, setGithubToken] = useState('')
+  const [githubTokens, setGithubTokens] = useState<GithubTokenView[]>([])
+  const [selectedGithubTokenId, setSelectedGithubTokenId] = useState('')
   const [selectedReleaseActions, setSelectedReleaseActions] = useState<ReleasePublishActionKey[]>([])
   const [publishLog, setPublishLog] = useState('')
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
@@ -5962,15 +6233,24 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const [generatingRelease, setGeneratingRelease] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [loadingAiSettings, setLoadingAiSettings] = useState(false)
+  const [loadingGithubTokens, setLoadingGithubTokens] = useState(false)
   const [savingAiSettings, setSavingAiSettings] = useState(false)
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
+  const selectedGithubToken = githubTokens.find((token) => token.id === selectedGithubTokenId) ?? null
   const releaseView = useMemo(
-    () => createReleasePublishViewModel({ plan: preparation?.plan ?? null, githubToken, selectedActions: selectedReleaseActions }),
-    [githubToken, preparation, selectedReleaseActions]
+    () => createReleasePublishViewModel({ plan: preparation?.plan ?? null, githubToken: selectedGithubTokenId || githubToken, selectedActions: selectedReleaseActions }),
+    [githubToken, preparation, selectedGithubTokenId, selectedReleaseActions]
   )
   const releasePlatformOptions = useMemo(
     () => createReleasePlatformOptions({ plan: preparation?.plan ?? null }),
     [preparation]
+  )
+  const githubTokenOptions = useMemo(
+    () => githubTokens.map((token) => ({
+      label: `${token.name}${token.githubLogin ? ` · @${token.githubLogin}` : ''} · ****${token.tokenLastFour || '----'}`,
+      value: token.id
+    })),
+    [githubTokens]
   )
 
   useEffect(() => {
@@ -6037,6 +6317,32 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     }
   }
 
+  async function refreshReleaseGithubTokens(): Promise<void> {
+    if (!window.forgeDesk) {
+      setGithubTokens([])
+      setSelectedGithubTokenId('')
+      return
+    }
+
+    setLoadingGithubTokens(true)
+
+    try {
+      const tokens = await window.forgeDesk.listGithubTokens()
+      setGithubTokens(tokens)
+      setSelectedGithubTokenId((current) => {
+        if (current && tokens.some((token) => token.id === current)) {
+          return current
+        }
+
+        return tokens[0]?.id ?? ''
+      })
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingGithubTokens(false)
+    }
+  }
+
   useEffect(() => {
     if (!open || !selectedRepository) {
       return
@@ -6046,9 +6352,11 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     setReleaseTitle('')
     setReleaseNotes('')
     setReleaseCommitMessage('')
+    setGithubToken('')
     setSelectedReleaseActions([])
     setPublishLog('')
     loadReleasePreparation()
+    refreshReleaseGithubTokens()
   }, [open, selectedRepository?.id])
 
   async function refreshReleaseAiSettings(): Promise<AiSettingsView | null> {
@@ -6189,7 +6497,8 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
         releaseTitle: title,
         releaseNotes: notes,
         commitMessage,
-        githubToken: githubToken.trim() || undefined,
+        githubTokenId: selectedGithubTokenId || undefined,
+        githubToken: selectedGithubTokenId ? undefined : githubToken.trim() || undefined,
         releaseActions: selectedReleaseActions
       })
 
@@ -6358,12 +6667,36 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
           </Col>
           {plan?.selectedScript === 'publish:mac' ? (
             <Col xs={24}>
-              <Input.Password
-                value={githubToken}
-                addonBefore="GitHub Token"
-                placeholder="只用于本次发布，需要 Contents: Read and write"
-                onChange={(event) => setGithubToken(event.target.value)}
-              />
+              <Space direction="vertical" size={8} className="release-github-token-picker">
+                <Space.Compact className="full-width-control">
+                  <Select
+                    allowClear
+                    value={selectedGithubTokenId || undefined}
+                    className="release-github-token-select"
+                    loading={loadingGithubTokens}
+                    placeholder={githubTokens.length > 0 ? '选择已保存的 GitHub Token' : '设置里还没有保存 GitHub Token'}
+                    options={githubTokenOptions}
+                    onChange={(value) => setSelectedGithubTokenId(value ?? '')}
+                  />
+                  <Tooltip title="重新读取已保存 Token">
+                    <Button icon={<ReloadOutlined />} loading={loadingGithubTokens} onClick={refreshReleaseGithubTokens} />
+                  </Tooltip>
+                </Space.Compact>
+                {selectedGithubToken ? (
+                  <Space wrap size={[4, 4]}>
+                    <Tag color="green">{getGithubTokenTypeLabel(selectedGithubToken)}</Tag>
+                    {renderGithubTokenScopes(selectedGithubToken)}
+                    <Typography.Text type="secondary">校验：{formatGithubTokenCheckedAt(selectedGithubToken)}</Typography.Text>
+                  </Space>
+                ) : null}
+                <Input.Password
+                  value={githubToken}
+                  addonBefore="临时 Token"
+                  disabled={Boolean(selectedGithubTokenId)}
+                  placeholder={selectedGithubTokenId ? '正在使用已保存 Token' : '不保存，只用于本次发布'}
+                  onChange={(event) => setGithubToken(event.target.value)}
+                />
+              </Space>
             </Col>
           ) : null}
         </Row>

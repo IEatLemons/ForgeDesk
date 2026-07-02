@@ -91,7 +91,7 @@ export function createReleasePublishViewModel(input: {
 
   if (!tokenReady && input.plan.selectedScript === 'publish:mac') {
     return {
-      primaryLabel: '填写 GitHub Token',
+      primaryLabel: '选择 GitHub Token',
       primaryDisabled: true,
       issueCount,
       warningCount

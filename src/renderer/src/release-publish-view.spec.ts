@@ -68,7 +68,7 @@ describe('release publish view model', () => {
       githubToken: ''
     })
 
-    assert.equal(view.primaryLabel, '填写 GitHub Token')
+    assert.equal(view.primaryLabel, '选择 GitHub Token')
     assert.equal(view.primaryDisabled, true)
   })
 

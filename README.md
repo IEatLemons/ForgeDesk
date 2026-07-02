@@ -35,3 +35,7 @@ npm run dev
 ```
 
 The product document is stored at `docs/ForgeDesk 项目文档.pdf`.
+
+## License
+
+MIT

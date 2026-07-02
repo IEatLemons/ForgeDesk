@@ -337,6 +337,7 @@ export type RepositoryReleasePublishInput = {
   releaseTitle: string
   releaseNotes: string
   commitMessage: string
+  githubTokenId?: string
   githubToken?: string
   releaseActions?: ReleasePublishActionKey[]
 }
@@ -806,6 +807,28 @@ export type AiSettingsView = {
   apiKeyConfigured: boolean
   model: string
   temperature: number
+}
+
+export type GithubTokenType = 'classic' | 'fine-grained-or-app' | 'unknown'
+
+export type GithubTokenInput = {
+  id?: string
+  name: string
+  token?: string
+}
+
+export type GithubTokenView = {
+  id: string
+  name: string
+  tokenLastFour: string
+  githubLogin: string
+  scopes: string[]
+  tokenType: GithubTokenType
+  permissionSummary: string
+  tokenConfigured: boolean
+  createdAt: string
+  updatedAt: string
+  lastCheckedAt: string
 }
 
 export const projects: Project[] = []

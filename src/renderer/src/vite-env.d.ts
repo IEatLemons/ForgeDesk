@@ -257,6 +257,7 @@ type RepositoryReleasePublishInput = {
   releaseTitle: string
   releaseNotes: string
   commitMessage: string
+  githubTokenId?: string
   githubToken?: string
   releaseActions?: ReleasePublishActionKey[]
 }
@@ -768,6 +769,28 @@ type AiSettingsView = {
   temperature: number
 }
 
+type GithubTokenType = 'classic' | 'fine-grained-or-app' | 'unknown'
+
+type GithubTokenInput = {
+  id?: string
+  name: string
+  token?: string
+}
+
+type GithubTokenView = {
+  id: string
+  name: string
+  tokenLastFour: string
+  githubLogin: string
+  scopes: string[]
+  tokenType: GithubTokenType
+  permissionSummary: string
+  tokenConfigured: boolean
+  createdAt: string
+  updatedAt: string
+  lastCheckedAt: string
+}
+
 type AppUpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
 
 type AppUpdateState = {
@@ -971,6 +994,10 @@ interface Window {
     configureGitIdentity: (identity: { userName: string; userEmail: string }) => Promise<GitSetupStatus>
     getAiSettings: () => Promise<AiSettingsView>
     saveAiSettings: (input: AiSettingsInput) => Promise<AiSettingsView>
+    listGithubTokens: () => Promise<GithubTokenView[]>
+    saveGithubToken: (input: GithubTokenInput) => Promise<GithubTokenView[]>
+    refreshGithubToken: (tokenId: string) => Promise<GithubTokenView[]>
+    deleteGithubToken: (tokenId: string) => Promise<GithubTokenView[]>
     listRsaPrivateKeys: () => Promise<RsaPrivateKeyRecord[]>
     createRsaPrivateKey: (input: RsaPrivateKeyCreateInput) => Promise<RsaPrivateKeyRecord>
     updateRsaPrivateKey: (input: RsaPrivateKeyUpdateInput) => Promise<RsaPrivateKeyRecord>

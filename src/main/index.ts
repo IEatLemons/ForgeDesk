@@ -14,6 +14,16 @@ import { registerAppUpdateIpc } from './app-updates'
 import { buildGitAuthorLookup, resolveGitAuthorDisplay, type GitAuthorLookup } from './git-author-mapping'
 import { parseControlledGitCommand, validateRepositoryRemoteName } from './git-controls'
 import {
+  deleteGithubToken,
+  getGithubTokenSecret,
+  listGithubTokens,
+  refreshGithubToken,
+  saveGithubToken,
+  type GithubTokenInput,
+  type GithubTokenView
+} from './github-tokens'
+import { createScriptExecutionEnv } from './shell-environment'
+import {
   buildGitAddArgs,
   buildGitCommitArgs,
   buildGitDiffStatArgs,
@@ -263,6 +273,7 @@ type RepositoryReleasePublishInput = {
   releaseTitle: string
   releaseNotes: string
   commitMessage: string
+  githubTokenId?: string
   githubToken?: string
   releaseActions?: ReleasePublishActionKey[]
 }
@@ -2338,8 +2349,9 @@ function getReleaseScriptCommand(packageManager: RepositoryReleasePreparation['p
   return `${packageManager} run ${scriptName}`
 }
 
-function runReleaseScript(localPath: string, packageManager: RepositoryReleasePreparation['packageManager'], scriptName: ReleaseScriptName, env: NodeJS.ProcessEnv): Promise<Pick<RepositoryReleasePublishResult, 'ok' | 'stdout' | 'stderr' | 'exitCode'>> {
+async function runReleaseScript(localPath: string, packageManager: RepositoryReleasePreparation['packageManager'], scriptName: ReleaseScriptName, env: NodeJS.ProcessEnv): Promise<Pick<RepositoryReleasePublishResult, 'ok' | 'stdout' | 'stderr' | 'exitCode'>> {
   const command = getReleaseScriptCommand(packageManager, scriptName)
+  const scriptEnv = await createScriptExecutionEnv(env)
   const maxOutputLength = 1024 * 1024
   let stdout = ''
   let stderr = ''
@@ -2352,7 +2364,7 @@ function runReleaseScript(localPath: string, packageManager: RepositoryReleasePr
   return new Promise((resolveResult) => {
     const child = spawn('/bin/zsh', ['-lc', command], {
       cwd: localPath,
-      env: { ...process.env, ...env }
+      env: scriptEnv
     })
 
     child.stdout.on('data', (chunk: Buffer) => {
@@ -2387,8 +2399,17 @@ function parseGithubRemote(remoteUrl: string): { owner: string; repo: string } |
   }
 }
 
-async function updateGithubReleaseDetails(repository: RepositoryRecord, input: RepositoryReleasePublishInput): Promise<string> {
-  const token = input.githubToken?.trim()
+async function resolveGithubReleaseToken(input: RepositoryReleasePublishInput): Promise<string> {
+  const tokenId = input.githubTokenId?.trim()
+
+  if (tokenId) {
+    return getGithubTokenSecret(app.getPath('userData'), tokenId)
+  }
+
+  return input.githubToken?.trim() || ''
+}
+
+async function updateGithubReleaseDetails(repository: RepositoryRecord, input: RepositoryReleasePublishInput, token: string): Promise<string> {
   const githubRepository = parseGithubRemote(repository.remoteUrl || repository.remotes.find((remote) => remote.name === 'origin')?.fetchUrl || '')
 
   if (!token || !githubRepository) {
@@ -2443,6 +2464,7 @@ async function publishRepositoryRelease(repositoryId: string, input: RepositoryR
   const expectedTagName = createReleaseTagName(version)
   const releaseActions = input.releaseActions ?? []
   const selectedActionSet = new Set(releaseActions)
+  const githubToken = await resolveGithubReleaseToken(input)
 
   if (tagName !== expectedTagName) {
     throw new Error(`Tag 应为 ${expectedTagName}`)
@@ -2455,8 +2477,8 @@ async function publishRepositoryRelease(repositoryId: string, input: RepositoryR
     throw new Error(initialIssues.join('\n') || '发布前检查未通过')
   }
 
-  if (initialPreparation.plan.selectedScript === 'publish:mac' && !input.githubToken?.trim()) {
-    throw new Error('发布到 GitHub Releases 需要 GitHub Token')
+  if (initialPreparation.plan.selectedScript === 'publish:mac' && !githubToken) {
+    throw new Error('发布到 GitHub Releases 需要选择或填写 GitHub Token')
   }
 
   const shouldCommitWorkspaceChanges = selectedActionSet.has('commit-workspace-changes')
@@ -2496,15 +2518,15 @@ async function publishRepositoryRelease(repositoryId: string, input: RepositoryR
   const scriptResult = await withSavedSshPassphrases((env) =>
     runReleaseScript(repository.localPath, finalPreparation.packageManager, finalPreparation.plan.selectedScript, {
       ...env,
-      GH_TOKEN: input.githubToken?.trim() || process.env.GH_TOKEN || '',
-      GITHUB_TOKEN: input.githubToken?.trim() || process.env.GITHUB_TOKEN || ''
+      GH_TOKEN: githubToken || process.env.GH_TOKEN || '',
+      GITHUB_TOKEN: githubToken || process.env.GITHUB_TOKEN || ''
     })
   )
   let stdout = scriptResult.stdout
   let stderr = scriptResult.stderr
 
   if (scriptResult.ok && finalPreparation.plan.selectedScript === 'publish:mac') {
-    const releaseUpdateMessage = await updateGithubReleaseDetails(repository, input)
+    const releaseUpdateMessage = await updateGithubReleaseDetails(repository, input, githubToken)
 
     if (releaseUpdateMessage) {
       stdout = [stdout, releaseUpdateMessage].filter(Boolean).join('\n')
@@ -3170,6 +3192,14 @@ ipcMain.handle('settings:ai:save', async (_event, input: Partial<AiSettings>): P
 
   return getRedactedAiSettings(nextSettings)
 })
+
+ipcMain.handle('settings:github-tokens:list', async (): Promise<GithubTokenView[]> => listGithubTokens(app.getPath('userData')))
+
+ipcMain.handle('settings:github-tokens:save', async (_event, input: GithubTokenInput): Promise<GithubTokenView[]> => saveGithubToken(app.getPath('userData'), input))
+
+ipcMain.handle('settings:github-tokens:refresh', async (_event, tokenId: string): Promise<GithubTokenView[]> => refreshGithubToken(app.getPath('userData'), tokenId))
+
+ipcMain.handle('settings:github-tokens:delete', async (_event, tokenId: string): Promise<GithubTokenView[]> => deleteGithubToken(app.getPath('userData'), tokenId))
 
 ipcMain.handle('ssh:generate-key', async (_event, input: string | SshKeyGenerationInput): Promise<GitSetupStatus['sshPublicKeys'][number]> => {
   const comment = (typeof input === 'string' ? input : input.email).trim()

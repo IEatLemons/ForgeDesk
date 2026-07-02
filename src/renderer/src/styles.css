@@ -1808,7 +1808,25 @@ body {
   grid-column: 1 / -1;
 }
 
+.github-token-form {
+  grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) auto;
+}
+
+.github-token-table .ant-tag {
+  max-width: 100%;
+  white-space: normal;
+}
+
 .full-width-control {
+  width: 100%;
+}
+
+.release-github-token-picker {
+  width: 100%;
+}
+
+.release-github-token-select {
+  min-width: 0;
   width: 100%;
 }
 
