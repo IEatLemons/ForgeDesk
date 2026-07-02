@@ -1812,6 +1812,22 @@ body {
   grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) auto;
 }
 
+.log-refresh-settings-form {
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto;
+}
+
+.log-refresh-setting-field {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  color: #1f2937;
+  font-weight: 500;
+}
+
+.log-refresh-setting-field > span {
+  line-height: 22px;
+}
+
 .github-token-table .ant-tag {
   max-width: 100%;
   white-space: normal;

@@ -158,6 +158,10 @@ import {
 import {
   buildBranchGroups,
   createGraphRows,
+  defaultGitLogRefreshPreferences,
+  gitLogRefreshIntervalBounds,
+  gitLogRefreshPreferenceChangedEvent,
+  gitLogRefreshPreferenceStorageKey,
   getWorkspaceFileChangeStatus,
   getCommitAuthorDisplay,
   getCommitAuthorFilterValue,
@@ -165,12 +169,14 @@ import {
   getGitGraphColumnWidth,
   isWorkingTreeCommit,
   getNextVisibleCommitCount,
+  normalizeGitLogRefreshPreferences,
   getRefColor,
   getRepositoryDefaultPushTarget,
   prependWorkingTreeCommit,
   gitGraphLaneWidth,
   workingTreeCommitHash,
-  type GitGraphRow
+  type GitGraphRow,
+  type GitLogRefreshPreferences
 } from './git-log-view'
 import {
   DEFAULT_PROJECT_DETAIL_TAB,
@@ -255,7 +261,7 @@ type SshPassphraseForm = {
   confirmPassphrase: string
 }
 
-type SettingsModuleKey = 'overview' | 'git' | 'github' | 'private' | 'public' | 'config' | 'services' | 'plane' | 'ai' | 'updates'
+type SettingsModuleKey = 'overview' | 'git' | 'github' | 'private' | 'public' | 'config' | 'services' | 'plane' | 'ai' | 'updates' | 'log-refresh'
 
 type AiSettingsForm = {
   enabled: boolean
@@ -402,6 +408,58 @@ type VercelDomainForm = {
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function readStoredGitLogRefreshPreferences(): GitLogRefreshPreferences {
+  if (typeof window === 'undefined') {
+    return defaultGitLogRefreshPreferences
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(gitLogRefreshPreferenceStorageKey)
+    return normalizeGitLogRefreshPreferences(rawValue ? JSON.parse(rawValue) : null)
+  } catch {
+    return defaultGitLogRefreshPreferences
+  }
+}
+
+function writeStoredGitLogRefreshPreferences(input: unknown): GitLogRefreshPreferences {
+  const preferences = normalizeGitLogRefreshPreferences(input)
+
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(gitLogRefreshPreferenceStorageKey, JSON.stringify(preferences))
+      window.dispatchEvent(new Event(gitLogRefreshPreferenceChangedEvent))
+    } catch {
+      // The setting is non-critical; keep the in-memory value even if storage is unavailable.
+    }
+  }
+
+  return preferences
+}
+
+function useGitLogRefreshPreferences(): [GitLogRefreshPreferences, (input: unknown) => void] {
+  const [preferences, setPreferences] = useState(readStoredGitLogRefreshPreferences)
+
+  useEffect(() => {
+    function syncPreferences(): void {
+      setPreferences(readStoredGitLogRefreshPreferences())
+    }
+
+    window.addEventListener('storage', syncPreferences)
+    window.addEventListener(gitLogRefreshPreferenceChangedEvent, syncPreferences)
+
+    return () => {
+      window.removeEventListener('storage', syncPreferences)
+      window.removeEventListener(gitLogRefreshPreferenceChangedEvent, syncPreferences)
+    }
+  }, [])
+
+  function savePreferences(input: unknown): void {
+    setPreferences(writeStoredGitLogRefreshPreferences(input))
+  }
+
+  return [preferences, savePreferences]
 }
 
 function getPathFileName(path: string): string {
@@ -1426,6 +1484,7 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
   const [aiSettingsForm] = Form.useForm<AiSettingsForm>()
   const [githubTokenForm] = Form.useForm<GithubTokenForm>()
   const [planeSettingsForm] = Form.useForm<PlaneSettingsForm>()
+  const [gitLogRefreshPreferences, setGitLogRefreshPreferences] = useGitLogRefreshPreferences()
   const [gitStatus, setGitStatus] = useState<GitSetupStatus | null>(null)
   const [sshConfig, setSshConfig] = useState<SshConfigFile | null>(null)
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
@@ -1618,6 +1677,13 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     label: key.fileName,
     value: `~/.ssh/${key.fileName}`
   }))
+
+  function saveGitLogRefreshPreferencePatch(patch: Partial<GitLogRefreshPreferences>): void {
+    setGitLogRefreshPreferences({
+      ...gitLogRefreshPreferences,
+      ...patch
+    })
+  }
 
   function updateSshConfigEntry(index: number, patch: Partial<SshConfigEntry>): void {
     setSshConfigEntries((entries) => entries.map((entry, currentIndex) => (currentIndex === index ? { ...entry, ...patch } : entry)))
@@ -2201,6 +2267,14 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
       tone: gitReady ? 'ok' : 'danger'
     },
     {
+      key: 'log-refresh',
+      title: 'Log 树刷新',
+      description: '设置 Log 树自动重读本地 Git 数据的频率。',
+      icon: <ReloadOutlined />,
+      meta: gitLogRefreshPreferences.autoRefreshEnabled ? `${gitLogRefreshPreferences.intervalSeconds} 秒` : '手动',
+      tone: gitLogRefreshPreferences.autoRefreshEnabled ? 'ok' : 'neutral'
+    },
+    {
       key: 'github',
       title: 'GitHub Token',
       description: '保存发布用 Token，并读取 GitHub 返回的权限范围。',
@@ -2325,6 +2399,45 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
             打开 Git 下载页
           </Button>
         )}
+      </div>
+    )
+  }
+
+  function renderLogRefreshModule(): JSX.Element {
+    return (
+      <div className="panel settings-module-panel">
+        {renderModuleHeader('Log 树刷新', '控制 Log 树重读本地 Git 数据的频率。')}
+        <Alert
+          className="settings-module-alert"
+          type={gitLogRefreshPreferences.autoRefreshEnabled ? 'success' : 'info'}
+          showIcon
+          message={gitLogRefreshPreferences.autoRefreshEnabled ? `已开启，每 ${gitLogRefreshPreferences.intervalSeconds} 秒刷新` : '自动刷新未开启'}
+          description="自动刷新只重读本地仓库详情、提交图谱和工作区状态，不会自动 Fetch 远端。"
+        />
+        <div className="settings-management-form log-refresh-settings-form">
+          <label className="log-refresh-setting-field">
+            <span>自动刷新</span>
+            <Switch
+              checked={gitLogRefreshPreferences.autoRefreshEnabled}
+              onChange={(checked) => saveGitLogRefreshPreferencePatch({ autoRefreshEnabled: checked })}
+            />
+          </label>
+          <label className="log-refresh-setting-field">
+            <span>刷新频率（秒）</span>
+            <InputNumber
+              min={gitLogRefreshIntervalBounds.minSeconds}
+              max={gitLogRefreshIntervalBounds.maxSeconds}
+              step={5}
+              value={gitLogRefreshPreferences.intervalSeconds}
+              disabled={!gitLogRefreshPreferences.autoRefreshEnabled}
+              className="full-width-control"
+              onChange={(value) => saveGitLogRefreshPreferencePatch({ intervalSeconds: Number(value ?? defaultGitLogRefreshPreferences.intervalSeconds) })}
+            />
+          </label>
+          <Button icon={<ReloadOutlined />} onClick={() => setGitLogRefreshPreferences(defaultGitLogRefreshPreferences)}>
+            恢复默认
+          </Button>
+        </div>
       </div>
     )
   }
@@ -2859,6 +2972,8 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     switch (activeSettingsModule) {
       case 'git':
         return renderGitModule()
+      case 'log-refresh':
+        return renderLogRefreshModule()
       case 'github':
         return renderGithubTokensModule()
       case 'private':
@@ -6237,6 +6352,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const [loadingAiSettings, setLoadingAiSettings] = useState(false)
   const [loadingGithubTokens, setLoadingGithubTokens] = useState(false)
   const [savingAiSettings, setSavingAiSettings] = useState(false)
+  const [cancellingPublishTask, setCancellingPublishTask] = useState(false)
   const handledActivePublishTaskIdsRef = useRef<Set<string>>(new Set())
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
   const selectedGithubToken = githubTokens.find((token) => token.id === selectedGithubTokenId) ?? null
@@ -6548,6 +6664,24 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     }
   }
 
+  async function cancelActivePublishTask(): Promise<void> {
+    if (!activePublishTask || !window.forgeDesk) {
+      return
+    }
+
+    setCancellingPublishTask(true)
+
+    try {
+      const task = await window.forgeDesk.cancelRepositoryReleasePublishTask(activePublishTask.id)
+      setActivePublishTask(task)
+      message.warning(`${task.tagName} 发布任务已请求终止`)
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setCancellingPublishTask(false)
+    }
+  }
+
   function confirmPublishRelease(): void {
     Modal.confirm({
       title: `发布 ${tagName || targetVersion}？`,
@@ -6741,11 +6875,21 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
                 <Tag color={activePublishTaskView.statusColor}>{activePublishTaskView.statusLabel}</Tag>
                 <Typography.Text type="secondary">{activePublishTaskView.title}</Typography.Text>
               </Space>
-              <Typography.Text type="secondary">更新：{new Date(activePublishTask.updatedAt).toLocaleString()}</Typography.Text>
+              <Space>
+                <Typography.Text type="secondary">更新：{new Date(activePublishTask.updatedAt).toLocaleString()}</Typography.Text>
+                {activePublishTaskView.canCancel ? (
+                  <Popconfirm title="终止这个发布任务？" description="可能已经创建 Tag、Release 或上传了部分文件，重试前需要检查 GitHub Releases。" okText="终止" cancelText="取消" onConfirm={cancelActivePublishTask}>
+                    <Button danger size="small" loading={cancellingPublishTask}>
+                      终止
+                    </Button>
+                  </Popconfirm>
+                ) : null}
+              </Space>
             </div>
             <div className="release-task-progress-row">
               <Typography.Text type="secondary">当前步骤：{activePublishTaskView.phase}</Typography.Text>
-              <Progress percent={activePublishTaskView.progressPercent} size="small" status={activePublishTask.status === 'failed' ? 'exception' : activePublishTask.status === 'succeeded' ? 'success' : 'active'} />
+              <Alert type={activePublishTask.status === 'failed' ? 'error' : activePublishTask.status === 'cancelled' ? 'warning' : 'info'} showIcon message={activePublishTaskView.hint} />
+              <Progress percent={activePublishTaskView.progressPercent} size="small" status={activePublishTask.status === 'failed' || activePublishTask.status === 'cancelled' ? 'exception' : activePublishTask.status === 'succeeded' ? 'success' : 'active'} />
             </div>
             <div className="release-publish-log">
               <Typography.Text copyable>{activePublishTaskView.log}</Typography.Text>
@@ -7639,6 +7783,7 @@ function ReleasePublishTaskDock(): JSX.Element | null {
   const [tasks, setTasks] = useState<RepositoryReleasePublishTask[]>([])
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [activeTaskId, setActiveTaskId] = useState('')
+  const [cancellingTaskId, setCancellingTaskId] = useState('')
   const activeTaskIdRef = useRef('')
   const initializedRef = useRef(false)
   const notifiedTaskIdsRef = useRef<Set<string>>(new Set())
@@ -7690,6 +7835,8 @@ function ReleasePublishTaskDock(): JSX.Element | null {
 
         if (task.status === 'succeeded') {
           message.success(`${task.tagName} 发布流程已完成`)
+        } else if (task.status === 'cancelled') {
+          message.warning(`${task.tagName} 发布任务已终止`)
         } else {
           message.error(`${task.tagName} 发布失败：${formatReleaseTaskToastError(task)}`)
         }
@@ -7708,6 +7855,24 @@ function ReleasePublishTaskDock(): JSX.Element | null {
       window.clearInterval(intervalId)
     }
   }, [updateRepository])
+
+  async function cancelReleaseTask(task: RepositoryReleasePublishTask): Promise<void> {
+    if (!window.forgeDesk || task.status !== 'running') {
+      return
+    }
+
+    setCancellingTaskId(task.id)
+
+    try {
+      const nextTask = await window.forgeDesk.cancelRepositoryReleasePublishTask(task.id)
+      setTasks((current) => current.map((item) => (item.id === nextTask.id ? nextTask : item)))
+      message.warning(`${nextTask.tagName} 发布任务已请求终止`)
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setCancellingTaskId('')
+    }
+  }
 
   if (tasks.length === 0) {
     return null
@@ -7756,8 +7921,18 @@ function ReleasePublishTaskDock(): JSX.Element | null {
                     <Typography.Title level={4}>{activeTaskView.title}</Typography.Title>
                     <Tag color={activeTaskView.statusColor}>{activeTaskView.statusLabel}</Tag>
                   </Space>
-                  <Typography.Text type="secondary">更新：{formatReleaseTaskTime(activeTask.updatedAt)}</Typography.Text>
+                  <Space>
+                    <Typography.Text type="secondary">更新：{formatReleaseTaskTime(activeTask.updatedAt)}</Typography.Text>
+                    {activeTaskView.canCancel ? (
+                      <Popconfirm title="终止这个发布任务？" description="可能已经创建 Tag、Release 或上传了部分文件，重试前需要检查 GitHub Releases。" okText="终止" cancelText="取消" onConfirm={() => cancelReleaseTask(activeTask)}>
+                        <Button danger size="small" loading={cancellingTaskId === activeTask.id}>
+                          终止发布
+                        </Button>
+                      </Popconfirm>
+                    ) : null}
+                  </Space>
                 </div>
+                <Alert type={activeTask.status === 'failed' ? 'error' : activeTask.status === 'cancelled' ? 'warning' : 'info'} showIcon message={activeTaskView.hint} />
                 <Descriptions size="small" bordered column={2}>
                   <Descriptions.Item label="仓库">{activeTask.repositoryName}</Descriptions.Item>
                   <Descriptions.Item label="Tag">{activeTask.tagName}</Descriptions.Item>
@@ -7765,11 +7940,12 @@ function ReleasePublishTaskDock(): JSX.Element | null {
                   <Descriptions.Item label="当前步骤">{activeTaskView.phase}</Descriptions.Item>
                   <Descriptions.Item label="脚本">{activeTask.selectedScript || activeTask.plan?.selectedScript || '-'}</Descriptions.Item>
                   <Descriptions.Item label="开始时间">{formatReleaseTaskTime(activeTask.startedAt)}</Descriptions.Item>
+                  <Descriptions.Item label="最后输出">{formatReleaseTaskTime(activeTask.lastOutputAt)}</Descriptions.Item>
                   <Descriptions.Item label="结束时间">{formatReleaseTaskTime(activeTask.finishedAt)}</Descriptions.Item>
                   <Descriptions.Item label="退出码">{activeTask.exitCode ?? '-'}</Descriptions.Item>
                   <Descriptions.Item label="标题">{activeTask.releaseTitle || '-'}</Descriptions.Item>
                 </Descriptions>
-                <Progress percent={activeTaskView.progressPercent} status={activeTask.status === 'failed' ? 'exception' : activeTask.status === 'succeeded' ? 'success' : 'active'} />
+                <Progress percent={activeTaskView.progressPercent} status={activeTask.status === 'failed' || activeTask.status === 'cancelled' ? 'exception' : activeTask.status === 'succeeded' ? 'success' : 'active'} />
                 {activeTask.error ? <Alert type="error" showIcon message={activeTask.error} /> : null}
                 <div className="release-publish-log release-task-log">
                   <Typography.Text copyable>{activeTaskView.log}</Typography.Text>
@@ -10752,6 +10928,7 @@ function RepositoryLogTree({
   onRepositoryChange?: (repositoryId: string) => void
 }): JSX.Element {
   const { setProjectSummary, updateRepository } = useForgeDeskStore()
+  const [gitLogRefreshPreferences] = useGitLogRefreshPreferences()
   const [detailRepository, setDetailRepository] = useState<Repository | null>(repository)
   const [commits, setCommits] = useState<GitCommit[]>([])
   const [workspaceStatus, setWorkspaceStatus] = useState<GitWorkspaceStatus | null>(null)
@@ -10772,6 +10949,7 @@ function RepositoryLogTree({
   const [branchDrawerOpen, setBranchDrawerOpen] = useState(false)
   const [branchTags, setBranchTags] = useState<ProjectBranchTag[]>([])
   const commitLoadMoreRef = useRef<HTMLDivElement | null>(null)
+  const repositoryRefreshInFlightRef = useRef(false)
   const activeProjectId = (detailRepository ?? repository)?.projectId ?? ''
   const activeRepositoryForLog = detailRepository ?? repository
 
@@ -10956,6 +11134,60 @@ function RepositoryLogTree({
     }
   }, [repository?.id, repository?.latestCommit, repository?.remoteCount, repository?.remoteBranchCount, refreshToken])
 
+  async function refreshRepositorySnapshot({
+    targetRepository = detailRepository,
+    nextRange = commitRange,
+    nextBranch = commitBranch,
+    showSuccess = false,
+    context = '刷新 Log 树'
+  }: {
+    targetRepository?: Repository | null
+    nextRange?: { startDate: string; endDate: string }
+    nextBranch?: string
+    showSuccess?: boolean
+    context?: string
+  } = {}): Promise<void> {
+    if (!targetRepository || !window.forgeDesk || repositoryRefreshInFlightRef.current) {
+      return
+    }
+
+    repositoryRefreshInFlightRef.current = true
+    setLoadingDetail(true)
+    setSelectedCommit(null)
+    setCommitFiles([])
+    setSelectedFile(null)
+    setCommitDiff(null)
+    setDiffModalOpen(false)
+    setVisibleCommitCount(commitGraphBatchSize)
+
+    try {
+      const detail = await window.forgeDesk.getRepositoryDetail(targetRepository.id)
+      const [nextCommits, nextWorkspaceStatus] = await Promise.all([
+        window.forgeDesk.getRepositoryCommitGraph(detail.id, {
+          ...nextRange,
+          branchName: nextBranch || undefined
+        }),
+        window.forgeDesk.getRepositoryWorkspaceStatus(detail.id)
+      ])
+
+      updateRepository(detail)
+      setDetailRepository(detail)
+      setCommits(nextCommits)
+      setWorkspaceStatus(nextWorkspaceStatus)
+      onCommitCountChange?.(detail.id, nextCommits.length)
+      setGitError(null)
+
+      if (showSuccess) {
+        message.success('Log 树已刷新')
+      }
+    } catch (error) {
+      setGitError(createGitErrorGuidance(error, context))
+    } finally {
+      repositoryRefreshInFlightRef.current = false
+      setLoadingDetail(false)
+    }
+  }
+
   async function refreshCommits(nextRange = commitRange, nextBranch = commitBranch, targetRepository = detailRepository): Promise<void> {
     if (!targetRepository || !window.forgeDesk) {
       return
@@ -10988,6 +11220,28 @@ function RepositoryLogTree({
       setLoadingDetail(false)
     }
   }
+
+  useEffect(() => {
+    if (!gitLogRefreshPreferences.autoRefreshEnabled || !activeRepositoryForLog || !window.forgeDesk) {
+      return
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (!loadingDetail) {
+        void refreshRepositorySnapshot({ targetRepository: activeRepositoryForLog, context: '自动刷新 Log 树' })
+      }
+    }, gitLogRefreshPreferences.intervalSeconds * 1000)
+
+    return () => window.clearInterval(intervalId)
+  }, [
+    activeRepositoryForLog?.id,
+    commitBranch,
+    commitRange.endDate,
+    commitRange.startDate,
+    gitLogRefreshPreferences.autoRefreshEnabled,
+    gitLogRefreshPreferences.intervalSeconds,
+    loadingDetail
+  ])
 
   function selectBranchFilter(nextBranch: string): void {
     setCommitBranch(nextBranch)
@@ -11116,8 +11370,14 @@ function RepositoryLogTree({
             <Space size={8} wrap>
               <Typography.Title level={4}>提交图谱</Typography.Title>
               <Tag color={commitBranch ? 'blue' : 'default'}>{commitBranch || '全部引用'}</Tag>
+              {gitLogRefreshPreferences.autoRefreshEnabled && <Tag color="processing">{gitLogRefreshPreferences.intervalSeconds}s 自动</Tag>}
             </Space>
             <Space wrap>
+              <Tooltip title="重新读取本地仓库详情、提交图谱和工作区状态">
+                <Button icon={<ReloadOutlined />} loading={loadingDetail} onClick={() => refreshRepositorySnapshot({ targetRepository: activeRepository, showSuccess: true })}>
+                  刷新
+                </Button>
+              </Tooltip>
               <Button icon={<BranchesOutlined />} onClick={() => setBranchDrawerOpen(true)}>
                 分支
               </Button>

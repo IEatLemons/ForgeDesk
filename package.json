@@ -1,6 +1,6 @@
 {
   "name": "forgedesk",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Local-first project management console for repositories, environments, deployments, and AI reports.",
   "license": "MIT",
   "main": "out/main/index.js",

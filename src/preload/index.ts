@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   startRepositoryReleasePublishTask: (repositoryId: string, input: RepositoryReleasePublishInput) => ipcRenderer.invoke('repository:release-publish-task:start', repositoryId, input),
   listRepositoryReleasePublishTasks: (repositoryId?: string) => ipcRenderer.invoke('repository:release-publish-tasks:list', repositoryId),
   getRepositoryReleasePublishTask: (taskId: string) => ipcRenderer.invoke('repository:release-publish-task:get', taskId),
+  cancelRepositoryReleasePublishTask: (taskId: string) => ipcRenderer.invoke('repository:release-publish-task:cancel', taskId),
   suggestConflictResolution: (repositoryId: string, filePath: string) => ipcRenderer.invoke('repository:conflict:suggest', repositoryId, filePath),
   applyConflictResolution: (repositoryId: string, filePath: string, content: string) => ipcRenderer.invoke('repository:conflict:apply', repositoryId, filePath, content),
   listRepositoryCommitFiles: (repositoryId: string, commitHash: string) => ipcRenderer.invoke('repository:commit-files', repositoryId, commitHash),

@@ -271,7 +271,7 @@ type RepositoryReleasePublishResult = {
   exitCode: number | null
 }
 
-type RepositoryReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed'
+type RepositoryReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 type RepositoryReleasePublishTask = {
   id: string
@@ -285,6 +285,9 @@ type RepositoryReleasePublishTask = {
   phase: string
   phaseIndex: number
   phaseTotal: number
+  hint: string
+  lastOutputAt: string
+  processPid?: number
   startedAt: string
   updatedAt: string
   finishedAt?: string
@@ -964,6 +967,7 @@ interface Window {
     startRepositoryReleasePublishTask: (repositoryId: string, input: RepositoryReleasePublishInput) => Promise<RepositoryReleasePublishTask>
     listRepositoryReleasePublishTasks: (repositoryId?: string) => Promise<RepositoryReleasePublishTask[]>
     getRepositoryReleasePublishTask: (taskId: string) => Promise<RepositoryReleasePublishTask | null>
+    cancelRepositoryReleasePublishTask: (taskId: string) => Promise<RepositoryReleasePublishTask>
     suggestConflictResolution: (repositoryId: string, filePath: string) => Promise<AiConflictSuggestion>
     applyConflictResolution: (repositoryId: string, filePath: string, content: string) => Promise<GitOperationResult>
     listRepositoryCommitFiles: (repositoryId: string, commitHash: string) => Promise<GitCommitFileChange[]>

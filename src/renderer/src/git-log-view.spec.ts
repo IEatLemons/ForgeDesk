@@ -4,6 +4,8 @@ import {
   buildBranchGroups,
   createWorkingTreeCommit,
   createGraphRows,
+  defaultGitLogRefreshPreferences,
+  gitLogRefreshIntervalBounds,
   getCommitAuthorDisplay,
   getCommitAuthorFilterValue,
   getGraphCellBottomLaneIndexes,
@@ -14,6 +16,7 @@ import {
   getRepositoryDefaultPushTarget,
   getNextVisibleCommitCount,
   getRefTone,
+  normalizeGitLogRefreshPreferences,
   prependWorkingTreeCommit,
   workingTreeCommitHash
 } from './git-log-view.js'
@@ -232,5 +235,21 @@ describe('git log view helpers', () => {
     )
 
     assert.deepEqual(getRepositoryDefaultPushTarget({ currentBranch: 'develop', remotes: [] }), { remote: 'origin', branch: 'develop' })
+  })
+
+  it('normalizes log tree refresh preferences with safe interval bounds', () => {
+    assert.deepEqual(normalizeGitLogRefreshPreferences(null), defaultGitLogRefreshPreferences)
+    assert.deepEqual(normalizeGitLogRefreshPreferences({ autoRefreshEnabled: true, intervalSeconds: 2 }), {
+      autoRefreshEnabled: true,
+      intervalSeconds: gitLogRefreshIntervalBounds.minSeconds
+    })
+    assert.deepEqual(normalizeGitLogRefreshPreferences({ autoRefreshEnabled: false, intervalSeconds: 9999 }), {
+      autoRefreshEnabled: false,
+      intervalSeconds: gitLogRefreshIntervalBounds.maxSeconds
+    })
+    assert.deepEqual(normalizeGitLogRefreshPreferences({ autoRefreshEnabled: true, intervalSeconds: 45.4 }), {
+      autoRefreshEnabled: true,
+      intervalSeconds: 45
+    })
   })
 })

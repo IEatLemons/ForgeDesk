@@ -20,7 +20,39 @@ export type GraphParentEdge = {
 export const gitGraphLaneWidth = 16
 export const gitGraphColumnMinWidth = 152
 export const workingTreeCommitHash = '__FORGEDESK_WORKING_TREE__'
+export const gitLogRefreshPreferenceStorageKey = 'forgedesk.gitLogRefreshPreferences'
+export const gitLogRefreshPreferenceChangedEvent = 'forgedesk:git-log-refresh-preferences-changed'
+export const gitLogRefreshIntervalBounds = {
+  minSeconds: 10,
+  maxSeconds: 600
+}
 const gitGraphColumnPadding = 56
+
+export type GitLogRefreshPreferences = {
+  autoRefreshEnabled: boolean
+  intervalSeconds: number
+}
+
+export const defaultGitLogRefreshPreferences: GitLogRefreshPreferences = {
+  autoRefreshEnabled: false,
+  intervalSeconds: 30
+}
+
+function clampGitLogRefreshInterval(seconds: number): number {
+  return Math.min(gitLogRefreshIntervalBounds.maxSeconds, Math.max(gitLogRefreshIntervalBounds.minSeconds, Math.round(seconds)))
+}
+
+export function normalizeGitLogRefreshPreferences(input: unknown): GitLogRefreshPreferences {
+  const candidate = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {}
+  const intervalSeconds = Number(candidate.intervalSeconds)
+
+  return {
+    autoRefreshEnabled: candidate.autoRefreshEnabled === true,
+    intervalSeconds: Number.isFinite(intervalSeconds)
+      ? clampGitLogRefreshInterval(intervalSeconds)
+      : defaultGitLogRefreshPreferences.intervalSeconds
+  }
+}
 
 export type WorkspaceStatusInput = {
   files?: unknown[]

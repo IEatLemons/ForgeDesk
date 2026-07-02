@@ -351,7 +351,7 @@ export type RepositoryReleasePublishResult = {
   exitCode: number | null
 }
 
-export type RepositoryReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed'
+export type RepositoryReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 export type RepositoryReleasePublishTask = {
   id: string
@@ -365,6 +365,9 @@ export type RepositoryReleasePublishTask = {
   phase: string
   phaseIndex: number
   phaseTotal: number
+  hint: string
+  lastOutputAt: string
+  processPid?: number
   startedAt: string
   updatedAt: string
   finishedAt?: string

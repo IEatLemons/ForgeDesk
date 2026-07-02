@@ -28,7 +28,7 @@ export type ReleasePublishViewModel = {
   warningCount: number
 }
 
-export type ReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed'
+export type ReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 export type ReleasePublishTaskViewInput = {
   repositoryName: string
@@ -41,6 +41,8 @@ export type ReleasePublishTaskViewInput = {
   phase?: string
   phaseIndex?: number
   phaseTotal?: number
+  hint?: string
+  lastOutputAt?: string
   error?: string
 }
 
@@ -49,7 +51,9 @@ export type ReleasePublishTaskViewModel = {
   statusLabel: string
   statusColor: string
   active: boolean
+  canCancel: boolean
   phase: string
+  hint: string
   progressPercent: number
   log: string
 }
@@ -139,7 +143,9 @@ export function createReleasePublishTaskView(input: { task: ReleasePublishTaskVi
       statusLabel: '无任务',
       statusColor: 'default',
       active: false,
+      canCancel: false,
       phase: '暂无任务',
+      hint: '还没有发布任务。',
       progressPercent: 0,
       log: '暂无发布日志'
     }
@@ -156,8 +162,11 @@ export function createReleasePublishTaskView(input: { task: ReleasePublishTaskVi
     ? { label: '发布中', color: 'processing', active: true }
     : input.task.status === 'succeeded'
       ? { label: '已完成', color: 'green', active: false }
-      : { label: '失败', color: 'red', active: false }
+      : input.task.status === 'cancelled'
+        ? { label: '已终止', color: 'orange', active: false }
+        : { label: '失败', color: 'red', active: false }
   const fallbackLog = [
+    input.task.hint ? `中文提示：${input.task.hint}` : '',
     input.task.log,
     input.task.stdout,
     input.task.stderr,
@@ -170,7 +179,9 @@ export function createReleasePublishTaskView(input: { task: ReleasePublishTaskVi
     statusLabel: statusView.label,
     statusColor: statusView.color,
     active: statusView.active,
+    canCancel: input.task.status === 'running',
     phase: input.task.phase || statusView.label,
+    hint: input.task.hint || '正在等待发布任务输出。',
     progressPercent,
     log: fallbackLog || '暂无发布日志'
   }
