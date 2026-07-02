@@ -362,6 +362,9 @@ export type RepositoryReleasePublishTask = {
   releaseTitle: string
   selectedScript: ReleaseScriptName
   status: RepositoryReleasePublishTaskStatus
+  phase: string
+  phaseIndex: number
+  phaseTotal: number
   startedAt: string
   updatedAt: string
   finishedAt?: string

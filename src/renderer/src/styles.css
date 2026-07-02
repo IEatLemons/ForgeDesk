@@ -2272,6 +2272,12 @@ body {
   min-width: 0;
 }
 
+.release-task-progress-row {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
 .release-task-dock {
   position: fixed;
   right: 24px;

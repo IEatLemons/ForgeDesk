@@ -18,6 +18,7 @@ import {
   Menu,
   Modal,
   Popconfirm,
+  Progress,
   Row,
   Segmented,
   Select,
@@ -187,7 +188,7 @@ import {
   PROJECT_SETTINGS_MODULES,
   type ProjectSettingsModuleKey
 } from './project-settings-view'
-import { createReleasePlatformOptions, createReleasePublishTaskView, createReleasePublishViewModel, getUnresolvedReleaseIssues, type ReleasePublishActionKey } from './release-publish-view'
+import { createReleasePlatformOptions, createReleasePublishTaskView, createReleasePublishViewModel, type ReleasePublishActionKey } from './release-publish-view'
 import {
   createDeploymentFilterOptions,
   createDeploymentRows,
@@ -6526,14 +6527,6 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     setPublishing(true)
 
     try {
-      const checkedPreparation = await loadReleasePreparation(version, true)
-      const unresolvedIssues = checkedPreparation ? getUnresolvedReleaseIssues(checkedPreparation.plan, selectedReleaseActions) : []
-
-      if (!checkedPreparation || (!checkedPreparation.plan.canPublish && unresolvedIssues.length > 0)) {
-        message.warning(unresolvedIssues.join('；') || '发布前检查未通过')
-        return
-      }
-
       const task = await window.forgeDesk.startRepositoryReleasePublishTask(selectedRepository.id, {
         version,
         tagName: releaseTagName,
@@ -6547,7 +6540,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
 
       setActivePublishTaskId(task.id)
       setActivePublishTask(task)
-      message.success(`${releaseTagName} 已在后台发布，可关闭窗口继续操作`)
+      message.success(`${releaseTagName} 已创建后台发布任务，日志会持续更新`)
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
@@ -6584,7 +6577,9 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
       ),
       okText: '开始发布',
       cancelText: '取消',
-      onOk: publishReleaseAfterConfirm
+      onOk: () => {
+        void publishReleaseAfterConfirm()
+      }
     })
   }
 
@@ -6747,6 +6742,10 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
                 <Typography.Text type="secondary">{activePublishTaskView.title}</Typography.Text>
               </Space>
               <Typography.Text type="secondary">更新：{new Date(activePublishTask.updatedAt).toLocaleString()}</Typography.Text>
+            </div>
+            <div className="release-task-progress-row">
+              <Typography.Text type="secondary">当前步骤：{activePublishTaskView.phase}</Typography.Text>
+              <Progress percent={activePublishTaskView.progressPercent} size="small" status={activePublishTask.status === 'failed' ? 'exception' : activePublishTask.status === 'succeeded' ? 'success' : 'active'} />
             </div>
             <div className="release-publish-log">
               <Typography.Text copyable>{activePublishTaskView.log}</Typography.Text>
@@ -7763,12 +7762,14 @@ function ReleasePublishTaskDock(): JSX.Element | null {
                   <Descriptions.Item label="仓库">{activeTask.repositoryName}</Descriptions.Item>
                   <Descriptions.Item label="Tag">{activeTask.tagName}</Descriptions.Item>
                   <Descriptions.Item label="版本">{activeTask.version}</Descriptions.Item>
+                  <Descriptions.Item label="当前步骤">{activeTaskView.phase}</Descriptions.Item>
                   <Descriptions.Item label="脚本">{activeTask.selectedScript || activeTask.plan?.selectedScript || '-'}</Descriptions.Item>
                   <Descriptions.Item label="开始时间">{formatReleaseTaskTime(activeTask.startedAt)}</Descriptions.Item>
                   <Descriptions.Item label="结束时间">{formatReleaseTaskTime(activeTask.finishedAt)}</Descriptions.Item>
                   <Descriptions.Item label="退出码">{activeTask.exitCode ?? '-'}</Descriptions.Item>
                   <Descriptions.Item label="标题">{activeTask.releaseTitle || '-'}</Descriptions.Item>
                 </Descriptions>
+                <Progress percent={activeTaskView.progressPercent} status={activeTask.status === 'failed' ? 'exception' : activeTask.status === 'succeeded' ? 'success' : 'active'} />
                 {activeTask.error ? <Alert type="error" showIcon message={activeTask.error} /> : null}
                 <div className="release-publish-log release-task-log">
                   <Typography.Text copyable>{activeTaskView.log}</Typography.Text>

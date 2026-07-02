@@ -146,6 +146,9 @@ describe('release publish view model', () => {
         repositoryName: 'ForgeDesk',
         tagName: 'v1.0.5',
         status: 'running',
+        phase: '执行发布脚本',
+        phaseIndex: 8,
+        phaseTotal: 9,
         log: '[12:00:00] 执行发布脚本',
         stdout: '',
         stderr: '',
@@ -168,6 +171,8 @@ describe('release publish view model', () => {
     assert.equal(running.title, 'ForgeDesk v1.0.5')
     assert.equal(running.statusLabel, '发布中')
     assert.equal(running.active, true)
+    assert.equal(running.phase, '执行发布脚本')
+    assert.equal(running.progressPercent, 89)
     assert.match(running.log, /执行发布脚本/)
     assert.equal(failed.statusLabel, '失败')
     assert.match(failed.log, /HTTP 401/)

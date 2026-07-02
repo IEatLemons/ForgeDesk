@@ -299,6 +299,9 @@ type RepositoryReleasePublishTaskSnapshot = {
   releaseTitle: string
   selectedScript: ReleaseScriptName
   status: RepositoryReleasePublishTaskStatus
+  phase: string
+  phaseIndex: number
+  phaseTotal: number
   startedAt: string
   updatedAt: string
   finishedAt?: string
@@ -314,6 +317,7 @@ type RepositoryReleasePublishTaskSnapshot = {
 type ReleasePublishCallbacks = {
   onLog?: (message: string) => void
   onOutput?: (stream: 'stdout' | 'stderr', chunk: string) => void
+  onPhase?: (phase: string, index: number, total: number) => void
 }
 
 type GitMergeAnalysis = {
@@ -481,6 +485,7 @@ const terminalService = new TerminalService({
 const releasePublishTasks = new Map<string, RepositoryReleasePublishTaskSnapshot>()
 const releaseTaskMaxLogLength = 1024 * 1024
 const releaseTaskHistoryLimit = 20
+const releasePublishPhaseTotal = 9
 
 function getErrorText(error: unknown): string {
   return error instanceof Error ? error.message : '读取远端对齐状态失败'
@@ -502,6 +507,11 @@ function appendReleaseTaskLog(task: RepositoryReleasePublishTaskSnapshot, messag
   const time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
   const nextLog = [task.log, `[${time}] ${message}`].filter(Boolean).join('\n')
   updateReleaseTask(task, { log: trimReleaseTaskLog(nextLog) })
+}
+
+function setReleaseTaskPhase(task: RepositoryReleasePublishTaskSnapshot, phase: string, phaseIndex: number, phaseTotal = releasePublishPhaseTotal): void {
+  updateReleaseTask(task, { phase, phaseIndex, phaseTotal })
+  appendReleaseTaskLog(task, `当前步骤 ${phaseIndex}/${phaseTotal}：${phase}`)
 }
 
 function appendReleaseTaskOutput(task: RepositoryReleasePublishTaskSnapshot, stream: 'stdout' | 'stderr', chunk: string): void {
@@ -2554,6 +2564,7 @@ async function publishRepositoryRelease(
   const expectedTagName = createReleaseTagName(version)
   const releaseActions = input.releaseActions ?? []
   const selectedActionSet = new Set(releaseActions)
+  callbacks.onPhase?.('准备发布参数', 1, releasePublishPhaseTotal)
   callbacks.onLog?.(`准备发布 ${repository.name} ${tagName}`)
   const githubToken = await resolveGithubReleaseToken(input)
 
@@ -2561,6 +2572,7 @@ async function publishRepositoryRelease(
     throw new Error(`Tag 应为 ${expectedTagName}`)
   }
 
+  callbacks.onPhase?.('检查发布计划', 2, releasePublishPhaseTotal)
   callbacks.onLog?.('检查发布计划')
   const initialPreparation = await prepareRepositoryRelease(repositoryId, { targetVersion: version })
   const initialIssues = getUnresolvedReleaseIssues(initialPreparation.plan, releaseActions)
@@ -2576,6 +2588,7 @@ async function publishRepositoryRelease(
   const shouldCommitWorkspaceChanges = selectedActionSet.has('commit-workspace-changes')
   const shouldReplaceLocalTag = selectedActionSet.has('replace-local-tag')
 
+  callbacks.onPhase?.('写入版本并暂存改动', 3, releasePublishPhaseTotal)
   if (initialPreparation.plan.currentVersion !== version) {
     callbacks.onLog?.(`写入 package.json 版本：${initialPreparation.plan.currentVersion} -> ${version}`)
     await writeRepositoryPackageVersion(repository.localPath, version)
@@ -2589,16 +2602,23 @@ async function publishRepositoryRelease(
     await runGitInPathStrict(repository.localPath, ['add', 'package.json'])
   }
 
+  callbacks.onPhase?.('创建版本提交', 4, releasePublishPhaseTotal)
   if (initialPreparation.plan.currentVersion !== version || shouldCommitWorkspaceChanges) {
     callbacks.onLog?.(`创建版本提交：${input.commitMessage.trim() || `chore: release ${tagName}`}`)
     await runGitInPathStrict(repository.localPath, ['commit', '-m', input.commitMessage.trim() || `chore: release ${tagName}`])
+  } else {
+    callbacks.onLog?.('版本提交已是最新，跳过提交')
   }
 
+  callbacks.onPhase?.('处理本地 Tag', 5, releasePublishPhaseTotal)
   if (shouldReplaceLocalTag) {
     callbacks.onLog?.(`删除本地旧 Tag：${tagName}`)
     await runGitInPathStrict(repository.localPath, ['tag', '-d', tagName])
+  } else {
+    callbacks.onLog?.('无需重建本地 Tag')
   }
 
+  callbacks.onPhase?.('发布前最终检查', 6, releasePublishPhaseTotal)
   callbacks.onLog?.('重新检查发布条件')
   const finalPreparation = await prepareRepositoryRelease(repositoryId, { targetVersion: version })
   const finalIssues = getUnresolvedReleaseIssues(finalPreparation.plan, releaseActions)
@@ -2609,6 +2629,7 @@ async function publishRepositoryRelease(
 
   const branch = await runGitInPath(repository.localPath, ['branch', '--show-current'])
 
+  callbacks.onPhase?.('推送当前分支', 7, releasePublishPhaseTotal)
   if (branch) {
     callbacks.onLog?.(`推送当前分支到 origin/${branch}`)
     await withSavedSshPassphrases((env) => runGitInPathStrict(repository.localPath, ['push', 'origin', branch], { env }))
@@ -2616,6 +2637,7 @@ async function publishRepositoryRelease(
     callbacks.onLog?.('当前不在命名分支上，跳过分支推送')
   }
 
+  callbacks.onPhase?.('执行发布脚本', 8, releasePublishPhaseTotal)
   callbacks.onLog?.(`执行发布脚本：${getReleaseScriptCommand(finalPreparation.packageManager, finalPreparation.plan.selectedScript)}`)
   const scriptResult = await withSavedSshPassphrases((env) =>
     runReleaseScript(repository.localPath, finalPreparation.packageManager, finalPreparation.plan.selectedScript, {
@@ -2627,6 +2649,7 @@ async function publishRepositoryRelease(
   let stdout = scriptResult.stdout
   let stderr = scriptResult.stderr
 
+  callbacks.onPhase?.('更新 Release 并刷新状态', 9, releasePublishPhaseTotal)
   if (scriptResult.ok && finalPreparation.plan.selectedScript === 'publish:mac') {
     callbacks.onLog?.('更新 GitHub Release 标题和发布说明')
     const releaseUpdateMessage = await updateGithubReleaseDetails(repository, input, githubToken)
@@ -2664,13 +2687,17 @@ async function runRepositoryReleasePublishTask(task: RepositoryReleasePublishTas
   try {
     const result = await publishRepositoryRelease(task.repositoryId, input, {
       onLog: (line) => appendReleaseTaskLog(task, line),
-      onOutput: (stream, chunk) => appendReleaseTaskOutput(task, stream, chunk)
+      onOutput: (stream, chunk) => appendReleaseTaskOutput(task, stream, chunk),
+      onPhase: (phase, phaseIndex, phaseTotal) => setReleaseTaskPhase(task, phase, phaseIndex, phaseTotal)
     })
     const finishedAt = new Date().toISOString()
 
     updateReleaseTask(task, {
       status: result.ok ? 'succeeded' : 'failed',
       finishedAt,
+      phase: result.ok ? '发布完成' : '发布失败',
+      phaseIndex: releasePublishPhaseTotal,
+      phaseTotal: releasePublishPhaseTotal,
       stdout: result.stdout,
       stderr: result.stderr,
       exitCode: result.exitCode,
@@ -2686,6 +2713,9 @@ async function runRepositoryReleasePublishTask(task: RepositoryReleasePublishTas
     updateReleaseTask(task, {
       status: 'failed',
       finishedAt,
+      phase: '发布失败',
+      phaseIndex: Math.max(task.phaseIndex, 1),
+      phaseTotal: task.phaseTotal || releasePublishPhaseTotal,
       error: errorMessage,
       stderr: task.stderr || errorMessage,
       exitCode: task.exitCode
@@ -2715,6 +2745,9 @@ function startRepositoryReleasePublishTask(repositoryId: string, input: Reposito
     releaseTitle: input.releaseTitle.trim(),
     selectedScript: '',
     status: 'running',
+    phase: '等待后台任务启动',
+    phaseIndex: 0,
+    phaseTotal: releasePublishPhaseTotal,
     startedAt: now,
     updatedAt: now,
     log: '',

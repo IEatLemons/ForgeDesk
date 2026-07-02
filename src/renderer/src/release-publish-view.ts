@@ -38,6 +38,9 @@ export type ReleasePublishTaskViewInput = {
   stdout: string
   stderr: string
   exitCode: number | null
+  phase?: string
+  phaseIndex?: number
+  phaseTotal?: number
   error?: string
 }
 
@@ -46,6 +49,8 @@ export type ReleasePublishTaskViewModel = {
   statusLabel: string
   statusColor: string
   active: boolean
+  phase: string
+  progressPercent: number
   log: string
 }
 
@@ -134,10 +139,19 @@ export function createReleasePublishTaskView(input: { task: ReleasePublishTaskVi
       statusLabel: '无任务',
       statusColor: 'default',
       active: false,
+      phase: '暂无任务',
+      progressPercent: 0,
       log: '暂无发布日志'
     }
   }
 
+  const phaseTotal = Math.max(input.task.phaseTotal ?? 0, 1)
+  const phaseIndex = Math.min(Math.max(input.task.phaseIndex ?? 0, 0), phaseTotal)
+  const progressPercent = input.task.status === 'succeeded'
+    ? 100
+    : input.task.status === 'failed'
+      ? Math.max(Math.round((phaseIndex / phaseTotal) * 100), 1)
+      : Math.round((phaseIndex / phaseTotal) * 100)
   const statusView = input.task.status === 'running'
     ? { label: '发布中', color: 'processing', active: true }
     : input.task.status === 'succeeded'
@@ -156,6 +170,8 @@ export function createReleasePublishTaskView(input: { task: ReleasePublishTaskVi
     statusLabel: statusView.label,
     statusColor: statusView.color,
     active: statusView.active,
+    phase: input.task.phase || statusView.label,
+    progressPercent,
     log: fallbackLog || '暂无发布日志'
   }
 }
