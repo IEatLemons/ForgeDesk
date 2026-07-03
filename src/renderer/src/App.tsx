@@ -53,6 +53,7 @@ import {
   KeyOutlined,
   LinkOutlined,
   LockOutlined,
+  DockerOutlined,
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
@@ -125,6 +126,7 @@ import type {
   VercelEnvVarInput,
 } from './data'
 import { APP_NAVIGATION_ITEMS, type AppNavigationKey } from './app-navigation'
+import { DockerPanel } from './docker-panel'
 import { createAppUpdateViewModel } from './app-update-view'
 import { createDiffResultLines, createSourceDiffLines, type DiffDisplayLine } from './diff-view'
 import { compareEnvFiles, formatVariableNames, type EnvFileDiffResult } from './env-file-diff'
@@ -12651,6 +12653,7 @@ function App(): JSX.Element {
   const navigationIcons: Record<AppNavigationKey, JSX.Element> = {
     overview: <DashboardOutlined />,
     services: <ThunderboltOutlined />,
+    docker: <DockerOutlined />,
     tools: <ToolOutlined />,
     terminal: <CodeOutlined />,
     settings: <SettingOutlined />
@@ -12737,6 +12740,7 @@ function App(): JSX.Element {
               <GlobalServiceCenterPanel />
             </section>
           )}
+          {!loadingWorkspace && activeKey === 'docker' && <DockerPanel />}
           {!loadingWorkspace && activeKey === 'tools' && <ToolsPanel />}
           {!loadingWorkspace && activeKey === 'overview' && (
             <ProjectOverview

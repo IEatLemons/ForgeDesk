@@ -661,6 +661,72 @@ type VercelDomainConfig = {
   raw: Record<string, unknown>
 }
 
+type DockerResourceType = 'image' | 'container'
+
+type DockerResourceNoteRecord = {
+  resourceType: DockerResourceType
+  resourceKey: string
+  displayName: string
+  notes: string
+  createdAt: string
+  updatedAt: string
+}
+
+type DockerResourceNoteInput = {
+  resourceType: DockerResourceType
+  resourceKey: string
+  displayName?: string
+  notes?: string
+}
+
+type DockerImageSummary = {
+  id: string
+  shortId: string
+  repository: string
+  tag: string
+  digest: string
+  size: string
+  createdAt: string
+  createdSince: string
+  reference: string
+  tagResourceKey: string
+  imageIdResourceKey: string
+  noteResourceKey: string
+  displayName: string
+  note: DockerResourceNoteRecord | null
+}
+
+type DockerContainerSummary = {
+  id: string
+  shortId: string
+  name: string
+  image: string
+  state: string
+  status: string
+  ports: string
+  createdAt: string
+  runningFor: string
+  noteResourceKey: string
+  displayName: string
+  note: DockerResourceNoteRecord | null
+}
+
+type DockerSnapshot = {
+  images: DockerImageSummary[]
+  containers: DockerContainerSummary[]
+  notes: DockerResourceNoteRecord[]
+  checkedAt: string
+}
+
+type DockerEventSummary = {
+  id: string
+  type: string
+  action: string
+  status: string
+  time: string
+  actorAttributes: Record<string, string>
+}
+
 type ProjectRecord = {
   id: string
   name: string
@@ -1015,6 +1081,13 @@ interface Window {
     verifyServiceDomain: (serviceId: string, domain: string) => Promise<ProjectServiceRecord>
     inspectServiceDomainConfig: (serviceId: string, domain: string) => Promise<VercelDomainConfig>
     listServiceRuntimeLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
+    getDockerSnapshot: () => Promise<DockerSnapshot>
+    saveDockerResourceNote: (input: DockerResourceNoteInput) => Promise<DockerSnapshot>
+    deleteDockerResourceNote: (resourceType: DockerResourceType, resourceKey: string) => Promise<DockerSnapshot>
+    startDockerWatch: () => Promise<void>
+    stopDockerWatch: () => Promise<void>
+    onDockerChanged: (listener: (event: DockerEventSummary) => void) => () => void
+    onDockerWatchError: (listener: (event: { message: string }) => void) => () => void
     saveProjectPerson: (input: { id?: string; projectId: string; displayName: string; role?: string; identities: Array<{ name: string; email: string }> }) => Promise<ProjectPersonRecord>
     deleteProjectPerson: (projectId: string, personId: string) => Promise<ProjectPersonRecord[]>
     scanRepositories: (paths: string[]) => Promise<ScannedRepository[]>
