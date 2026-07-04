@@ -83,6 +83,21 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   verifyServiceDomain: (serviceId: string, domain: string) => ipcRenderer.invoke('service:domain:verify', serviceId, domain),
   inspectServiceDomainConfig: (serviceId: string, domain: string) => ipcRenderer.invoke('service:domain:config', serviceId, domain),
   listServiceRuntimeLogs: (serviceId: string, environmentName: string) => ipcRenderer.invoke('service:runtime:logs', serviceId, environmentName),
+  getDockerSnapshot: () => ipcRenderer.invoke('docker:snapshot'),
+  saveDockerResourceNote: (input: DockerResourceNoteInput) => ipcRenderer.invoke('docker:note:save', input),
+  deleteDockerResourceNote: (resourceType: DockerResourceType, resourceKey: string) => ipcRenderer.invoke('docker:note:delete', resourceType, resourceKey),
+  startDockerWatch: () => ipcRenderer.invoke('docker:watch:start'),
+  stopDockerWatch: () => ipcRenderer.invoke('docker:watch:stop'),
+  onDockerChanged: (listener: (event: DockerEventSummary) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, event: DockerEventSummary): void => listener(event)
+    ipcRenderer.on('docker:changed', wrapped)
+    return () => ipcRenderer.removeListener('docker:changed', wrapped)
+  },
+  onDockerWatchError: (listener: (event: { message: string }) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, event: { message: string }): void => listener(event)
+    ipcRenderer.on('docker:watch:error', wrapped)
+    return () => ipcRenderer.removeListener('docker:watch:error', wrapped)
+  },
   saveProjectPerson: (input: { id?: string; projectId: string; displayName: string; role?: string; identities: Array<{ name: string; email: string }> }) =>
     ipcRenderer.invoke('project:person:save', input),
   deleteProjectPerson: (projectId: string, personId: string) => ipcRenderer.invoke('project:person:delete', projectId, personId),

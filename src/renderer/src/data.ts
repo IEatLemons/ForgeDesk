@@ -780,6 +780,72 @@ export type VercelDomainInput = {
   redirectStatusCode?: number
 }
 
+export type DockerResourceType = 'image' | 'container'
+
+export type DockerResourceNote = {
+  resourceType: DockerResourceType
+  resourceKey: string
+  displayName: string
+  notes: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type DockerResourceNoteInput = {
+  resourceType: DockerResourceType
+  resourceKey: string
+  displayName?: string
+  notes?: string
+}
+
+export type DockerImageSummary = {
+  id: string
+  shortId: string
+  repository: string
+  tag: string
+  digest: string
+  size: string
+  createdAt: string
+  createdSince: string
+  reference: string
+  tagResourceKey: string
+  imageIdResourceKey: string
+  noteResourceKey: string
+  displayName: string
+  note: DockerResourceNote | null
+}
+
+export type DockerContainerSummary = {
+  id: string
+  shortId: string
+  name: string
+  image: string
+  state: string
+  status: string
+  ports: string
+  createdAt: string
+  runningFor: string
+  noteResourceKey: string
+  displayName: string
+  note: DockerResourceNote | null
+}
+
+export type DockerSnapshot = {
+  images: DockerImageSummary[]
+  containers: DockerContainerSummary[]
+  notes: DockerResourceNote[]
+  checkedAt: string
+}
+
+export type DockerEventSummary = {
+  id: string
+  type: string
+  action: string
+  status: string
+  time: string
+  actorAttributes: Record<string, string>
+}
+
 export type VercelDomainConfig = {
   configured: boolean
   misconfigured: boolean

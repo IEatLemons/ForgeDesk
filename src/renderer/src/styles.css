@@ -1926,6 +1926,36 @@ body {
   margin-bottom: 14px;
 }
 
+.docker-page {
+  display: block;
+}
+
+.docker-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.docker-alert {
+  margin-bottom: 0;
+}
+
+.docker-summary-row {
+  width: 100%;
+}
+
+.docker-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.docker-search {
+  width: min(420px, 100%);
+}
+
 .settings-management-form {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto;

@@ -77,6 +77,8 @@ import {
   type RsaPrivateKeyRecord,
   type RsaPrivateKeyUpdateInput
 } from './rsa-private-keys'
+import { migrateDockerTables } from './docker'
+import { createDockerIpcService, registerDockerIpc } from './docker-ipc'
 import { readSshConfigFile, writeSshConfigFile, type SshConfigFile } from './ssh-config'
 import { createNodePtyFactory } from './node-pty-factory'
 import {
@@ -951,6 +953,7 @@ function migrateDatabase(db: Database.Database): void {
   migrateProjectTerminalCommandTable(db)
   migrateServiceMonitoringTables(db)
   migrateRsaPrivateKeyTables(db)
+  migrateDockerTables(db)
   migrateTerminalRemoteShortcutTables(db)
   migratePlaneIntegrationTables(db)
   migrateReleasePublishTaskTable(db)
@@ -3978,6 +3981,7 @@ ipcMain.handle('terminal:remote-host:ssh-command', async (_event, hostId: string
 })
 
 registerTerminalIpc(ipcMain, terminalService)
+registerDockerIpc(ipcMain, createDockerIpcService(() => getDatabase(), () => BrowserWindow.getAllWindows()))
 
 ipcMain.handle('external:open-git-download', async (): Promise<void> => {
   await shell.openExternal('https://git-scm.com/downloads')
