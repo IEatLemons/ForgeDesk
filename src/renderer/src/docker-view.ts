@@ -20,6 +20,20 @@ export type DockerWatchStatusMeta = {
   color: string
 }
 
+export type DockerContainerFilterOptions = {
+  onlyRunning?: boolean
+}
+
+export type DockerTableColumnLayout = {
+  key: string
+  width: number
+}
+
+export type DockerTableLayout = {
+  minWidth: number
+  columns: DockerTableColumnLayout[]
+}
+
 export type DockerImageNoteTargetOption = {
   label: string
   value: string
@@ -48,9 +62,17 @@ export function createDockerDashboardSummary(snapshot: DockerSnapshot): DockerDa
   }
 }
 
-export function filterDockerContainers(containers: DockerContainerSummary[], query: string): DockerContainerSummary[] {
-  return containers.filter((container) =>
-    matchesQuery(
+export function filterDockerContainers(
+  containers: DockerContainerSummary[],
+  query: string,
+  options: DockerContainerFilterOptions = {}
+): DockerContainerSummary[] {
+  return containers.filter((container) => {
+    if (options.onlyRunning && container.state.trim().toLowerCase() !== 'running') {
+      return false
+    }
+
+    return matchesQuery(
       [
         container.displayName,
         container.note?.notes ?? '',
@@ -64,7 +86,7 @@ export function filterDockerContainers(containers: DockerContainerSummary[], que
       ],
       query
     )
-  )
+  })
 }
 
 export function filterDockerImages(images: DockerImageSummary[], query: string): DockerImageSummary[] {
@@ -131,6 +153,21 @@ export function getDockerContainerStatusMeta(state: string, status: string): Doc
   }
 
   return { label: normalizedState || fallbackLabel, color: 'default', badgeStatus: 'default' }
+}
+
+export function getDockerContainerTableLayout(): DockerTableLayout {
+  const columns: DockerTableColumnLayout[] = [
+    { key: 'container', width: 230 },
+    { key: 'state', width: 150 },
+    { key: 'image', width: 320 },
+    { key: 'runtime', width: 170 },
+    { key: 'noteActions', width: 250 }
+  ]
+
+  return {
+    minWidth: columns.reduce((total, column) => total + column.width, 0),
+    columns
+  }
 }
 
 export function getDockerWatchStatusMeta({

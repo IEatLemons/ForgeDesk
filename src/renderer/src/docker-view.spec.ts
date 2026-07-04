@@ -5,6 +5,7 @@ import {
   filterDockerContainers,
   filterDockerImages,
   getDockerContainerStatusMeta,
+  getDockerContainerTableLayout,
   getDockerWatchStatusMeta,
   getDockerImageDefaultNoteResourceKey,
   getDockerImageNoteTargetOptions
@@ -107,6 +108,21 @@ describe('docker view model', () => {
     assert.deepEqual(filterDockerContainers(snapshot.containers, 'worker').map((item) => item.id), [exitedContainer.id])
     assert.deepEqual(filterDockerContainers(snapshot.containers, 'merchant-api:latest').map((item) => item.id), [container.id])
     assert.deepEqual(filterDockerContainers(snapshot.containers, 'abcdef123456').map((item) => item.id), [container.id])
+  })
+
+  it('filters Docker containers to running rows when requested', () => {
+    assert.deepEqual(filterDockerContainers(snapshot.containers, '', { onlyRunning: true }).map((item) => item.id), [container.id])
+    assert.deepEqual(filterDockerContainers(snapshot.containers, 'worker', { onlyRunning: true }), [])
+  })
+
+  it('keeps the compact Docker container table within the main content width', () => {
+    const layout = getDockerContainerTableLayout()
+
+    assert.equal(layout.minWidth <= 1120, true)
+    assert.deepEqual(
+      layout.columns.map((column) => column.key),
+      ['container', 'state', 'image', 'runtime', 'noteActions']
+    )
   })
 
   it('filters Docker images by note, reference, digest and id', () => {

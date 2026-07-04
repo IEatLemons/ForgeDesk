@@ -12,6 +12,7 @@
   --primary-soft: #eff6ff;
   --primary-surface: #f7fbff;
   --primary-border: #b8cdfb;
+  --primary-border-soft: #dbeafe;
   --panel-bg: #ffffff;
   --card-bg: #ffffff;
   --sidebar-bg: #ffffff;
@@ -24,6 +25,32 @@
   --terminal-panel-header-bg: #f8fafc;
   --terminal-panel-border: #dce3ec;
   --terminal-tab-active-bg: #eff6ff;
+  --table-bg: #ffffff;
+  --table-header-bg: #fbfcfe;
+  --table-row-muted-bg: #f6f7f9;
+  --table-row-hover-bg: #eef1f5;
+  --table-row-selected-bg: #eef4ff;
+  --table-expanded-bg: #fbfdff;
+  --table-border: #e6eaf1;
+  --table-border-muted: #f0f2f5;
+  --graph-column-bg: #ffffff;
+  --graph-column-border: #eef1f5;
+  --danger-soft-bg: #fff2e8;
+  --danger-soft-hover-bg: #fff1e6;
+  --danger-border: #d4380d;
+  --danger-border-soft: #ffccc7;
+  --success-border: #86d36b;
+  --warning-soft-bg: #fffaf0;
+  --warning-border: #ffd591;
+  --warning-border-soft: #ffe7ba;
+  --code-bg: #fbfcfe;
+  --code-border: #d7dce5;
+  --diff-pane-bg: #fbfcfe;
+  --diff-pane-header-bg: #f7f9fc;
+  --diff-line-add-bg: #e9fbef;
+  --diff-line-delete-bg: #fff0f0;
+  --diff-line-number-bg: rgba(255, 255, 255, 0.42);
+  --diff-line-number-border: rgba(230, 234, 241, 0.75);
 }
 
 [data-theme='dark'] {
@@ -40,6 +67,7 @@
   --primary-soft: #121d2a;
   --primary-surface: #172236;
   --primary-border: #3b82f6;
+  --primary-border-soft: #244266;
   --panel-bg: #101721;
   --card-bg: #111923;
   --sidebar-bg: #0f141b;
@@ -52,6 +80,179 @@
   --terminal-panel-header-bg: #111820;
   --terminal-panel-border: #263244;
   --terminal-tab-active-bg: #172236;
+  --table-bg: #101721;
+  --table-header-bg: #111923;
+  --table-row-muted-bg: #151c25;
+  --table-row-hover-bg: #1d2836;
+  --table-row-selected-bg: #172236;
+  --table-expanded-bg: #111923;
+  --table-border: #263244;
+  --table-border-muted: #1f2937;
+  --graph-column-bg: #101721;
+  --graph-column-border: #242b35;
+  --danger-soft-bg: rgba(212, 56, 13, 0.16);
+  --danger-soft-hover-bg: rgba(212, 56, 13, 0.22);
+  --danger-border: #f87171;
+  --danger-border-soft: rgba(248, 113, 113, 0.48);
+  --success-border: #22c55e;
+  --warning-soft-bg: rgba(250, 173, 20, 0.14);
+  --warning-border: rgba(250, 173, 20, 0.42);
+  --warning-border-soft: rgba(250, 173, 20, 0.28);
+  --code-bg: #111923;
+  --code-border: #334155;
+  --diff-pane-bg: #101721;
+  --diff-pane-header-bg: #151c25;
+  --diff-line-add-bg: rgba(34, 197, 94, 0.13);
+  --diff-line-delete-bg: rgba(248, 113, 113, 0.13);
+  --diff-line-number-bg: rgba(16, 23, 33, 0.72);
+  --diff-line-number-border: rgba(38, 50, 68, 0.85);
+}
+
+[data-theme='dark'] .service-provider-entry-card {
+  background: var(--card-bg);
+  border-color: var(--app-border);
+}
+
+[data-theme='dark'] .service-provider-entry-card:hover {
+  background: var(--primary-surface);
+  border-color: var(--primary-border);
+  box-shadow: var(--app-shadow-hover);
+}
+
+[data-theme='dark'] .service-provider-section {
+  background: var(--subtle-bg);
+  border-color: var(--app-border-soft);
+}
+
+[data-theme='dark'] .deployment-filter-bar,
+[data-theme='dark'] .service-detail-log-panel,
+[data-theme='dark'] .service-domain-config-json,
+[data-theme='dark'] .service-guide-box {
+  background: var(--subtle-bg);
+  border-color: var(--app-border-soft);
+}
+
+[data-theme='dark'] .deployment-list {
+  background: var(--panel-bg);
+  border-color: var(--app-border-soft);
+}
+
+[data-theme='dark'] .deployment-row {
+  border-bottom-color: var(--table-border-muted);
+}
+
+[data-theme='dark'] .deployment-row:hover {
+  background: var(--table-row-hover-bg);
+}
+
+[data-theme='dark'] .tool-entry-card {
+  background: var(--card-bg);
+  border-color: var(--app-border);
+  box-shadow: var(--app-shadow);
+}
+
+[data-theme='dark'] .tool-entry-card:hover {
+  border-color: var(--primary-border);
+  box-shadow: var(--app-shadow-hover);
+}
+
+[data-theme='dark'] .password-preset-summary,
+[data-theme='dark'] .password-env-block,
+[data-theme='dark'] .file-picker-card,
+[data-theme='dark'] .file-diff-summary .ant-statistic {
+  background: var(--subtle-bg);
+  border-color: var(--app-border-soft);
+}
+
+[data-theme='dark'] .password-output-row {
+  background: var(--card-bg);
+  border-color: var(--app-border-soft);
+}
+
+[data-theme='dark'] .password-plain-value {
+  color: var(--app-text);
+  background: var(--subtle-bg);
+  border-color: var(--app-border-soft);
+}
+
+[data-theme='dark'] .file-picker-card:hover {
+  background: var(--primary-surface);
+  border-color: var(--primary-border);
+}
+
+[data-theme='dark'] .monthly-performance-message-role,
+[data-theme='dark'] .file-picker-description,
+[data-theme='dark'] .file-picker-empty,
+[data-theme='dark'] .ssh-config-field {
+  color: var(--app-muted);
+}
+
+[data-theme='dark'] .monthly-performance-message-bubble {
+  color: var(--app-text);
+  background: var(--card-bg);
+  border-color: var(--app-border);
+}
+
+[data-theme='dark'] .ssh-key-card,
+[data-theme='dark'] .ssh-config-entry-card {
+  background: var(--card-bg);
+  border-color: var(--app-border-soft);
+}
+
+[data-theme='dark'] .ssh-key-card-warning {
+  background: var(--warning-soft-bg);
+}
+
+[data-theme='dark'] .project-settings-entry-card {
+  background: var(--card-bg);
+  border-color: var(--app-border-soft);
+}
+
+[data-theme='dark'] .project-settings-entry-card:hover {
+  background: var(--primary-surface);
+  border-color: var(--primary-border);
+}
+
+[data-theme='dark'] .release-platform-card,
+[data-theme='dark'] .merge-direction-preview,
+[data-theme='dark'] .git-workspace-panel {
+  background: var(--primary-surface);
+  border-color: var(--primary-border);
+}
+
+[data-theme='dark'] .release-platform-card-active {
+  background: var(--table-row-selected-bg);
+  border-color: var(--primary-border);
+}
+
+[data-theme='dark'] .release-platform-icon {
+  background: var(--card-bg);
+  box-shadow: inset 0 0 0 1px var(--primary-border);
+}
+
+[data-theme='dark'] .release-publish-log,
+[data-theme='dark'] .release-background-task-card,
+[data-theme='dark'] .release-task-item {
+  background: var(--card-bg);
+  border-color: var(--app-border-soft);
+}
+
+[data-theme='dark'] .release-task-item:hover,
+[data-theme='dark'] .release-task-item.is-active {
+  background: var(--table-row-selected-bg);
+  border-color: var(--primary-border);
+}
+
+[data-theme='dark'] .remote-manager,
+[data-theme='dark'] .git-command-console,
+[data-theme='dark'] .git-operation-box {
+  background: var(--card-bg);
+  border-color: var(--app-border-soft);
+}
+
+[data-theme='dark'] .conflict-file-row {
+  background: var(--warning-soft-bg);
+  border-color: var(--warning-border);
 }
 
 * {
@@ -393,17 +594,17 @@ body {
   gap: 12px;
   margin-top: 16px;
   padding: 12px 14px;
-  border: 1px solid #e4e8ef;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--card-bg);
 }
 
 .chart-panel,
 .contributor-panel {
-  background: #ffffff;
-  border: 1px solid #e4e8ef;
+  background: var(--card-bg);
+  border: 1px solid var(--app-border);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(23, 32, 51, 0.05);
+  box-shadow: var(--app-shadow);
 }
 
 .chart-panel {
@@ -433,9 +634,9 @@ body {
 
 .repository-summary-strip {
   padding: 14px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--table-border);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--subtle-bg);
 }
 
 .repository-summary-grid {
@@ -474,9 +675,9 @@ body {
   display: grid;
   gap: 12px;
   padding: 14px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--table-border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--panel-bg);
 }
 
 .remote-alignment-heading {
@@ -501,9 +702,9 @@ body {
   gap: 4px;
   min-width: 0;
   padding: 10px 12px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--table-border);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--subtle-bg);
 }
 
 .project-service-settings,
@@ -527,16 +728,16 @@ body {
   padding: 18px;
   color: inherit;
   text-align: left;
-  border: 1px solid #e4e8ef;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--subtle-bg);
   cursor: pointer;
 }
 
 .service-provider-entry-card:hover {
-  border-color: #b8cdfb;
-  background: #f7fbff;
-  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.08);
+  border-color: var(--primary-border);
+  background: var(--primary-surface);
+  box-shadow: var(--app-shadow-hover);
 }
 
 .service-provider-entry-heading {
@@ -591,9 +792,9 @@ body {
   width: 100%;
   min-width: 0;
   padding: 14px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--subtle-bg);
   overflow: hidden;
 }
 
@@ -672,7 +873,7 @@ body {
   align-items: start;
   width: 100%;
   padding: 8px 0;
-  border-bottom: 1px solid #edf0f5;
+  border-bottom: 1px solid var(--table-border-muted);
 }
 
 .service-log-line .ant-typography {
@@ -683,9 +884,9 @@ body {
 .service-detail-log-panel {
   width: 100%;
   padding: 12px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--subtle-bg);
 }
 
 .service-detail-log-panel h5 {
@@ -727,9 +928,9 @@ body {
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  border: 1px solid #d7dce5;
+  border: 1px solid var(--code-border);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--code-bg);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
 }
 
@@ -748,9 +949,9 @@ body {
   gap: 10px;
   min-width: 0;
   padding: 12px 14px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--subtle-bg);
 }
 
 .service-guide-heading {
@@ -769,7 +970,7 @@ body {
 .service-guide-steps {
   margin: 0;
   padding-left: 18px;
-  color: #44546a;
+  color: var(--app-muted);
 }
 
 .service-guide-steps li + li {
@@ -799,9 +1000,9 @@ body {
   justify-content: flex-start;
   flex-wrap: wrap;
   padding: 10px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--subtle-bg);
 }
 
 .deployment-date-range {
@@ -834,9 +1035,9 @@ body {
   width: 100%;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--panel-bg);
 }
 
 .deployment-row {
@@ -854,7 +1055,7 @@ body {
   gap: 12px;
   min-height: 54px;
   padding: 9px 12px;
-  border-bottom: 1px solid #eef1f5;
+  border-bottom: 1px solid var(--table-border-muted);
 }
 
 .deployment-row:last-child {
@@ -868,7 +1069,7 @@ body {
 }
 
 .deployment-row:hover {
-  background: #fafcff;
+  background: var(--table-row-hover-bg);
 }
 
 .deployment-row-message,
@@ -953,9 +1154,9 @@ body {
 
 .source-tree-table {
   overflow: hidden;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--table-border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--table-bg);
 }
 
 .source-tree-table .ant-table {
@@ -970,8 +1171,8 @@ body {
 .source-tree-table .ant-table-thead > tr > th {
   padding-top: 8px !important;
   padding-bottom: 8px !important;
-  border-bottom: 1px solid #e6eaf1 !important;
-  background: #fbfcfe !important;
+  border-bottom: 1px solid var(--table-border) !important;
+  background: var(--table-header-bg) !important;
 }
 
 .source-tree-table .ant-table-tbody > tr.ant-table-row > td {
@@ -984,43 +1185,43 @@ body {
 .source-tree-table .commit-graph-column {
   position: relative;
   padding-inline: 0 !important;
-  background: #ffffff !important;
-  box-shadow: inset -1px 0 0 #eef1f5;
+  background: var(--graph-column-bg) !important;
+  box-shadow: inset -1px 0 0 var(--graph-column-border);
 }
 
 .source-tree-table .ant-table-tbody > tr.ant-table-row > td:not(.commit-graph-column) {
-  border-bottom: 1px solid #f0f2f5 !important;
+  border-bottom: 1px solid var(--table-border-muted) !important;
 }
 
 .source-tree-table .ant-table-tbody > tr.ant-table-row.selected-row > td {
-  border-bottom-color: #d9ebff !important;
+  border-bottom-color: var(--primary-border) !important;
 }
 
 .source-tree-table .ant-table-tbody > tr.ant-table-row.working-tree-row > td {
-  background: #f6f7f9 !important;
-  color: #475467;
+  background: var(--table-row-muted-bg) !important;
+  color: var(--app-muted);
 }
 
 .source-tree-table .ant-table-tbody > tr.ant-table-row.working-tree-row:hover > td {
-  background: #eef1f5 !important;
+  background: var(--table-row-hover-bg) !important;
 }
 
 .source-tree-table .ant-table-tbody > tr.ant-table-row.working-tree-row.selected-row > td {
-  background: #eef4ff !important;
+  background: var(--table-row-selected-bg) !important;
 }
 
 .source-tree-table .ant-table-expanded-row > td {
   padding: 0 !important;
-  border-bottom: 1px solid #d9ebff !important;
-  background: #ffffff !important;
+  border-bottom: 1px solid var(--primary-border) !important;
+  background: var(--table-bg) !important;
 }
 
 .commit-detail-panel {
   min-height: 420px;
   padding: 14px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--table-border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--panel-bg);
 }
 
 .commit-detail-content,
@@ -1116,24 +1317,24 @@ body {
   gap: 12px;
   margin-top: 12px;
   padding: 14px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--table-border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--panel-bg);
 }
 
 .commit-expanded-detail-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   min-height: 100%;
-  background: #fbfdff;
+  background: var(--table-expanded-bg);
 }
 
 .commit-expanded-graph-cell {
   position: relative;
   min-width: 0;
   overflow: hidden;
-  background: #ffffff;
-  box-shadow: inset -1px 0 0 #eef1f5;
+  background: var(--graph-column-bg);
+  box-shadow: inset -1px 0 0 var(--graph-column-border);
 }
 
 .commit-expanded-graph-svg {
@@ -1148,7 +1349,7 @@ body {
   padding: 14px 16px 16px 20px;
   border: 0;
   border-radius: 0;
-  background: #fbfdff;
+  background: var(--table-expanded-bg);
 }
 
 .commit-inline-heading {
@@ -1163,10 +1364,10 @@ body {
   place-items: center;
   min-height: 38px;
   padding: 8px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--table-border);
   border-top: 0;
   border-radius: 0 0 8px 8px;
-  background: #fbfcfe;
+  background: var(--subtle-bg);
 }
 
 .diff-preview-modal .ant-modal-content {
@@ -1227,15 +1428,15 @@ body {
 }
 
 .source-tree-commit-message.is-working-tree .source-tree-message-text {
-  color: #344054;
+  color: var(--app-text);
   font-weight: 600;
 }
 
 .source-tree-worktree-hash,
 .source-tree-worktree-ref {
-  border-color: #d0d5dd;
-  background: #f2f4f7;
-  color: #475467;
+  border-color: var(--app-border);
+  background: var(--table-row-muted-bg);
+  color: var(--app-muted);
 }
 
 .source-tree-ref {
@@ -1270,14 +1471,14 @@ body {
 
 .commit-author-name {
   max-width: 100%;
-  color: #172033;
+  color: var(--app-text);
   font-weight: 600;
   line-height: 18px;
 }
 
 .commit-author-email {
   max-width: 100%;
-  color: #667085;
+  color: var(--app-muted);
   font-size: 12px;
   line-height: 16px;
 }
@@ -1311,30 +1512,30 @@ body {
   justify-content: space-between;
   gap: 8px;
   padding: 7px 10px;
-  color: #172033;
+  color: var(--app-text);
   text-align: left;
-  background: #ffffff;
-  border: 1px solid #e6eaf1;
+  background: var(--card-bg);
+  border: 1px solid var(--table-border);
   border-radius: 6px;
   cursor: pointer;
 }
 
 .branch-drawer-item:hover,
 .branch-drawer-item.is-active {
-  border-color: #1677ff;
-  background: #f0f7ff;
+  border-color: var(--primary);
+  background: var(--table-row-selected-bg);
 }
 
 .branch-drawer-item.is-current {
-  border-color: #d4380d;
-  background: #fff2e8;
-  box-shadow: inset 3px 0 0 #d4380d;
+  border-color: var(--danger-border);
+  background: var(--danger-soft-bg);
+  box-shadow: inset 3px 0 0 var(--danger-border);
 }
 
 .branch-drawer-item.is-current:hover,
 .branch-drawer-item.is-current.is-active {
-  border-color: #d4380d;
-  background: #fff1e6;
+  border-color: var(--danger-border);
+  background: var(--danger-soft-hover-bg);
 }
 
 .branch-drawer-name {
@@ -1345,11 +1546,11 @@ body {
 }
 
 .selected-row > td {
-  background: #eef6ff !important;
+  background: var(--table-row-selected-bg) !important;
 }
 
 .current-branch-row > td {
-  background: #f4f8ff;
+  background: var(--primary-surface);
 }
 
 .diff-merged {
@@ -1363,9 +1564,9 @@ body {
 .diff-pane {
   min-height: 0;
   overflow: auto;
-  color: #182238;
-  background: #fbfcfe;
-  border: 1px solid #e6eaf1;
+  color: var(--app-text);
+  background: var(--diff-pane-bg);
+  border: 1px solid var(--table-border);
   border-radius: 8px;
 }
 
@@ -1374,11 +1575,11 @@ body {
   top: 0;
   z-index: 1;
   padding: 8px 12px;
-  color: #5d6b82;
+  color: var(--app-muted);
   font-size: 12px;
   font-weight: 700;
-  background: #f7f9fc;
-  border-bottom: 1px solid #e6eaf1;
+  background: var(--diff-pane-header-bg);
+  border-bottom: 1px solid var(--table-border);
 }
 
 .diff-lines {
@@ -1391,19 +1592,19 @@ body {
   display: grid;
   grid-template-columns: 22px 44px minmax(0, 1fr);
   min-height: 23px;
-  border-bottom: 1px solid rgba(230, 234, 241, 0.7);
+  border-bottom: 1px solid var(--table-border-muted);
 }
 
 .diff-line.source {
-  background: #fbfcfe;
+  background: var(--diff-pane-bg);
 }
 
 .diff-line.add {
-  background: #e9fbef;
+  background: var(--diff-line-add-bg);
 }
 
 .diff-line.delete {
-  background: #fff0f0;
+  background: var(--diff-line-delete-bg);
 }
 
 .diff-line-marker,
@@ -1430,8 +1631,8 @@ body {
 
 .diff-line-number {
   text-align: right;
-  background: rgba(255, 255, 255, 0.42);
-  border-right: 1px solid rgba(230, 234, 241, 0.75);
+  background: var(--diff-line-number-bg);
+  border-right: 1px solid var(--diff-line-number-border);
 }
 
 .diff-line-content {
@@ -1445,7 +1646,7 @@ body {
   display: grid;
   min-height: 180px;
   place-items: center;
-  color: #8a94a6;
+  color: var(--app-muted);
   font-size: 13px;
 }
 
@@ -1453,9 +1654,9 @@ body {
   height: 32px;
   min-width: 150px;
   padding: 4px 10px;
-  color: #172033;
-  background: #ffffff;
-  border: 1px solid #d9d9d9;
+  color: var(--app-text);
+  background: var(--card-bg);
+  border: 1px solid var(--app-border);
   border-radius: 6px;
 }
 
@@ -1493,16 +1694,16 @@ body {
   padding: 14px;
   color: inherit;
   text-align: left;
-  border: 1px solid #e4e8ef;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 8px 24px rgba(23, 32, 51, 0.05);
+  background: var(--card-bg);
+  box-shadow: var(--app-shadow);
   cursor: pointer;
 }
 
 .tool-entry-card:hover {
-  border-color: #b8cdfb;
-  box-shadow: 0 12px 30px rgba(37, 99, 235, 0.1);
+  border-color: var(--primary-border);
+  box-shadow: var(--app-shadow-hover);
 }
 
 .tool-entry-copy {
@@ -1544,9 +1745,9 @@ body {
   display: grid;
   place-items: center;
   flex: 0 0 40px;
-  color: #2563eb;
+  color: var(--primary);
   border-radius: 8px;
-  background: #eff6ff;
+  background: var(--primary-soft);
   font-size: 20px;
 }
 
@@ -1561,9 +1762,9 @@ body {
 .password-preset-summary {
   margin-bottom: 16px;
   padding: 12px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--subtle-bg);
 }
 
 .password-preset-summary-row {
@@ -1592,10 +1793,10 @@ body {
 .password-output-row {
   display: grid;
   gap: 12px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
   padding: 14px;
-  background: #ffffff;
+  background: var(--card-bg);
 }
 
 .password-output-meta {
@@ -1619,23 +1820,23 @@ body {
 
 .password-plain-value {
   padding: 10px 12px;
-  color: #172033;
-  border: 1px solid #d7dce5;
+  color: var(--app-text);
+  border: 1px solid var(--code-border);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--code-bg);
 }
 
 .password-env-block {
   display: grid;
   gap: 10px;
   padding: 12px;
-  border: 1px solid #dbe3ef;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #f8fbff;
+  background: var(--primary-surface);
 }
 
 .password-env-block.compact {
-  background: #fbfcfe;
+  background: var(--subtle-bg);
 }
 
 .password-copy-row {
@@ -1723,7 +1924,7 @@ body {
 }
 
 .monthly-performance-message-role {
-  color: #667085;
+  color: var(--app-muted);
   font-size: 12px;
   font-weight: 700;
 }
@@ -1734,12 +1935,12 @@ body {
 
 .monthly-performance-message-bubble {
   padding: 12px 14px;
-  color: #172033;
+  color: var(--app-text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  border: 1px solid #e0e7f1;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--card-bg);
 }
 
 .monthly-performance-message.is-user .monthly-performance-message-bubble {
@@ -1767,15 +1968,15 @@ body {
   min-width: 0;
   padding: 14px;
   color: inherit;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--subtle-bg);
   cursor: pointer;
 }
 
 .file-picker-card:hover {
-  border-color: #b8cdfb;
-  background: #f7fbff;
+  border-color: var(--primary-border);
+  background: var(--primary-surface);
 }
 
 .file-picker-card input {
@@ -1783,13 +1984,13 @@ body {
 }
 
 .file-picker-title {
-  color: #172033;
+  color: var(--app-text);
   font-weight: 700;
 }
 
 .file-picker-description,
 .file-picker-empty {
-  color: #667085;
+  color: var(--app-muted);
 }
 
 .file-picker-selected {
@@ -1806,9 +2007,9 @@ body {
 
 .file-diff-summary .ant-statistic {
   padding: 12px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--subtle-bg);
 }
 
 .file-missing-panel,
@@ -1828,19 +2029,19 @@ body {
   margin: 0;
   min-height: 120px;
   padding: 12px;
-  color: #172033;
+  color: var(--app-text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  border: 1px solid #d7dce5;
+  border: 1px solid var(--code-border);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--code-bg);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
 }
 
 .file-variable-list.secondary {
   min-height: 0;
-  color: #44546a;
-  background: #ffffff;
+  color: var(--app-muted);
+  background: var(--card-bg);
 }
 
 .rsa-records-panel {
@@ -1911,11 +2112,11 @@ body {
 }
 
 .settings-entry-card-warning {
-  border-color: #ffd591;
+  border-color: var(--warning-border);
 }
 
 .settings-entry-card-danger {
-  border-color: #ffccc7;
+  border-color: var(--danger-border-soft);
 }
 
 .settings-entry-icon {
@@ -1986,6 +2187,7 @@ body {
 
 .docker-page {
   display: block;
+  max-width: none;
 }
 
 .docker-panel {
@@ -2012,6 +2214,52 @@ body {
 
 .docker-search {
   width: min(420px, 100%);
+}
+
+.docker-compact-table {
+  width: 100%;
+  min-width: 0;
+}
+
+.docker-compact-table .ant-table {
+  table-layout: fixed;
+}
+
+.docker-compact-table .ant-table-cell {
+  padding: 10px 12px !important;
+  vertical-align: middle;
+}
+
+.docker-compact-table .ant-table-thead > tr > th {
+  white-space: nowrap;
+}
+
+.docker-cell-stack {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.docker-cell-row,
+.docker-note-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.docker-cell-text {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docker-note-action-cell {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
 }
 
 .settings-management-form {
@@ -2099,14 +2347,14 @@ body {
   gap: 16px;
   align-items: center;
   padding: 16px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--card-bg);
 }
 
 .ssh-key-card-warning {
-  border-color: #ffd591;
-  background: #fffdf7;
+  border-color: var(--warning-border);
+  background: var(--warning-soft-bg);
 }
 
 .ssh-key-card-main {
@@ -2140,9 +2388,9 @@ body {
   display: grid;
   gap: 14px;
   padding: 16px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--card-bg);
 }
 
 .ssh-config-entry-heading {
@@ -2162,7 +2410,7 @@ body {
   display: grid;
   gap: 6px;
   min-width: 0;
-  color: #667085;
+  color: var(--app-muted);
   font-size: 13px;
 }
 
@@ -2220,15 +2468,15 @@ body {
   min-width: 0;
   padding: 14px;
   text-align: left;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--card-bg);
   cursor: pointer;
 }
 
 .project-settings-entry-card:hover {
-  border-color: #b9d4ff;
-  background: #f8fbff;
+  border-color: var(--primary-border);
+  background: var(--primary-surface);
 }
 
 .project-settings-entry-icon {
@@ -2237,9 +2485,9 @@ body {
   justify-content: center;
   width: 36px;
   height: 36px;
-  color: #165dcc;
+  color: var(--primary);
   border-radius: 8px;
-  background: #eef5ff;
+  background: var(--primary-soft);
 }
 
 .project-settings-entry-copy {
@@ -2444,14 +2692,14 @@ body {
   gap: 10px;
   min-width: 0;
   padding: 12px;
-  border: 1px solid #dbeafe;
+  border: 1px solid var(--primary-border-soft);
   border-radius: 8px;
-  background: #f8fbff;
+  background: var(--primary-surface);
 }
 
 .release-platform-card-active {
-  border-color: #91caff;
-  background: #f0f7ff;
+  border-color: var(--primary-border);
+  background: var(--table-row-selected-bg);
 }
 
 .release-platform-card-disabled {
@@ -2477,9 +2725,9 @@ body {
   height: 34px;
   flex: 0 0 auto;
   border-radius: 8px;
-  color: #1677ff;
-  background: #ffffff;
-  box-shadow: inset 0 0 0 1px #dbeafe;
+  color: var(--primary);
+  background: var(--card-bg);
+  box-shadow: inset 0 0 0 1px var(--primary-border-soft);
 }
 
 .release-platform-body {
@@ -2499,9 +2747,9 @@ body {
   max-height: 220px;
   overflow: auto;
   padding: 12px;
-  border: 1px solid #d9e2ec;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #f7fafc;
+  background: var(--subtle-bg-strong);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2516,9 +2764,9 @@ body {
   display: grid;
   gap: 10px;
   padding: 12px;
-  border: 1px solid #d9e2ec;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--card-bg);
 }
 
 .release-background-task-header,
@@ -2569,18 +2817,18 @@ body {
   width: 100%;
   min-width: 0;
   padding: 10px;
-  border: 1px solid #e4e8ef;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
   color: inherit;
-  background: #ffffff;
+  background: var(--card-bg);
   cursor: pointer;
   text-align: left;
 }
 
 .release-task-item:hover,
 .release-task-item.is-active {
-  border-color: #91caff;
-  background: #f0f7ff;
+  border-color: var(--primary-border);
+  background: var(--table-row-selected-bg);
 }
 
 .release-task-item-main {
@@ -2622,9 +2870,9 @@ body {
   gap: 10px;
   min-width: 0;
   padding: 10px 12px;
-  border: 1px solid #dbeafe;
+  border: 1px solid var(--primary-border-soft);
   border-radius: 8px;
-  background: #f8fbff;
+  background: var(--primary-surface);
 }
 
 .merge-analysis-details {
@@ -2643,9 +2891,9 @@ body {
   min-width: 0;
   padding: 14px;
   overflow: hidden;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--subtle-bg);
 }
 
 .git-command-console {
@@ -2654,9 +2902,9 @@ body {
   min-width: 0;
   padding: 14px;
   overflow: hidden;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--card-bg);
 }
 
 .git-workspace-panel {
@@ -2664,9 +2912,9 @@ body {
   gap: 12px;
   padding: 14px;
   overflow: hidden;
-  border: 1px solid #dbeafe;
+  border: 1px solid var(--primary-border-soft);
   border-radius: 8px;
-  background: #f8fbff;
+  background: var(--primary-surface);
 }
 
 .git-workspace-toolbar h4 {
@@ -2683,9 +2931,9 @@ body {
   height: 100%;
   min-width: 0;
   padding: 12px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--card-bg);
 }
 
 .git-operation-compact {
@@ -2728,9 +2976,9 @@ body {
   gap: 12px;
   width: 100%;
   padding: 10px;
-  border: 1px solid #ffe7ba;
+  border: 1px solid var(--warning-border-soft);
   border-radius: 8px;
-  background: #fffaf0;
+  background: var(--warning-soft-bg);
 }
 
 .project-settings-section .ant-table-wrapper,
@@ -2785,7 +3033,7 @@ body {
 
 .git-error-actions li {
   margin: 2px 0;
-  color: #344054;
+  color: var(--app-text);
 }
 
 .git-error-raw {
@@ -2807,11 +3055,11 @@ body {
 }
 
 .git-command-output.is-ok {
-  border-color: #86d36b;
+  border-color: var(--success-border);
 }
 
 .git-command-output.is-error {
-  border-color: #ff9c9c;
+  border-color: var(--danger-border-soft);
 }
 
 .git-command-output-heading {
@@ -2844,9 +3092,9 @@ body {
   display: grid;
   gap: 12px;
   padding: 14px;
-  border: 1px solid #e6eaf1;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--subtle-bg);
 }
 
 .inline-setup-form .ant-form-item {
@@ -2902,9 +3150,9 @@ body {
 
 .repository-preview {
   overflow: hidden;
-  border: 1px solid #edf0f5;
+  border: 1px solid var(--table-border-muted);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--table-bg);
 }
 
 .repository-preview .ant-table-container {
@@ -2913,9 +3161,9 @@ body {
 }
 
 .repository-preview .ant-table-thead > tr > th {
-  color: #344054;
-  background: #f8fafc;
-  border-bottom-color: #e8edf3;
+  color: var(--app-text);
+  background: var(--table-header-bg);
+  border-bottom-color: var(--table-border);
 }
 
 .repository-preview .ant-table-tbody > tr.ant-table-placeholder > td {

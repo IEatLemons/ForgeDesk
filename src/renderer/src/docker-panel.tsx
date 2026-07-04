@@ -1,5 +1,5 @@
 import { DeleteOutlined, EditOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
-import { Alert, Badge, Button, Col, Empty, Form, Input, Modal, Row, Select, Space, Spin, Statistic, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Alert, Badge, Button, Col, Empty, Form, Input, Modal, Row, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DockerContainerSummary, DockerImageSummary, DockerResourceNote, DockerResourceType, DockerSnapshot } from './data'
@@ -8,6 +8,7 @@ import {
   filterDockerContainers,
   filterDockerImages,
   getDockerContainerStatusMeta,
+  getDockerContainerTableLayout,
   getDockerImageDefaultNoteResourceKey,
   getDockerImageNoteTargetOptions,
   getDockerWatchStatusMeta
@@ -50,11 +51,28 @@ function renderMutedText(value: string, fallback = '-'): JSX.Element {
   )
 }
 
+function renderCompactText(value: string, fallback = '-'): JSX.Element {
+  return (
+    <Typography.Text className="docker-cell-text" ellipsis={{ tooltip: value || fallback }}>
+      {value || fallback}
+    </Typography.Text>
+  )
+}
+
+function renderCompactMutedText(value: string, fallback = '-'): JSX.Element {
+  return (
+    <Typography.Text type="secondary" className="docker-cell-text" ellipsis={{ tooltip: value || fallback }}>
+      {value || fallback}
+    </Typography.Text>
+  )
+}
+
 export function DockerPanel(): JSX.Element {
   const [snapshot, setSnapshot] = useState<DockerSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [query, setQuery] = useState('')
+  const [onlyRunning, setOnlyRunning] = useState(false)
   const [watching, setWatching] = useState(false)
   const [watchError, setWatchError] = useState('')
   const [lastEventLabel, setLastEventLabel] = useState('')
@@ -144,8 +162,9 @@ export function DockerPanel(): JSX.Element {
     [snapshot]
   )
   const watchStatus = useMemo(() => getDockerWatchStatusMeta({ watching, watchError, errorMessage }), [watching, watchError, errorMessage])
-  const filteredContainers = useMemo(() => filterDockerContainers(snapshot?.containers ?? [], query), [query, snapshot])
+  const filteredContainers = useMemo(() => filterDockerContainers(snapshot?.containers ?? [], query, { onlyRunning }), [onlyRunning, query, snapshot])
   const filteredImages = useMemo(() => filterDockerImages(snapshot?.images ?? [], query), [query, snapshot])
+  const containerTableLayout = getDockerContainerTableLayout()
 
   function openContainerNote(container: DockerContainerSummary): void {
     const note = container.note
@@ -256,46 +275,66 @@ export function DockerPanel(): JSX.Element {
     {
       title: '容器',
       key: 'container',
-      width: 260,
+      width: containerTableLayout.columns[0].width,
       render: (_, container) => (
-        <Space direction="vertical" size={2}>
-          <Typography.Text strong ellipsis={{ tooltip: container.displayName }}>
+        <div className="docker-cell-stack">
+          <Typography.Text strong className="docker-cell-text" ellipsis={{ tooltip: container.displayName }}>
             {container.displayName}
           </Typography.Text>
-          <Space size={6} wrap>
-            {renderMutedText(container.name || container.shortId)}
+          <div className="docker-cell-row">
+            {renderCompactMutedText(container.name || container.shortId)}
             {container.note ? <Tag color="blue">备注</Tag> : null}
-          </Space>
-        </Space>
+          </div>
+        </div>
       )
     },
     {
       title: '状态',
       key: 'state',
-      width: 170,
+      width: containerTableLayout.columns[1].width,
       render: (_, container) => {
         const meta = getDockerContainerStatusMeta(container.state, container.status)
 
         return (
-          <Space direction="vertical" size={2}>
+          <div className="docker-cell-stack">
             <Badge status={meta.badgeStatus} text={<Tag color={meta.color}>{meta.label}</Tag>} />
-            {renderMutedText(container.status)}
-          </Space>
+            {renderCompactMutedText(container.status)}
+          </div>
         )
       }
     },
-    { title: '镜像', key: 'image', width: 220, render: (_, container) => renderMutedText(container.image) },
-    { title: '端口', key: 'ports', render: (_, container) => renderMutedText(container.ports, '未暴露端口') },
-    { title: '容器 ID', key: 'id', width: 150, render: (_, container) => <Typography.Text code>{container.shortId}</Typography.Text> },
-    { title: '创建 / 运行', key: 'time', width: 220, render: (_, container) => renderMutedText(container.runningFor || container.createdAt) },
     {
-      title: '备注',
-      key: 'note',
-      width: 250,
+      title: '镜像 / 端口',
+      key: 'image',
+      width: containerTableLayout.columns[2].width,
       render: (_, container) => (
-        <Space direction="vertical" size={4}>
-          {container.note?.notes ? renderMutedText(container.note.notes) : <Typography.Text type="secondary">-</Typography.Text>}
-          <Space wrap size={6}>
+        <div className="docker-cell-stack">
+          {renderCompactText(container.image)}
+          {renderCompactMutedText(container.ports, '未暴露端口')}
+        </div>
+      )
+    },
+    {
+      title: '运行 / ID',
+      key: 'runtime',
+      width: containerTableLayout.columns[3].width,
+      render: (_, container) => (
+        <div className="docker-cell-stack">
+          {renderCompactText(container.runningFor || container.createdAt)}
+          <Typography.Text code className="docker-cell-text" ellipsis={{ tooltip: container.id }}>
+            {container.shortId}
+          </Typography.Text>
+        </div>
+      )
+    },
+    {
+      title: '备注 / 操作',
+      key: 'noteActions',
+      width: containerTableLayout.columns[4].width,
+      render: (_, container) => (
+        <div className="docker-note-action-cell">
+          {container.note?.notes ? renderCompactMutedText(container.note.notes) : <Typography.Text type="secondary">-</Typography.Text>}
+          <div className="docker-note-actions">
             <Button size="small" icon={<EditOutlined />} onClick={() => openContainerNote(container)}>
               备注
             </Button>
@@ -310,8 +349,8 @@ export function DockerPanel(): JSX.Element {
                 删除
               </Button>
             ) : null}
-          </Space>
-        </Space>
+          </div>
+        </div>
       )
     }
   ]
@@ -412,6 +451,10 @@ export function DockerPanel(): JSX.Element {
             onChange={(event) => setQuery(event.target.value)}
           />
           <Space wrap>
+            <Space size={8}>
+              <Switch size="small" checked={onlyRunning} onChange={setOnlyRunning} />
+              <Typography.Text type="secondary">只看运行中</Typography.Text>
+            </Space>
             <Typography.Text type="secondary">上次刷新：{formatDockerTime(snapshot?.checkedAt ?? '')}</Typography.Text>
             {lastEventLabel ? <Typography.Text type="secondary">最近事件：{lastEventLabel}</Typography.Text> : null}
           </Space>
@@ -425,12 +468,14 @@ export function DockerPanel(): JSX.Element {
                 label: `容器 ${filteredContainers.length}`,
                 children: (
                   <Table
+                    className="docker-compact-table"
                     rowKey="id"
                     size="small"
+                    tableLayout="fixed"
                     columns={containerColumns}
                     dataSource={filteredContainers}
                     pagination={{ pageSize: 10 }}
-                    scroll={{ x: 1420 }}
+                    scroll={{ x: containerTableLayout.minWidth }}
                     locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={loading ? '正在读取容器' : '暂无容器'} /> }}
                   />
                 )
