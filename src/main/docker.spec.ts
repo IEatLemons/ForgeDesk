@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   createDockerSnapshot,
+  createDockerCommandRunner,
   deleteDockerResourceNote,
   listDockerResourceNotes,
   migrateDockerTables,
@@ -93,6 +94,23 @@ function createDatabase(): TestDatabase {
 }
 
 describe('docker local inventory', () => {
+  it('adds command context and Docker-specific hints when a Docker command fails', async () => {
+    const runner = createDockerCommandRunner((_file, _args, _options, callback) => {
+      callback(new Error('Command failed: docker container ls --all'), '', 'permission denied while trying to connect to the docker API')
+    })
+
+    await assert.rejects(
+      () => runner(['container', 'ls', '--all']),
+      (error: unknown) => {
+        assert.ok(error instanceof Error)
+        assert.match(error.message, /docker container ls --all/)
+        assert.match(error.message, /permission denied while trying to connect/)
+        assert.match(error.message, /Docker Desktop/)
+        return true
+      }
+    )
+  })
+
   it('parses Docker image json lines and skips malformed rows', () => {
     const images = parseDockerImageLines(
       [

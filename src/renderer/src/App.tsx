@@ -44,6 +44,7 @@ import {
   DashboardOutlined,
   DeleteOutlined,
   DiffOutlined,
+  DesktopOutlined,
   DownloadOutlined,
   EditOutlined,
   ArrowLeftOutlined,
@@ -55,11 +56,13 @@ import {
   LinkOutlined,
   LockOutlined,
   DockerOutlined,
+  MoonOutlined,
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
   SearchOutlined,
   SettingOutlined,
+  SunOutlined,
   TeamOutlined,
   ToolOutlined,
   UnlockOutlined,
@@ -252,6 +255,7 @@ import { useForgeDeskStore } from './store'
 import { TerminalWorkspace } from './terminal-panel'
 import type { TerminalOpenRequest } from './terminal-panel-events'
 import { TerminalRemoteShortcuts } from './terminal-remote-shortcuts'
+import type { ResolvedTheme, ThemePreference } from './app-theme'
 
 type ImportForm = {
   projectName: string
@@ -278,7 +282,28 @@ type SshPassphraseForm = {
   confirmPassphrase: string
 }
 
-type SettingsModuleKey = 'overview' | 'git' | 'github' | 'private' | 'public' | 'config' | 'services' | 'plane' | 'ai' | 'updates' | 'log-refresh'
+type SettingsModuleKey = 'overview' | 'appearance' | 'git' | 'github' | 'private' | 'public' | 'config' | 'services' | 'plane' | 'ai' | 'updates' | 'log-refresh'
+
+type AppProps = {
+  themePreference: ThemePreference
+  resolvedTheme: ResolvedTheme
+  onThemePreferenceChange: (preference: ThemePreference) => void
+}
+
+function getThemePreferenceLabel(preference: ThemePreference): string {
+  switch (preference) {
+    case 'light':
+      return '白天模式'
+    case 'dark':
+      return '黑夜模式'
+    default:
+      return '跟随系统'
+  }
+}
+
+function getResolvedThemeLabel(theme: ResolvedTheme): string {
+  return theme === 'dark' ? '当前黑夜' : '当前白天'
+}
 
 type AiSettingsForm = {
   enabled: boolean
@@ -1495,7 +1520,17 @@ function PlaneSettingsSection({ form, settings, loading, saving, testing, testRe
   )
 }
 
-function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JSX.Element {
+function SettingsPanel({
+  onCreateProject,
+  themePreference,
+  resolvedTheme,
+  onThemePreferenceChange
+}: {
+  onCreateProject: () => void
+  themePreference: ThemePreference
+  resolvedTheme: ResolvedTheme
+  onThemePreferenceChange: (preference: ThemePreference) => void
+}): JSX.Element {
   const [gitIdentityForm] = Form.useForm<GitIdentityForm>()
   const [sshKeyForm] = Form.useForm<SshKeyForm>()
   const [sshImportForm] = Form.useForm<SshKeyImportForm>()
@@ -2278,6 +2313,14 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
     tone: 'ok' | 'warning' | 'neutral' | 'danger'
   }> = [
     {
+      key: 'appearance',
+      title: '外观',
+      description: '切换白天、黑夜，或自动跟随系统。',
+      icon: <DesktopOutlined />,
+      meta: themePreference === 'system' ? getResolvedThemeLabel(resolvedTheme) : getThemePreferenceLabel(themePreference),
+      tone: 'neutral'
+    },
+    {
       key: 'git',
       title: 'Git 账户',
       description: '维护本机全局提交身份。',
@@ -2372,6 +2415,57 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
           <Button onClick={() => setActiveSettingsModule('overview')}>返回总览</Button>
           {actions}
         </Space>
+      </div>
+    )
+  }
+
+  function renderAppearanceModule(): JSX.Element {
+    return (
+      <div className="panel settings-module-panel">
+        {renderModuleHeader('外观', '选择 ForgeDesk 使用白天模式、黑夜模式，或跟随系统自动切换。')}
+        <Alert
+          className="settings-module-alert"
+          type="info"
+          showIcon
+          message={`当前使用：${themePreference === 'system' ? `${getThemePreferenceLabel(themePreference)} · ${getResolvedThemeLabel(resolvedTheme)}` : getThemePreferenceLabel(themePreference)}`}
+          description="偏好会保存在本机；选择跟随系统时，会随操作系统外观变化自动切换。"
+        />
+        <div className="settings-management-form appearance-settings-form">
+          <Segmented
+            block
+            value={themePreference}
+            options={[
+              {
+                label: (
+                  <span className="appearance-option-label">
+                    <DesktopOutlined />
+                    跟随系统
+                  </span>
+                ),
+                value: 'system'
+              },
+              {
+                label: (
+                  <span className="appearance-option-label">
+                    <SunOutlined />
+                    白天模式
+                  </span>
+                ),
+                value: 'light'
+              },
+              {
+                label: (
+                  <span className="appearance-option-label">
+                    <MoonOutlined />
+                    黑夜模式
+                  </span>
+                ),
+                value: 'dark'
+              }
+            ]}
+            onChange={(value) => onThemePreferenceChange(value as ThemePreference)}
+          />
+        </div>
       </div>
     )
   }
@@ -2989,6 +3083,8 @@ function SettingsPanel({ onCreateProject }: { onCreateProject: () => void }): JS
 
   function renderActiveSettingsModule(): JSX.Element {
     switch (activeSettingsModule) {
+      case 'appearance':
+        return renderAppearanceModule()
       case 'git':
         return renderGitModule()
       case 'log-refresh':
@@ -13186,7 +13282,7 @@ function PasswordGeneratorTool({ onBack }: { onBack: () => void }): JSX.Element 
   )
 }
 
-function App(): JSX.Element {
+function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppProps): JSX.Element {
   const { loadingWorkspace, loadWorkspace } = useForgeDeskStore()
   const [activeKey, setActiveKey] = useState<AppNavigationKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
@@ -13289,7 +13385,7 @@ function App(): JSX.Element {
 
   return (
     <Layout className="app-shell">
-      <Layout.Sider width={236} theme="light" className="sidebar">
+      <Layout.Sider width={236} theme={resolvedTheme} className="sidebar">
         <div className="sidebar-inner">
           <div className="brand">
             <div className="brand-mark">
@@ -13323,6 +13419,9 @@ function App(): JSX.Element {
           )}
           {!loadingWorkspace && activeKey === 'settings' && (
             <SettingsPanel
+              themePreference={themePreference}
+              resolvedTheme={resolvedTheme}
+              onThemePreferenceChange={onThemePreferenceChange}
               onCreateProject={() => {
                 setActiveKey('overview')
                 setCreatingProject(true)

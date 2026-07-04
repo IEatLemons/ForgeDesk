@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process'
+import { homedir } from 'node:os'
+import { createGuiToolFallbackPath, mergePathValues } from './shell-environment.js'
 
 export type DockerResourceType = 'image' | 'container'
 
@@ -78,6 +80,19 @@ export type DockerDatabase = {
 }
 
 export type DockerCommandRunner = (args: string[]) => Promise<string>
+
+export type DockerExecFileRunner = (
+  file: string,
+  args: string[],
+  options: { timeout: number; maxBuffer: number; env: NodeJS.ProcessEnv },
+  callback: (error: DockerProcessError | null, stdout: string | Buffer, stderr: string | Buffer) => void
+) => void
+
+type DockerProcessError = Error & {
+  code?: string | number
+  killed?: boolean
+  signal?: string | null
+}
 
 export type DockerSnapshotInput = {
   images: DockerImageSummary[]
@@ -379,24 +394,70 @@ export function createDockerSnapshot(input: DockerSnapshotInput): DockerSnapshot
   }
 }
 
-export function createDockerCommandEnv(): NodeJS.ProcessEnv {
-  const fallbackPaths = ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin']
-  const path = [process.env.PATH, ...fallbackPaths].filter(Boolean).join(':')
+function stringOutput(value: string | Buffer): string {
+  return Buffer.isBuffer(value) ? value.toString('utf8') : value
+}
 
-  return { ...process.env, PATH: path }
+function formatDockerCommand(args: string[]): string {
+  const renderedArgs = args.map((arg) => (/\s/.test(arg) ? `'${arg.replaceAll("'", "'\\''")}'` : arg))
+  return ['docker', ...renderedArgs].join(' ')
+}
+
+function getDockerCommandHint(message: string, error: DockerProcessError): string {
+  const normalizedMessage = message.toLowerCase()
+
+  if (error.killed || normalizedMessage.includes('timed out') || normalizedMessage.includes('timeout')) {
+    return '提示：Docker CLI 响应超时，请确认 Docker Desktop 已启动完成后重试。'
+  }
+
+  if (error.code === 'ENOENT' || normalizedMessage.includes('enoent')) {
+    return '提示：请确认 Docker CLI 已安装，并且 /usr/local/bin 或 /opt/homebrew/bin 可访问。'
+  }
+
+  if (normalizedMessage.includes('permission denied') && normalizedMessage.includes('docker api')) {
+    return '提示：请确认 Docker Desktop 正在运行，并允许 ForgeDesk 访问 Docker Desktop 的 Unix socket。'
+  }
+
+  if (normalizedMessage.includes('cannot connect') || normalizedMessage.includes('docker daemon')) {
+    return '提示：请先启动 Docker Desktop，等 Docker 状态稳定后重试。'
+  }
+
+  return ''
+}
+
+function createDockerCommandError(args: string[], error: DockerProcessError, stderr: string | Buffer): Error {
+  const stderrText = stringOutput(stderr).trim()
+  const detail = stderrText || error.message || '未知错误'
+  const hint = getDockerCommandHint(detail, error)
+  const message = [`Docker 命令执行失败：${formatDockerCommand(args)}`, detail, hint].filter(Boolean).join('\n')
+
+  return new Error(message)
+}
+
+export function createDockerCommandEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const path = mergePathValues(env.PATH, createGuiToolFallbackPath())
+
+  return { ...env, HOME: env.HOME || homedir(), PATH: path }
+}
+
+export function createDockerCommandRunner(execFileRunner: DockerExecFileRunner = execFile as DockerExecFileRunner): DockerCommandRunner {
+  return (args: string[]) =>
+    new Promise((resolveOutput, reject) => {
+      execFileRunner('docker', args, { timeout: 15000, maxBuffer: 1024 * 1024 * 20, env: createDockerCommandEnv() }, (error, stdout, stderr) => {
+        if (error) {
+          reject(createDockerCommandError(args, error, stderr))
+          return
+        }
+
+        resolveOutput(stringOutput(stdout))
+      })
+    })
 }
 
 export function runDockerCommand(args: string[]): Promise<string> {
-  return new Promise((resolveOutput, reject) => {
-    execFile('docker', args, { timeout: 15000, maxBuffer: 1024 * 1024 * 20, env: createDockerCommandEnv() }, (error, stdout, stderr) => {
-      if (error) {
-        reject(new Error(stderr.trim() || error.message))
-        return
-      }
+  const runner = createDockerCommandRunner()
 
-      resolveOutput(stdout)
-    })
-  })
+  return runner(args)
 }
 
 export async function readDockerSnapshot(db: DockerDatabase, runner: DockerCommandRunner = runDockerCommand): Promise<DockerSnapshot> {

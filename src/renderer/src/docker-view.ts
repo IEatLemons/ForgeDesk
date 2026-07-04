@@ -15,6 +15,11 @@ export type DockerStatusMeta = {
   badgeStatus: BadgeStatus
 }
 
+export type DockerWatchStatusMeta = {
+  label: string
+  color: string
+}
+
 export type DockerImageNoteTargetOption = {
   label: string
   value: string
@@ -126,4 +131,28 @@ export function getDockerContainerStatusMeta(state: string, status: string): Doc
   }
 
   return { label: normalizedState || fallbackLabel, color: 'default', badgeStatus: 'default' }
+}
+
+export function getDockerWatchStatusMeta({
+  watching,
+  watchError,
+  errorMessage
+}: {
+  watching: boolean
+  watchError: string
+  errorMessage: string
+}): DockerWatchStatusMeta {
+  if (errorMessage.trim()) {
+    return { label: 'Docker 异常', color: 'red' }
+  }
+
+  if (watching) {
+    return { label: '监听中', color: 'green' }
+  }
+
+  if (watchError.trim()) {
+    return { label: '监听异常', color: 'red' }
+  }
+
+  return { label: '未监听', color: 'default' }
 }

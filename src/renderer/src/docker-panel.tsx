@@ -9,7 +9,8 @@ import {
   filterDockerImages,
   getDockerContainerStatusMeta,
   getDockerImageDefaultNoteResourceKey,
-  getDockerImageNoteTargetOptions
+  getDockerImageNoteTargetOptions,
+  getDockerWatchStatusMeta
 } from './docker-view'
 import { getErrorMessage } from './error-messages'
 
@@ -142,6 +143,7 @@ export function DockerPanel(): JSX.Element {
     () => createDockerDashboardSummary(snapshot ?? { images: [], containers: [], notes: [], checkedAt: '' }),
     [snapshot]
   )
+  const watchStatus = useMemo(() => getDockerWatchStatusMeta({ watching, watchError, errorMessage }), [watching, watchError, errorMessage])
   const filteredContainers = useMemo(() => filterDockerContainers(snapshot?.containers ?? [], query), [query, snapshot])
   const filteredImages = useMemo(() => filterDockerImages(snapshot?.images ?? [], query), [query, snapshot])
 
@@ -374,7 +376,7 @@ export function DockerPanel(): JSX.Element {
             <Typography.Text type="secondary">查看本机镜像和容器实例，给它们保存只属于 ForgeDesk 的备注名称。</Typography.Text>
           </Space>
           <Space wrap>
-            <Tag color={watching ? 'green' : watchError ? 'red' : 'default'}>{watching ? '监听中' : watchError ? '监听异常' : '未监听'}</Tag>
+            <Tag color={watchStatus.color}>{watchStatus.label}</Tag>
             <Button icon={<ReloadOutlined />} loading={loading} onClick={() => loadSnapshot()}>
               刷新
             </Button>

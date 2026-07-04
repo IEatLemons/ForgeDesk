@@ -5,6 +5,7 @@ import {
   filterDockerContainers,
   filterDockerImages,
   getDockerContainerStatusMeta,
+  getDockerWatchStatusMeta,
   getDockerImageDefaultNoteResourceKey,
   getDockerImageNoteTargetOptions
 } from './docker-view.js'
@@ -145,6 +146,21 @@ describe('docker view model', () => {
       label: 'Created 1 minute ago',
       color: 'blue',
       badgeStatus: 'processing'
+    })
+  })
+
+  it('shows Docker availability errors before optimistic watcher state', () => {
+    assert.deepEqual(getDockerWatchStatusMeta({ watching: true, watchError: '', errorMessage: 'Command failed' }), {
+      label: 'Docker 异常',
+      color: 'red'
+    })
+    assert.deepEqual(getDockerWatchStatusMeta({ watching: true, watchError: '', errorMessage: '' }), {
+      label: '监听中',
+      color: 'green'
+    })
+    assert.deepEqual(getDockerWatchStatusMeta({ watching: false, watchError: 'daemon unavailable', errorMessage: '' }), {
+      label: '监听异常',
+      color: 'red'
     })
   })
 })
