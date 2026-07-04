@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import ts from 'typescript'
@@ -26,6 +26,12 @@ async function walk(directory) {
 }
 
 try {
+  await symlink(join(root, 'node_modules'), join(outDir, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir').catch((error) => {
+    if (error?.code !== 'EEXIST') {
+      throw error
+    }
+  })
+
   const files = (await Promise.all(sourceRoots.map((item) => walk(join(root, item))))).flat()
   const specFiles = []
   const scriptTestFiles = (await readdir(join(root, 'scripts')))

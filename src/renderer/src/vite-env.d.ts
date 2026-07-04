@@ -143,6 +143,10 @@ type TerminalSession = {
   signal?: number
 }
 
+type TerminalSessionSnapshot = TerminalSession & {
+  output: string[]
+}
+
 type TerminalDataEvent = {
   sessionId: string
   data: string
@@ -460,6 +464,23 @@ type ProjectBranchTagRecord = {
   label: string
   branchName: string
   color: string
+}
+
+type ProjectTerminalCommandRecord = {
+  id: string
+  projectId: string
+  name: string
+  command: string
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
+}
+
+type ProjectTerminalCommandInput = {
+  id?: string
+  projectId: string
+  name: string
+  command: string
 }
 
 type ServiceProviderType = 'railway' | 'vercel'
@@ -798,6 +819,103 @@ type AiSettingsView = {
   temperature: number
 }
 
+type MonthlyPerformancePreviewInput = {
+  projectId: string
+  month: string
+  instruction: string
+}
+
+type MonthlyPerformanceRow = {
+  personId: string
+  name: string
+  role: string
+  identity: string
+  commits: number
+  additions: number
+  deletions: number
+  filesChanged: number
+  activeDays: number
+  completedWorkItems: number
+  inProgressWorkItems: number
+  overdueWorkItems: number
+  aiScore: number
+  performanceLevel: string
+  highlights: string
+  risks: string
+  nextMonthPlan: string
+  notes: string
+}
+
+type MonthlyPerformancePreview = {
+  projectId: string
+  projectName: string
+  month: string
+  startDate: string
+  endDate: string
+  generatedAt: string
+  totalCommits: number
+  totalAdditions: number
+  totalDeletions: number
+  activeDays: number
+  contributorCount: number
+  aiSummary: string
+  highlights: string[]
+  risks: string[]
+  nextMonthFocus: string[]
+  rows: MonthlyPerformanceRow[]
+  warnings: string[]
+}
+
+type MonthlyPerformanceExportInput = {
+  preview: MonthlyPerformancePreview
+}
+
+type MonthlyPerformanceExportResult = {
+  filePath: string | null
+}
+
+type MonthlyPerformanceMessageRole = 'user' | 'assistant'
+
+type MonthlyPerformanceChatMessage = {
+  id: string
+  role: MonthlyPerformanceMessageRole
+  content: string
+  createdAt: string
+}
+
+type MonthlyPerformanceSessionStatus = 'draft' | 'ready' | 'exported'
+
+type MonthlyPerformanceSession = {
+  id: string
+  projectId: string
+  projectName: string
+  month: string
+  title: string
+  status: MonthlyPerformanceSessionStatus
+  messages: MonthlyPerformanceChatMessage[]
+  preview: MonthlyPerformancePreview | null
+  filePath: string
+  createdAt: string
+  updatedAt: string
+  exportedAt: string
+}
+
+type MonthlyPerformanceSessionCreateInput = {
+  projectId: string
+  month: string
+}
+
+type MonthlyPerformanceSessionMessageInput = {
+  sessionId: string
+  projectId: string
+  month: string
+  content: string
+}
+
+type MonthlyPerformanceSessionExportInput = {
+  sessionId: string
+}
+
 type GithubTokenType = 'classic' | 'fine-grained-or-app' | 'unknown'
 
 type GithubTokenInput = {
@@ -979,6 +1097,9 @@ interface Window {
     listProjectBranchTags: (projectId: string) => Promise<ProjectBranchTagRecord[]>
     saveProjectBranchTag: (input: { id?: string; projectId: string; label: string; branchName: string; color: string }) => Promise<ProjectBranchTagRecord>
     deleteProjectBranchTag: (projectId: string, tagId: string) => Promise<ProjectBranchTagRecord[]>
+    listProjectTerminalCommands: (projectId: string) => Promise<ProjectTerminalCommandRecord[]>
+    saveProjectTerminalCommand: (input: ProjectTerminalCommandInput) => Promise<ProjectTerminalCommandRecord>
+    deleteProjectTerminalCommand: (projectId: string, commandId: string) => Promise<ProjectTerminalCommandRecord[]>
     getPlaneSettings: () => Promise<PlaneSettings>
     savePlaneSettings: (input: PlaneSettingsInput) => Promise<PlaneSettings>
     testPlaneSettings: (input?: PlaneSettingsInput) => Promise<PlaneConnectionTestResult>
@@ -1035,6 +1156,13 @@ interface Window {
     createRsaPrivateKey: (input: RsaPrivateKeyCreateInput) => Promise<RsaPrivateKeyRecord>
     updateRsaPrivateKey: (input: RsaPrivateKeyUpdateInput) => Promise<RsaPrivateKeyRecord>
     deleteRsaPrivateKey: (id: string) => Promise<RsaPrivateKeyRecord[]>
+    previewMonthlyPerformance: (input: MonthlyPerformancePreviewInput) => Promise<MonthlyPerformancePreview>
+    exportMonthlyPerformance: (input: MonthlyPerformanceExportInput) => Promise<MonthlyPerformanceExportResult>
+    listMonthlyPerformanceSessions: () => Promise<MonthlyPerformanceSession[]>
+    createMonthlyPerformanceSession: (input: MonthlyPerformanceSessionCreateInput) => Promise<MonthlyPerformanceSession>
+    sendMonthlyPerformanceSessionMessage: (input: MonthlyPerformanceSessionMessageInput) => Promise<MonthlyPerformanceSession>
+    confirmMonthlyPerformanceSession: (input: { sessionId: string; projectId: string; month: string }) => Promise<MonthlyPerformanceSession>
+    exportMonthlyPerformanceSession: (input: MonthlyPerformanceSessionExportInput) => Promise<MonthlyPerformanceSession>
     generateSshKey: (input: string | SshKeyGenerationInput) => Promise<GitSetupStatus['sshPublicKeys'][number]>
     copySshPublicKey: (publicKeyPath: string) => Promise<void>
     copySshKeyPath: (path: string, kind: SshKeyKind) => Promise<void>
@@ -1054,6 +1182,7 @@ interface Window {
     saveTerminalRemoteHost: (input: TerminalRemoteHostInput) => Promise<TerminalRemoteHostRecord>
     deleteTerminalRemoteHost: (hostId: string) => Promise<TerminalRemoteHostRecord[]>
     getTerminalRemoteSshCommand: (hostId: string) => Promise<string>
+    listTerminals: () => Promise<TerminalSessionSnapshot[]>
     openTerminal: (input?: TerminalCreateInput) => Promise<TerminalSession>
     writeTerminal: (sessionId: string, data: string) => Promise<void>
     resizeTerminal: (sessionId: string, cols: number, rows: number) => Promise<void>

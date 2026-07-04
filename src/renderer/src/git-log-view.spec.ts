@@ -12,6 +12,7 @@ import {
   getGitGraphColumnWidth,
   getWorkspaceFileChangeStatus,
   isWorkingTreeCommit,
+  currentBranchRefColor,
   getRefColor,
   getRepositoryDefaultPushTarget,
   getNextVisibleCommitCount,
@@ -145,6 +146,13 @@ describe('git log view helpers', () => {
     assert.equal(getRefColor('origin/feature/card-form', branchTags), 'cyan')
   })
 
+  it('uses a prominent default color for the current branch ref', () => {
+    assert.equal(getRefColor('main', [], 'main'), currentBranchRefColor)
+    assert.equal(getRefColor('HEAD -> main', [], 'main'), currentBranchRefColor)
+    assert.equal(getRefColor('origin/main', [], 'main'), currentBranchRefColor)
+    assert.equal(getRefColor('origin/feature/card-form', [], 'main'), 'cyan')
+  })
+
   it('increments visible commit count and clamps to total commits', () => {
     assert.equal(getNextVisibleCommitCount({ current: 0, total: 185, batchSize: 60 }), 60)
     assert.equal(getNextVisibleCommitCount({ current: 60, total: 185, batchSize: 60 }), 120)
@@ -171,6 +179,32 @@ describe('git log view helpers', () => {
     assert.equal(isWorkingTreeCommit(rows[0]), true)
     assert.deepEqual(rows[0].graphParentEdges, [{ fromLaneIndex: 0, toLaneIndex: 0 }])
     assert.equal(rows[1].hash, 'head')
+  })
+
+  it('anchors the working tree commit to the current HEAD when another ref is newer', () => {
+    const commits = [
+      { hash: 'feature-tip', parentHashes: ['main-head'], refs: ['origin/feat/docker'], message: 'add docker' },
+      { hash: 'main-head', parentHashes: ['root'], refs: ['HEAD -> main', 'origin/main'], message: 'release' },
+      { hash: 'root', parentHashes: [], refs: [], message: 'root' }
+    ]
+    const rows = createGraphRows(
+      prependWorkingTreeCommit(
+        commits,
+        { files: [{ path: 'src/App.tsx' }] },
+        ({ parentHashes, fileCount }) => ({
+          hash: workingTreeCommitHash,
+          parentHashes,
+          refs: [],
+          message: `${fileCount} uncommitted files`
+        }),
+        { currentBranch: 'main' }
+      )
+    )
+
+    assert.equal(rows[0].hash, workingTreeCommitHash)
+    assert.deepEqual(rows[0].parentHashes, ['main-head'])
+    assert.equal(rows[1].hash, 'feature-tip')
+    assert.equal(rows[2].hash, 'main-head')
   })
 
   it('does not prepend a working tree commit when the workspace is clean', () => {

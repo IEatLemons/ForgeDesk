@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { createPublishPlan, getReleaseTagName } from './publish-mac-helpers.mjs'
+import {
+  assertMacReleaseAssetsComplete,
+  createPublishPlan,
+  getExpectedMacReleaseAssetNames,
+  getReleaseTagName
+} from './publish-mac-helpers.mjs'
 
 describe('publish mac helpers', () => {
   it('creates a v-prefixed release tag from package version', () => {
@@ -63,6 +68,46 @@ describe('publish mac helpers', () => {
           allowDirtyRelease: false
         }),
       /不是当前提交/
+    )
+  })
+
+  it('expects updater metadata and every generated mac artifact in the release', () => {
+    const assetNames = getExpectedMacReleaseAssetNames({
+      version: '1.0.8',
+      distFiles: [
+        'ForgeDesk-1.0.8-arm64.dmg',
+        'ForgeDesk-1.0.8-arm64.dmg.blockmap',
+        'ForgeDesk-1.0.8-arm64.zip',
+        'ForgeDesk-1.0.8-arm64.zip.blockmap',
+        'latest-mac.yml',
+        'builder-effective-config.yaml'
+      ]
+    })
+
+    assert.deepEqual(assetNames, [
+      'ForgeDesk-1.0.8-arm64.dmg',
+      'ForgeDesk-1.0.8-arm64.dmg.blockmap',
+      'ForgeDesk-1.0.8-arm64.zip',
+      'ForgeDesk-1.0.8-arm64.zip.blockmap',
+      'latest-mac.yml'
+    ])
+  })
+
+  it('fails release validation when latest-mac.yml is missing remotely', () => {
+    assert.throws(
+      () =>
+        assertMacReleaseAssetsComplete({
+          tagName: 'v1.0.8',
+          expectedAssetNames: [
+            'ForgeDesk-1.0.8-arm64.dmg',
+            'ForgeDesk-1.0.8-arm64.dmg.blockmap',
+            'ForgeDesk-1.0.8-arm64.zip',
+            'ForgeDesk-1.0.8-arm64.zip.blockmap',
+            'latest-mac.yml'
+          ],
+          existingAssetNames: ['ForgeDesk-1.0.8-arm64.dmg.blockmap']
+        }),
+      /v1\.0\.8.*latest-mac\.yml/
     )
   })
 })

@@ -77,6 +77,34 @@ body {
   margin: 0;
 }
 
+.brand-copy {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.brand-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.brand-version {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  color: #667085;
+  background: #ffffff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
 .brand-mark {
   width: 32px;
   height: 32px;
@@ -1239,6 +1267,18 @@ body {
   background: #f0f7ff;
 }
 
+.branch-drawer-item.is-current {
+  border-color: #d4380d;
+  background: #fff2e8;
+  box-shadow: inset 3px 0 0 #d4380d;
+}
+
+.branch-drawer-item.is-current:hover,
+.branch-drawer-item.is-current.is-active {
+  border-color: #d4380d;
+  background: #fff1e6;
+}
+
 .branch-drawer-name {
   min-width: 0;
   overflow: hidden;
@@ -1382,17 +1422,17 @@ body {
 
 .tool-entry-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 360px));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
 }
 
 .tool-entry-card {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 14px;
+  gap: 10px;
   align-items: center;
   min-height: 112px;
-  padding: 18px;
+  padding: 14px;
   color: inherit;
   text-align: left;
   border: 1px solid #e4e8ef;
@@ -1551,9 +1591,110 @@ body {
   align-items: start;
 }
 
+.excel-tool-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.38fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
 .file-picker-panel,
-.file-diff-panel {
+.file-diff-panel,
+.monthly-performance-input-panel,
+.monthly-performance-preview-panel {
   min-height: 0;
+}
+
+.monthly-performance-form .ant-form-item {
+  margin-bottom: 14px;
+}
+
+.monthly-performance-preview {
+  width: 100%;
+}
+
+.monthly-performance-table .ant-typography {
+  max-width: 100%;
+}
+
+.monthly-performance-history-panel {
+  min-height: 0;
+}
+
+.monthly-performance-chat-page {
+  max-width: 1440px;
+}
+
+.monthly-performance-chat-shell {
+  display: grid;
+  grid-template-columns: minmax(420px, 0.52fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.monthly-performance-chat-panel {
+  display: grid;
+  grid-template-rows: auto minmax(360px, 58vh) auto;
+  gap: 12px;
+  min-height: 0;
+}
+
+.monthly-performance-chat-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px;
+  gap: 10px;
+}
+
+.monthly-performance-chat-messages {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-height: 0;
+  padding: 4px;
+  overflow: auto;
+}
+
+.monthly-performance-message {
+  display: grid;
+  gap: 6px;
+  max-width: 86%;
+}
+
+.monthly-performance-message.is-user {
+  justify-self: end;
+}
+
+.monthly-performance-message-role {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.monthly-performance-message.is-user .monthly-performance-message-role {
+  text-align: right;
+}
+
+.monthly-performance-message-bubble {
+  padding: 12px 14px;
+  color: #172033;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid #e0e7f1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.monthly-performance-message.is-user .monthly-performance-message-bubble {
+  color: #ffffff;
+  border-color: #2563eb;
+  background: #2563eb;
+}
+
+.monthly-performance-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
 }
 
 .file-picker-grid,
@@ -3289,10 +3430,182 @@ body {
   background: #eaf2ff !important;
 }
 
+.terminal-workspace-actions {
+  flex: 0 0 auto;
+}
+
+.terminal-workspace-actions .terminal-command-trigger {
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.terminal-command-manager {
+  width: 100%;
+}
+
+.terminal-command-form-grid {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.terminal-command-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.terminal-command-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.terminal-command-record-copy {
+  flex: 1 1 auto;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+}
+
+.terminal-command-name,
+.terminal-command-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-command-name {
+  color: #172033;
+  font-weight: 700;
+}
+
+.terminal-command-text {
+  color: #64748b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.terminal-command-actions {
+  flex: 0 0 auto;
+}
+
+.terminal-command-sidebar {
+  flex: 0 0 238px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: #d8dee9;
+  border-left: 1px solid #263244;
+  background: #111820;
+}
+
+.terminal-command-sidebar-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border-bottom: 1px solid #263244;
+}
+
+.terminal-command-sidebar-title {
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.terminal-command-sidebar-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 7px;
+  color: #93c5fd;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid rgba(59, 130, 246, 0.38);
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.terminal-command-shortcut-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  padding: 10px;
+  overflow: auto;
+}
+
+.terminal-command-shortcut {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+  color: inherit;
+  text-align: left;
+  border: 1px solid #263244;
+  border-radius: 8px;
+  background: #151c25;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.12);
+}
+
+.terminal-command-shortcut:hover,
+.terminal-command-shortcut:focus-visible {
+  border-color: #3b82f6;
+  background: #1d2836;
+  outline: none;
+}
+
+.terminal-command-shortcut-name,
+.terminal-command-shortcut-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-command-shortcut-name {
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.terminal-command-shortcut-text {
+  color: #9aa7b6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
 .terminal-workspace-body {
   position: relative;
   flex: 1 1 auto;
+  display: flex;
+  align-items: stretch;
   height: min(58vh, 620px);
+  min-height: 0;
+  overflow: hidden;
+  background: #101318;
+}
+
+.terminal-pane-stack {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   background: #101318;
 }
@@ -3328,7 +3641,9 @@ body {
 
 @media (max-width: 1180px) {
   .password-tool-layout,
-  .file-tool-layout {
+  .file-tool-layout,
+  .excel-tool-layout,
+  .monthly-performance-chat-shell {
     grid-template-columns: 1fr;
   }
 
@@ -3501,6 +3816,10 @@ body {
 
   .terminal-workspace-body {
     height: 420px;
+  }
+
+  .terminal-command-sidebar {
+    flex-basis: 208px;
   }
 
   .terminal-tab {

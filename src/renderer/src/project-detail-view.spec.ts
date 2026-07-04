@@ -6,9 +6,12 @@ import {
   createProjectTerminalOpenRequest,
   createRepositorySummaryFields,
   createRepositoryTerminalOpenRequest,
+  getRepositoryRemoteCount,
+  hasProjectRemoteAlignment,
   PROJECT_DETAIL_TABS,
   resolveProjectDetailTab,
   shouldShowRepositorySummary,
+  type ProjectDetailTabAvailability,
   type ProjectDetailTabKey
 } from './project-detail-view.js'
 
@@ -41,6 +44,12 @@ const repositorySummary = {
   name: repository.name
 }
 
+const allProjectDetailFeatures: ProjectDetailTabAvailability = {
+  hasBoundServices: true,
+  hasRemoteAlignment: true,
+  hasPlane: true
+}
+
 describe('project detail view helpers', () => {
   it('keeps the repository summary visible across all project detail tabs', () => {
     const tabs: ProjectDetailTabKey[] = ['data', 'log-tree', 'remote-alignment', 'plane', 'service-monitor', 'terminal']
@@ -63,20 +72,52 @@ describe('project detail view helpers', () => {
 
   it('shows service monitoring only after the project has bound services', () => {
     assert.deepEqual(
-      createProjectDetailTabs(false).map((tab) => tab.key),
+      createProjectDetailTabs({
+        ...allProjectDetailFeatures,
+        hasBoundServices: false
+      }).map((tab) => tab.key),
       ['log-tree', 'data', 'terminal', 'remote-alignment', 'plane']
     )
 
     assert.deepEqual(
-      createProjectDetailTabs(true).map((tab) => tab.key),
+      createProjectDetailTabs(allProjectDetailFeatures).map((tab) => tab.key),
       ['log-tree', 'data', 'terminal', 'remote-alignment', 'plane', 'service-monitor']
     )
   })
 
-  it('moves away from service monitoring when the project has no bound services', () => {
-    assert.equal(resolveProjectDetailTab('service-monitor', false), 'log-tree')
-    assert.equal(resolveProjectDetailTab('service-monitor', true), 'service-monitor')
-    assert.equal(resolveProjectDetailTab('terminal', false), 'terminal')
+  it('shows feature tabs only when their backing configuration is available', () => {
+    assert.deepEqual(
+      createProjectDetailTabs({
+        hasBoundServices: false,
+        hasRemoteAlignment: false,
+        hasPlane: false
+      }).map((tab) => tab.key),
+      ['log-tree', 'data', 'terminal']
+    )
+
+    assert.deepEqual(
+      createProjectDetailTabs({
+        hasBoundServices: false,
+        hasRemoteAlignment: true,
+        hasPlane: false
+      }).map((tab) => tab.key),
+      ['log-tree', 'data', 'terminal', 'remote-alignment']
+    )
+  })
+
+  it('detects project remote alignment only when a repository has at least two remotes', () => {
+    assert.equal(getRepositoryRemoteCount({ remoteUrl: 'git@github.com:IEatLemons/ForgeDesk.git' }), 1)
+    assert.equal(getRepositoryRemoteCount({ remoteCount: 1, remotes: [{ name: 'origin' }, { name: 'backup' }] }), 2)
+    assert.equal(hasProjectRemoteAlignment([{ remoteCount: 1 }, { remoteCount: 1 }]), false)
+    assert.equal(hasProjectRemoteAlignment([{ remoteCount: 1 }, { remotes: [{ name: 'origin' }, { name: 'backup' }] }]), true)
+  })
+
+  it('moves away from unavailable project detail tabs', () => {
+    assert.equal(resolveProjectDetailTab('service-monitor', { ...allProjectDetailFeatures, hasBoundServices: false }), 'log-tree')
+    assert.equal(resolveProjectDetailTab('service-monitor', allProjectDetailFeatures), 'service-monitor')
+    assert.equal(resolveProjectDetailTab('remote-alignment', { ...allProjectDetailFeatures, hasRemoteAlignment: false }), 'log-tree')
+    assert.equal(resolveProjectDetailTab('plane', { ...allProjectDetailFeatures, hasPlane: false }), 'log-tree')
+    assert.equal(resolveProjectDetailTab('terminal', { ...allProjectDetailFeatures, hasPlane: false, hasRemoteAlignment: false }), 'terminal')
   })
 
   it('omits duplicate repository name and local path fields from the summary strip', () => {

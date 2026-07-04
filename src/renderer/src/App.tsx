@@ -48,6 +48,7 @@ import {
   EditOutlined,
   ArrowLeftOutlined,
   FileTextOutlined,
+  FileExcelOutlined,
   FolderOpenOutlined,
   GithubOutlined,
   KeyOutlined,
@@ -87,6 +88,9 @@ import type {
   GitStatusFile,
   GitWorkspaceStatus,
   GithubTokenView,
+  MonthlyPerformancePreview,
+  MonthlyPerformanceRow,
+  MonthlyPerformanceSession,
   Project,
   ProjectBranchTag,
   ProjectGitSummary,
@@ -158,6 +162,7 @@ import {
 import {
   buildBranchGroups,
   createGraphRows,
+  currentBranchRefColor,
   defaultGitLogRefreshPreferences,
   gitLogRefreshIntervalBounds,
   gitLogRefreshPreferenceChangedEvent,
@@ -183,8 +188,11 @@ import {
   createProjectDetailTabs,
   createProjectTerminalOpenRequest,
   createRepositorySummaryFields,
+  getRepositoryRemoteCount,
+  hasProjectRemoteAlignment,
   resolveProjectDetailTab,
   shouldShowRepositorySummary,
+  type ProjectDetailTabAvailability,
   type ProjectDetailTabKey
 } from './project-detail-view'
 import {
@@ -194,7 +202,14 @@ import {
   PROJECT_SETTINGS_MODULES,
   type ProjectSettingsModuleKey
 } from './project-settings-view'
-import { createReleasePlatformOptions, createReleasePublishTaskView, createReleasePublishViewModel, type ReleasePublishActionKey } from './release-publish-view'
+import {
+  createDefaultReleaseMetadata,
+  createReleasePlatformOptions,
+  createReleasePublishTaskView,
+  createReleasePublishViewModel,
+  updateDefaultReleaseMetadataForVersionChange,
+  type ReleasePublishActionKey
+} from './release-publish-view'
 import {
   createDeploymentFilterOptions,
   createDeploymentRows,
@@ -910,7 +925,7 @@ function CommitAuthorCell({ commit }: { commit: RepositoryLogCommit }): JSX.Elem
   )
 }
 
-function CommitMessageCell({ commit, branchTags }: { commit: RepositoryLogCommit; branchTags: ProjectBranchTag[] }): JSX.Element {
+function CommitMessageCell({ commit, branchTags, currentBranch }: { commit: RepositoryLogCommit; branchTags: ProjectBranchTag[]; currentBranch: string }): JSX.Element {
   const isWorkingTree = isWorkingTreeCommit(commit)
 
   return (
@@ -928,7 +943,7 @@ function CommitMessageCell({ commit, branchTags }: { commit: RepositoryLogCommit
       ) : commit.refs.length > 0 && (
         <div className="source-tree-ref-strip">
           {commit.refs.slice(0, 6).map((ref) => (
-            <Tag key={ref} color={getRefColor(ref, branchTags)} className="source-tree-ref">
+            <Tag key={ref} color={getRefColor(ref, branchTags, currentBranch)} className="source-tree-ref">
               {ref}
             </Tag>
           ))}
@@ -947,6 +962,7 @@ function CommitInlineDetail({
   onSelectFile,
   graphColumnWidth,
   branchTags,
+  currentBranch,
   canOpenDiff
 }: {
   commit: GitGraphRow<RepositoryLogCommit>
@@ -956,6 +972,7 @@ function CommitInlineDetail({
   onSelectFile: (file: GitCommitFileChange) => void
   graphColumnWidth: number
   branchTags: ProjectBranchTag[]
+  currentBranch: string
   canOpenDiff: boolean
 }): JSX.Element {
   const author = getCommitAuthorDisplay(commit)
@@ -974,7 +991,7 @@ function CommitInlineDetail({
                 <Tag className="source-tree-ref source-tree-worktree-ref">工作区</Tag>
               ) : (
                 commit.refs.map((ref) => (
-                  <Tag key={ref} color={getRefColor(ref, branchTags)} className="source-tree-ref">
+                  <Tag key={ref} color={getRefColor(ref, branchTags, currentBranch)} className="source-tree-ref">
                     {ref}
                   </Tag>
                 ))
@@ -6402,9 +6419,15 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     })
 
     if (!preserveTextFields) {
-      setReleaseTitle(`${nextPreparation.plan.repositoryName} ${nextTagName || nextVersion}`)
-      setReleaseNotes(`发布 ${nextTagName || nextVersion}`)
-      setReleaseCommitMessage(`chore: release ${nextTagName || nextVersion}`)
+      const metadata = createDefaultReleaseMetadata({
+        repositoryName: nextPreparation.plan.repositoryName,
+        version: nextVersion,
+        tagName: nextTagName
+      })
+
+      setReleaseTitle(metadata.releaseTitle)
+      setReleaseNotes(metadata.releaseNotes)
+      setReleaseCommitMessage(metadata.commitMessage)
     }
   }
 
@@ -6616,11 +6639,29 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   }
 
   function onTargetVersionChange(value: string): void {
-    setTargetVersion(value)
+    const previousVersion = targetVersion
+    const previousTagName = tagName
     const nextTagName = createTagNameFromVersion(value)
+
+    setTargetVersion(value)
 
     if (nextTagName) {
       setTagName(nextTagName)
+
+      const metadata = updateDefaultReleaseMetadataForVersionChange({
+        repositoryName: preparation?.plan.repositoryName ?? selectedRepository?.name ?? '',
+        previousVersion,
+        previousTagName,
+        nextVersion: value,
+        nextTagName,
+        releaseTitle,
+        releaseNotes,
+        commitMessage: releaseCommitMessage
+      })
+
+      setReleaseTitle(metadata.releaseTitle)
+      setReleaseNotes(metadata.releaseNotes)
+      setReleaseCommitMessage(metadata.commitMessage)
     }
   }
 
@@ -8502,7 +8543,7 @@ function ProjectCard({
 }): JSX.Element {
   const changedRepositories = repositories.filter((repository) => repository.hasChanges).length
   const aheadRepositories = repositories.filter((repository) => repository.ahead > 0).length
-  const remoteCount = repositories.reduce((sum, repository) => sum + (repository.remoteCount || repository.remotes?.length || (repository.remoteUrl ? 1 : 0)), 0)
+  const remoteCount = repositories.reduce((sum, repository) => sum + getRepositoryRemoteCount(repository), 0)
   const remoteAlignmentStats = getProjectRemoteAlignmentStats(repositories)
 
   return (
@@ -9176,23 +9217,31 @@ function ProjectOverview({
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [branchTagRefreshToken, setBranchTagRefreshToken] = useState(0)
   const [projectServiceCounts, setProjectServiceCounts] = useState<Record<string, number>>({})
+  const [projectPlaneAvailability, setProjectPlaneAvailability] = useState<Record<string, boolean>>({})
   const [rangePreset, setRangePreset] = useState('30')
   const [range, setRange] = useState(createPresetRange(30))
   const terminalRequestSeqRef = useRef(0)
   const projectWorkspaceStatusRefreshRef = useRef(false)
   const projectRepositoriesRef = useRef<Repository[]>([])
   const selectedProject = projects.find((project) => project.id === detailProjectId) ?? null
-  const hasBoundProjectServices = selectedProject ? (projectServiceCounts[selectedProject.id] ?? 0) > 0 : false
-  const projectDetailTabs = createProjectDetailTabs(hasBoundProjectServices)
-  const activeProjectDetailTab = resolveProjectDetailTab(projectDetailTab, hasBoundProjectServices)
   const projectRepositories = selectedProject ? repositories.filter((repository) => repository.projectId === selectedProject.id) : []
   const projectRepositoryIds = projectRepositories.map((repository) => repository.id).join('|')
+  const hasBoundProjectServices = selectedProject ? (projectServiceCounts[selectedProject.id] ?? 0) > 0 : false
+  const projectHasRemoteAlignment = hasProjectRemoteAlignment(projectRepositories)
+  const hasConfiguredProjectPlane = selectedProject ? Boolean(projectPlaneAvailability[selectedProject.id]) : false
+  const projectDetailTabAvailability: ProjectDetailTabAvailability = {
+    hasBoundServices: hasBoundProjectServices,
+    hasRemoteAlignment: projectHasRemoteAlignment,
+    hasPlane: hasConfiguredProjectPlane
+  }
+  const projectDetailTabs = createProjectDetailTabs(projectDetailTabAvailability)
+  const activeProjectDetailTab = resolveProjectDetailTab(projectDetailTab, projectDetailTabAvailability)
   const selectedProjectGitRepository = projectRepositories.find((repository) => repository.id === projectGitRepositoryId) ?? projectRepositories[0] ?? null
   const changedRepositories = projectRepositories.filter((repository) => repository.hasChanges).length
   const aheadRepositories = projectRepositories.filter((repository) => repository.ahead > 0).length
   const projectHasCommittableChanges = hasProjectCommittableChanges(projectRepositories)
   const projectHasPushableTargets = hasProjectPushableTargets(projectRepositories)
-  const remoteCount = projectRepositories.reduce((sum, repository) => sum + (repository.remoteCount || repository.remotes?.length || (repository.remoteUrl ? 1 : 0)), 0)
+  const remoteCount = projectRepositories.reduce((sum, repository) => sum + getRepositoryRemoteCount(repository), 0)
   const remoteAlignmentStats = getProjectRemoteAlignmentStats(projectRepositories)
   const summary = selectedProject ? summaries[selectedProject.id] ?? createEmptySummary(selectedProject.id) : null
   const selectedProjectGitContribution = summary?.repositories.find((repository) => repository.repositoryId === selectedProjectGitRepository?.id)
@@ -9203,6 +9252,7 @@ function ProjectOverview({
   const summaryRange = rangePreset === 'all' ? undefined : range
   const dailyDates = summary?.dailyMetrics.map((metric) => metric.date) ?? []
   const hasGitData = Boolean(summary && summary.totalCommits > 0)
+  const selectedProjectTerminalRequest = selectedProject ? createProjectTerminalOpenRequest(selectedProject) : null
 
   function queueTerminalOpen(request: TerminalOpenRequest): void {
     terminalRequestSeqRef.current += 1
@@ -9301,6 +9351,46 @@ function ProjectOverview({
   }, [selectedProject?.id, projectSettingsDrawerOpen])
 
   useEffect(() => {
+    if (!selectedProject || !window.forgeDesk) {
+      return undefined
+    }
+
+    let cancelled = false
+
+    async function refreshProjectPlaneAvailability(): Promise<void> {
+      if (!selectedProject || !window.forgeDesk) {
+        return
+      }
+
+      try {
+        const [settings, binding] = await Promise.all([
+          window.forgeDesk.getPlaneSettings(),
+          window.forgeDesk.getProjectPlaneBinding(selectedProject.id)
+        ])
+        const nextAvailable = isPlaneSettingsReady(settings) && Boolean(binding)
+
+        if (!cancelled) {
+          setProjectPlaneAvailability((current) =>
+            current[selectedProject.id] === nextAvailable ? current : { ...current, [selectedProject.id]: nextAvailable }
+          )
+        }
+      } catch (error) {
+        console.warn(`Failed to refresh Plane availability for project ${selectedProject.name}`, error)
+
+        if (!cancelled) {
+          setProjectPlaneAvailability((current) => (current[selectedProject.id] === false ? current : { ...current, [selectedProject.id]: false }))
+        }
+      }
+    }
+
+    refreshProjectPlaneAvailability()
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedProject?.id, projectSettingsDrawerOpen])
+
+  useEffect(() => {
     projectRepositoriesRef.current = projectRepositories
   }, [projectRepositories])
 
@@ -9318,12 +9408,12 @@ function ProjectOverview({
   }, [selectedProject?.id, projectRepositoryIds])
 
   useEffect(() => {
-    const nextTab = resolveProjectDetailTab(projectDetailTab, hasBoundProjectServices)
+    const nextTab = resolveProjectDetailTab(projectDetailTab, projectDetailTabAvailability)
 
     if (nextTab !== projectDetailTab) {
       setProjectDetailTab(nextTab)
     }
-  }, [hasBoundProjectServices, projectDetailTab])
+  }, [hasBoundProjectServices, hasConfiguredProjectPlane, projectDetailTab, projectHasRemoteAlignment])
 
   useEffect(() => {
     if (summary?.status === 'failed' && summary.errorMessage) {
@@ -9629,8 +9719,17 @@ function ProjectOverview({
             )}
 
             <Tabs
+              destroyOnHidden={false}
               activeKey={activeProjectDetailTab}
-              onChange={(key) => setProjectDetailTab(key as ProjectDetailTabKey)}
+              onChange={(key) => {
+                const nextTab = key as ProjectDetailTabKey
+
+                setProjectDetailTab(nextTab)
+
+                if (nextTab === 'terminal' && selectedProjectTerminalRequest) {
+                  queueTerminalOpen(selectedProjectTerminalRequest)
+                }
+              }}
               items={[
                 {
                   key: 'data',
@@ -9659,15 +9758,17 @@ function ProjectOverview({
                           </div>
                         </Col>
                       </Row>
-                      <div className="remote-health-strip">
-                        <Typography.Text strong>远端对齐</Typography.Text>
-                        <Space wrap>
-                          <Tag color="green">已对齐 {remoteAlignmentStats.aligned}</Tag>
-                          <Tag color="orange">未对齐 {remoteAlignmentStats.notAligned}</Tag>
-                          <Tag color="red">缺配置 {remoteAlignmentStats.missing}</Tag>
-                          <Tag>待同步 {remoteAlignmentStats.unknown}</Tag>
-                        </Space>
-                      </div>
+                      {projectHasRemoteAlignment && (
+                        <div className="remote-health-strip">
+                          <Typography.Text strong>远端对齐</Typography.Text>
+                          <Space wrap>
+                            <Tag color="green">已对齐 {remoteAlignmentStats.aligned}</Tag>
+                            <Tag color="orange">未对齐 {remoteAlignmentStats.notAligned}</Tag>
+                            <Tag color="red">缺配置 {remoteAlignmentStats.missing}</Tag>
+                            <Tag>待同步 {remoteAlignmentStats.unknown}</Tag>
+                          </Space>
+                        </div>
+                      )}
                       <Space className="trend-toolbar" wrap>
                         <Button type={rangePreset === 'all' ? 'primary' : 'default'} onClick={() => updateRangePreset('all')}>全部</Button>
                         <Button type={rangePreset === '7' ? 'primary' : 'default'} onClick={() => updateRangePreset('7')}>7 天</Button>
@@ -9757,9 +9858,11 @@ function ProjectOverview({
                   label: '终端',
                   children: (
                     <TerminalWorkspace
-                      defaultCwd={selectedProject.workspacePath}
-                      defaultTitle={selectedProject.name}
+                      defaultCwd={selectedProjectTerminalRequest?.cwd ?? selectedProject.workspacePath}
+                      defaultReuseKey={selectedProjectTerminalRequest?.reuseKey}
+                      defaultTitle={selectedProjectTerminalRequest?.title ?? selectedProject.name}
                       openRequest={terminalOpenRequest}
+                      projectId={selectedProject.id}
                     />
                   )
                 }
@@ -10994,7 +11097,9 @@ function RepositoryLogTree({
             filesChanged: fileCount,
             isWorkingTreeCommit: true,
             worktreeFiles: workspaceCommitFiles
-          }))
+          }), {
+            currentBranch: workspaceStatus?.branch || activeRepositoryForLog.currentBranch || ''
+          })
         : filteredCommits,
     [activeRepositoryForLog, commitBranch, filteredCommits, workspaceCommitFiles, workspaceStatus]
   )
@@ -11438,7 +11543,7 @@ function RepositoryLogTree({
                 title: '提交',
                 dataIndex: 'message',
                 key: 'message',
-                render: (_, commit) => <CommitMessageCell commit={commit} branchTags={branchTags} />
+                render: (_, commit) => <CommitMessageCell commit={commit} branchTags={branchTags} currentBranch={activeRepository.currentBranch} />
               },
               { title: '提交人', key: 'author', width: 210, render: (_, commit) => <CommitAuthorCell commit={commit} /> },
               {
@@ -11468,6 +11573,7 @@ function RepositoryLogTree({
                     loadingFiles={loadingFiles}
                     graphColumnWidth={graphColumnWidth}
                     branchTags={branchTags}
+                    currentBranch={activeRepository.currentBranch}
                     canOpenDiff={!isWorkingTreeCommit(commit)}
                     onSelectFile={(file) => {
                       selectCommitFile(file)
@@ -11539,12 +11645,16 @@ function RepositoryLogTree({
                   group.items.map((branch) => (
                     <button
                       key={`${group.key}:${branch.name}`}
-                      className={branch.isActive ? 'branch-drawer-item is-active' : 'branch-drawer-item'}
+                      className={[
+                        'branch-drawer-item',
+                        branch.isCurrent ? 'is-current' : '',
+                        branch.isActive ? 'is-active' : ''
+                      ].filter(Boolean).join(' ')}
                       onClick={() => selectBranchFilter(branch.name)}
                     >
                       <span className="branch-drawer-name">{branch.name}</span>
                       <Space size={4}>
-                        {branch.isCurrent && <Tag color="blue">当前</Tag>}
+                        {branch.isCurrent && <Tag color={currentBranchRefColor}>当前</Tag>}
                         {branch.isActive && <Tag color="green">筛选中</Tag>}
                       </Space>
                     </button>
@@ -11864,7 +11974,8 @@ function createCustomPasswordToolItem(input: {
 }
 
 type PasswordWorkflowMode = 'preset' | 'custom'
-type ToolKey = 'password' | 'file' | 'rsa'
+type ToolKey = 'password' | 'file' | 'rsa' | 'excel'
+type ExcelToolKey = 'monthly-performance'
 
 type RsaPrivateKeyGenerationForm = {
   name: string
@@ -11942,6 +12053,10 @@ function ToolsPanel(): JSX.Element {
     return <RsaPrivateKeyTool onBack={() => setActiveTool(null)} />
   }
 
+  if (activeTool === 'excel') {
+    return <ExcelTool onBack={() => setActiveTool(null)} />
+  }
+
   return (
     <section className="workspace-section tools-workspace">
       <div className="section-heading">
@@ -11979,6 +12094,454 @@ function ToolsPanel(): JSX.Element {
             <Typography.Text type="secondary">生成并管理本地私钥记录。</Typography.Text>
           </span>
         </button>
+        <button className="tool-entry-card" type="button" onClick={() => setActiveTool('excel')}>
+          <span className="password-tool-icon">
+            <FileExcelOutlined />
+          </span>
+          <span className="tool-entry-copy">
+            <Typography.Text strong>Excel 工具</Typography.Text>
+            <Typography.Text type="secondary">用 AI 整理数据并生成工作簿。</Typography.Text>
+          </span>
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function getCurrentMonthValue(): string {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+}
+
+function ExcelTool({ onBack }: { onBack: () => void }): JSX.Element {
+  const [activeExcelTool, setActiveExcelTool] = useState<ExcelToolKey | null>(null)
+
+  if (activeExcelTool === 'monthly-performance') {
+    return <MonthlyPerformanceTool onBack={() => setActiveExcelTool(null)} />
+  }
+
+  return (
+    <section className="workspace-section tools-workspace">
+      <div className="section-heading">
+        <div>
+          <Button className="tool-back-button" icon={<ArrowLeftOutlined />} onClick={onBack}>
+            工具
+          </Button>
+          <Typography.Title level={2}>Excel 工具</Typography.Title>
+          <Typography.Text type="secondary">选择一种工作簿生成方式。</Typography.Text>
+        </div>
+      </div>
+
+      <div className="tool-entry-grid">
+        <button className="tool-entry-card" type="button" onClick={() => setActiveExcelTool('monthly-performance')}>
+          <span className="password-tool-icon">
+            <FileExcelOutlined />
+          </span>
+          <span className="tool-entry-copy">
+            <Typography.Text strong>月度绩效</Typography.Text>
+            <Typography.Text type="secondary">结合项目数据和 AI 口径生成绩效 Excel。</Typography.Text>
+          </span>
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function getMonthlyPerformanceStatusTag(status: MonthlyPerformanceSession['status']): JSX.Element {
+  const view = {
+    draft: { color: 'default', label: '对话中' },
+    ready: { color: 'blue', label: '待导出' },
+    exported: { color: 'green', label: '已生成' }
+  }[status]
+
+  return <Tag color={view.color}>{view.label}</Tag>
+}
+
+function formatMonthlyPerformanceTime(value: string): string {
+  const timestamp = new Date(value)
+  return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString()
+}
+
+function createMonthlyPerformanceColumns(): ColumnsType<MonthlyPerformanceRow> {
+  return [
+    { title: '姓名', dataIndex: 'name', key: 'name', width: 130, fixed: 'left' },
+    { title: '角色', dataIndex: 'role', key: 'role', width: 120 },
+    { title: '邮箱/身份', dataIndex: 'identity', key: 'identity', width: 210, render: (value: string) => <Typography.Text ellipsis={{ tooltip: value }}>{value || '-'}</Typography.Text> },
+    { title: '提交数', dataIndex: 'commits', key: 'commits', width: 95, render: (value: number) => formatNumber(value) },
+    { title: '新增行', dataIndex: 'additions', key: 'additions', width: 105, render: (value: number) => formatNumber(value) },
+    { title: '删除行', dataIndex: 'deletions', key: 'deletions', width: 105, render: (value: number) => formatNumber(value) },
+    { title: '变更文件', dataIndex: 'filesChanged', key: 'filesChanged', width: 105, render: (value: number) => formatNumber(value) },
+    { title: '活跃天数', dataIndex: 'activeDays', key: 'activeDays', width: 105, render: (value: number) => formatNumber(value) },
+    { title: '完成工作项', dataIndex: 'completedWorkItems', key: 'completedWorkItems', width: 115, render: (value: number) => formatNumber(value) },
+    { title: '进行中工作项', dataIndex: 'inProgressWorkItems', key: 'inProgressWorkItems', width: 130, render: (value: number) => formatNumber(value) },
+    { title: '逾期工作项', dataIndex: 'overdueWorkItems', key: 'overdueWorkItems', width: 115, render: (value: number) => formatNumber(value) },
+    { title: 'AI 分数', dataIndex: 'aiScore', key: 'aiScore', width: 95 },
+    { title: '绩效等级', dataIndex: 'performanceLevel', key: 'performanceLevel', width: 105, render: (value: string) => <Tag color={value === 'A' ? 'green' : value === 'B' ? 'blue' : value === 'C' ? 'gold' : 'default'}>{value || '待评估'}</Tag> },
+    { title: '亮点', dataIndex: 'highlights', key: 'highlights', width: 240, render: (value: string) => <Typography.Text ellipsis={{ tooltip: value }}>{value || '-'}</Typography.Text> },
+    { title: '风险/改进', dataIndex: 'risks', key: 'risks', width: 240, render: (value: string) => <Typography.Text ellipsis={{ tooltip: value }}>{value || '-'}</Typography.Text> },
+    { title: '下月建议', dataIndex: 'nextMonthPlan', key: 'nextMonthPlan', width: 240, render: (value: string) => <Typography.Text ellipsis={{ tooltip: value }}>{value || '-'}</Typography.Text> },
+    { title: '备注', dataIndex: 'notes', key: 'notes', width: 220, render: (value: string) => <Typography.Text ellipsis={{ tooltip: value }}>{value || '-'}</Typography.Text> }
+  ]
+}
+
+function MonthlyPerformancePreviewPanel({ session }: { session: MonthlyPerformanceSession }): JSX.Element {
+  const preview = session.preview
+  const columns = useMemo(() => createMonthlyPerformanceColumns(), [])
+
+  if (!preview) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="确认生成数据后显示表格预览" />
+  }
+
+  return (
+    <Space direction="vertical" className="monthly-performance-preview" size={14}>
+      <Row gutter={[10, 10]}>
+        <Col xs={24} md={6}><div className="metric-tile"><Statistic title="提交数" value={preview.totalCommits} /></div></Col>
+        <Col xs={24} md={6}><div className="metric-tile"><Statistic title="贡献人数" value={preview.contributorCount} /></div></Col>
+        <Col xs={24} md={6}><div className="metric-tile"><Statistic title="新增行" value={preview.totalAdditions} /></div></Col>
+        <Col xs={24} md={6}><div className="metric-tile"><Statistic title="活跃天数" value={preview.activeDays} /></div></Col>
+      </Row>
+      {preview.aiSummary && <Alert type="info" showIcon message={preview.aiSummary} />}
+      {preview.warnings.length > 0 && <Alert type="warning" showIcon message={preview.warnings.join('；')} />}
+      {session.filePath && <Alert type="success" showIcon message="Excel 已生成" description={session.filePath} />}
+      <Table
+        className="content-table monthly-performance-table"
+        rowKey={(row) => row.personId || row.identity || row.name}
+        columns={columns}
+        dataSource={preview.rows}
+        scroll={{ x: 2440 }}
+        pagination={false}
+        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="预览中没有人员明细" /> }}
+      />
+    </Space>
+  )
+}
+
+function MonthlyPerformanceChatPage({
+  initialSession,
+  onBack,
+  onSessionChange
+}: {
+  initialSession: MonthlyPerformanceSession
+  onBack: () => void
+  onSessionChange: (session: MonthlyPerformanceSession) => void
+}): JSX.Element {
+  const { projects } = useForgeDeskStore()
+  const [session, setSession] = useState(initialSession)
+  const [projectId, setProjectId] = useState(initialSession.projectId)
+  const [month, setMonth] = useState(initialSession.month)
+  const [draftMessage, setDraftMessage] = useState('')
+  const [sending, setSending] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [exporting, setExporting] = useState(false)
+
+  function commitSession(nextSession: MonthlyPerformanceSession): void {
+    setSession(nextSession)
+    setProjectId(nextSession.projectId)
+    setMonth(nextSession.month)
+    onSessionChange(nextSession)
+  }
+
+  async function sendMessage(): Promise<void> {
+    const content = draftMessage.trim()
+
+    if (!window.forgeDesk || !content) {
+      return
+    }
+
+    setSending(true)
+
+    try {
+      const nextSession = await window.forgeDesk.sendMonthlyPerformanceSessionMessage({
+        sessionId: session.id,
+        projectId,
+        month,
+        content
+      })
+      setDraftMessage('')
+      commitSession(nextSession)
+    } catch (error) {
+      message.error(getErrorMessage(error, '发送绩效对话失败'))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function confirmData(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setConfirming(true)
+
+    try {
+      const nextSession = await window.forgeDesk.confirmMonthlyPerformanceSession({ sessionId: session.id, projectId, month })
+      commitSession(nextSession)
+      message.success('绩效数据已整理成表格')
+    } catch (error) {
+      message.error(getErrorMessage(error, '确认生成数据失败'))
+    } finally {
+      setConfirming(false)
+    }
+  }
+
+  async function exportSession(): Promise<void> {
+    if (!window.forgeDesk || !session.preview) {
+      return
+    }
+
+    setExporting(true)
+
+    try {
+      const nextSession = await window.forgeDesk.exportMonthlyPerformanceSession({ sessionId: session.id })
+      commitSession(nextSession)
+
+      if (nextSession.filePath) {
+        message.success('月度绩效 Excel 已生成')
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error, '生成 Excel 失败'))
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  return (
+    <section className="workspace-section tools-workspace monthly-performance-chat-page">
+      <div className="section-heading">
+        <div>
+          <Button className="tool-back-button" icon={<ArrowLeftOutlined />} onClick={onBack}>
+            月度绩效
+          </Button>
+          <Typography.Title level={2}>新增绩效</Typography.Title>
+          <Typography.Text type="secondary">{session.title}</Typography.Text>
+        </div>
+        <Space wrap>
+          <Button icon={<CheckCircleOutlined />} loading={confirming} disabled={sending} onClick={confirmData}>
+            确认生成数据
+          </Button>
+          <Button type="primary" icon={<FileExcelOutlined />} loading={exporting} disabled={!session.preview || confirming} onClick={exportSession}>
+            生成 Excel
+          </Button>
+        </Space>
+      </div>
+
+      <div className="monthly-performance-chat-shell">
+        <div className="panel monthly-performance-chat-panel">
+          <div className="monthly-performance-chat-toolbar">
+            <Select
+              className="monthly-performance-project-select"
+              value={projectId || undefined}
+              placeholder="选择项目"
+              options={projects.map((project) => ({ label: project.name, value: project.id }))}
+              onChange={setProjectId}
+            />
+            <Input className="monthly-performance-month-input" type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
+          </div>
+          <div className="monthly-performance-chat-messages">
+            {session.messages.map((chatMessage) => (
+              <div className={`monthly-performance-message is-${chatMessage.role}`} key={chatMessage.id}>
+                <div className="monthly-performance-message-role">{chatMessage.role === 'user' ? '你' : 'AI'}</div>
+                <div className="monthly-performance-message-bubble">{chatMessage.content}</div>
+              </div>
+            ))}
+          </div>
+          <div className="monthly-performance-composer">
+            <Input.TextArea
+              rows={4}
+              value={draftMessage}
+              placeholder="告诉我绩效规则、补充事实、成员评价或你想要的表格口径。"
+              onChange={(event) => setDraftMessage(event.target.value)}
+              onPressEnter={(event) => {
+                if (!event.shiftKey) {
+                  event.preventDefault()
+                  void sendMessage()
+                }
+              }}
+            />
+            <Button type="primary" icon={<ArrowRightOutlined />} loading={sending} disabled={!draftMessage.trim()} onClick={() => void sendMessage()}>
+              发送
+            </Button>
+          </div>
+        </div>
+
+        <div className="panel monthly-performance-preview-panel">
+          <div className="password-tool-heading">
+            <span className="password-tool-icon">
+              <FileExcelOutlined />
+            </span>
+            <div>
+              <Typography.Title level={3}>表格预览</Typography.Title>
+              <Typography.Text type="secondary">确认生成数据后，可导出 Excel。</Typography.Text>
+            </div>
+          </div>
+          <MonthlyPerformancePreviewPanel session={session} />
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function MonthlyPerformanceTool({ onBack }: { onBack: () => void }): JSX.Element {
+  const { projects, selectedProjectId } = useForgeDeskStore()
+  const [sessions, setSessions] = useState<MonthlyPerformanceSession[]>([])
+  const [activeSession, setActiveSession] = useState<MonthlyPerformanceSession | null>(null)
+  const [loadingSessions, setLoadingSessions] = useState(false)
+  const [creatingSession, setCreatingSession] = useState(false)
+
+  async function refreshSessions(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLoadingSessions(true)
+
+    try {
+      setSessions(await window.forgeDesk.listMonthlyPerformanceSessions())
+    } catch (error) {
+      message.error(getErrorMessage(error, '读取月度绩效历史失败'))
+    } finally {
+      setLoadingSessions(false)
+    }
+  }
+
+  useEffect(() => {
+    void refreshSessions()
+  }, [])
+
+  function updateSessionList(nextSession: MonthlyPerformanceSession): void {
+    setSessions((current) => [nextSession, ...current.filter((item) => item.id !== nextSession.id)])
+  }
+
+  async function createSession(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const projectId = selectedProjectId || projects[0]?.id
+
+    if (!projectId) {
+      message.warning('请先创建项目')
+      return
+    }
+
+    setCreatingSession(true)
+
+    try {
+      const nextSession = await window.forgeDesk.createMonthlyPerformanceSession({
+        projectId,
+        month: getCurrentMonthValue()
+      })
+      updateSessionList(nextSession)
+      setActiveSession(nextSession)
+    } catch (error) {
+      message.error(getErrorMessage(error, '新增绩效失败'))
+    } finally {
+      setCreatingSession(false)
+    }
+  }
+
+  const columns: ColumnsType<MonthlyPerformanceSession> = [
+    {
+      title: '绩效记录',
+      key: 'session',
+      width: 320,
+      render: (_, session) => (
+        <Space direction="vertical" size={2}>
+          <Typography.Text strong>{session.title}</Typography.Text>
+          <Typography.Text type="secondary">{session.projectName} · {session.month}</Typography.Text>
+        </Space>
+      )
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 110,
+      render: (status: MonthlyPerformanceSession['status']) => getMonthlyPerformanceStatusTag(status)
+    },
+    {
+      title: '聊天',
+      key: 'messages',
+      width: 100,
+      render: (_, session) => formatNumber(session.messages.length)
+    },
+    {
+      title: 'Excel',
+      key: 'excel',
+      width: 360,
+      render: (_, session) =>
+        session.filePath ? (
+          <Typography.Text ellipsis={{ tooltip: session.filePath }}>{session.filePath}</Typography.Text>
+        ) : (
+          <Typography.Text type="secondary">未生成</Typography.Text>
+        )
+    },
+    {
+      title: '更新时间',
+      dataIndex: 'updatedAt',
+      key: 'updatedAt',
+      width: 190,
+      render: (value: string) => formatMonthlyPerformanceTime(value)
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 150,
+      render: (_, session) => (
+        <Button size="small" icon={<ArrowRightOutlined />} onClick={() => setActiveSession(session)}>
+          进入
+        </Button>
+      )
+    }
+  ]
+
+  if (activeSession) {
+    return (
+      <MonthlyPerformanceChatPage
+        initialSession={activeSession}
+        onBack={() => {
+          setActiveSession(null)
+          void refreshSessions()
+        }}
+        onSessionChange={(session) => {
+          setActiveSession(session)
+          updateSessionList(session)
+        }}
+      />
+    )
+  }
+
+  return (
+    <section className="workspace-section tools-workspace">
+      <div className="section-heading">
+        <div>
+          <Button className="tool-back-button" icon={<ArrowLeftOutlined />} onClick={onBack}>
+            Excel 工具
+          </Button>
+          <Typography.Title level={2}>月度绩效</Typography.Title>
+          <Typography.Text type="secondary">查看历史绩效对话和已生成的 Excel。</Typography.Text>
+        </div>
+        <Space wrap>
+          <Button icon={<ReloadOutlined />} loading={loadingSessions} onClick={() => refreshSessions()}>
+            刷新
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} loading={creatingSession} onClick={createSession}>
+            新增绩效
+          </Button>
+        </Space>
+      </div>
+
+      <div className="panel monthly-performance-history-panel">
+        <Table
+          className="content-table monthly-performance-history-table"
+          rowKey="id"
+          columns={columns}
+          dataSource={sessions}
+          loading={loadingSessions}
+          pagination={false}
+          scroll={{ x: 1220 }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有月度绩效记录" /> }}
+        />
       </div>
     </section>
   )
@@ -12626,6 +13189,10 @@ function App(): JSX.Element {
   const [activeKey, setActiveKey] = useState<AppNavigationKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
   const [terminalOpenRequest, setTerminalOpenRequest] = useState<TerminalOpenRequest | null>(null)
+  const [appUpdateState, setAppUpdateState] = useState<AppUpdateState>({
+    status: 'idle',
+    currentVersion: ''
+  })
   const terminalOpenRequestIdRef = useRef(0)
 
   useEffect(() => {
@@ -12648,6 +13215,30 @@ function App(): JSX.Element {
     }
   }, [loadWorkspace])
 
+  useEffect(() => {
+    if (!window.forgeDesk) {
+      return undefined
+    }
+
+    let mounted = true
+
+    window.forgeDesk
+      .getAppUpdateState()
+      .then((state) => {
+        if (mounted) {
+          setAppUpdateState(state)
+        }
+      })
+      .catch((error) => message.error(getErrorMessage(error)))
+
+    const unsubscribe = window.forgeDesk.onAppUpdateState((state) => setAppUpdateState(state))
+
+    return () => {
+      mounted = false
+      unsubscribe()
+    }
+  }, [])
+
   const navigationIcons: Record<AppNavigationKey, JSX.Element> = {
     overview: <DashboardOutlined />,
     services: <ThunderboltOutlined />,
@@ -12663,6 +13254,7 @@ function App(): JSX.Element {
     ...item,
     icon: navigationIcons[item.key]
   }))
+  const appVersionLabel = appUpdateState.currentVersion ? `v${appUpdateState.currentVersion}` : ''
 
   function openTerminalRequest(request: Omit<TerminalOpenRequest, 'requestId'>): void {
     terminalOpenRequestIdRef.current += 1
@@ -12700,9 +13292,11 @@ function App(): JSX.Element {
             <div className="brand-mark">
               <img src={forgedeskLogoUrl} alt="ForgeDesk" />
             </div>
-            <div>
-              <Typography.Title level={4}>ForgeDesk</Typography.Title>
-              <Typography.Text type="secondary">Local First Console</Typography.Text>
+            <div className="brand-copy">
+              <div className="brand-heading">
+                <Typography.Title level={4}>ForgeDesk</Typography.Title>
+                {appVersionLabel && <span className="brand-version">{appVersionLabel}</span>}
+              </div>
             </div>
           </div>
           <Menu className="sidebar-nav" mode="inline" selectedKeys={activeKey === 'settings' ? [] : [activeKey]} items={menuItems} onClick={({ key }) => setActiveKey(key as AppNavigationKey)} />

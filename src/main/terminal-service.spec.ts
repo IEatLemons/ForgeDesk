@@ -171,6 +171,43 @@ describe('terminal service', () => {
     }
   })
 
+  it('lists existing terminal sessions with buffered output for renderer remounts', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'forgedesk-terminal-home-'))
+    const spawned: FakePty[] = []
+    const service = new TerminalService({
+      env: { SHELL: '/bin/zsh', PATH: '/usr/bin' },
+      homeDirectory: home,
+      idFactory: () => `term-${spawned.length + 1}`,
+      outputBufferLimit: 12,
+      platform: 'darwin',
+      ptyFactory: (_file, _args, options) => {
+        const pty = new FakePty(options.cols ?? 80, options.rows ?? 24)
+        spawned.push(pty)
+        return pty
+      }
+    })
+
+    try {
+      const session = service.create({ cwd: home, reuseKey: `cwd:${home}`, title: 'ForgeDesk' })
+      spawned[0]?.emitData('hello ')
+      spawned[0]?.emitData('persistent terminal')
+
+      const snapshots = service.list()
+
+      assert.equal(snapshots.length, 1)
+      assert.deepEqual(
+        snapshots.map((snapshot) => ({ ...snapshot, output: undefined })),
+        [{ ...session, output: undefined }]
+      )
+      assert.deepEqual(snapshots[0]?.output, ['ent terminal'])
+
+      snapshots[0]?.output.push('mutated')
+      assert.deepEqual(service.list()[0]?.output, ['ent terminal'])
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('maps low-level node-pty spawn failures to a readable runtime error', async () => {
     const home = await mkdtemp(join(tmpdir(), 'forgedesk-terminal-home-'))
     const service = new TerminalService({

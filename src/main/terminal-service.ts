@@ -52,6 +52,10 @@ export type TerminalSession = {
   signal?: number
 }
 
+export type TerminalSessionSnapshot = TerminalSession & {
+  output: string[]
+}
+
 export type TerminalDataEvent = {
   sessionId: string
   data: string
@@ -69,6 +73,7 @@ type TerminalServiceOptions = {
   idFactory?: () => string
   onData?: (event: TerminalDataEvent) => void
   onExit?: (event: TerminalExitEvent) => void
+  outputBufferLimit?: number
   platform?: NodeJS.Platform
   ptyFactory?: TerminalPtyFactory
 }
@@ -77,7 +82,11 @@ type TerminalRecord = {
   pty: TerminalPtyLike
   session: TerminalSession
   disposables: TerminalPtyDisposable[]
+  output: string[]
+  outputSize: number
 }
+
+const defaultOutputBufferLimit = 1024 * 1024
 
 export function expandTerminalHomePath(path: string, homeDirectory: string): string {
   if (path === '~') {
@@ -138,6 +147,29 @@ function normalizeDimension(value: number | undefined, fallback: number): number
   return Math.max(1, Math.floor(value))
 }
 
+function appendTerminalOutput(record: TerminalRecord, data: string, outputBufferLimit: number): void {
+  if (outputBufferLimit <= 0 || data.length === 0) {
+    return
+  }
+
+  record.output.push(data)
+  record.outputSize += data.length
+
+  while (record.outputSize > outputBufferLimit && record.output.length > 0) {
+    const overflow = record.outputSize - outputBufferLimit
+    const firstChunk = record.output[0]
+
+    if (firstChunk.length <= overflow) {
+      record.output.shift()
+      record.outputSize -= firstChunk.length
+      continue
+    }
+
+    record.output[0] = firstChunk.slice(overflow)
+    record.outputSize -= overflow
+  }
+}
+
 export function mapTerminalPtyError(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error)
 
@@ -154,6 +186,7 @@ export class TerminalService {
   private readonly idFactory: () => string
   private readonly onData?: (event: TerminalDataEvent) => void
   private readonly onExit?: (event: TerminalExitEvent) => void
+  private readonly outputBufferLimit: number
   private readonly platform: NodeJS.Platform
   private readonly ptyFactory: TerminalPtyFactory
   private readonly reuseIndex = new Map<string, string>()
@@ -165,6 +198,7 @@ export class TerminalService {
     this.idFactory = options.idFactory ?? randomUUID
     this.onData = options.onData
     this.onExit = options.onExit
+    this.outputBufferLimit = options.outputBufferLimit ?? defaultOutputBufferLimit
     this.platform = options.platform ?? process.platform
     this.ptyFactory = options.ptyFactory ?? createDefaultPtyFactory()
   }
@@ -221,11 +255,14 @@ export class TerminalService {
     const record: TerminalRecord = {
       pty,
       session,
-      disposables: []
+      disposables: [],
+      output: [],
+      outputSize: 0
     }
 
     record.disposables.push(
       pty.onData((data) => {
+        appendTerminalOutput(record, data, this.outputBufferLimit)
         this.onData?.({ sessionId: id, data })
       })
     )
@@ -297,6 +334,13 @@ export class TerminalService {
 
   getSession(sessionId: string): TerminalSession {
     return { ...this.getRecord(sessionId).session }
+  }
+
+  list(): TerminalSessionSnapshot[] {
+    return Array.from(this.sessions.values()).map((record) => ({
+      ...record.session,
+      output: [...record.output]
+    }))
   }
 
   private getRecord(sessionId: string): TerminalRecord {

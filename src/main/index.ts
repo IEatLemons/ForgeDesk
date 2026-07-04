@@ -60,6 +60,14 @@ import {
   type ProjectBranchTagRecord
 } from './project-branch-tags'
 import {
+  deleteProjectTerminalCommand as deleteProjectTerminalCommandRecord,
+  listProjectTerminalCommands as listProjectTerminalCommandRecords,
+  migrateProjectTerminalCommandTable,
+  saveProjectTerminalCommand as saveProjectTerminalCommandRecord,
+  type ProjectTerminalCommandInput,
+  type ProjectTerminalCommandRecord
+} from './project-terminal-commands'
+import {
   createRsaPrivateKeyRecord,
   deleteRsaPrivateKeyRecord,
   listRsaPrivateKeyRecords,
@@ -116,6 +124,14 @@ import {
   type ReleaseScriptName,
   type ReleaseVersionRecommendation
 } from './release-publishing'
+import {
+  getReleasePublishTask as getStoredReleasePublishTask,
+  listReleasePublishTasks as listStoredReleasePublishTasks,
+  migrateReleasePublishTaskTable,
+  saveReleasePublishTask,
+  type ReleasePublishTaskSnapshot as StoredReleasePublishTaskSnapshot,
+  type ReleasePublishTaskStatus
+} from './release-publish-tasks'
 import {
   bindProjectService as bindProjectServiceRecord,
   addServiceDomain as addServiceDomainRecord,
@@ -176,6 +192,30 @@ import {
   type PlaneProjectBindingInput,
   type PlaneSettingsInput
 } from './plane-integration'
+import {
+  appendMonthlyPerformanceMessages,
+  createMonthlyPerformanceSession,
+  createMonthlyPerformanceRange,
+  createMonthlyPerformanceSourceRows,
+  getMonthlyPerformanceSession,
+  listMonthlyPerformanceSessions,
+  migrateMonthlyPerformanceTables,
+  requestMonthlyPerformanceChat,
+  requestMonthlyPerformancePreview,
+  saveMonthlyPerformanceSessionExport,
+  saveMonthlyPerformanceSessionPreview,
+  updateMonthlyPerformanceSessionScope,
+  writeMonthlyPerformanceWorkbook,
+  type MonthlyPerformanceExportInput,
+  type MonthlyPerformanceExportResult,
+  type MonthlyPerformancePreview,
+  type MonthlyPerformancePreviewInput,
+  type MonthlyPerformanceSession,
+  type MonthlyPerformanceSessionCreateInput,
+  type MonthlyPerformanceSessionExportInput,
+  type MonthlyPerformanceSessionMessageInput,
+  type MonthlyPerformanceWorkItemSource
+} from './monthly-performance'
 
 type RepositoryScanResult = {
   id: string
@@ -288,33 +328,9 @@ type RepositoryReleasePublishResult = {
   exitCode: number | null
 }
 
-type RepositoryReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
-
-type RepositoryReleasePublishTaskSnapshot = {
-  id: string
-  repositoryId: string
-  repositoryName: string
-  version: string
-  tagName: string
-  releaseTitle: string
+type RepositoryReleasePublishTaskSnapshot = StoredReleasePublishTaskSnapshot<ReleasePlan, RepositoryRecord> & {
   selectedScript: ReleaseScriptName
-  status: RepositoryReleasePublishTaskStatus
-  phase: string
-  phaseIndex: number
-  phaseTotal: number
-  hint: string
-  lastOutputAt: string
-  processPid?: number
-  startedAt: string
-  updatedAt: string
-  finishedAt?: string
-  log: string
-  stdout: string
-  stderr: string
-  exitCode: number | null
-  error?: string
-  plan?: ReleasePlan
-  repository?: RepositoryRecord
+  status: ReleasePublishTaskStatus
 }
 
 type ReleasePublishCallbacks = {
@@ -507,6 +523,15 @@ function trimReleaseTaskLog(log: string): string {
 
 function updateReleaseTask(task: RepositoryReleasePublishTaskSnapshot, patch: Partial<RepositoryReleasePublishTaskSnapshot>): void {
   Object.assign(task, patch, { updatedAt: new Date().toISOString() })
+  persistReleaseTask(task)
+}
+
+function persistReleaseTask(task: RepositoryReleasePublishTaskSnapshot): void {
+  try {
+    saveReleasePublishTask(getDatabase(), task)
+  } catch (error) {
+    console.warn('Failed to persist release publish task', error)
+  }
 }
 
 function appendReleaseTaskLog(task: RepositoryReleasePublishTaskSnapshot, message: string): void {
@@ -923,10 +948,13 @@ function migrateDatabase(db: Database.Database): void {
   `)
 
   migrateProjectBranchTagTable(db)
+  migrateProjectTerminalCommandTable(db)
   migrateServiceMonitoringTables(db)
   migrateRsaPrivateKeyTables(db)
   migrateTerminalRemoteShortcutTables(db)
   migratePlaneIntegrationTables(db)
+  migrateReleasePublishTaskTable(db)
+  migrateMonthlyPerformanceTables(db)
 
   addColumnIfMissing(db, 'repositories', 'remotes_json', "TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(db, 'repositories', 'remote_count', 'INTEGER NOT NULL DEFAULT 0')
@@ -1014,6 +1042,16 @@ function listProjects(): ProjectRecord[] {
     .prepare('SELECT * FROM projects ORDER BY created_at DESC')
     .all()
     .map((row) => mapProjectRow(row as Record<string, unknown>))
+}
+
+function getProjectOrThrow(projectId: string): ProjectRecord {
+  const row = getDatabase().prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Record<string, unknown> | undefined
+
+  if (!row) {
+    throw new Error('项目不存在')
+  }
+
+  return mapProjectRow(row)
 }
 
 function listRepositories(projectId?: string): RepositoryRecord[] {
@@ -1716,6 +1754,143 @@ function listProjectContributorIdentities(projectId: string): GitContributorIden
   return Array.from(identities.values())
     .map(({ days: _days, ...identity }) => identity)
     .sort((a, b) => b.commits - a.commits || a.name.localeCompare(b.name))
+}
+
+async function createMonthlyPerformancePreview(input: MonthlyPerformancePreviewInput): Promise<MonthlyPerformancePreview> {
+  const project = getProjectOrThrow(input.projectId)
+  const range = createMonthlyPerformanceRange(input.month)
+  const summary = getProjectSummary(project.id, range)
+  const people = listProjectPeople(project.id)
+  const sourceWarnings: string[] = []
+  let workItems: MonthlyPerformanceWorkItemSource[] = []
+
+  if (summary.totalCommits === 0) {
+    sourceWarnings.push('本月没有 Git 提交数据')
+  }
+
+  try {
+    const planeContent = await getPlaneProjectContent(getDatabase(), project.id)
+    workItems = planeContent.workItems
+  } catch (error) {
+    sourceWarnings.push(`Plane 数据未参与：${getUnknownErrorMessage(error, '读取 Plane 数据失败')}`)
+  }
+
+  const sourceRows = createMonthlyPerformanceSourceRows({
+    contributors: summary.contributors,
+    people,
+    workItems,
+    startDate: range.startDate,
+    endDate: range.endDate
+  })
+  const settings = await readAiSettingsFile(app.getPath('userData'))
+
+  return requestMonthlyPerformancePreview({
+    settings,
+    projectId: project.id,
+    projectName: project.name,
+    month: input.month,
+    startDate: range.startDate,
+    endDate: range.endDate,
+    instruction: input.instruction,
+    totalCommits: summary.totalCommits,
+    totalAdditions: summary.totalAdditions,
+    totalDeletions: summary.totalDeletions,
+    activeDays: summary.activeDays,
+    contributorCount: summary.contributorCount,
+    sourceRows,
+    sourceWarnings
+  })
+}
+
+function sanitizeExcelFileName(value: string): string {
+  return value.trim().replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ') || '月度绩效'
+}
+
+async function exportMonthlyPerformanceWorkbook(input: MonthlyPerformanceExportInput): Promise<MonthlyPerformanceExportResult> {
+  const preview = input.preview
+  const defaultPath = join(app.getPath('documents'), `${sanitizeExcelFileName(preview.projectName)}-${preview.month}-月度绩效.xlsx`)
+  const result = await dialog.showSaveDialog({
+    title: '保存月度绩效 Excel',
+    defaultPath,
+    filters: [{ name: 'Excel 工作簿', extensions: ['xlsx'] }]
+  })
+
+  if (result.canceled || !result.filePath) {
+    return { filePath: null }
+  }
+
+  await writeMonthlyPerformanceWorkbook(preview, result.filePath)
+  return { filePath: result.filePath }
+}
+
+function createMonthlyPerformanceSessionRecord(input: MonthlyPerformanceSessionCreateInput): MonthlyPerformanceSession {
+  const project = getProjectOrThrow(input.projectId)
+  createMonthlyPerformanceRange(input.month)
+
+  return createMonthlyPerformanceSession(getDatabase(), {
+    projectId: project.id,
+    projectName: project.name,
+    month: input.month
+  })
+}
+
+function updateMonthlyPerformanceSessionScopeRecord(input: { sessionId: string; projectId: string; month: string }): MonthlyPerformanceSession {
+  const project = getProjectOrThrow(input.projectId)
+  createMonthlyPerformanceRange(input.month)
+
+  return updateMonthlyPerformanceSessionScope(getDatabase(), {
+    sessionId: input.sessionId,
+    projectId: project.id,
+    projectName: project.name,
+    month: input.month
+  })
+}
+
+async function sendMonthlyPerformanceSessionMessage(input: MonthlyPerformanceSessionMessageInput): Promise<MonthlyPerformanceSession> {
+  let session = updateMonthlyPerformanceSessionScopeRecord(input)
+  session = appendMonthlyPerformanceMessages(getDatabase(), session.id, [{ role: 'user', content: input.content }])
+
+  const settings = await readAiSettingsFile(app.getPath('userData'))
+  const assistantContent = await requestMonthlyPerformanceChat({
+    settings,
+    projectName: session.projectName,
+    month: session.month,
+    messages: session.messages
+  })
+
+  return appendMonthlyPerformanceMessages(getDatabase(), session.id, [{ role: 'assistant', content: assistantContent }])
+}
+
+async function confirmMonthlyPerformanceSession(input: { sessionId: string; projectId: string; month: string }): Promise<MonthlyPerformanceSession> {
+  const session = updateMonthlyPerformanceSessionScopeRecord(input)
+  const instruction = session.messages.map((message) => `${message.role === 'user' ? '用户' : 'AI'}：${message.content}`).join('\n')
+  const preview = await createMonthlyPerformancePreview({
+    projectId: session.projectId,
+    month: session.month,
+    instruction
+  })
+
+  return saveMonthlyPerformanceSessionPreview(getDatabase(), session.id, preview)
+}
+
+async function exportMonthlyPerformanceSession(input: MonthlyPerformanceSessionExportInput): Promise<MonthlyPerformanceSession> {
+  const session = getMonthlyPerformanceSession(getDatabase(), input.sessionId)
+
+  if (!session) {
+    throw new Error('月度绩效会话不存在')
+  }
+
+  if (!session.preview) {
+    throw new Error('请先确认生成数据后再导出 Excel')
+  }
+
+  const result = await exportMonthlyPerformanceWorkbook({ preview: session.preview })
+
+  if (!result.filePath) {
+    return session
+  }
+
+  return saveMonthlyPerformanceSessionExport(getDatabase(), session.id, result.filePath)
 }
 
 function mapCommitRecord(
@@ -2747,14 +2922,26 @@ async function publishRepositoryRelease(
 }
 
 function listRepositoryReleasePublishTasks(repositoryId?: string): RepositoryReleasePublishTaskSnapshot[] {
-  return Array.from(releasePublishTasks.values())
+  const tasksById = new Map<string, RepositoryReleasePublishTaskSnapshot>()
+
+  for (const task of listStoredReleasePublishTasks<ReleasePlan, RepositoryRecord>(getDatabase(), repositoryId) as RepositoryReleasePublishTaskSnapshot[]) {
+    tasksById.set(task.id, task)
+  }
+
+  for (const task of releasePublishTasks.values()) {
+    if (!repositoryId || task.repositoryId === repositoryId) {
+      tasksById.set(task.id, task)
+    }
+  }
+
+  return Array.from(tasksById.values())
     .filter((task) => !repositoryId || task.repositoryId === repositoryId)
     .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
     .map(getReleaseTaskSnapshot)
 }
 
 function getRepositoryReleasePublishTask(taskId: string): RepositoryReleasePublishTaskSnapshot | null {
-  const task = releasePublishTasks.get(taskId)
+  const task = releasePublishTasks.get(taskId) ?? getStoredReleasePublishTask<ReleasePlan, RepositoryRecord>(getDatabase(), taskId) as RepositoryReleasePublishTaskSnapshot | null
   return task ? getReleaseTaskSnapshot(task) : null
 }
 
@@ -3349,6 +3536,18 @@ ipcMain.handle('project:branch-tag:delete', async (_event, projectId: string, ta
   deleteProjectBranchTagRecord(getDatabase(), projectId, tagId)
 )
 
+ipcMain.handle('project:terminal-commands:list', async (_event, projectId: string): Promise<ProjectTerminalCommandRecord[]> =>
+  listProjectTerminalCommandRecords(getDatabase(), projectId)
+)
+
+ipcMain.handle('project:terminal-command:save', async (_event, input: ProjectTerminalCommandInput): Promise<ProjectTerminalCommandRecord> =>
+  saveProjectTerminalCommandRecord(getDatabase(), input)
+)
+
+ipcMain.handle('project:terminal-command:delete', async (_event, projectId: string, commandId: string): Promise<ProjectTerminalCommandRecord[]> =>
+  deleteProjectTerminalCommandRecord(getDatabase(), projectId, commandId)
+)
+
 ipcMain.handle('plane:settings:get', async () => getPlaneSettings(getDatabase()))
 
 ipcMain.handle('plane:settings:save', async (_event, input: PlaneSettingsInput) => savePlaneSettings(getDatabase(), input))
@@ -3718,6 +3917,34 @@ ipcMain.handle('tools:rsa-private-keys:update', async (_event, input: RsaPrivate
 
 ipcMain.handle('tools:rsa-private-keys:delete', async (_event, id: string): Promise<RsaPrivateKeyRecord[]> => {
   return deleteRsaPrivateKeyRecord(getDatabase(), id)
+})
+
+ipcMain.handle('tools:monthly-performance:preview', async (_event, input: MonthlyPerformancePreviewInput): Promise<MonthlyPerformancePreview> => {
+  return createMonthlyPerformancePreview(input)
+})
+
+ipcMain.handle('tools:monthly-performance:export', async (_event, input: MonthlyPerformanceExportInput): Promise<MonthlyPerformanceExportResult> => {
+  return exportMonthlyPerformanceWorkbook(input)
+})
+
+ipcMain.handle('tools:monthly-performance:sessions:list', async (): Promise<MonthlyPerformanceSession[]> => {
+  return listMonthlyPerformanceSessions(getDatabase())
+})
+
+ipcMain.handle('tools:monthly-performance:sessions:create', async (_event, input: MonthlyPerformanceSessionCreateInput): Promise<MonthlyPerformanceSession> => {
+  return createMonthlyPerformanceSessionRecord(input)
+})
+
+ipcMain.handle('tools:monthly-performance:sessions:message', async (_event, input: MonthlyPerformanceSessionMessageInput): Promise<MonthlyPerformanceSession> => {
+  return sendMonthlyPerformanceSessionMessage(input)
+})
+
+ipcMain.handle('tools:monthly-performance:sessions:confirm', async (_event, input: { sessionId: string; projectId: string; month: string }): Promise<MonthlyPerformanceSession> => {
+  return confirmMonthlyPerformanceSession(input)
+})
+
+ipcMain.handle('tools:monthly-performance:sessions:export', async (_event, input: MonthlyPerformanceSessionExportInput): Promise<MonthlyPerformanceSession> => {
+  return exportMonthlyPerformanceSession(input)
 })
 
 ipcMain.handle('terminal:remote-groups:list', async (): Promise<TerminalRemoteGroupRecord[]> => listTerminalRemoteGroupRecords(getDatabase()))

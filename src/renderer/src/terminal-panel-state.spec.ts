@@ -3,7 +3,9 @@ import { describe, it } from 'node:test'
 import {
   closeTerminalTab,
   createTerminalPanelState,
+  createTerminalPanelStateFromSessions,
   createTerminalReuseKey,
+  filterRestorableTerminalPanelSessions,
   markTerminalTabExited,
   upsertTerminalTab,
   type TerminalPanelSession
@@ -74,5 +76,30 @@ describe('terminal panel state', () => {
     assert.equal(createTerminalReuseKey('project', 'project-1'), 'project:project-1')
     assert.equal(createTerminalReuseKey('repository', 'repo-1'), 'repository:repo-1')
     assert.equal(createTerminalReuseKey('cwd', '/Users/stone/ForgeDesk'), 'cwd:/Users/stone/ForgeDesk')
+  })
+
+  it('restores panel state from existing sessions and prefers a running tab', () => {
+    const state = createTerminalPanelStateFromSessions([{ ...firstSession, exited: true }, secondSession])
+
+    assert.equal(state.activeSessionId, secondSession.id)
+    assert.deepEqual(
+      state.tabs.map((tab) => tab.id),
+      [firstSession.id, secondSession.id]
+    )
+  })
+
+  it('restores project terminal sessions by reuse key before falling back to legacy cwd-only sessions', () => {
+    const projectSession = { ...firstSession, id: 'project-terminal', reuseKey: 'project:project-a' }
+    const repositorySession = { ...firstSession, id: 'repository-terminal', reuseKey: 'repository:repo-a' }
+    const legacySession = { ...firstSession, id: 'legacy-terminal', reuseKey: undefined }
+    const otherSession = { ...secondSession, id: 'other-terminal', reuseKey: undefined }
+
+    assert.deepEqual(
+      filterRestorableTerminalPanelSessions([repositorySession, legacySession, otherSession, projectSession], {
+        defaultCwd: firstSession.cwd,
+        defaultReuseKey: 'project:project-a'
+      }).map((session) => session.id),
+      ['legacy-terminal', 'project-terminal']
+    )
   })
 })

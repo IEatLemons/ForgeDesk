@@ -14,7 +14,18 @@ function getRsaPrivateKeyToolSource(): string {
   return appSource.slice(start, end)
 }
 
+function getRendererStyles(): string {
+  return readFileSync(join(process.cwd(), 'src/renderer/src/styles.css'), 'utf8')
+}
+
 describe('RSA private key tool layout', () => {
+  it('keeps tool entry cards in one row at the default window width', () => {
+    const styles = getRendererStyles()
+
+    assert.match(styles, /\.tool-entry-grid \{[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(200px, 1fr\)\);/)
+    assert.doesNotMatch(styles, /\.tool-entry-grid \{[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(280px, 360px\)\);/)
+  })
+
   it('opens the generation form from a standalone button modal', () => {
     const source = getRsaPrivateKeyToolSource()
 

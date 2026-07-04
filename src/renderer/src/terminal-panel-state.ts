@@ -17,6 +17,11 @@ export type TerminalPanelState = {
 
 export type TerminalReuseKind = 'project' | 'repository' | 'cwd'
 
+export type TerminalRestoreCriteria = {
+  defaultCwd?: string
+  defaultReuseKey?: string
+}
+
 export function createTerminalPanelState(): TerminalPanelState {
   return {
     activeSessionId: null,
@@ -24,8 +29,32 @@ export function createTerminalPanelState(): TerminalPanelState {
   }
 }
 
+export function createTerminalPanelStateFromSessions(sessions: TerminalPanelSession[]): TerminalPanelState {
+  const activeSession = sessions.find((session) => !session.exited) ?? sessions[0] ?? null
+
+  return {
+    activeSessionId: activeSession?.id ?? null,
+    tabs: sessions.map((session) => ({ ...session }))
+  }
+}
+
 export function createTerminalReuseKey(kind: TerminalReuseKind, value: string): string {
   return `${kind}:${value}`
+}
+
+export function shouldRestoreTerminalPanelSession(session: Pick<TerminalPanelSession, 'cwd' | 'reuseKey'>, criteria: TerminalRestoreCriteria = {}): boolean {
+  if (criteria.defaultReuseKey) {
+    return session.reuseKey === criteria.defaultReuseKey || (!session.reuseKey && Boolean(criteria.defaultCwd) && session.cwd === criteria.defaultCwd)
+  }
+
+  return !criteria.defaultCwd || session.cwd === criteria.defaultCwd
+}
+
+export function filterRestorableTerminalPanelSessions<T extends Pick<TerminalPanelSession, 'cwd' | 'reuseKey'>>(
+  sessions: T[],
+  criteria: TerminalRestoreCriteria = {}
+): T[] {
+  return sessions.filter((session) => shouldRestoreTerminalPanelSession(session, criteria))
 }
 
 export function upsertTerminalTab(state: TerminalPanelState, session: TerminalPanelSession): TerminalPanelState {
