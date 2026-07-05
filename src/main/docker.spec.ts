@@ -8,6 +8,7 @@ import {
   migrateDockerTables,
   parseDockerContainerLines,
   parseDockerImageLines,
+  readDockerContainerDetail,
   saveDockerResourceNote
 } from './docker.js'
 
@@ -203,6 +204,99 @@ describe('docker local inventory', () => {
         }
       ]
     )
+  })
+
+  it('reads Docker container inspect data into a detailed view model', async () => {
+    const calls: string[][] = []
+    const detail = await readDockerContainerDetail('abcdef1234567890', async (args) => {
+      calls.push(args)
+      return JSON.stringify([
+        {
+          Id: 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+          Name: '/merchant-api-1',
+          Created: '2026-07-03T02:00:00.000000000Z',
+          Path: 'docker-entrypoint.sh',
+          Args: ['node', 'server.js'],
+          Image: 'sha256:1111111111111111111111111111111111111111111111111111111111111111',
+          Platform: 'linux',
+          Driver: 'overlay2',
+          RestartCount: 1,
+          State: {
+            Status: 'running',
+            Running: true,
+            Paused: false,
+            Restarting: false,
+            Pid: 31822,
+            ExitCode: 0,
+            StartedAt: '2026-07-03T02:01:00.000000000Z',
+            FinishedAt: '0001-01-01T00:00:00Z'
+          },
+          Config: {
+            Hostname: 'abcdef123456',
+            Image: 'merchant-api:latest',
+            User: 'node',
+            Env: ['NODE_ENV=development', 'PORT=3000'],
+            Entrypoint: ['docker-entrypoint.sh'],
+            Cmd: ['node', 'server.js'],
+            WorkingDir: '/app',
+            Labels: {
+              'com.docker.compose.project': 'merchant'
+            }
+          },
+          HostConfig: {
+            NetworkMode: 'bridge',
+            RestartPolicy: { Name: 'unless-stopped' }
+          },
+          Mounts: [
+            {
+              Type: 'bind',
+              Source: '/Users/stone/merchant-api',
+              Destination: '/app',
+              Mode: 'rw',
+              RW: true,
+              Name: ''
+            }
+          ],
+          NetworkSettings: {
+            Ports: {
+              '3000/tcp': [{ HostIp: '0.0.0.0', HostPort: '3000' }],
+              '9229/tcp': null
+            },
+            Networks: {
+              bridge: {
+                NetworkID: 'network-123',
+                IPAddress: '172.17.0.2',
+                Gateway: '172.17.0.1',
+                MacAddress: '02:42:ac:11:00:02'
+              }
+            }
+          }
+        }
+      ])
+    })
+
+    assert.deepEqual(calls, [['container', 'inspect', 'abcdef1234567890']])
+    assert.equal(detail.id, 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890')
+    assert.equal(detail.name, 'merchant-api-1')
+    assert.equal(detail.imageName, 'merchant-api:latest')
+    assert.equal(detail.status, 'running')
+    assert.equal(detail.running, true)
+    assert.equal(detail.pid, 31822)
+    assert.deepEqual(detail.command, ['node', 'server.js'])
+    assert.deepEqual(detail.entrypoint, ['docker-entrypoint.sh'])
+    assert.deepEqual(detail.env, ['NODE_ENV=development', 'PORT=3000'])
+    assert.deepEqual(detail.ports, [
+      { privatePort: '3000', type: 'tcp', hostIp: '0.0.0.0', hostPort: '3000' },
+      { privatePort: '9229', type: 'tcp', hostIp: '', hostPort: '' }
+    ])
+    assert.deepEqual(detail.mounts, [
+      { type: 'bind', source: '/Users/stone/merchant-api', destination: '/app', mode: 'rw', rw: true, name: '' }
+    ])
+    assert.deepEqual(detail.networks, [
+      { name: 'bridge', networkId: 'network-123', ipAddress: '172.17.0.2', gateway: '172.17.0.1', macAddress: '02:42:ac:11:00:02' }
+    ])
+    assert.deepEqual(detail.labels, { 'com.docker.compose.project': 'merchant' })
+    assert.match(detail.rawJson, /"Config"/)
   })
 
   it('stores, updates and deletes Docker resource notes', () => {

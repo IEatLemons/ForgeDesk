@@ -732,6 +732,63 @@ type DockerContainerSummary = {
   note: DockerResourceNoteRecord | null
 }
 
+type DockerContainerPortDetail = {
+  privatePort: string
+  type: string
+  hostIp: string
+  hostPort: string
+}
+
+type DockerContainerMountDetail = {
+  type: string
+  source: string
+  destination: string
+  mode: string
+  rw: boolean
+  name: string
+}
+
+type DockerContainerNetworkDetail = {
+  name: string
+  networkId: string
+  ipAddress: string
+  gateway: string
+  macAddress: string
+}
+
+type DockerContainerDetail = {
+  id: string
+  shortId: string
+  name: string
+  image: string
+  imageName: string
+  createdAt: string
+  startedAt: string
+  finishedAt: string
+  status: string
+  running: boolean
+  paused: boolean
+  restarting: boolean
+  pid: number
+  exitCode: number
+  restartCount: number
+  platform: string
+  driver: string
+  hostname: string
+  user: string
+  workingDir: string
+  entrypoint: string[]
+  command: string[]
+  env: string[]
+  ports: DockerContainerPortDetail[]
+  mounts: DockerContainerMountDetail[]
+  networks: DockerContainerNetworkDetail[]
+  labels: Record<string, string>
+  networkMode: string
+  restartPolicy: string
+  rawJson: string
+}
+
 type DockerSnapshot = {
   images: DockerImageSummary[]
   containers: DockerContainerSummary[]
@@ -1203,6 +1260,7 @@ interface Window {
     inspectServiceDomainConfig: (serviceId: string, domain: string) => Promise<VercelDomainConfig>
     listServiceRuntimeLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
     getDockerSnapshot: () => Promise<DockerSnapshot>
+    getDockerContainerDetail: (containerId: string) => Promise<DockerContainerDetail>
     saveDockerResourceNote: (input: DockerResourceNoteInput) => Promise<DockerSnapshot>
     deleteDockerResourceNote: (resourceType: DockerResourceType, resourceKey: string) => Promise<DockerSnapshot>
     startDockerWatch: () => Promise<void>

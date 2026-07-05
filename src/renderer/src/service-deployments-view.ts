@@ -8,6 +8,12 @@ export type DeploymentStatusMeta = {
   badgeStatus: BadgeStatus
 }
 
+export type DeploymentProjectTagStyle = {
+  color: string
+  backgroundColor: string
+  borderColor: string
+}
+
 export type DeploymentDashboardRow = {
   key: string
   serviceId: string
@@ -76,6 +82,35 @@ export const deploymentVisibleBatchSize = 60
 export const railwayDeploymentRefreshBatchSize = 4
 export const deploymentAutoRefreshIntervalMs = 300_000
 export const deploymentRateLimitFallbackMs = 60_000
+
+const deploymentProjectTagPalette: DeploymentProjectTagStyle[] = [
+  { color: '#0f766e', backgroundColor: '#ccfbf1', borderColor: '#5eead4' },
+  { color: '#1d4ed8', backgroundColor: '#dbeafe', borderColor: '#93c5fd' },
+  { color: '#7c2d12', backgroundColor: '#ffedd5', borderColor: '#fdba74' },
+  { color: '#86198f', backgroundColor: '#fae8ff', borderColor: '#e879f9' },
+  { color: '#166534', backgroundColor: '#dcfce7', borderColor: '#86efac' },
+  { color: '#be123c', backgroundColor: '#ffe4e6', borderColor: '#fda4af' },
+  { color: '#6d28d9', backgroundColor: '#ede9fe', borderColor: '#c4b5fd' },
+  { color: '#0e7490', backgroundColor: '#cffafe', borderColor: '#67e8f9' },
+  { color: '#854d0e', backgroundColor: '#fef3c7', borderColor: '#fcd34d' },
+  { color: '#374151', backgroundColor: '#f3f4f6', borderColor: '#d1d5db' }
+]
+
+export function getDeploymentProjectTagStyle(projectName: string): DeploymentProjectTagStyle {
+  const normalizedName = projectName.trim().toLowerCase()
+
+  if (!normalizedName) {
+    return deploymentProjectTagPalette[deploymentProjectTagPalette.length - 1]
+  }
+
+  let hash = 0
+
+  for (const character of normalizedName) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0
+  }
+
+  return deploymentProjectTagPalette[hash % deploymentProjectTagPalette.length]
+}
 
 function stringMeta(meta: Record<string, unknown>, ...keys: string[]): string {
   for (const key of keys) {

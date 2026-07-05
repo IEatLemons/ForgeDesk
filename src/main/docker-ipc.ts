@@ -3,8 +3,10 @@ import {
   createDockerCommandEnv,
   deleteDockerResourceNote,
   parseDockerEventLines,
+  readDockerContainerDetail,
   readDockerSnapshot,
   saveDockerResourceNote,
+  type DockerContainerDetail,
   type DockerDatabase,
   type DockerEventSummary,
   type DockerResourceNoteInput,
@@ -24,6 +26,7 @@ export type DockerWindow = {
 
 export type DockerIpcService = {
   getSnapshot: () => Promise<DockerSnapshot>
+  getContainerDetail: (containerId: string) => Promise<DockerContainerDetail>
   saveResourceNote: (input: DockerResourceNoteInput) => Promise<DockerSnapshot>
   deleteResourceNote: (resourceType: DockerResourceType, resourceKey: string) => Promise<DockerSnapshot>
   startWatch: () => void
@@ -113,6 +116,7 @@ export function createDockerIpcService(getDatabase: DockerDatabaseProvider, getW
 
   return {
     getSnapshot: () => readDockerSnapshot(getDatabase()),
+    getContainerDetail: (containerId) => readDockerContainerDetail(containerId),
     saveResourceNote: async (input) => {
       saveDockerResourceNote(getDatabase(), input)
       return readDockerSnapshot(getDatabase())
@@ -128,6 +132,7 @@ export function createDockerIpcService(getDatabase: DockerDatabaseProvider, getW
 
 export function registerDockerIpc(ipcMain: DockerIpcMain, service: DockerIpcService): void {
   ipcMain.handle('docker:snapshot', () => service.getSnapshot())
+  ipcMain.handle('docker:container:detail', (_event, containerId: string) => service.getContainerDetail(containerId))
   ipcMain.handle('docker:note:save', (_event, input: DockerResourceNoteInput) => service.saveResourceNote(input))
   ipcMain.handle('docker:note:delete', (_event, resourceType: DockerResourceType, resourceKey: string) => service.deleteResourceNote(resourceType, resourceKey))
   ipcMain.handle('docker:watch:start', () => service.startWatch())

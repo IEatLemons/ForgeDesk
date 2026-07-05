@@ -222,6 +222,7 @@ import {
   deploymentAutoRefreshIntervalMs,
   deploymentRateLimitFallbackMs,
   filterDeploymentRows,
+  getDeploymentProjectTagStyle,
   getDeploymentRateLimitRetryMs,
   getNextDeploymentVisibleCount,
   getVisibleDeploymentRows,
@@ -5661,9 +5662,9 @@ function GlobalServiceCenterPanel({ onBack }: { onBack?: () => void }): JSX.Elem
           <Typography.Text strong ellipsis={{ tooltip: row.projectName }}>
             {row.projectName}
           </Typography.Text>
-          <Typography.Text type="secondary" ellipsis={{ tooltip: row.repositoryName }}>
-            {row.repositoryName}
-          </Typography.Text>
+          <span className="deployment-project-tag" style={getDeploymentProjectTagStyle(row.repositoryName)} title={row.repositoryName}>
+            {row.repositoryName || '-'}
+          </span>
         </div>
         <div className="deployment-row-git">
           <Typography.Text code>{row.shortCommit || '-'}</Typography.Text>
@@ -13360,6 +13361,11 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     setTerminalOpenRequest({ ...request, requestId: terminalOpenRequestIdRef.current })
   }
 
+  function openGlobalTerminalRequest(request: Omit<TerminalOpenRequest, 'requestId'>): void {
+    openTerminalRequest(request)
+    setActiveKey('terminal')
+  }
+
   if (activeKey === 'terminal') {
     return (
       <Layout className="terminal-mode-shell">
@@ -13433,7 +13439,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
               <GlobalServiceCenterPanel />
             </section>
           )}
-          {!loadingWorkspace && activeKey === 'docker' && <DockerPanel />}
+          {!loadingWorkspace && activeKey === 'docker' && <DockerPanel onOpenTerminalRequest={openGlobalTerminalRequest} />}
           {!loadingWorkspace && activeKey === 'tools' && <ToolsPanel />}
           {!loadingWorkspace && activeKey === 'overview' && (
             <ProjectOverview

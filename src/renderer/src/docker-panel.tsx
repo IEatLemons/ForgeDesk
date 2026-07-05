@@ -1,9 +1,10 @@
-import { DeleteOutlined, EditOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
-import { Alert, Badge, Button, Col, Empty, Form, Input, Modal, Row, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
+import { CodeOutlined, DeleteOutlined, EditOutlined, InfoCircleOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
+import { Alert, Badge, Button, Col, Descriptions, Drawer, Empty, Form, Input, Modal, Row, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { DockerContainerSummary, DockerImageSummary, DockerResourceNote, DockerResourceType, DockerSnapshot } from './data'
+import type { DockerContainerDetail, DockerContainerSummary, DockerImageSummary, DockerResourceNote, DockerResourceType, DockerSnapshot } from './data'
 import {
+  createDockerImageRootTerminalRequest,
   createDockerDashboardSummary,
   filterDockerContainers,
   filterDockerImages,
@@ -11,9 +12,11 @@ import {
   getDockerContainerTableLayout,
   getDockerImageDefaultNoteResourceKey,
   getDockerImageNoteTargetOptions,
+  getDockerImageTableLayout,
   getDockerWatchStatusMeta
 } from './docker-view'
 import { getErrorMessage } from './error-messages'
+import type { TerminalOpenRequest } from './terminal-panel-events'
 
 type DockerNoteForm = {
   resourceKey: string
@@ -28,6 +31,10 @@ type EditingDockerNote = {
   targetOptions: Array<{ label: string; value: string }>
   defaultDisplayName: string
   note: DockerResourceNote | null
+}
+
+type DockerPanelProps = {
+  onOpenTerminalRequest?: (request: Omit<TerminalOpenRequest, 'requestId'>) => void
 }
 
 function formatDockerTime(value: string): string {
@@ -67,7 +74,23 @@ function renderCompactMutedText(value: string, fallback = '-'): JSX.Element {
   )
 }
 
-export function DockerPanel(): JSX.Element {
+function formatDockerList(value: string[]): string {
+  return value.length > 0 ? value.join(' ') : '-'
+}
+
+function formatDockerBoolean(value: boolean): string {
+  return value ? '是' : '否'
+}
+
+function renderDetailCode(value: string, fallback = '-'): JSX.Element {
+  return (
+    <Typography.Text code copyable={value ? { text: value } : false} className="docker-image-detail-code">
+      {value || fallback}
+    </Typography.Text>
+  )
+}
+
+export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.Element {
   const [snapshot, setSnapshot] = useState<DockerSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
@@ -77,9 +100,15 @@ export function DockerPanel(): JSX.Element {
   const [watchError, setWatchError] = useState('')
   const [lastEventLabel, setLastEventLabel] = useState('')
   const [editingNote, setEditingNote] = useState<EditingDockerNote | null>(null)
+  const [selectedContainer, setSelectedContainer] = useState<DockerContainerSummary | null>(null)
+  const [containerDetail, setContainerDetail] = useState<DockerContainerDetail | null>(null)
+  const [containerDetailLoading, setContainerDetailLoading] = useState(false)
+  const [containerDetailError, setContainerDetailError] = useState('')
+  const [selectedImage, setSelectedImage] = useState<DockerImageSummary | null>(null)
   const [savingNote, setSavingNote] = useState(false)
   const [workingNoteKey, setWorkingNoteKey] = useState('')
   const [noteForm] = Form.useForm<DockerNoteForm>()
+  const containerDetailRequestRef = useRef(0)
   const refreshInFlightRef = useRef(false)
   const mountedRef = useRef(true)
 
@@ -165,6 +194,7 @@ export function DockerPanel(): JSX.Element {
   const filteredContainers = useMemo(() => filterDockerContainers(snapshot?.containers ?? [], query, { onlyRunning }), [onlyRunning, query, snapshot])
   const filteredImages = useMemo(() => filterDockerImages(snapshot?.images ?? [], query), [query, snapshot])
   const containerTableLayout = getDockerContainerTableLayout()
+  const imageTableLayout = getDockerImageTableLayout()
 
   function openContainerNote(container: DockerContainerSummary): void {
     const note = container.note
@@ -202,6 +232,54 @@ export function DockerPanel(): JSX.Element {
       displayName: note?.displayName || image.displayName || image.reference || image.shortId,
       notes: note?.notes || ''
     })
+  }
+
+  function openImageDetails(image: DockerImageSummary): void {
+    setSelectedImage(image)
+  }
+
+  function openImageRootTerminal(image: DockerImageSummary): void {
+    onOpenTerminalRequest?.(createDockerImageRootTerminalRequest(image))
+  }
+
+  function openContainerDetails(container: DockerContainerSummary): void {
+    setSelectedContainer(container)
+    setContainerDetail(null)
+    setContainerDetailError('')
+
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const requestId = containerDetailRequestRef.current + 1
+    containerDetailRequestRef.current = requestId
+    setContainerDetailLoading(true)
+
+    window.forgeDesk
+      .getDockerContainerDetail(container.id)
+      .then((detail) => {
+        if (containerDetailRequestRef.current === requestId) {
+          setContainerDetail(detail)
+        }
+      })
+      .catch((error) => {
+        if (containerDetailRequestRef.current === requestId) {
+          setContainerDetailError(getErrorMessage(error))
+        }
+      })
+      .finally(() => {
+        if (containerDetailRequestRef.current === requestId) {
+          setContainerDetailLoading(false)
+        }
+      })
+  }
+
+  function closeContainerDetails(): void {
+    containerDetailRequestRef.current += 1
+    setSelectedContainer(null)
+    setContainerDetail(null)
+    setContainerDetailError('')
+    setContainerDetailLoading(false)
   }
 
   function changeNoteResourceKey(resourceKey: string): void {
@@ -335,7 +413,24 @@ export function DockerPanel(): JSX.Element {
         <div className="docker-note-action-cell">
           {container.note?.notes ? renderCompactMutedText(container.note.notes) : <Typography.Text type="secondary">-</Typography.Text>}
           <div className="docker-note-actions">
-            <Button size="small" icon={<EditOutlined />} onClick={() => openContainerNote(container)}>
+            <Button
+              size="small"
+              icon={<InfoCircleOutlined />}
+              onClick={(event) => {
+                event.stopPropagation()
+                openContainerDetails(container)
+              }}
+            >
+              详情
+            </Button>
+            <Button
+              size="small"
+              icon={<EditOutlined />}
+              onClick={(event) => {
+                event.stopPropagation()
+                openContainerNote(container)
+              }}
+            >
               备注
             </Button>
             {container.note ? (
@@ -344,7 +439,10 @@ export function DockerPanel(): JSX.Element {
                 danger
                 icon={<DeleteOutlined />}
                 loading={workingNoteKey === container.note.resourceKey}
-                onClick={() => confirmDeleteNote('container', container.noteResourceKey)}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  confirmDeleteNote('container', container.noteResourceKey)
+                }}
               >
                 删除
               </Button>
@@ -359,7 +457,7 @@ export function DockerPanel(): JSX.Element {
     {
       title: '镜像',
       key: 'image',
-      width: 280,
+      width: imageTableLayout.columns[0].width,
       render: (_, image) => (
         <Space direction="vertical" size={2}>
           <Typography.Text strong ellipsis={{ tooltip: image.displayName }}>
@@ -372,21 +470,48 @@ export function DockerPanel(): JSX.Element {
         </Space>
       )
     },
-    { title: '仓库', key: 'repository', width: 200, render: (_, image) => renderMutedText(image.repository, '<none>') },
-    { title: 'Tag', key: 'tag', width: 140, render: (_, image) => renderMutedText(image.tag, '<none>') },
-    { title: 'Image ID', key: 'id', width: 150, render: (_, image) => <Typography.Text code>{image.shortId}</Typography.Text> },
-    { title: 'Digest', key: 'digest', render: (_, image) => renderMutedText(image.digest, '<none>') },
-    { title: '大小', key: 'size', width: 110, render: (_, image) => image.size || '-' },
-    { title: '创建时间', key: 'created', width: 190, render: (_, image) => renderMutedText(image.createdSince || formatDockerTime(image.createdAt)) },
+    { title: '仓库', key: 'repository', width: imageTableLayout.columns[1].width, render: (_, image) => renderMutedText(image.repository, '<none>') },
+    { title: 'Tag', key: 'tag', width: imageTableLayout.columns[2].width, render: (_, image) => renderMutedText(image.tag, '<none>') },
+    { title: 'Image ID', key: 'id', width: imageTableLayout.columns[3].width, render: (_, image) => <Typography.Text code>{image.shortId}</Typography.Text> },
+    { title: 'Digest', key: 'digest', width: imageTableLayout.columns[4].width, render: (_, image) => renderMutedText(image.digest, '<none>') },
+    { title: '大小', key: 'size', width: imageTableLayout.columns[5].width, render: (_, image) => image.size || '-' },
+    { title: '创建时间', key: 'created', width: imageTableLayout.columns[6].width, render: (_, image) => renderMutedText(image.createdSince || formatDockerTime(image.createdAt)) },
     {
-      title: '备注',
-      key: 'note',
-      width: 250,
+      title: '详情 / 操作',
+      key: 'actions',
+      width: imageTableLayout.columns[7].width,
       render: (_, image) => (
-        <Space direction="vertical" size={4}>
+        <div className="docker-note-action-cell">
           {image.note?.notes ? renderMutedText(image.note.notes) : <Typography.Text type="secondary">-</Typography.Text>}
-          <Space wrap size={6}>
-            <Button size="small" icon={<EditOutlined />} onClick={() => openImageNote(image)}>
+          <div className="docker-note-actions">
+            <Button
+              size="small"
+              icon={<InfoCircleOutlined />}
+              onClick={(event) => {
+                event.stopPropagation()
+                openImageDetails(image)
+              }}
+            >
+              详情
+            </Button>
+            <Button
+              size="small"
+              icon={<CodeOutlined />}
+              onClick={(event) => {
+                event.stopPropagation()
+                openImageRootTerminal(image)
+              }}
+            >
+              Root
+            </Button>
+            <Button
+              size="small"
+              icon={<EditOutlined />}
+              onClick={(event) => {
+                event.stopPropagation()
+                openImageNote(image)
+              }}
+            >
               备注
             </Button>
             {image.note ? (
@@ -395,16 +520,26 @@ export function DockerPanel(): JSX.Element {
                 danger
                 icon={<DeleteOutlined />}
                 loading={workingNoteKey === image.note.resourceKey}
-                onClick={() => confirmDeleteNote('image', image.note?.resourceKey ?? image.noteResourceKey)}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  confirmDeleteNote('image', image.note?.resourceKey ?? image.noteResourceKey)
+                }}
               >
                 删除
               </Button>
             ) : null}
-          </Space>
-        </Space>
+          </div>
+        </div>
       )
     }
   ]
+
+  const selectedContainerStatus = selectedContainer ? getDockerContainerStatusMeta(containerDetail?.status || selectedContainer.state, selectedContainer.status) : null
+  const containerEnvRows = (containerDetail?.env ?? []).map((value, index) => ({ key: String(index), value }))
+  const containerPortRows = (containerDetail?.ports ?? []).map((port, index) => ({ key: `${port.privatePort}-${port.hostPort}-${index}`, ...port }))
+  const containerMountRows = (containerDetail?.mounts ?? []).map((mount, index) => ({ key: `${mount.destination}-${index}`, ...mount }))
+  const containerNetworkRows = (containerDetail?.networks ?? []).map((network) => ({ key: network.name, ...network }))
+  const containerLabelRows = Object.entries(containerDetail?.labels ?? {}).map(([key, value]) => ({ key, label: key, value }))
 
   return (
     <section className="workspace-section docker-page">
@@ -476,6 +611,10 @@ export function DockerPanel(): JSX.Element {
                     dataSource={filteredContainers}
                     pagination={{ pageSize: 10 }}
                     scroll={{ x: containerTableLayout.minWidth }}
+                    onRow={(container) => ({
+                      className: 'docker-clickable-row',
+                      onClick: () => openContainerDetails(container)
+                    })}
                     locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={loading ? '正在读取容器' : '暂无容器'} /> }}
                   />
                 )
@@ -485,12 +624,18 @@ export function DockerPanel(): JSX.Element {
                 label: `镜像 ${filteredImages.length}`,
                 children: (
                   <Table
+                    className="docker-compact-table"
                     rowKey={(image) => image.noteResourceKey || image.id}
                     size="small"
+                    tableLayout="fixed"
                     columns={imageColumns}
                     dataSource={filteredImages}
                     pagination={{ pageSize: 10 }}
-                    scroll={{ x: 1540 }}
+                    scroll={{ x: imageTableLayout.minWidth }}
+                    onRow={(image) => ({
+                      className: 'docker-clickable-row',
+                      onClick: () => openImageDetails(image)
+                    })}
                     locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={loading ? '正在读取镜像' : '暂无镜像'} /> }}
                   />
                 )
@@ -499,6 +644,233 @@ export function DockerPanel(): JSX.Element {
           />
         </Spin>
       </div>
+
+      <Drawer
+        title={selectedContainer ? `容器详情：${selectedContainer.displayName}` : '容器详情'}
+        width={760}
+        open={Boolean(selectedContainer)}
+        onClose={closeContainerDetails}
+      >
+        {selectedContainer ? (
+          <Spin spinning={containerDetailLoading}>
+            <Space direction="vertical" size={16} className="docker-container-detail">
+              {containerDetailError ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="容器详情读取失败"
+                  description={containerDetailError}
+                  action={<Button onClick={() => openContainerDetails(selectedContainer)}>重试</Button>}
+                />
+              ) : null}
+              <Tabs
+                items={[
+                  {
+                    key: 'overview',
+                    label: '概览',
+                    children: (
+                      <Descriptions
+                        bordered
+                        size="small"
+                        column={1}
+                        items={[
+                          { key: 'name', label: '名称', children: containerDetail?.name || selectedContainer.name || selectedContainer.shortId },
+                          {
+                            key: 'id',
+                            label: 'Container ID',
+                            children: renderDetailCode(containerDetail?.id || selectedContainer.id)
+                          },
+                          {
+                            key: 'status',
+                            label: '状态',
+                            children: selectedContainerStatus ? <Badge status={selectedContainerStatus.badgeStatus} text={<Tag color={selectedContainerStatus.color}>{selectedContainerStatus.label}</Tag>} /> : '-'
+                          },
+                          { key: 'imageName', label: '镜像', children: containerDetail?.imageName || selectedContainer.image || '-' },
+                          { key: 'imageId', label: 'Image ID', children: renderDetailCode(containerDetail?.image || '') },
+                          { key: 'ports', label: '端口', children: selectedContainer.ports || (containerPortRows.length > 0 ? `${containerPortRows.length} 条映射` : '-') },
+                          { key: 'createdAt', label: '创建时间', children: formatDockerTime(containerDetail?.createdAt || selectedContainer.createdAt) },
+                          { key: 'startedAt', label: '启动时间', children: formatDockerTime(containerDetail?.startedAt || '') },
+                          { key: 'finishedAt', label: '结束时间', children: formatDockerTime(containerDetail?.finishedAt || '') },
+                          { key: 'pid', label: 'PID', children: containerDetail ? String(containerDetail.pid) : '-' },
+                          { key: 'exitCode', label: 'Exit Code', children: containerDetail ? String(containerDetail.exitCode) : '-' },
+                          { key: 'restartCount', label: '重启次数', children: containerDetail ? String(containerDetail.restartCount) : '-' },
+                          { key: 'platform', label: '平台', children: containerDetail?.platform || '-' },
+                          { key: 'driver', label: '存储驱动', children: containerDetail?.driver || '-' }
+                        ]}
+                      />
+                    )
+                  },
+                  {
+                    key: 'config',
+                    label: '配置',
+                    children: (
+                      <Space direction="vertical" size={16} className="docker-detail-tab">
+                        <Descriptions
+                          bordered
+                          size="small"
+                          column={1}
+                          items={[
+                            { key: 'hostname', label: 'Hostname', children: containerDetail?.hostname || '-' },
+                            { key: 'user', label: 'User', children: containerDetail?.user || 'default' },
+                            { key: 'workingDir', label: 'WorkingDir', children: containerDetail?.workingDir || '-' },
+                            { key: 'entrypoint', label: 'Entrypoint', children: formatDockerList(containerDetail?.entrypoint ?? []) },
+                            { key: 'command', label: 'Command', children: formatDockerList(containerDetail?.command ?? []) },
+                            { key: 'networkMode', label: 'Network Mode', children: containerDetail?.networkMode || '-' },
+                            { key: 'restartPolicy', label: 'Restart Policy', children: containerDetail?.restartPolicy || '-' },
+                            { key: 'running', label: 'Running', children: containerDetail ? formatDockerBoolean(containerDetail.running) : '-' },
+                            { key: 'paused', label: 'Paused', children: containerDetail ? formatDockerBoolean(containerDetail.paused) : '-' },
+                            { key: 'restarting', label: 'Restarting', children: containerDetail ? formatDockerBoolean(containerDetail.restarting) : '-' }
+                          ]}
+                        />
+                        <Table
+                          className="docker-detail-table"
+                          rowKey="key"
+                          size="small"
+                          pagination={false}
+                          columns={[{ title: 'Env', dataIndex: 'value', key: 'value' }]}
+                          dataSource={containerEnvRows}
+                          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无环境变量" /> }}
+                        />
+                      </Space>
+                    )
+                  },
+                  {
+                    key: 'mounts',
+                    label: `挂载 ${containerMountRows.length}`,
+                    children: (
+                      <Table
+                        className="docker-detail-table"
+                        rowKey="key"
+                        size="small"
+                        pagination={false}
+                        scroll={{ x: 720 }}
+                        columns={[
+                          { title: '类型', dataIndex: 'type', key: 'type', width: 100 },
+                          { title: '宿主机路径', dataIndex: 'source', key: 'source', width: 260 },
+                          { title: '容器路径', dataIndex: 'destination', key: 'destination', width: 220 },
+                          { title: '模式', dataIndex: 'mode', key: 'mode', width: 100 },
+                          { title: 'RW', dataIndex: 'rw', key: 'rw', width: 80, render: (value: boolean) => formatDockerBoolean(value) }
+                        ]}
+                        dataSource={containerMountRows}
+                        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无挂载" /> }}
+                      />
+                    )
+                  },
+                  {
+                    key: 'networks',
+                    label: `网络 ${containerNetworkRows.length}`,
+                    children: (
+                      <Space direction="vertical" size={16} className="docker-detail-tab">
+                        <Table
+                          className="docker-detail-table"
+                          rowKey="key"
+                          size="small"
+                          pagination={false}
+                          scroll={{ x: 760 }}
+                          columns={[
+                            { title: '网络', dataIndex: 'name', key: 'name', width: 140 },
+                            { title: 'IP', dataIndex: 'ipAddress', key: 'ipAddress', width: 150 },
+                            { title: '网关', dataIndex: 'gateway', key: 'gateway', width: 150 },
+                            { title: 'MAC', dataIndex: 'macAddress', key: 'macAddress', width: 180 },
+                            { title: 'Network ID', dataIndex: 'networkId', key: 'networkId', width: 180 }
+                          ]}
+                          dataSource={containerNetworkRows}
+                          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无网络信息" /> }}
+                        />
+                        <Table
+                          className="docker-detail-table"
+                          rowKey="key"
+                          size="small"
+                          pagination={false}
+                          columns={[
+                            { title: '容器端口', dataIndex: 'privatePort', key: 'privatePort', width: 120 },
+                            { title: '协议', dataIndex: 'type', key: 'type', width: 100 },
+                            { title: 'Host IP', dataIndex: 'hostIp', key: 'hostIp', width: 160 },
+                            { title: 'Host Port', dataIndex: 'hostPort', key: 'hostPort', width: 160 }
+                          ]}
+                          dataSource={containerPortRows}
+                          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无端口映射" /> }}
+                        />
+                      </Space>
+                    )
+                  },
+                  {
+                    key: 'labels',
+                    label: `标签 ${containerLabelRows.length}`,
+                    children: (
+                      <Table
+                        className="docker-detail-table"
+                        rowKey="key"
+                        size="small"
+                        pagination={false}
+                        scroll={{ x: 680 }}
+                        columns={[
+                          { title: 'Key', dataIndex: 'label', key: 'label', width: 300 },
+                          { title: 'Value', dataIndex: 'value', key: 'value', width: 360 }
+                        ]}
+                        dataSource={containerLabelRows}
+                        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无标签" /> }}
+                      />
+                    )
+                  },
+                  {
+                    key: 'inspect',
+                    label: 'Inspect',
+                    children: (
+                      <Input.TextArea className="docker-detail-raw" readOnly rows={18} value={containerDetail?.rawJson || ''} />
+                    )
+                  }
+                ]}
+              />
+            </Space>
+          </Spin>
+        ) : null}
+      </Drawer>
+
+      <Drawer
+        title={selectedImage ? `镜像详情：${selectedImage.displayName}` : '镜像详情'}
+        width={560}
+        open={Boolean(selectedImage)}
+        onClose={() => setSelectedImage(null)}
+        extra={
+          selectedImage ? (
+            <Button icon={<CodeOutlined />} onClick={() => openImageRootTerminal(selectedImage)}>
+              Root 终端
+            </Button>
+          ) : null
+        }
+      >
+        {selectedImage ? (
+          <Space direction="vertical" size={16} className="docker-image-detail">
+            <Descriptions
+              bordered
+              size="small"
+              column={1}
+              items={[
+                { key: 'displayName', label: '显示名称', children: selectedImage.displayName || '-' },
+                { key: 'reference', label: '镜像引用', children: selectedImage.reference || '<untagged>' },
+                { key: 'repository', label: '仓库', children: selectedImage.repository || '<none>' },
+                { key: 'tag', label: 'Tag', children: selectedImage.tag || '<none>' },
+                {
+                  key: 'id',
+                  label: 'Image ID',
+                  children: (
+                    <Typography.Text code copyable={{ text: selectedImage.id }} className="docker-image-detail-code">
+                      {selectedImage.id}
+                    </Typography.Text>
+                  )
+                },
+                { key: 'digest', label: 'Digest', children: selectedImage.digest || '<none>' },
+                { key: 'size', label: '大小', children: selectedImage.size || '-' },
+                { key: 'createdSince', label: '创建', children: selectedImage.createdSince || '-' },
+                { key: 'createdAt', label: '创建时间', children: formatDockerTime(selectedImage.createdAt) },
+                { key: 'noteKey', label: '备注绑定', children: selectedImage.noteResourceKey },
+                { key: 'notes', label: '备注', children: selectedImage.note?.notes || '-' }
+              ]}
+            />
+          </Space>
+        ) : null}
+      </Drawer>
 
       <Modal
         title={editingNote ? `编辑备注：${editingNote.title}` : '编辑 Docker 备注'}

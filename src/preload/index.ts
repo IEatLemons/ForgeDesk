@@ -84,6 +84,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   inspectServiceDomainConfig: (serviceId: string, domain: string) => ipcRenderer.invoke('service:domain:config', serviceId, domain),
   listServiceRuntimeLogs: (serviceId: string, environmentName: string) => ipcRenderer.invoke('service:runtime:logs', serviceId, environmentName),
   getDockerSnapshot: () => ipcRenderer.invoke('docker:snapshot'),
+  getDockerContainerDetail: (containerId: string) => ipcRenderer.invoke('docker:container:detail', containerId),
   saveDockerResourceNote: (input: DockerResourceNoteInput) => ipcRenderer.invoke('docker:note:save', input),
   deleteDockerResourceNote: (resourceType: DockerResourceType, resourceKey: string) => ipcRenderer.invoke('docker:note:delete', resourceType, resourceKey),
   startDockerWatch: () => ipcRenderer.invoke('docker:watch:start'),

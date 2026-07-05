@@ -1,4 +1,5 @@
 import type { DockerContainerSummary, DockerImageSummary, DockerSnapshot } from './data'
+import type { TerminalOpenRequest } from './terminal-panel-events'
 
 type BadgeStatus = 'success' | 'processing' | 'default' | 'error' | 'warning'
 
@@ -38,6 +39,8 @@ export type DockerImageNoteTargetOption = {
   label: string
   value: string
 }
+
+export type DockerImageRootTerminalRequest = Pick<TerminalOpenRequest, 'startupCommand' | 'title'>
 
 function includesText(value: string, query: string): boolean {
   return value.toLowerCase().includes(query.toLowerCase())
@@ -124,6 +127,29 @@ export function getDockerImageDefaultNoteResourceKey(image: DockerImageSummary):
   return image.tagResourceKey || image.imageIdResourceKey
 }
 
+function shellQuoteArg(value: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./~-]+$/.test(value)) {
+    return value
+  }
+
+  return `'${value.replace(/'/g, "'\\''")}'`
+}
+
+function getDockerImageRunTarget(image: DockerImageSummary): string {
+  return image.tagResourceKey ? image.reference : image.id
+}
+
+export function createDockerImageRootTerminalRequest(image: DockerImageSummary): DockerImageRootTerminalRequest {
+  const target = getDockerImageRunTarget(image)
+  const titleTarget = image.tagResourceKey ? image.reference : image.shortId
+  const args = ['docker', 'run', '--rm', '-it', '-u', 'root', '--entrypoint', '/bin/sh', target]
+
+  return {
+    title: `root · ${titleTarget}`,
+    startupCommand: `${args.map(shellQuoteArg).join(' ')}\r`
+  }
+}
+
 export function getDockerContainerStatusMeta(state: string, status: string): DockerStatusMeta {
   const normalizedState = state.trim().toLowerCase()
   const fallbackLabel = status.trim() || 'unknown'
@@ -162,6 +188,24 @@ export function getDockerContainerTableLayout(): DockerTableLayout {
     { key: 'image', width: 320 },
     { key: 'runtime', width: 170 },
     { key: 'noteActions', width: 250 }
+  ]
+
+  return {
+    minWidth: columns.reduce((total, column) => total + column.width, 0),
+    columns
+  }
+}
+
+export function getDockerImageTableLayout(): DockerTableLayout {
+  const columns: DockerTableColumnLayout[] = [
+    { key: 'image', width: 280 },
+    { key: 'repository', width: 200 },
+    { key: 'tag', width: 140 },
+    { key: 'id', width: 150 },
+    { key: 'digest', width: 260 },
+    { key: 'size', width: 110 },
+    { key: 'created', width: 190 },
+    { key: 'actions', width: 330 }
   ]
 
   return {

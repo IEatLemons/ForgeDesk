@@ -1,5 +1,5 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" role="img" aria-label="ForgeDesk" xmlns="http://www.w3.org/2000/svg">
-  <rect x="176" y="176" width="672" height="672" rx="168" fill="#111827"/>
-  <path d="M354 306H690V414H474V504H646V612H474V718H354V306Z" fill="#F8FAFC"/>
-  <rect x="612" y="650" width="116" height="116" rx="30" fill="#38BDF8"/>
+  <rect x="96" y="96" width="832" height="832" rx="208" fill="#111827"/>
+  <path d="M316 257L732 257L732 391L465 391L465 502L678 502L678 636L465 636L465 767L316 767Z" fill="#F8FAFC"/>
+  <rect x="636" y="683" width="144" height="144" rx="37" fill="#38BDF8"/>
 </svg>

@@ -4,8 +4,10 @@ import {
   createDockerDashboardSummary,
   filterDockerContainers,
   filterDockerImages,
+  createDockerImageRootTerminalRequest,
   getDockerContainerStatusMeta,
   getDockerContainerTableLayout,
+  getDockerImageTableLayout,
   getDockerWatchStatusMeta,
   getDockerImageDefaultNoteResourceKey,
   getDockerImageNoteTargetOptions
@@ -125,6 +127,16 @@ describe('docker view model', () => {
     )
   })
 
+  it('keeps Docker image actions available in a stable table layout', () => {
+    const layout = getDockerImageTableLayout()
+
+    assert.equal(layout.minWidth <= 1680, true)
+    assert.deepEqual(
+      layout.columns.map((column) => column.key),
+      ['image', 'repository', 'tag', 'id', 'digest', 'size', 'created', 'actions']
+    )
+  })
+
   it('filters Docker images by note, reference, digest and id', () => {
     assert.deepEqual(filterDockerImages(snapshot.images, 'local build').map((item) => item.id), [image.id])
     assert.deepEqual(filterDockerImages(snapshot.images, 'merchant-api:latest').map((item) => item.id), [image.id])
@@ -145,6 +157,20 @@ describe('docker view model', () => {
   it('defaults image note editing to tag when a tag exists', () => {
     assert.equal(getDockerImageDefaultNoteResourceKey({ ...image, noteResourceKey: image.imageIdResourceKey }), image.tagResourceKey)
     assert.equal(getDockerImageDefaultNoteResourceKey(untaggedImage), untaggedImage.imageIdResourceKey)
+  })
+
+  it('builds a root shell terminal request for a tagged Docker image', () => {
+    assert.deepEqual(createDockerImageRootTerminalRequest(image), {
+      title: 'root · merchant-api:latest',
+      startupCommand: 'docker run --rm -it -u root --entrypoint /bin/sh merchant-api:latest\r'
+    })
+  })
+
+  it('uses the Image ID when building a root shell request for an untagged Docker image', () => {
+    assert.deepEqual(createDockerImageRootTerminalRequest(untaggedImage), {
+      title: 'root · 222222222222',
+      startupCommand: `docker run --rm -it -u root --entrypoint /bin/sh ${untaggedImage.id}\r`
+    })
   })
 
   it('maps Docker container state to stable badge metadata', () => {

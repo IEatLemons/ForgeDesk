@@ -52,6 +52,63 @@ export type DockerContainerSummary = {
   note: DockerResourceNoteRecord | null
 }
 
+export type DockerContainerPortDetail = {
+  privatePort: string
+  type: string
+  hostIp: string
+  hostPort: string
+}
+
+export type DockerContainerMountDetail = {
+  type: string
+  source: string
+  destination: string
+  mode: string
+  rw: boolean
+  name: string
+}
+
+export type DockerContainerNetworkDetail = {
+  name: string
+  networkId: string
+  ipAddress: string
+  gateway: string
+  macAddress: string
+}
+
+export type DockerContainerDetail = {
+  id: string
+  shortId: string
+  name: string
+  image: string
+  imageName: string
+  createdAt: string
+  startedAt: string
+  finishedAt: string
+  status: string
+  running: boolean
+  paused: boolean
+  restarting: boolean
+  pid: number
+  exitCode: number
+  restartCount: number
+  platform: string
+  driver: string
+  hostname: string
+  user: string
+  workingDir: string
+  entrypoint: string[]
+  command: string[]
+  env: string[]
+  ports: DockerContainerPortDetail[]
+  mounts: DockerContainerMountDetail[]
+  networks: DockerContainerNetworkDetail[]
+  labels: Record<string, string>
+  networkMode: string
+  restartPolicy: string
+  rawJson: string
+}
+
 export type DockerSnapshot = {
   images: DockerImageSummary[]
   containers: DockerContainerSummary[]
@@ -126,6 +183,10 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.map(asRecord).filter((record) => Object.keys(record).length > 0) : []
+}
+
 function stringField(record: Record<string, unknown>, ...keys: string[]): string {
   for (const key of keys) {
     const value = record[key]
@@ -140,6 +201,34 @@ function stringField(record: Record<string, unknown>, ...keys: string[]): string
   }
 
   return ''
+}
+
+function stringArrayField(record: Record<string, unknown>, key: string): string[] {
+  const value = record[key]
+
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item ?? '')).filter(Boolean)
+  }
+
+  if (typeof value === 'string') {
+    return value.trim() ? [value.trim()] : []
+  }
+
+  return []
+}
+
+function booleanField(record: Record<string, unknown>, key: string): boolean {
+  return record[key] === true
+}
+
+function numberField(record: Record<string, unknown>, key: string): number {
+  const value = record[key]
+
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function stringRecord(value: unknown): Record<string, string> {
+  return Object.fromEntries(Object.entries(asRecord(value)).map(([key, entryValue]) => [key, String(entryValue ?? '')]))
 }
 
 function normalizeResourceType(value: unknown): DockerResourceType {
@@ -346,6 +435,123 @@ export function parseDockerContainerLines(content: string): DockerContainerSumma
   })
 }
 
+function parseDockerInspectObject(content: string): Record<string, unknown> {
+  let parsed: unknown
+
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    throw new Error('Docker 容器详情解析失败')
+  }
+
+  const candidate = Array.isArray(parsed) ? parsed[0] : parsed
+  const record = asRecord(candidate)
+
+  if (Object.keys(record).length === 0) {
+    throw new Error('Docker 容器详情为空')
+  }
+
+  return record
+}
+
+function normalizeDockerTimestamp(value: string): string {
+  return value.startsWith('0001-01-01') ? '' : value
+}
+
+function mapDockerPorts(value: unknown): DockerContainerPortDetail[] {
+  return Object.entries(asRecord(value)).flatMap(([key, bindingValue]) => {
+    const match = key.match(/^(.+)\/(.+)$/)
+    const privatePort = match?.[1] ?? key
+    const type = match?.[2] ?? ''
+    const bindings = Array.isArray(bindingValue) ? bindingValue.map(asRecord) : []
+
+    if (bindings.length === 0) {
+      return [{ privatePort, type, hostIp: '', hostPort: '' }]
+    }
+
+    return bindings.map((binding) => ({
+      privatePort,
+      type,
+      hostIp: stringField(binding, 'HostIp'),
+      hostPort: stringField(binding, 'HostPort')
+    }))
+  })
+}
+
+function mapDockerMounts(value: unknown): DockerContainerMountDetail[] {
+  return asRecordArray(value).map((mount) => ({
+    type: stringField(mount, 'Type'),
+    source: stringField(mount, 'Source'),
+    destination: stringField(mount, 'Destination'),
+    mode: stringField(mount, 'Mode'),
+    rw: booleanField(mount, 'RW'),
+    name: stringField(mount, 'Name')
+  }))
+}
+
+function mapDockerNetworks(value: unknown): DockerContainerNetworkDetail[] {
+  return Object.entries(asRecord(value)).map(([name, networkValue]) => {
+    const network = asRecord(networkValue)
+
+    return {
+      name,
+      networkId: stringField(network, 'NetworkID'),
+      ipAddress: stringField(network, 'IPAddress'),
+      gateway: stringField(network, 'Gateway'),
+      macAddress: stringField(network, 'MacAddress')
+    }
+  })
+}
+
+export function parseDockerContainerInspect(content: string): DockerContainerDetail {
+  const record = parseDockerInspectObject(content)
+  const id = normalizeDockerId(stringField(record, 'Id', 'ID', 'id'))
+
+  if (!id) {
+    throw new Error('Docker 容器详情缺少容器 ID')
+  }
+
+  const state = asRecord(record.State)
+  const config = asRecord(record.Config)
+  const hostConfig = asRecord(record.HostConfig)
+  const restartPolicy = asRecord(hostConfig.RestartPolicy)
+  const networkSettings = asRecord(record.NetworkSettings)
+  const name = stringField(record, 'Name').replace(/^\/+/, '')
+
+  return {
+    id,
+    shortId: shortenDockerId(id),
+    name: name || shortenDockerId(id),
+    image: stringField(record, 'Image'),
+    imageName: stringField(config, 'Image') || stringField(record, 'Image'),
+    createdAt: stringField(record, 'Created'),
+    startedAt: normalizeDockerTimestamp(stringField(state, 'StartedAt')),
+    finishedAt: normalizeDockerTimestamp(stringField(state, 'FinishedAt')),
+    status: stringField(state, 'Status'),
+    running: booleanField(state, 'Running'),
+    paused: booleanField(state, 'Paused'),
+    restarting: booleanField(state, 'Restarting'),
+    pid: numberField(state, 'Pid'),
+    exitCode: numberField(state, 'ExitCode'),
+    restartCount: numberField(record, 'RestartCount'),
+    platform: stringField(record, 'Platform'),
+    driver: stringField(record, 'Driver'),
+    hostname: stringField(config, 'Hostname'),
+    user: stringField(config, 'User'),
+    workingDir: stringField(config, 'WorkingDir'),
+    entrypoint: stringArrayField(config, 'Entrypoint'),
+    command: stringArrayField(config, 'Cmd').length > 0 ? stringArrayField(config, 'Cmd') : stringArrayField(record, 'Args'),
+    env: stringArrayField(config, 'Env'),
+    ports: mapDockerPorts(networkSettings.Ports),
+    mounts: mapDockerMounts(record.Mounts),
+    networks: mapDockerNetworks(networkSettings.Networks),
+    labels: stringRecord(config.Labels),
+    networkMode: stringField(hostConfig, 'NetworkMode'),
+    restartPolicy: stringField(restartPolicy, 'Name'),
+    rawJson: JSON.stringify(record, null, 2)
+  }
+}
+
 export function parseDockerEventLines(content: string): DockerEventSummary[] {
   return parseDockerJsonLines(content).map((row) => {
     const actor = asRecord(row.Actor)
@@ -471,4 +677,11 @@ export async function readDockerSnapshot(db: DockerDatabase, runner: DockerComma
     containers: parseDockerContainerLines(containerOutput),
     notes: listDockerResourceNotes(db)
   })
+}
+
+export async function readDockerContainerDetail(containerId: string, runner: DockerCommandRunner = runDockerCommand): Promise<DockerContainerDetail> {
+  const normalizedContainerId = normalizeResourceKey(containerId)
+  const output = await runner(['container', 'inspect', normalizedContainerId])
+
+  return parseDockerContainerInspect(output)
 }

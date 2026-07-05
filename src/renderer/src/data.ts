@@ -830,6 +830,63 @@ export type DockerContainerSummary = {
   note: DockerResourceNote | null
 }
 
+export type DockerContainerPortDetail = {
+  privatePort: string
+  type: string
+  hostIp: string
+  hostPort: string
+}
+
+export type DockerContainerMountDetail = {
+  type: string
+  source: string
+  destination: string
+  mode: string
+  rw: boolean
+  name: string
+}
+
+export type DockerContainerNetworkDetail = {
+  name: string
+  networkId: string
+  ipAddress: string
+  gateway: string
+  macAddress: string
+}
+
+export type DockerContainerDetail = {
+  id: string
+  shortId: string
+  name: string
+  image: string
+  imageName: string
+  createdAt: string
+  startedAt: string
+  finishedAt: string
+  status: string
+  running: boolean
+  paused: boolean
+  restarting: boolean
+  pid: number
+  exitCode: number
+  restartCount: number
+  platform: string
+  driver: string
+  hostname: string
+  user: string
+  workingDir: string
+  entrypoint: string[]
+  command: string[]
+  env: string[]
+  ports: DockerContainerPortDetail[]
+  mounts: DockerContainerMountDetail[]
+  networks: DockerContainerNetworkDetail[]
+  labels: Record<string, string>
+  networkMode: string
+  restartPolicy: string
+  rawJson: string
+}
+
 export type DockerSnapshot = {
   images: DockerImageSummary[]
   containers: DockerContainerSummary[]

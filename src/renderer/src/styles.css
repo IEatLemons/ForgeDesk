@@ -1091,6 +1091,23 @@ body {
   min-width: 0;
 }
 
+.deployment-project-tag {
+  display: inline-block;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  padding: 1px 8px;
+  overflow: hidden;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .deployment-url-button {
   height: auto;
   max-width: 100%;
@@ -2234,6 +2251,10 @@ body {
   white-space: nowrap;
 }
 
+.docker-clickable-row {
+  cursor: pointer;
+}
+
 .docker-cell-stack {
   display: grid;
   gap: 4px;
@@ -2260,6 +2281,31 @@ body {
   display: grid;
   gap: 6px;
   min-width: 0;
+}
+
+.docker-image-detail {
+  width: 100%;
+}
+
+.docker-container-detail,
+.docker-detail-tab {
+  width: 100%;
+}
+
+.docker-detail-table .ant-table-cell {
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.docker-detail-raw {
+  font-family: Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.docker-image-detail-code {
+  word-break: break-all;
+  white-space: normal;
 }
 
 .settings-management-form {
