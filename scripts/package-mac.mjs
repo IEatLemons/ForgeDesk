@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, r
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
+import { normalizeMacFrameworks } from './package-mac-signing.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const nodeBin = process.execPath
@@ -177,6 +178,7 @@ writeFileSync(
 
 rmSync(finalApp, { recursive: true, force: true })
 renameSync(tempApp, finalApp)
+normalizeMacFrameworks(finalApp)
 run('codesign', ['--force', '--deep', '--sign', '-', finalApp])
 
 console.log(`Packaged ${finalApp}`)
