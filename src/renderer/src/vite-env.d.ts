@@ -131,6 +131,64 @@ type RsaPrivateKeyUpdateInput = {
   notes?: string
 }
 
+type CliEnvironmentIssueStatus = 'ok' | 'warning' | 'error'
+
+type CliEnvironmentRepairAction = 'source-profile-from-zprofile' | 'install-zsh-dev-prompt' | 'install-zsh-ls-colors'
+
+type CliEnvironmentIssue = {
+  id: string
+  status: CliEnvironmentIssueStatus
+  title: string
+  detail: string
+  action?: CliEnvironmentRepairAction
+}
+
+type CliEnvironmentConfigFile = {
+  key: 'profile' | 'zprofile' | 'zshrc' | 'bashProfile' | 'bashrc'
+  label: string
+  path: string
+  exists: boolean
+  managed: boolean
+}
+
+type CliEnvironmentCommandCheck = {
+  name: string
+  available: boolean
+  path: string
+  version: string
+  error: string
+}
+
+type CliEnvironmentPlatform = 'aix' | 'android' | 'darwin' | 'freebsd' | 'haiku' | 'linux' | 'openbsd' | 'sunos' | 'win32' | 'cygwin' | 'netbsd'
+
+type CliEnvironmentSnapshot = {
+  platform: CliEnvironmentPlatform
+  shell: string
+  shellName: string
+  homeDirectory: string
+  checkedAt: string
+  processPath: string
+  loginShellPath: string
+  mergedPath: string
+  pnpmHome: string
+  profileSourcedFromLoginFile: boolean
+  promptConfigured: boolean
+  promptProvider: string
+  listingColorsConfigured: boolean
+  listingColorProvider: string
+  configFiles: CliEnvironmentConfigFile[]
+  commands: CliEnvironmentCommandCheck[]
+  issues: CliEnvironmentIssue[]
+  repairableActions: CliEnvironmentRepairAction[]
+}
+
+type CliEnvironmentRepairResult = {
+  snapshot: CliEnvironmentSnapshot
+  appliedActions: CliEnvironmentRepairAction[]
+  changedFiles: string[]
+  backupFiles: string[]
+}
+
 type TerminalSession = {
   id: string
   title: string
@@ -700,6 +758,53 @@ type DockerResourceNoteInput = {
   notes?: string
 }
 
+type DockerDevEnvironmentSystem = 'ubuntu-24.04' | 'ubuntu-22.04' | 'debian-12' | 'node-22' | 'python-3.12'
+
+type DockerDevEnvironmentInput = {
+  hostPath: string
+  name?: string
+  workspaceFolder?: string
+  system: DockerDevEnvironmentSystem
+  enableDockerInDocker?: boolean
+  overwrite?: boolean
+}
+
+type DockerDevEnvironmentResult = {
+  configPath: string
+  hostPath: string
+  name: string
+  workspaceFolder: string
+  system: DockerDevEnvironmentSystem
+  image: string
+  dockerInDocker: boolean
+  containerName: string
+  content: string
+}
+
+type DockerDevEnvironmentTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+
+type DockerDevEnvironmentRunMode = 'devcontainer-cli' | 'docker-run'
+
+type DockerDevEnvironmentTaskSnapshot = {
+  taskId: string
+  status: DockerDevEnvironmentTaskStatus
+  runMode: DockerDevEnvironmentRunMode
+  progressPercent: number
+  stage: string
+  title: string
+  hostPath: string
+  configPath: string
+  containerName: string
+  command: string
+  startedAt: string
+  updatedAt: string
+  finishedAt: string
+  exitCode: number | null
+  error: string
+  logs: string[]
+  result: DockerDevEnvironmentResult
+}
+
 type DockerImageSummary = {
   id: string
   shortId: string
@@ -1261,12 +1366,15 @@ interface Window {
     listServiceRuntimeLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
     getDockerSnapshot: () => Promise<DockerSnapshot>
     getDockerContainerDetail: (containerId: string) => Promise<DockerContainerDetail>
+    createDockerDevEnvironment: (input: DockerDevEnvironmentInput) => Promise<DockerDevEnvironmentTaskSnapshot>
+    listDockerDevEnvironmentTasks: () => Promise<DockerDevEnvironmentTaskSnapshot[]>
     saveDockerResourceNote: (input: DockerResourceNoteInput) => Promise<DockerSnapshot>
     deleteDockerResourceNote: (resourceType: DockerResourceType, resourceKey: string) => Promise<DockerSnapshot>
     startDockerWatch: () => Promise<void>
     stopDockerWatch: () => Promise<void>
     onDockerChanged: (listener: (event: DockerEventSummary) => void) => () => void
     onDockerWatchError: (listener: (event: { message: string }) => void) => () => void
+    onDockerDevEnvironmentProgress: (listener: (event: DockerDevEnvironmentTaskSnapshot) => void) => () => void
     saveProjectPerson: (input: { id?: string; projectId: string; displayName: string; role?: string; identities: Array<{ name: string; email: string }> }) => Promise<ProjectPersonRecord>
     deleteProjectPerson: (projectId: string, personId: string) => Promise<ProjectPersonRecord[]>
     scanRepositories: (paths: string[]) => Promise<ScannedRepository[]>
@@ -1287,6 +1395,8 @@ interface Window {
     createRsaPrivateKey: (input: RsaPrivateKeyCreateInput) => Promise<RsaPrivateKeyRecord>
     updateRsaPrivateKey: (input: RsaPrivateKeyUpdateInput) => Promise<RsaPrivateKeyRecord>
     deleteRsaPrivateKey: (id: string) => Promise<RsaPrivateKeyRecord[]>
+    inspectCliEnvironment: () => Promise<CliEnvironmentSnapshot>
+    repairCliEnvironment: () => Promise<CliEnvironmentRepairResult>
     previewMonthlyPerformance: (input: MonthlyPerformancePreviewInput) => Promise<MonthlyPerformancePreview>
     exportMonthlyPerformance: (input: MonthlyPerformanceExportInput) => Promise<MonthlyPerformanceExportResult>
     listMonthlyPerformanceSessions: () => Promise<MonthlyPerformanceSession[]>

@@ -12,6 +12,7 @@ import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion 
 import { requestReleaseSuggestion, type ReleaseSuggestion } from './ai-release-assistant'
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
 import { registerAppUpdateIpc } from './app-updates'
+import { inspectCliEnvironment, repairCliEnvironment, type CliEnvironmentRepairResult, type CliEnvironmentSnapshot } from './cli-environment'
 import { buildGitAuthorLookup, resolveGitAuthorDisplay, type GitAuthorLookup } from './git-author-mapping'
 import { parseControlledGitCommand, validateRepositoryRemoteName } from './git-controls'
 import {
@@ -3921,6 +3922,10 @@ ipcMain.handle('tools:rsa-private-keys:update', async (_event, input: RsaPrivate
 ipcMain.handle('tools:rsa-private-keys:delete', async (_event, id: string): Promise<RsaPrivateKeyRecord[]> => {
   return deleteRsaPrivateKeyRecord(getDatabase(), id)
 })
+
+ipcMain.handle('tools:cli-environment:inspect', async (): Promise<CliEnvironmentSnapshot> => inspectCliEnvironment())
+
+ipcMain.handle('tools:cli-environment:repair', async (): Promise<CliEnvironmentRepairResult> => repairCliEnvironment())
 
 ipcMain.handle('tools:monthly-performance:preview', async (_event, input: MonthlyPerformancePreviewInput): Promise<MonthlyPerformancePreview> => {
   return createMonthlyPerformancePreview(input)

@@ -77,6 +77,9 @@ import forgedeskLogoUrl from './assets/forgedesk-logo.svg'
 import type {
   AiSettingsView,
   AiConflictSuggestion,
+  CliEnvironmentIssue,
+  CliEnvironmentRepairResult,
+  CliEnvironmentSnapshot,
   ContributorSummary,
   GitCommandResult,
   GitBranchSwitchInput,
@@ -284,6 +287,12 @@ type SshPassphraseForm = {
 }
 
 type SettingsModuleKey = 'overview' | 'appearance' | 'git' | 'github' | 'private' | 'public' | 'config' | 'services' | 'plane' | 'ai' | 'updates' | 'log-refresh'
+type SettingsOverviewModuleKey = Exclude<SettingsModuleKey, 'overview'>
+type SettingsOverviewCategory = {
+  title: string
+  description: string
+  keys: SettingsOverviewModuleKey[]
+}
 
 type AppProps = {
   themePreference: ThemePreference
@@ -2306,7 +2315,7 @@ function SettingsPanel({
   }
 
   const settingsModules: Array<{
-    key: Exclude<SettingsModuleKey, 'overview'>
+    key: SettingsOverviewModuleKey
     title: string
     description: string
     icon: JSX.Element
@@ -2402,6 +2411,29 @@ function SettingsPanel({
       icon: <SettingOutlined />,
       meta: aiReady ? '已启用' : aiSettings?.apiKeyConfigured ? '未启用' : '需要配置',
       tone: aiReady ? 'ok' : aiSettings?.apiKeyConfigured ? 'neutral' : 'warning'
+    }
+  ]
+  const settingsModuleByKey = new Map(settingsModules.map((module) => [module.key, module]))
+  const settingsOverviewCategories: SettingsOverviewCategory[] = [
+    {
+      title: '个性化',
+      description: '控制界面外观和日常视图刷新。',
+      keys: ['appearance', 'log-refresh']
+    },
+    {
+      title: 'Git 与 SSH',
+      description: '管理提交身份、密钥和 SSH 连接配置。',
+      keys: ['git', 'private', 'public', 'config']
+    },
+    {
+      title: '集成与服务',
+      description: '配置外部账号、服务平台、Plane 和 AI 能力。',
+      keys: ['github', 'services', 'plane', 'ai']
+    },
+    {
+      title: '应用维护',
+      description: '检查、下载并安装 ForgeDesk 新版本。',
+      keys: ['updates']
     }
   ]
 
@@ -3051,32 +3083,52 @@ function SettingsPanel({
 
   function renderOverview(): JSX.Element {
     return (
-      <div className="settings-module-grid">
-        {settingsModules.map((module) => (
-          <button
-            className={`settings-entry-card settings-entry-card-${module.tone}`}
-            key={module.key}
-            type="button"
-            onClick={() => setActiveSettingsModule(module.key)}
-          >
-            <span className="settings-entry-icon">{module.icon}</span>
-            <span className="settings-entry-copy">
-              <span className="settings-entry-title-row">
-                <Typography.Text strong className="settings-entry-title">
-                  {module.title}
-                </Typography.Text>
-                <Tag
-                  className="settings-entry-meta"
-                  color={module.tone === 'ok' ? 'green' : module.tone === 'warning' ? 'gold' : module.tone === 'danger' ? 'red' : 'default'}
-                >
-                  {module.meta}
-                </Tag>
-              </span>
-              <Typography.Text className="settings-entry-description" type="secondary">
-                {module.description}
-              </Typography.Text>
-            </span>
-          </button>
+      <div className="settings-category-list">
+        {settingsOverviewCategories.map((category) => (
+          <section className="settings-category-section" key={category.title}>
+            <div className="settings-category-heading">
+              <Typography.Title className="settings-category-title" level={3}>
+                {category.title}
+              </Typography.Title>
+              <Typography.Text type="secondary">{category.description}</Typography.Text>
+            </div>
+            <div className="settings-module-grid">
+              {category.keys.map((key) => {
+                const module = settingsModuleByKey.get(key)
+
+                if (!module) {
+                  return null
+                }
+
+                return (
+                  <button
+                    className={`settings-entry-card settings-entry-card-${module.tone}`}
+                    key={module.key}
+                    type="button"
+                    onClick={() => setActiveSettingsModule(module.key)}
+                  >
+                    <span className="settings-entry-icon">{module.icon}</span>
+                    <span className="settings-entry-copy">
+                      <span className="settings-entry-title-row">
+                        <Typography.Text strong className="settings-entry-title">
+                          {module.title}
+                        </Typography.Text>
+                        <Tag
+                          className="settings-entry-meta"
+                          color={module.tone === 'ok' ? 'green' : module.tone === 'warning' ? 'gold' : module.tone === 'danger' ? 'red' : 'default'}
+                        >
+                          {module.meta}
+                        </Tag>
+                      </span>
+                      <Typography.Text className="settings-entry-description" type="secondary">
+                        {module.description}
+                      </Typography.Text>
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </section>
         ))}
       </div>
     )
@@ -12073,7 +12125,7 @@ function createCustomPasswordToolItem(input: {
 }
 
 type PasswordWorkflowMode = 'preset' | 'custom'
-type ToolKey = 'password' | 'file' | 'rsa' | 'excel'
+type ToolKey = 'password' | 'file' | 'rsa' | 'excel' | 'cli-environment'
 type ExcelToolKey = 'monthly-performance'
 
 type RsaPrivateKeyGenerationForm = {
@@ -12156,6 +12208,10 @@ function ToolsPanel(): JSX.Element {
     return <ExcelTool onBack={() => setActiveTool(null)} />
   }
 
+  if (activeTool === 'cli-environment') {
+    return <CliEnvironmentTool onBack={() => setActiveTool(null)} />
+  }
+
   return (
     <section className="workspace-section tools-workspace">
       <div className="section-heading">
@@ -12202,6 +12258,267 @@ function ToolsPanel(): JSX.Element {
             <Typography.Text type="secondary">用 AI 整理数据并生成工作簿。</Typography.Text>
           </span>
         </button>
+        <button className="tool-entry-card" type="button" onClick={() => setActiveTool('cli-environment')}>
+          <span className="password-tool-icon">
+            <CodeOutlined />
+          </span>
+          <span className="tool-entry-copy">
+            <Typography.Text strong>命令行环境</Typography.Text>
+            <Typography.Text type="secondary">检测 profile、PATH、Git 提示符。</Typography.Text>
+          </span>
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function splitCliEnvironmentPath(value: string, platform: CliEnvironmentSnapshot['platform']): string[] {
+  const delimiter = platform === 'win32' ? ';' : ':'
+
+  return value
+    .split(delimiter)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function getCliEnvironmentIssueAlertType(issue: CliEnvironmentIssue): 'success' | 'warning' | 'error' | 'info' {
+  if (issue.status === 'error') {
+    return 'error'
+  }
+
+  if (issue.status === 'warning') {
+    return 'warning'
+  }
+
+  return 'success'
+}
+
+function getCliEnvironmentStatus(snapshot: CliEnvironmentSnapshot | null): { type: 'success' | 'warning' | 'info'; message: string; description: string } {
+  if (!snapshot) {
+    return { type: 'info', message: '等待检测', description: '正在读取当前 shell 配置。' }
+  }
+
+  if (snapshot.issues.length === 0) {
+    return { type: 'success', message: '命令行环境正常', description: '新的 ForgeDesk 终端可以读取用户环境，并已有目录颜色和 Git 开发提示。' }
+  }
+
+  return { type: 'warning', message: '命令行环境需要修复', description: `发现 ${snapshot.issues.length} 个可改进项，其中 ${snapshot.repairableActions.length} 个可以自动修复。` }
+}
+
+function CliEnvironmentTool({ onBack }: { onBack: () => void }): JSX.Element {
+  const [snapshot, setSnapshot] = useState<CliEnvironmentSnapshot | null>(null)
+  const [repairResult, setRepairResult] = useState<CliEnvironmentRepairResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [repairing, setRepairing] = useState(false)
+  const [openingTerminal, setOpeningTerminal] = useState(false)
+  const statusView = getCliEnvironmentStatus(snapshot)
+  const mergedPathItems = snapshot ? splitCliEnvironmentPath(snapshot.mergedPath, snapshot.platform).slice(0, 14) : []
+  const repairDisabled = !snapshot || snapshot.repairableActions.length === 0 || repairing || loading
+
+  async function refreshEnvironment(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLoading(true)
+
+    try {
+      setSnapshot(await window.forgeDesk.inspectCliEnvironment())
+      setRepairResult(null)
+    } catch (error) {
+      message.error(getErrorMessage(error, '检测命令行环境失败'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function repairEnvironment(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setRepairing(true)
+
+    try {
+      const result = await window.forgeDesk.repairCliEnvironment()
+      setRepairResult(result)
+      setSnapshot(result.snapshot)
+      message.success(result.appliedActions.length > 0 ? '命令行环境已修复' : '没有需要修复的项目')
+    } catch (error) {
+      message.error(getErrorMessage(error, '修复命令行环境失败'))
+    } finally {
+      setRepairing(false)
+    }
+  }
+
+  async function openVerificationTerminal(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setOpeningTerminal(true)
+
+    try {
+      await window.forgeDesk.openTerminal({
+        title: '命令行环境验证',
+        startupCommand: 'echo "ForgeDesk CLI environment"; echo "SHELL=$SHELL"; echo "PATH=$PATH"; command -v git; git --version; echo; echo "ls -al preview:"; ls -al; \r'
+      })
+      message.success('验证终端已打开')
+    } catch (error) {
+      message.error(getErrorMessage(error, '打开验证终端失败'))
+    } finally {
+      setOpeningTerminal(false)
+    }
+  }
+
+  useEffect(() => {
+    void refreshEnvironment()
+  }, [])
+
+  return (
+    <section className="workspace-section tools-workspace">
+      <div className="section-heading">
+        <div>
+          <Button className="tool-back-button" icon={<ArrowLeftOutlined />} onClick={onBack}>
+            工具
+          </Button>
+          <Typography.Title level={2}>命令行环境</Typography.Title>
+          <Typography.Text type="secondary">检测 shell 启动链、PATH、Git 和开发提示符。</Typography.Text>
+        </div>
+        <Space wrap>
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={() => refreshEnvironment()}>
+            重新检测
+          </Button>
+          <Button icon={<DesktopOutlined />} loading={openingTerminal} onClick={() => openVerificationTerminal()}>
+            打开验证终端
+          </Button>
+          <Button type="primary" icon={<ToolOutlined />} disabled={repairDisabled} loading={repairing} onClick={() => repairEnvironment()}>
+            自动修复
+          </Button>
+        </Space>
+      </div>
+
+      <div className="cli-env-layout">
+        <div className="panel cli-env-status-panel">
+          <div className="password-tool-heading">
+            <span className="password-tool-icon">
+              <CodeOutlined />
+            </span>
+            <div>
+              <Typography.Title level={3}>环境状态</Typography.Title>
+              <Typography.Text type="secondary">新建终端会使用这里检测到的 shell 配置。</Typography.Text>
+            </div>
+          </div>
+
+          <Spin spinning={loading && !snapshot}>
+            <Space direction="vertical" size={14} className="full-width-control">
+              <Alert type={statusView.type} showIcon message={statusView.message} description={statusView.description} />
+
+              {snapshot && (
+                <>
+                  <div className="cli-env-summary-grid">
+                    <div className="cli-env-summary-item">
+                      <Typography.Text type="secondary">Shell</Typography.Text>
+                      <Typography.Text code ellipsis={{ tooltip: snapshot.shell }}>{snapshot.shellName}</Typography.Text>
+                    </div>
+                    <div className="cli-env-summary-item">
+                      <Typography.Text type="secondary">.profile</Typography.Text>
+                      <Tag color={snapshot.profileSourcedFromLoginFile ? 'green' : 'gold'}>{snapshot.profileSourcedFromLoginFile ? '已加载' : '未加载'}</Tag>
+                    </div>
+                    <div className="cli-env-summary-item">
+                      <Typography.Text type="secondary">Git Prompt</Typography.Text>
+                      <Tag color={snapshot.promptConfigured ? 'green' : 'gold'}>{snapshot.promptProvider || '未配置'}</Tag>
+                    </div>
+                    <div className="cli-env-summary-item">
+                      <Typography.Text type="secondary">ls 颜色</Typography.Text>
+                      <Tag color={snapshot.listingColorsConfigured ? 'green' : 'gold'}>{snapshot.listingColorProvider || '未开启'}</Tag>
+                    </div>
+                    <div className="cli-env-summary-item">
+                      <Typography.Text type="secondary">PNPM_HOME</Typography.Text>
+                      <Typography.Text ellipsis={{ tooltip: snapshot.pnpmHome || '未读取' }}>{snapshot.pnpmHome || '-'}</Typography.Text>
+                    </div>
+                  </div>
+
+                  <div className="cli-env-file-list">
+                    {snapshot.configFiles.map((file) => (
+                      <div className="cli-env-file-row" key={file.key}>
+                        <Space size={8} wrap>
+                          <Typography.Text strong>{file.label}</Typography.Text>
+                          <Tag color={file.exists ? 'blue' : 'default'}>{file.exists ? '存在' : '缺失'}</Tag>
+                          {file.managed && <Tag color="green">ForgeDesk</Tag>}
+                        </Space>
+                        <Typography.Text type="secondary" ellipsis={{ tooltip: file.path }}>{file.path}</Typography.Text>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </Space>
+          </Spin>
+        </div>
+
+        <div className="panel cli-env-details-panel">
+          <div className="password-tool-heading">
+            <span className="password-tool-icon">
+              <DashboardOutlined />
+            </span>
+            <div>
+              <Typography.Title level={3}>检测结果</Typography.Title>
+              <Typography.Text type="secondary">Git、ls、PATH 和可修复项。</Typography.Text>
+            </div>
+          </div>
+
+          {!snapshot ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="正在检测命令行环境" />
+          ) : (
+            <Space direction="vertical" size={14} className="full-width-control">
+              {snapshot.commands.map((command) => (
+                <div className="cli-env-command-row" key={command.name}>
+                  <Space size={8} wrap>
+                    <Typography.Text strong>{command.name}</Typography.Text>
+                    <Tag color={command.available ? 'green' : 'red'}>{command.available ? '可用' : '缺失'}</Tag>
+                    {command.version && <Tag>{command.version}</Tag>}
+                  </Space>
+                  <Typography.Text type={command.available ? 'secondary' : 'danger'} ellipsis={{ tooltip: command.path || command.error }}>
+                    {command.path || command.error || '-'}
+                  </Typography.Text>
+                </div>
+              ))}
+
+              {snapshot.issues.length > 0 ? (
+                <Space direction="vertical" size={10} className="full-width-control">
+                  {snapshot.issues.map((issue) => (
+                    <Alert key={issue.id} type={getCliEnvironmentIssueAlertType(issue)} showIcon message={issue.title} description={issue.detail} />
+                  ))}
+                </Space>
+              ) : (
+                <Alert type="success" showIcon message="没有发现需要处理的问题" />
+              )}
+
+              <div className="cli-env-path-panel">
+                <div className="cli-env-path-heading">
+                  <Typography.Text strong>合并后的 PATH</Typography.Text>
+                  <Button size="small" icon={<CopyOutlined />} onClick={() => copyText(snapshot.mergedPath, 'PATH 已复制')}>
+                    复制
+                  </Button>
+                </div>
+                <pre>{mergedPathItems.map((item, index) => `${index + 1}. ${item}`).join('\n') || '未读取到 PATH'}</pre>
+              </div>
+
+              {repairResult && (
+                <Alert
+                  type={repairResult.appliedActions.length > 0 ? 'success' : 'info'}
+                  showIcon
+                  message={repairResult.appliedActions.length > 0 ? '修复已完成' : '没有写入新配置'}
+                  description={[
+                    ...repairResult.changedFiles.map((file) => `已更新：${file}`),
+                    ...repairResult.backupFiles.map((file) => `备份：${file}`)
+                  ].join('\n') || '当前配置已经满足检测项。'}
+                />
+              )}
+            </Space>
+          )}
+        </div>
       </div>
     </section>
   )

@@ -1874,6 +1874,68 @@ body {
   align-items: start;
 }
 
+.cli-env-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.42fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.cli-env-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cli-env-summary-item,
+.cli-env-file-row,
+.cli-env-command-row,
+.cli-env-path-panel {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+}
+
+.cli-env-summary-item {
+  display: grid;
+  gap: 6px;
+}
+
+.cli-env-file-list {
+  display: grid;
+  gap: 10px;
+}
+
+.cli-env-file-row,
+.cli-env-command-row {
+  display: grid;
+  gap: 6px;
+}
+
+.cli-env-path-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.cli-env-path-panel pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  color: var(--app-text);
+  border: 1px solid var(--code-border);
+  border-radius: 8px;
+  background: var(--code-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .file-picker-panel,
 .file-diff-panel,
 .monthly-performance-input-panel,
@@ -2099,6 +2161,28 @@ body {
   max-width: 1480px;
 }
 
+.settings-category-list {
+  display: grid;
+  gap: 24px;
+}
+
+.settings-category-section {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-category-heading {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-category-title.ant-typography {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
 .settings-module-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
@@ -2231,6 +2315,53 @@ body {
 
 .docker-search {
   width: min(420px, 100%);
+}
+
+.docker-dev-environment-form,
+.docker-dev-environment-form .ant-form,
+.docker-dev-environment-path {
+  width: 100%;
+}
+
+.docker-dev-environment-task {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+}
+
+.docker-dev-environment-task-failed {
+  border-color: rgba(255, 77, 79, 0.35);
+}
+
+.docker-dev-environment-task-succeeded {
+  border-color: rgba(82, 196, 26, 0.35);
+}
+
+.docker-dev-environment-task-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.docker-dev-environment-task-meta {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.28fr) minmax(220px, 0.36fr) minmax(220px, 0.36fr);
+  gap: 10px;
+}
+
+.docker-dev-environment-task-meta > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.docker-dev-environment-log {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
 }
 
 .docker-compact-table {
@@ -4038,6 +4169,7 @@ body {
   .password-tool-layout,
   .file-tool-layout,
   .excel-tool-layout,
+  .cli-env-layout,
   .monthly-performance-chat-shell {
     grid-template-columns: 1fr;
   }
@@ -4147,8 +4279,15 @@ body {
 
   .ai-settings-grid,
   .password-custom-grid,
-  .file-diff-summary {
+  .file-diff-summary,
+  .cli-env-summary-grid,
+  .docker-dev-environment-task-meta {
     grid-template-columns: 1fr;
+  }
+
+  .docker-dev-environment-task-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .conflict-file-row {

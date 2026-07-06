@@ -1,5 +1,8 @@
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
+import { basename, isAbsolute, join } from 'node:path'
 import { createGuiToolFallbackPath, mergePathValues } from './shell-environment.js'
 
 export type DockerResourceType = 'image' | 'container'
@@ -125,6 +128,65 @@ export type DockerEventSummary = {
   actorAttributes: Record<string, string>
 }
 
+export type DockerDevEnvironmentSystem = 'ubuntu-24.04' | 'ubuntu-22.04' | 'debian-12' | 'node-22' | 'python-3.12'
+
+export type DockerDevEnvironmentInput = {
+  hostPath: string
+  name?: string
+  workspaceFolder?: string
+  system: DockerDevEnvironmentSystem
+  enableDockerInDocker?: boolean
+  overwrite?: boolean
+}
+
+export type DockerDevEnvironmentResult = {
+  configPath: string
+  hostPath: string
+  name: string
+  workspaceFolder: string
+  system: DockerDevEnvironmentSystem
+  image: string
+  dockerInDocker: boolean
+  containerName: string
+  content: string
+}
+
+export type DockerDevEnvironmentConfigResult = DockerDevEnvironmentResult & {
+  config: Record<string, unknown>
+}
+
+export type DockerDevEnvironmentTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+
+export type DockerDevEnvironmentRunMode = 'devcontainer-cli' | 'docker-run'
+
+export type DockerDevEnvironmentTaskSnapshot = {
+  taskId: string
+  status: DockerDevEnvironmentTaskStatus
+  runMode: DockerDevEnvironmentRunMode
+  progressPercent: number
+  stage: string
+  title: string
+  hostPath: string
+  configPath: string
+  containerName: string
+  command: string
+  startedAt: string
+  updatedAt: string
+  finishedAt: string
+  exitCode: number | null
+  error: string
+  logs: string[]
+  result: DockerDevEnvironmentResult
+}
+
+export type DockerDevEnvironmentCommandStep = {
+  stage: string
+  file: string
+  args: string[]
+  progressPercent: number
+  allowMissingContainer?: boolean
+}
+
 type DockerStatement = {
   all: (...params: any[]) => unknown[]
   get: (...params: any[]) => unknown
@@ -156,6 +218,14 @@ export type DockerSnapshotInput = {
   containers: DockerContainerSummary[]
   notes: DockerResourceNoteRecord[]
   checkedAt?: string
+}
+
+const dockerDevEnvironmentSystems: Record<DockerDevEnvironmentSystem, { label: string; image: string }> = {
+  'ubuntu-24.04': { label: 'Ubuntu 24.04', image: 'mcr.microsoft.com/devcontainers/base:ubuntu-24.04' },
+  'ubuntu-22.04': { label: 'Ubuntu 22.04', image: 'mcr.microsoft.com/devcontainers/base:ubuntu-22.04' },
+  'debian-12': { label: 'Debian 12', image: 'mcr.microsoft.com/devcontainers/base:debian-12' },
+  'node-22': { label: 'Node.js 22', image: 'mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm' },
+  'python-3.12': { label: 'Python 3.12', image: 'mcr.microsoft.com/devcontainers/python:1-3.12-bookworm' }
 }
 
 function nowIso(): string {
@@ -247,6 +317,232 @@ function normalizeResourceKey(value: unknown): string {
   }
 
   return resourceKey
+}
+
+function normalizeDockerDevEnvironmentSystem(value: unknown): DockerDevEnvironmentSystem {
+  if (
+    value === 'ubuntu-24.04' ||
+    value === 'ubuntu-22.04' ||
+    value === 'debian-12' ||
+    value === 'node-22' ||
+    value === 'python-3.12'
+  ) {
+    return value
+  }
+
+  throw new Error('请选择有效的开发系统环境')
+}
+
+function normalizeDockerDevHostPath(value: unknown): string {
+  const hostPath = trimText(value)
+
+  if (!hostPath) {
+    throw new Error('请选择映射目录')
+  }
+
+  if (!isAbsolute(hostPath)) {
+    throw new Error('映射目录必须是绝对路径')
+  }
+
+  return hostPath
+}
+
+function normalizeDockerWorkspaceFolder(value: unknown, hostPath: string): string {
+  const folderName = basename(hostPath) || 'workspace'
+  const workspaceFolder = trimText(value) || `/workspaces/${folderName}`
+
+  if (!workspaceFolder.startsWith('/')) {
+    throw new Error('容器工作区路径必须以 / 开头')
+  }
+
+  return workspaceFolder.replace(/\/+$/, '') || '/'
+}
+
+function normalizeDockerDevEnvironmentName(value: unknown, hostPath: string): string {
+  return trimText(value) || `${basename(hostPath) || 'ForgeDesk'} Dev`
+}
+
+function slugifyDockerName(value: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, '-')
+    .replace(/^[^a-z0-9]+/, '')
+    .replace(/[^a-z0-9]+$/, '')
+
+  return slug || 'workspace'
+}
+
+function createDockerDevEnvironmentContainerName(hostPath: string, name: string): string {
+  const hash = createHash('sha1').update(hostPath).digest('hex').slice(0, 8)
+  const slug = slugifyDockerName(name).slice(0, 36).replace(/[^a-z0-9]+$/, '') || 'workspace'
+
+  return `forgedesk-dev-${slug}-${hash}`.slice(0, 63)
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      return false
+    }
+
+    throw error
+  }
+}
+
+async function assertDirectory(path: string): Promise<void> {
+  let pathStat
+
+  try {
+    pathStat = await stat(path)
+  } catch {
+    throw new Error(`映射目录不存在：${path}`)
+  }
+
+  if (!pathStat.isDirectory()) {
+    throw new Error(`映射目录不是文件夹：${path}`)
+  }
+}
+
+export function createDockerDevEnvironmentConfig(input: DockerDevEnvironmentInput): DockerDevEnvironmentConfigResult {
+  const hostPath = normalizeDockerDevHostPath(input.hostPath)
+  const system = normalizeDockerDevEnvironmentSystem(input.system)
+  const name = normalizeDockerDevEnvironmentName(input.name, hostPath)
+  const workspaceFolder = normalizeDockerWorkspaceFolder(input.workspaceFolder, hostPath)
+  const dockerInDocker = input.enableDockerInDocker !== false
+  const image = dockerDevEnvironmentSystems[system].image
+  const containerName = createDockerDevEnvironmentContainerName(hostPath, name)
+  const config: Record<string, unknown> = {
+    name,
+    image,
+    remoteUser: 'root',
+    containerUser: 'root',
+    updateRemoteUserUID: false,
+    workspaceFolder,
+    workspaceMount: `source=\${localWorkspaceFolder},target=${workspaceFolder},type=bind,consistency=cached`,
+    runArgs: ['--init'],
+    customizations: {
+      vscode: {
+        settings: {
+          'remote.containers.copyGitConfig': true
+        }
+      }
+    }
+  }
+
+  if (dockerInDocker) {
+    config.privileged = true
+    config.features = {
+      'ghcr.io/devcontainers/features/docker-in-docker:2': {
+        version: 'latest',
+        moby: true
+      }
+    }
+  }
+
+  const content = `${JSON.stringify(config, null, 2)}\n`
+
+  return {
+    configPath: join(hostPath, '.devcontainer', 'devcontainer.json'),
+    hostPath,
+    name,
+    workspaceFolder,
+    system,
+    image,
+    dockerInDocker,
+    containerName,
+    content,
+    config
+  }
+}
+
+export async function createDockerDevEnvironment(input: DockerDevEnvironmentInput): Promise<DockerDevEnvironmentResult> {
+  const result = createDockerDevEnvironmentConfig(input)
+
+  await assertDirectory(result.hostPath)
+
+  if (!input.overwrite && (await pathExists(result.configPath))) {
+    throw new Error(`开发环境配置已存在：${result.configPath}`)
+  }
+
+  await mkdir(join(result.hostPath, '.devcontainer'), { recursive: true })
+  await writeFile(result.configPath, result.content, 'utf8')
+
+  return result
+}
+
+function shellQuoteArg(value: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./~-]+$/.test(value)) {
+    return value
+  }
+
+  return `'${value.replace(/'/g, "'\\''")}'`
+}
+
+export function formatDockerProcessCommand(file: string, args: string[]): string {
+  return [file, ...args].map(shellQuoteArg).join(' ')
+}
+
+export function createDockerDevContainerCliArgs(result: DockerDevEnvironmentResult): string[] {
+  return [
+    'up',
+    '--workspace-folder',
+    result.hostPath,
+    '--config',
+    result.configPath,
+    '--id-label',
+    'forgedesk.dev-environment=true',
+    '--id-label',
+    `forgedesk.dev-environment.name=${result.name}`,
+    '--id-label',
+    `forgedesk.dev-environment.container=${result.containerName}`,
+    '--remove-existing-container',
+    '--log-level',
+    'info',
+    '--log-format',
+    'text'
+  ]
+}
+
+export function createDockerDevEnvironmentRunSteps(result: DockerDevEnvironmentResult): DockerDevEnvironmentCommandStep[] {
+  const labels = [
+    'forgedesk.dev-environment=true',
+    `forgedesk.dev-environment.name=${result.name}`,
+    `forgedesk.dev-environment.host-path=${result.hostPath}`,
+    `forgedesk.dev-environment.config-path=${result.configPath}`,
+    `forgedesk.dev-environment.docker-in-docker=${String(result.dockerInDocker)}`,
+    `devcontainer.local_folder=${result.hostPath}`,
+    `devcontainer.config_file=${result.configPath}`
+  ]
+  const runArgs = [
+    'run',
+    '-d',
+    '--name',
+    result.containerName,
+    '--init',
+    '--user',
+    'root',
+    '--workdir',
+    result.workspaceFolder,
+    '--mount',
+    `type=bind,source=${result.hostPath},target=${result.workspaceFolder}`,
+    ...labels.flatMap((label) => ['--label', label])
+  ]
+
+  if (result.dockerInDocker) {
+    runArgs.push('--privileged')
+  }
+
+  runArgs.push(result.image, '/bin/sh', '-lc', 'while sleep 3600; do :; done')
+
+  return [
+    { stage: '拉取开发环境镜像', file: 'docker', args: ['pull', result.image], progressPercent: 35 },
+    { stage: '清理同名开发容器', file: 'docker', args: ['rm', '-f', result.containerName], progressPercent: 55, allowMissingContainer: true },
+    { stage: '启动开发容器', file: 'docker', args: runArgs, progressPercent: 85 }
+  ]
 }
 
 function mapDockerNoteRow(row: Record<string, unknown>): DockerResourceNoteRecord {

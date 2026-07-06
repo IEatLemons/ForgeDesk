@@ -85,6 +85,8 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   listServiceRuntimeLogs: (serviceId: string, environmentName: string) => ipcRenderer.invoke('service:runtime:logs', serviceId, environmentName),
   getDockerSnapshot: () => ipcRenderer.invoke('docker:snapshot'),
   getDockerContainerDetail: (containerId: string) => ipcRenderer.invoke('docker:container:detail', containerId),
+  createDockerDevEnvironment: (input: DockerDevEnvironmentInput) => ipcRenderer.invoke('docker:dev-environment:create', input),
+  listDockerDevEnvironmentTasks: () => ipcRenderer.invoke('docker:dev-environment:tasks'),
   saveDockerResourceNote: (input: DockerResourceNoteInput) => ipcRenderer.invoke('docker:note:save', input),
   deleteDockerResourceNote: (resourceType: DockerResourceType, resourceKey: string) => ipcRenderer.invoke('docker:note:delete', resourceType, resourceKey),
   startDockerWatch: () => ipcRenderer.invoke('docker:watch:start'),
@@ -98,6 +100,11 @@ contextBridge.exposeInMainWorld('forgeDesk', {
     const wrapped = (_event: Electron.IpcRendererEvent, event: { message: string }): void => listener(event)
     ipcRenderer.on('docker:watch:error', wrapped)
     return () => ipcRenderer.removeListener('docker:watch:error', wrapped)
+  },
+  onDockerDevEnvironmentProgress: (listener: (event: DockerDevEnvironmentTaskSnapshot) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, event: DockerDevEnvironmentTaskSnapshot): void => listener(event)
+    ipcRenderer.on('docker:dev-environment:progress', wrapped)
+    return () => ipcRenderer.removeListener('docker:dev-environment:progress', wrapped)
   },
   saveProjectPerson: (input: { id?: string; projectId: string; displayName: string; role?: string; identities: Array<{ name: string; email: string }> }) =>
     ipcRenderer.invoke('project:person:save', input),
@@ -121,6 +128,8 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   createRsaPrivateKey: (input: RsaPrivateKeyCreateInput) => ipcRenderer.invoke('tools:rsa-private-keys:create', input),
   updateRsaPrivateKey: (input: RsaPrivateKeyUpdateInput) => ipcRenderer.invoke('tools:rsa-private-keys:update', input),
   deleteRsaPrivateKey: (id: string) => ipcRenderer.invoke('tools:rsa-private-keys:delete', id),
+  inspectCliEnvironment: () => ipcRenderer.invoke('tools:cli-environment:inspect'),
+  repairCliEnvironment: () => ipcRenderer.invoke('tools:cli-environment:repair'),
   previewMonthlyPerformance: (input: MonthlyPerformancePreviewInput) => ipcRenderer.invoke('tools:monthly-performance:preview', input),
   exportMonthlyPerformance: (input: MonthlyPerformanceExportInput) => ipcRenderer.invoke('tools:monthly-performance:export', input),
   listMonthlyPerformanceSessions: () => ipcRenderer.invoke('tools:monthly-performance:sessions:list'),

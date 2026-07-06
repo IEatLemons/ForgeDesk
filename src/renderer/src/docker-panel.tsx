@@ -1,8 +1,19 @@
-import { CodeOutlined, DeleteOutlined, EditOutlined, InfoCircleOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
-import { Alert, Badge, Button, Col, Descriptions, Drawer, Empty, Form, Input, Modal, Row, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
+import { CodeOutlined, DeleteOutlined, EditOutlined, FolderOpenOutlined, InfoCircleOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
+import { Alert, Badge, Button, Col, Descriptions, Drawer, Empty, Form, Input, Modal, Progress, Row, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { DockerContainerDetail, DockerContainerSummary, DockerImageSummary, DockerResourceNote, DockerResourceType, DockerSnapshot } from './data'
+import type {
+  DockerContainerDetail,
+  DockerContainerSummary,
+  DockerDevEnvironmentInput,
+  DockerDevEnvironmentSystem,
+  DockerDevEnvironmentTaskSnapshot,
+  DockerDevEnvironmentTaskStatus,
+  DockerImageSummary,
+  DockerResourceNote,
+  DockerResourceType,
+  DockerSnapshot
+} from './data'
 import {
   createDockerImageRootTerminalRequest,
   createDockerDashboardSummary,
@@ -24,6 +35,15 @@ type DockerNoteForm = {
   notes: string
 }
 
+type DockerDevEnvironmentForm = {
+  hostPath: string
+  name: string
+  workspaceFolder: string
+  system: DockerDevEnvironmentSystem
+  enableDockerInDocker: boolean
+  overwrite: boolean
+}
+
 type EditingDockerNote = {
   resourceType: DockerResourceType
   resourceKey: string
@@ -35,6 +55,67 @@ type EditingDockerNote = {
 
 type DockerPanelProps = {
   onOpenTerminalRequest?: (request: Omit<TerminalOpenRequest, 'requestId'>) => void
+}
+
+const dockerDevEnvironmentSystemOptions: Array<{ label: string; value: DockerDevEnvironmentSystem }> = [
+  { label: 'Ubuntu 24.04', value: 'ubuntu-24.04' },
+  { label: 'Ubuntu 22.04', value: 'ubuntu-22.04' },
+  { label: 'Debian 12', value: 'debian-12' },
+  { label: 'Node.js 22', value: 'node-22' },
+  { label: 'Python 3.12', value: 'python-3.12' }
+]
+
+function getPathBasename(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() || 'workspace'
+}
+
+function createDefaultDevEnvironmentValues(hostPath = ''): DockerDevEnvironmentForm {
+  const folderName = hostPath ? getPathBasename(hostPath) : 'workspace'
+
+  return {
+    hostPath,
+    name: `${folderName} Dev`,
+    workspaceFolder: `/workspaces/${folderName}`,
+    system: 'ubuntu-24.04',
+    enableDockerInDocker: true,
+    overwrite: false
+  }
+}
+
+function isDevEnvironmentTaskActive(task: DockerDevEnvironmentTaskSnapshot | null): boolean {
+  return task?.status === 'queued' || task?.status === 'running'
+}
+
+function getDevEnvironmentTaskStatusText(status: DockerDevEnvironmentTaskStatus): string {
+  if (status === 'queued') {
+    return '等待中'
+  }
+
+  if (status === 'running') {
+    return '构建中'
+  }
+
+  if (status === 'succeeded') {
+    return '已启动'
+  }
+
+  return '失败'
+}
+
+function getDevEnvironmentTaskProgressStatus(status: DockerDevEnvironmentTaskStatus): 'active' | 'success' | 'exception' | 'normal' {
+  if (status === 'succeeded') {
+    return 'success'
+  }
+
+  if (status === 'failed') {
+    return 'exception'
+  }
+
+  return status === 'running' ? 'active' : 'normal'
+}
+
+function getDevEnvironmentRunModeLabel(task: DockerDevEnvironmentTaskSnapshot): string {
+  return task.runMode === 'devcontainer-cli' ? 'Dev Containers CLI' : 'Docker 直接运行'
 }
 
 function formatDockerTime(value: string): string {
@@ -105,12 +186,17 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
   const [containerDetailLoading, setContainerDetailLoading] = useState(false)
   const [containerDetailError, setContainerDetailError] = useState('')
   const [selectedImage, setSelectedImage] = useState<DockerImageSummary | null>(null)
+  const [devEnvironmentOpen, setDevEnvironmentOpen] = useState(false)
+  const [creatingDevEnvironment, setCreatingDevEnvironment] = useState(false)
+  const [devEnvironmentTask, setDevEnvironmentTask] = useState<DockerDevEnvironmentTaskSnapshot | null>(null)
   const [savingNote, setSavingNote] = useState(false)
   const [workingNoteKey, setWorkingNoteKey] = useState('')
   const [noteForm] = Form.useForm<DockerNoteForm>()
+  const [devEnvironmentForm] = Form.useForm<DockerDevEnvironmentForm>()
   const containerDetailRequestRef = useRef(0)
   const refreshInFlightRef = useRef(false)
   const mountedRef = useRef(true)
+  const devEnvironmentTaskStatusRef = useRef<Record<string, DockerDevEnvironmentTaskStatus>>({})
 
   async function loadSnapshot(options: { silent?: boolean } = {}): Promise<void> {
     if (!window.forgeDesk || refreshInFlightRef.current) {
@@ -143,6 +229,27 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
     }
   }
 
+  function handleDevEnvironmentTaskUpdate(task: DockerDevEnvironmentTaskSnapshot): void {
+    setDevEnvironmentTask(task)
+
+    const previousStatus = devEnvironmentTaskStatusRef.current[task.taskId]
+    devEnvironmentTaskStatusRef.current[task.taskId] = task.status
+
+    if (previousStatus === task.status) {
+      return
+    }
+
+    if (task.status === 'succeeded') {
+      message.success(`开发容器已启动：${task.containerName}`)
+      void loadSnapshot({ silent: true })
+    }
+
+    if (task.status === 'failed') {
+      message.error(task.error || '开发环境构建失败')
+      void loadSnapshot({ silent: true })
+    }
+  }
+
   useEffect(() => {
     mountedRef.current = true
     void loadSnapshot()
@@ -161,6 +268,21 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
       setWatchError(event.message)
       setWatching(false)
     })
+    const removeDevEnvironmentProgressListener = window.forgeDesk.onDockerDevEnvironmentProgress((task) => {
+      if (mountedRef.current) {
+        handleDevEnvironmentTaskUpdate(task)
+      }
+    })
+
+    window.forgeDesk
+      .listDockerDevEnvironmentTasks()
+      .then((tasks) => {
+        if (mountedRef.current && tasks[0]) {
+          setDevEnvironmentTask(tasks[0])
+          devEnvironmentTaskStatusRef.current[tasks[0].taskId] = tasks[0].status
+        }
+      })
+      .catch(() => undefined)
 
     window.forgeDesk
       .startDockerWatch()
@@ -181,6 +303,7 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
       mountedRef.current = false
       removeChangedListener()
       removeWatchErrorListener()
+      removeDevEnvironmentProgressListener()
       setWatching(false)
       void window.forgeDesk.stopDockerWatch()
     }
@@ -240,6 +363,66 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
 
   function openImageRootTerminal(image: DockerImageSummary): void {
     onOpenTerminalRequest?.(createDockerImageRootTerminalRequest(image))
+  }
+
+  function openDevEnvironmentModal(): void {
+    devEnvironmentForm.setFieldsValue(createDefaultDevEnvironmentValues())
+    setDevEnvironmentOpen(true)
+  }
+
+  async function selectDevEnvironmentDirectory(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    try {
+      const directory = await window.forgeDesk.selectDirectory()
+
+      if (!directory) {
+        return
+      }
+
+      const defaults = createDefaultDevEnvironmentValues(directory)
+      const currentName = devEnvironmentForm.getFieldValue('name')
+
+      devEnvironmentForm.setFieldsValue({
+        ...defaults,
+        name: currentName?.trim() ? currentName : defaults.name
+      })
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    }
+  }
+
+  async function createDevEnvironment(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const values = await devEnvironmentForm.validateFields()
+    const input: DockerDevEnvironmentInput = {
+      hostPath: values.hostPath,
+      name: values.name,
+      workspaceFolder: values.workspaceFolder,
+      system: values.system,
+      enableDockerInDocker: values.enableDockerInDocker,
+      overwrite: values.overwrite
+    }
+
+    setCreatingDevEnvironment(true)
+
+    try {
+      const task = await window.forgeDesk.createDockerDevEnvironment(input)
+      setDevEnvironmentTask(task)
+      devEnvironmentTaskStatusRef.current[task.taskId] = task.status
+      setDevEnvironmentOpen(false)
+      devEnvironmentForm.resetFields()
+      message.success(`开发环境构建已启动：${task.containerName}`)
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setCreatingDevEnvironment(false)
+    }
   }
 
   function openContainerDetails(container: DockerContainerSummary): void {
@@ -540,6 +723,8 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
   const containerMountRows = (containerDetail?.mounts ?? []).map((mount, index) => ({ key: `${mount.destination}-${index}`, ...mount }))
   const containerNetworkRows = (containerDetail?.networks ?? []).map((network) => ({ key: network.name, ...network }))
   const containerLabelRows = Object.entries(containerDetail?.labels ?? {}).map(([key, value]) => ({ key, label: key, value }))
+  const devEnvironmentTaskActive = isDevEnvironmentTaskActive(devEnvironmentTask)
+  const devEnvironmentTaskLogs = (devEnvironmentTask?.logs ?? []).slice(-80).join('\n')
 
   return (
     <section className="workspace-section docker-page">
@@ -551,6 +736,9 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
           </Space>
           <Space wrap>
             <Tag color={watchStatus.color}>{watchStatus.label}</Tag>
+            <Button type="primary" icon={<PlusOutlined />} loading={creatingDevEnvironment} disabled={devEnvironmentTaskActive} onClick={openDevEnvironmentModal}>
+              创建开发环境
+            </Button>
             <Button icon={<ReloadOutlined />} loading={loading} onClick={() => loadSnapshot()}>
               刷新
             </Button>
@@ -568,6 +756,42 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
           />
         ) : null}
         {watchError ? <Alert className="docker-alert" type="info" showIcon message="Docker 监听未运行" description={watchError} /> : null}
+
+        {devEnvironmentTask ? (
+          <div className={`docker-dev-environment-task docker-dev-environment-task-${devEnvironmentTask.status}`}>
+            <div className="docker-dev-environment-task-heading">
+              <Space size={8} wrap>
+                <Tag color={devEnvironmentTask.status === 'failed' ? 'red' : devEnvironmentTask.status === 'succeeded' ? 'green' : 'blue'}>
+                  {getDevEnvironmentTaskStatusText(devEnvironmentTask.status)}
+                </Tag>
+                <Typography.Text strong>{devEnvironmentTask.stage}</Typography.Text>
+                <Typography.Text type="secondary">{getDevEnvironmentRunModeLabel(devEnvironmentTask)}</Typography.Text>
+              </Space>
+              <Typography.Text type="secondary">更新：{formatDockerTime(devEnvironmentTask.updatedAt)}</Typography.Text>
+            </div>
+            <Progress
+              percent={devEnvironmentTask.progressPercent}
+              size="small"
+              status={getDevEnvironmentTaskProgressStatus(devEnvironmentTask.status)}
+            />
+            <div className="docker-dev-environment-task-meta">
+              <div>
+                <Typography.Text type="secondary">容器</Typography.Text>
+                <Typography.Text code copyable={{ text: devEnvironmentTask.containerName }}>{devEnvironmentTask.containerName}</Typography.Text>
+              </div>
+              <div>
+                <Typography.Text type="secondary">映射目录</Typography.Text>
+                <Typography.Text ellipsis={{ tooltip: devEnvironmentTask.hostPath }}>{devEnvironmentTask.hostPath}</Typography.Text>
+              </div>
+              <div>
+                <Typography.Text type="secondary">配置</Typography.Text>
+                <Typography.Text ellipsis={{ tooltip: devEnvironmentTask.configPath }}>{devEnvironmentTask.configPath}</Typography.Text>
+              </div>
+            </div>
+            {devEnvironmentTask.error ? <Alert type="error" showIcon message="开发环境构建失败" description={devEnvironmentTask.error} /> : null}
+            {devEnvironmentTaskLogs ? <Input.TextArea className="docker-dev-environment-log" readOnly rows={6} value={devEnvironmentTaskLogs} /> : null}
+          </div>
+        ) : null}
 
         <Row gutter={[12, 12]} className="docker-summary-row">
           <Col xs={12} md={6}><div className="metric-tile"><Statistic title="镜像" value={summary.imageCount} /></div></Col>
@@ -871,6 +1095,55 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
           </Space>
         ) : null}
       </Drawer>
+
+      <Modal
+        title="创建开发环境"
+        open={devEnvironmentOpen}
+        okText="创建并启动"
+        cancelText="取消"
+        confirmLoading={creatingDevEnvironment}
+        onOk={createDevEnvironment}
+        onCancel={() => {
+          setDevEnvironmentOpen(false)
+          devEnvironmentForm.resetFields()
+        }}
+      >
+        <Space direction="vertical" size={14} className="docker-dev-environment-form">
+          <Alert
+            type="info"
+            showIcon
+            message="生成并启动 Dev Containers 开发环境"
+            description="会写入 .devcontainer/devcontainer.json，并启动一个 root 用户开发容器；默认启用 Docker-in-Docker 配置。"
+          />
+          <Form form={devEnvironmentForm} layout="vertical" initialValues={createDefaultDevEnvironmentValues()}>
+            <Form.Item label="映射目录" required>
+              <Space.Compact className="docker-dev-environment-path">
+                <Form.Item name="hostPath" noStyle rules={[{ required: true, message: '请选择映射目录' }]}>
+                  <Input placeholder="/Users/stone/project" />
+                </Form.Item>
+                <Button icon={<FolderOpenOutlined />} onClick={selectDevEnvironmentDirectory}>
+                  选择
+                </Button>
+              </Space.Compact>
+            </Form.Item>
+            <Form.Item name="name" label="环境名称" rules={[{ required: true, message: '请输入环境名称' }]}>
+              <Input placeholder="workspace Dev" />
+            </Form.Item>
+            <Form.Item name="workspaceFolder" label="容器工作区路径" rules={[{ required: true, message: '请输入容器工作区路径' }]}>
+              <Input placeholder="/workspaces/workspace" />
+            </Form.Item>
+            <Form.Item name="system" label="开发系统环境" rules={[{ required: true, message: '请选择开发系统环境' }]}>
+              <Select options={dockerDevEnvironmentSystemOptions} />
+            </Form.Item>
+            <Form.Item name="enableDockerInDocker" label="Docker-in-Docker 插件" valuePropName="checked">
+              <Switch checkedChildren="启用" unCheckedChildren="关闭" />
+            </Form.Item>
+            <Form.Item name="overwrite" label="覆盖已有配置" valuePropName="checked">
+              <Switch checkedChildren="覆盖" unCheckedChildren="保留" />
+            </Form.Item>
+          </Form>
+        </Space>
+      </Modal>
 
       <Modal
         title={editingNote ? `编辑备注：${editingNote.title}` : '编辑 Docker 备注'}

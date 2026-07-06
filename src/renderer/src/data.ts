@@ -36,6 +36,64 @@ export type RsaPrivateKeyUpdateInput = {
   notes?: string
 }
 
+export type CliEnvironmentIssueStatus = 'ok' | 'warning' | 'error'
+
+export type CliEnvironmentRepairAction = 'source-profile-from-zprofile' | 'install-zsh-dev-prompt' | 'install-zsh-ls-colors'
+
+export type CliEnvironmentIssue = {
+  id: string
+  status: CliEnvironmentIssueStatus
+  title: string
+  detail: string
+  action?: CliEnvironmentRepairAction
+}
+
+export type CliEnvironmentConfigFile = {
+  key: 'profile' | 'zprofile' | 'zshrc' | 'bashProfile' | 'bashrc'
+  label: string
+  path: string
+  exists: boolean
+  managed: boolean
+}
+
+export type CliEnvironmentCommandCheck = {
+  name: string
+  available: boolean
+  path: string
+  version: string
+  error: string
+}
+
+export type CliEnvironmentPlatform = 'aix' | 'android' | 'darwin' | 'freebsd' | 'haiku' | 'linux' | 'openbsd' | 'sunos' | 'win32' | 'cygwin' | 'netbsd'
+
+export type CliEnvironmentSnapshot = {
+  platform: CliEnvironmentPlatform
+  shell: string
+  shellName: string
+  homeDirectory: string
+  checkedAt: string
+  processPath: string
+  loginShellPath: string
+  mergedPath: string
+  pnpmHome: string
+  profileSourcedFromLoginFile: boolean
+  promptConfigured: boolean
+  promptProvider: string
+  listingColorsConfigured: boolean
+  listingColorProvider: string
+  configFiles: CliEnvironmentConfigFile[]
+  commands: CliEnvironmentCommandCheck[]
+  issues: CliEnvironmentIssue[]
+  repairableActions: CliEnvironmentRepairAction[]
+}
+
+export type CliEnvironmentRepairResult = {
+  snapshot: CliEnvironmentSnapshot
+  appliedActions: CliEnvironmentRepairAction[]
+  changedFiles: string[]
+  backupFiles: string[]
+}
+
 export type PlaneSettingsInput = {
   apiBaseUrl?: string
   webBaseUrl?: string
@@ -796,6 +854,53 @@ export type DockerResourceNoteInput = {
   resourceKey: string
   displayName?: string
   notes?: string
+}
+
+export type DockerDevEnvironmentSystem = 'ubuntu-24.04' | 'ubuntu-22.04' | 'debian-12' | 'node-22' | 'python-3.12'
+
+export type DockerDevEnvironmentInput = {
+  hostPath: string
+  name?: string
+  workspaceFolder?: string
+  system: DockerDevEnvironmentSystem
+  enableDockerInDocker?: boolean
+  overwrite?: boolean
+}
+
+export type DockerDevEnvironmentResult = {
+  configPath: string
+  hostPath: string
+  name: string
+  workspaceFolder: string
+  system: DockerDevEnvironmentSystem
+  image: string
+  dockerInDocker: boolean
+  containerName: string
+  content: string
+}
+
+export type DockerDevEnvironmentTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+
+export type DockerDevEnvironmentRunMode = 'devcontainer-cli' | 'docker-run'
+
+export type DockerDevEnvironmentTaskSnapshot = {
+  taskId: string
+  status: DockerDevEnvironmentTaskStatus
+  runMode: DockerDevEnvironmentRunMode
+  progressPercent: number
+  stage: string
+  title: string
+  hostPath: string
+  configPath: string
+  containerName: string
+  command: string
+  startedAt: string
+  updatedAt: string
+  finishedAt: string
+  exitCode: number | null
+  error: string
+  logs: string[]
+  result: DockerDevEnvironmentResult
 }
 
 export type DockerImageSummary = {
