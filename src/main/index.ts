@@ -1,8 +1,8 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import Database from 'better-sqlite3'
@@ -11,6 +11,7 @@ import { requestCommitMessageSuggestion, type CommitMessageSuggestion } from './
 import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion } from './ai-conflict-assistant'
 import { requestReleaseSuggestion, type ReleaseSuggestion } from './ai-release-assistant'
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
+import { collectCloseGuardActivities, createCloseGuardPrompt, type CloseGuardAction, type CloseGuardActivity } from './app-close-guard'
 import { registerAppUpdateIpc } from './app-updates'
 import { buildGitAuthorLookup, resolveGitAuthorDisplay, type GitAuthorLookup } from './git-author-mapping'
 import { parseControlledGitCommand, validateRepositoryRemoteName } from './git-controls'
@@ -492,6 +493,41 @@ type GitSetupStatus = {
   sshPrivateKeys: SshPrivateKeyRecord[]
 }
 
+type AppRuntimeInfo = {
+  version: string
+  isPackaged: boolean
+  isDevelopmentBuild: boolean
+  isDevServer: boolean
+  appPath: string
+  projectRoot: string
+}
+
+type QuickBuildTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+type QuickBuildStartInput = {
+  cwd?: string
+}
+
+type QuickBuildTaskSnapshot = {
+  id: string
+  command: string
+  cwd: string
+  status: QuickBuildTaskStatus
+  phase: string
+  hint: string
+  lastOutputAt: string
+  processPid?: number
+  startedAt: string
+  updatedAt: string
+  finishedAt?: string
+  log: string
+  stdout: string
+  stderr: string
+  exitCode: number | null
+  signal?: string
+  error?: string
+}
+
 type GitExecutionOptions = {
   env?: NodeJS.ProcessEnv
 }
@@ -510,6 +546,323 @@ const releasePublishTaskProcesses = new Map<string, ChildProcessWithoutNullStrea
 const releaseTaskMaxLogLength = 1024 * 1024
 const releaseTaskHistoryLimit = 20
 const releasePublishPhaseTotal = 9
+const quickBuildCommand = 'pnpm package:mac:legacy'
+const quickBuildMaxLogLength = 1024 * 1024
+let quickBuildTask: QuickBuildTaskSnapshot | null = null
+let quickBuildProcess: ChildProcessWithoutNullStreams | null = null
+let closeGuardPrompt: Promise<boolean> | null = null
+let forceQuitRequested = false
+const confirmedWindowCloseIds = new Set<number>()
+
+function getPrimaryWindow(): BrowserWindow | null {
+  return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ?? null
+}
+
+function getCloseGuardActivities(): CloseGuardActivity[] {
+  return collectCloseGuardActivities({
+    quickBuildTask,
+    releasePublishTasks: releasePublishTasks.values(),
+    terminalSessions: terminalService.list()
+  })
+}
+
+async function confirmCloseGuardAction(action: CloseGuardAction, ownerWindow: BrowserWindow | null = getPrimaryWindow()): Promise<boolean> {
+  const prompt = createCloseGuardPrompt(action, getCloseGuardActivities())
+
+  if (!prompt) {
+    return true
+  }
+
+  if (closeGuardPrompt) {
+    return closeGuardPrompt
+  }
+
+  const options = {
+    buttons: prompt.buttons,
+    cancelId: prompt.cancelId,
+    defaultId: prompt.defaultId,
+    detail: prompt.detail,
+    message: prompt.message,
+    noLink: true,
+    title: prompt.title,
+    type: 'warning' as const
+  }
+
+  closeGuardPrompt = (async () => {
+    const result = ownerWindow && !ownerWindow.isDestroyed()
+      ? await dialog.showMessageBox(ownerWindow, options)
+      : await dialog.showMessageBox(options)
+
+    return result.response === prompt.confirmButtonIndex
+  })()
+
+  try {
+    return await closeGuardPrompt
+  } finally {
+    closeGuardPrompt = null
+  }
+}
+
+function stopRunningCloseGuardActivities(): void {
+  if (quickBuildTask?.status === 'running') {
+    try {
+      cancelQuickBuildTask()
+    } catch (error) {
+      console.warn('Failed to cancel quick build while quitting', error)
+    }
+  }
+
+  for (const task of Array.from(releasePublishTasks.values())) {
+    if (task.status !== 'running') {
+      continue
+    }
+
+    try {
+      cancelRepositoryReleasePublishTask(task.id)
+    } catch (error) {
+      console.warn('Failed to cancel release task while quitting', error)
+    }
+  }
+
+  for (const session of terminalService.list()) {
+    if (session.exited) {
+      continue
+    }
+
+    try {
+      terminalService.close(session.id)
+    } catch (error) {
+      console.warn('Failed to close terminal session while quitting', error)
+    }
+  }
+}
+
+async function requestAppQuit(ownerWindow: BrowserWindow | null = getPrimaryWindow()): Promise<void> {
+  if (forceQuitRequested) {
+    return
+  }
+
+  const confirmed = await confirmCloseGuardAction('quit-app', ownerWindow)
+
+  if (!confirmed) {
+    return
+  }
+
+  forceQuitRequested = true
+  stopRunningCloseGuardActivities()
+  app.quit()
+}
+
+async function requestWindowDismiss(targetWindow: BrowserWindow | null = getPrimaryWindow(), source: 'shortcut' | 'system' = 'system'): Promise<void> {
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    return
+  }
+
+  if (source === 'system' && process.platform !== 'darwin' && BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed()).length <= 1) {
+    await requestAppQuit(targetWindow)
+    return
+  }
+
+  const confirmed = await confirmCloseGuardAction('close-window', targetWindow)
+
+  if (!confirmed || targetWindow.isDestroyed()) {
+    return
+  }
+
+  if (source === 'shortcut' || process.platform === 'darwin') {
+    targetWindow.hide()
+    return
+  }
+
+  confirmedWindowCloseIds.add(targetWindow.id)
+  targetWindow.close()
+}
+
+function attachWindowCloseGuard(window: BrowserWindow): void {
+  window.on('close', (event) => {
+    if (forceQuitRequested) {
+      return
+    }
+
+    if (confirmedWindowCloseIds.delete(window.id)) {
+      return
+    }
+
+    event.preventDefault()
+    void requestWindowDismiss(window, 'system')
+  })
+}
+
+function showOrCreatePrimaryWindow(): void {
+  const window = getPrimaryWindow()
+
+  if (!window) {
+    createWindow()
+    return
+  }
+
+  if (window.isMinimized()) {
+    window.restore()
+  }
+
+  window.show()
+  window.focus()
+}
+
+function installApplicationMenu(): void {
+  const closeWindowItem: MenuItemConstructorOptions = {
+    accelerator: 'CommandOrControl+W',
+    click: () => {
+      void requestWindowDismiss(getPrimaryWindow(), 'shortcut')
+    },
+    label: '关闭窗口'
+  }
+  const editMenu: MenuItemConstructorOptions = {
+    label: '编辑',
+    submenu: [
+      { role: 'undo' },
+      { role: 'redo' },
+      { type: 'separator' },
+      { role: 'cut' },
+      { role: 'copy' },
+      { role: 'paste' },
+      { role: 'selectAll' }
+    ]
+  }
+  const viewSubmenu: MenuItemConstructorOptions[] = [{ role: 'reload' }]
+
+  if (isDev) {
+    viewSubmenu.push({ role: 'forceReload' }, { role: 'toggleDevTools' })
+  }
+
+  viewSubmenu.push(
+    { type: 'separator' },
+    { role: 'resetZoom' },
+    { role: 'zoomIn' },
+    { role: 'zoomOut' },
+    { type: 'separator' },
+    { role: 'togglefullscreen' }
+  )
+
+  const viewMenu: MenuItemConstructorOptions = {
+    label: '视图',
+    submenu: viewSubmenu
+  }
+  const windowMenu: MenuItemConstructorOptions = {
+    label: '窗口',
+    submenu: [
+      closeWindowItem,
+      { role: 'minimize' },
+      ...(process.platform === 'darwin' ? [{ type: 'separator' as const }, { role: 'front' as const }] : [])
+    ]
+  }
+  const template: MenuItemConstructorOptions[] = process.platform === 'darwin'
+    ? [
+        {
+          label: 'ForgeDesk',
+          submenu: [
+            { role: 'about' },
+            { type: 'separator' },
+            { role: 'services' },
+            { type: 'separator' },
+            { role: 'hide' },
+            { role: 'hideOthers' },
+            { role: 'unhide' },
+            { type: 'separator' },
+            {
+              accelerator: 'Command+Q',
+              click: () => {
+                void requestAppQuit()
+              },
+              label: '退出 ForgeDesk'
+            }
+          ]
+        },
+        editMenu,
+        viewMenu,
+        windowMenu
+      ]
+    : [
+        {
+          label: '文件',
+          submenu: [
+            {
+              accelerator: 'Control+Q',
+              click: () => {
+                void requestAppQuit()
+              },
+              label: '退出 ForgeDesk'
+            }
+          ]
+        },
+        editMenu,
+        viewMenu,
+        windowMenu
+      ]
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
+function hasForgeDeskPackage(candidatePath: string): boolean {
+  const packageJsonPath = join(candidatePath, 'package.json')
+
+  if (!existsSync(packageJsonPath)) {
+    return false
+  }
+
+  try {
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+      name?: unknown
+      scripts?: Record<string, unknown>
+    }
+
+    return packageJson.name === 'forgedesk' && typeof packageJson.scripts?.['package:mac:legacy'] === 'string'
+  } catch {
+    return false
+  }
+}
+
+function findForgeDeskProjectRoot(startPath: string): string | null {
+  let currentPath = resolve(startPath)
+
+  while (true) {
+    if (hasForgeDeskPackage(currentPath)) {
+      return currentPath
+    }
+
+    const parentPath = dirname(currentPath)
+
+    if (parentPath === currentPath) {
+      return null
+    }
+
+    currentPath = parentPath
+  }
+}
+
+function resolveForgeDeskProjectRoot(): string {
+  const candidates = [
+    process.env.FORGEDESK_PROJECT_ROOT,
+    process.env.INIT_CWD,
+    app.getAppPath(),
+    __dirname,
+    process.cwd()
+  ]
+
+  for (const candidate of candidates) {
+    if (!candidate?.trim()) {
+      continue
+    }
+
+    const projectRoot = findForgeDeskProjectRoot(candidate)
+
+    if (projectRoot) {
+      return projectRoot
+    }
+  }
+
+  return resolve(process.cwd())
+}
 
 function getErrorText(error: unknown): string {
   return error instanceof Error ? error.message : '读取远端对齐状态失败'
@@ -624,6 +977,251 @@ function pruneReleaseTaskHistory(): void {
   for (const task of completedTasks.slice(releaseTaskHistoryLimit)) {
     releasePublishTasks.delete(task.id)
   }
+}
+
+function trimQuickBuildText(value: string): string {
+  return value.length > quickBuildMaxLogLength ? value.slice(value.length - quickBuildMaxLogLength) : value
+}
+
+function getQuickBuildTaskSnapshot(task = quickBuildTask): QuickBuildTaskSnapshot | null {
+  return task ? { ...task } : null
+}
+
+function sendQuickBuildTaskUpdate(task: QuickBuildTaskSnapshot): void {
+  const snapshot = getQuickBuildTaskSnapshot(task)
+
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('quick-build:task-updated', snapshot)
+  }
+}
+
+function updateQuickBuildTask(task: QuickBuildTaskSnapshot, patch: Partial<QuickBuildTaskSnapshot>): void {
+  Object.assign(task, patch, { updatedAt: new Date().toISOString() })
+  sendQuickBuildTaskUpdate(task)
+}
+
+function appendQuickBuildLog(task: QuickBuildTaskSnapshot, message: string): void {
+  const time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  const nextLog = [task.log, `[${time}] ${message}`].filter(Boolean).join('\n')
+
+  updateQuickBuildTask(task, {
+    lastOutputAt: new Date().toISOString(),
+    log: trimQuickBuildText(nextLog)
+  })
+}
+
+function appendQuickBuildOutput(task: QuickBuildTaskSnapshot, stream: 'stdout' | 'stderr', chunk: string): void {
+  const text = chunk.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const lines = text.split('\n').filter((line) => line.trim().length > 0)
+  const currentOutput = stream === 'stdout' ? task.stdout : task.stderr
+  const nextOutput = trimQuickBuildText(currentOutput + chunk)
+
+  updateQuickBuildTask(task, stream === 'stdout' ? { stdout: nextOutput, lastOutputAt: new Date().toISOString() } : { stderr: nextOutput, lastOutputAt: new Date().toISOString() })
+
+  for (const line of lines) {
+    appendQuickBuildLog(task, `${stream}: ${line}`)
+  }
+}
+
+function resolveQuickBuildCwd(input: QuickBuildStartInput = {}): string {
+  const requestedCwd = input.cwd?.trim()
+
+  if (requestedCwd && hasForgeDeskPackage(requestedCwd)) {
+    return resolve(requestedCwd)
+  }
+
+  const projectRoot = resolveForgeDeskProjectRoot()
+
+  if (!hasForgeDeskPackage(projectRoot)) {
+    throw new Error('未找到可执行快速构建的 ForgeDesk 项目目录')
+  }
+
+  return projectRoot
+}
+
+async function runQuickBuildTask(task: QuickBuildTaskSnapshot): Promise<void> {
+  try {
+    const scriptEnv = await createScriptExecutionEnv(process.env)
+
+    appendQuickBuildLog(task, `[ForgeDesk] 当前目录：${task.cwd}`)
+    appendQuickBuildLog(task, `[ForgeDesk] 快速构建开始：${new Date(task.startedAt).toLocaleString('zh-CN', { hour12: false })}`)
+
+    const child = spawn('/bin/zsh', ['-lc', task.command], {
+      cwd: task.cwd,
+      detached: true,
+      env: scriptEnv
+    })
+
+    quickBuildProcess = child
+    updateQuickBuildTask(task, {
+      phase: '执行构建命令',
+      hint: '快速构建正在后台运行，可以继续使用当前页面。',
+      processPid: child.pid
+    })
+
+    child.stdout.on('data', (chunk: Buffer) => appendQuickBuildOutput(task, 'stdout', chunk.toString()))
+    child.stderr.on('data', (chunk: Buffer) => appendQuickBuildOutput(task, 'stderr', chunk.toString()))
+
+    const result = await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; error?: string }>((resolveResult) => {
+      let settled = false
+      const finish = (nextResult: { exitCode: number | null; signal: NodeJS.Signals | null; error?: string }): void => {
+        if (settled) {
+          return
+        }
+
+        settled = true
+        resolveResult(nextResult)
+      }
+
+      child.on('error', (error) => {
+        appendQuickBuildOutput(task, 'stderr', error.message)
+        finish({ exitCode: null, signal: null, error: error.message })
+      })
+      child.on('exit', (exitCode, signal) => finish({ exitCode, signal }))
+    })
+
+    const finishedAt = new Date().toISOString()
+
+    if (task.status === 'cancelled') {
+      updateQuickBuildTask(task, {
+        exitCode: result.exitCode,
+        finishedAt,
+        phase: '构建已终止',
+        signal: result.signal ?? undefined
+      })
+      appendQuickBuildLog(task, '[ForgeDesk] 快速构建已终止')
+      return
+    }
+
+    if (result.error) {
+      throw new Error(result.error)
+    }
+
+    const succeeded = result.exitCode === 0
+
+    appendQuickBuildLog(task, succeeded ? '[ForgeDesk] 快速构建完成' : `[ForgeDesk] 快速构建失败：退出码 ${result.exitCode ?? '-'}`)
+    updateQuickBuildTask(task, {
+      exitCode: result.exitCode,
+      finishedAt,
+      hint: succeeded ? '快速构建已完成。' : '快速构建未成功完成，请查看构建日志。',
+      phase: succeeded ? '构建完成' : '构建失败',
+      signal: result.signal ?? undefined,
+      status: succeeded ? 'succeeded' : 'failed'
+    })
+  } catch (error) {
+    const errorMessage = getUnknownErrorMessage(error, '快速构建失败')
+
+    if (task.status === 'cancelled') {
+      updateQuickBuildTask(task, {
+        error: errorMessage,
+        finishedAt: new Date().toISOString(),
+        phase: '构建已终止'
+      })
+      appendQuickBuildLog(task, '[ForgeDesk] 快速构建已终止')
+      return
+    }
+
+    appendQuickBuildLog(task, `快速构建失败：${errorMessage}`)
+    updateQuickBuildTask(task, {
+      error: errorMessage,
+      finishedAt: new Date().toISOString(),
+      hint: '快速构建启动或执行失败，请查看构建日志。',
+      phase: '构建失败',
+      status: 'failed',
+      stderr: task.stderr || errorMessage
+    })
+  } finally {
+    if (quickBuildTask?.id === task.id) {
+      quickBuildProcess = null
+    }
+  }
+}
+
+function startQuickBuildTask(input: QuickBuildStartInput = {}): QuickBuildTaskSnapshot {
+  if (quickBuildTask?.status === 'running') {
+    appendQuickBuildLog(quickBuildTask, '快速构建已经在后台运行，已返回当前任务')
+    return getQuickBuildTaskSnapshot(quickBuildTask) as QuickBuildTaskSnapshot
+  }
+
+  const cwd = resolveQuickBuildCwd(input)
+  const now = new Date().toISOString()
+  const task: QuickBuildTaskSnapshot = {
+    id: randomUUID(),
+    command: quickBuildCommand,
+    cwd,
+    status: 'running',
+    phase: '等待后台任务启动',
+    hint: '后台构建任务已创建。',
+    lastOutputAt: now,
+    startedAt: now,
+    updatedAt: now,
+    log: '',
+    stdout: '',
+    stderr: '',
+    exitCode: null
+  }
+
+  quickBuildTask = task
+  sendQuickBuildTaskUpdate(task)
+  appendQuickBuildLog(task, '快速构建任务已进入后台')
+  void runQuickBuildTask(task)
+
+  return getQuickBuildTaskSnapshot(task) as QuickBuildTaskSnapshot
+}
+
+function stopQuickBuildProcess(task: QuickBuildTaskSnapshot): void {
+  const pid = quickBuildProcess?.pid ?? task.processPid
+
+  if (!pid) {
+    return
+  }
+
+  try {
+    process.kill(-pid, 'SIGTERM')
+  } catch {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      return
+    }
+  }
+
+  setTimeout(() => {
+    if (task.status !== 'cancelled') {
+      return
+    }
+
+    try {
+      process.kill(-pid, 'SIGKILL')
+    } catch {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // The process may already have exited after SIGTERM.
+      }
+    }
+  }, 5000)
+}
+
+function cancelQuickBuildTask(): QuickBuildTaskSnapshot {
+  if (!quickBuildTask) {
+    throw new Error('暂无快速构建任务')
+  }
+
+  if (quickBuildTask.status !== 'running') {
+    return getQuickBuildTaskSnapshot(quickBuildTask) as QuickBuildTaskSnapshot
+  }
+
+  updateQuickBuildTask(quickBuildTask, {
+    finishedAt: new Date().toISOString(),
+    hint: '已请求终止后台构建进程。',
+    phase: '正在终止构建',
+    status: 'cancelled'
+  })
+  appendQuickBuildLog(quickBuildTask, '已请求终止快速构建进程')
+  stopQuickBuildProcess(quickBuildTask)
+
+  return getQuickBuildTaskSnapshot(quickBuildTask) as QuickBuildTaskSnapshot
 }
 
 function sendTerminalEvent(channel: 'terminal:data', event: TerminalDataEvent): void
@@ -1425,6 +2023,8 @@ function createWindow(): void {
       contextIsolation: true
     }
   })
+
+  attachWindowCloseGuard(mainWindow)
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -3908,6 +4508,21 @@ ipcMain.handle('ssh:open-directory', async (): Promise<void> => {
 
 registerAppUpdateIpc()
 
+ipcMain.handle('app:runtime-info', (): AppRuntimeInfo => ({
+  appPath: app.getAppPath(),
+  isDevelopmentBuild: !app.isPackaged,
+  isDevServer: isDev,
+  isPackaged: app.isPackaged,
+  projectRoot: resolveForgeDeskProjectRoot(),
+  version: app.getVersion()
+}))
+
+ipcMain.handle('quick-build:start', async (_event, input?: QuickBuildStartInput): Promise<QuickBuildTaskSnapshot> => startQuickBuildTask(input))
+
+ipcMain.handle('quick-build:get', async (): Promise<QuickBuildTaskSnapshot | null> => getQuickBuildTaskSnapshot())
+
+ipcMain.handle('quick-build:cancel', async (): Promise<QuickBuildTaskSnapshot> => cancelQuickBuildTask())
+
 ipcMain.handle('tools:rsa-private-keys:list', async (): Promise<RsaPrivateKeyRecord[]> => listRsaPrivateKeyRecords(getDatabase()))
 
 ipcMain.handle('tools:rsa-private-keys:create', async (_event, input: RsaPrivateKeyCreateInput): Promise<RsaPrivateKeyRecord> => {
@@ -3996,14 +4611,22 @@ app.whenReady().then(() => {
     app.dock?.setIcon(appIconPath)
   }
 
+  installApplicationMenu()
   createWindow()
   startServiceMonitorScheduler()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
-    }
+    showOrCreatePrimaryWindow()
   })
+})
+
+app.on('before-quit', (event) => {
+  if (forceQuitRequested) {
+    return
+  }
+
+  event.preventDefault()
+  void requestAppQuit()
 })
 
 app.on('window-all-closed', () => {

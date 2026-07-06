@@ -39,6 +39,9 @@ describe('monthly performance Excel tool layout', () => {
     assert.match(source, /listMonthlyPerformanceSessions/)
     assert.match(source, /新增绩效/)
     assert.match(source, /createMonthlyPerformanceSession/)
+    assert.match(source, /查看/)
+    assert.match(source, /className: 'clickable-table-row'/)
+    assert.match(source, /onClick: \(\) => setActiveSession\(session\)/)
   })
 
   it('uses the chat session flow before exporting Excel', () => {

@@ -196,24 +196,68 @@ type MonthlyPerformanceDatabase = {
   prepare: (sql: string) => MonthlyPerformanceStatement
 }
 
-const detailHeaders = [
-  '姓名',
-  '角色',
-  '邮箱/身份',
-  '提交数',
-  '新增行',
-  '删除行',
-  '变更文件',
-  '活跃天数',
-  '完成工作项',
-  '进行中工作项',
-  '逾期工作项',
-  'AI 分数',
-  '绩效等级',
-  '亮点',
-  '风险/改进',
-  '下月建议',
-  '备注'
+type MonthlyPerformanceAssessmentItem = {
+  project: string
+  point: string
+  weight: number
+  scoringStandard: string
+  completion: (row: MonthlyPerformanceRow, preview: MonthlyPerformancePreview) => string
+  score: (row: MonthlyPerformanceRow) => number
+}
+
+const monthlyPerformanceAssessmentItems: MonthlyPerformanceAssessmentItem[] = [
+  {
+    project: '研发交付与工作项推进',
+    point: '完成本月核心需求、缺陷修复及工作项闭环推进',
+    weight: 0.4,
+    scoringStandard: '100分：关键交付按期完成且无明显返工；80分：存在少量返工或延期但不影响主流程；60分：核心交付延期或阻塞上下游',
+    completion: (row) => joinChineseLines([
+      `提交 ${row.commits} 次，变更文件 ${row.filesChanged} 个，完成工作项 ${row.completedWorkItems} 个，进行中 ${row.inProgressWorkItems} 个。`,
+      row.highlights
+    ]),
+    score: (row) => row.aiScore
+  },
+  {
+    project: '代码质量与系统稳定性',
+    point: '控制代码质量、发布风险和线上稳定性问题',
+    weight: 0.25,
+    scoringStandard: '100分：本月无重大质量问题，交付稳定；80分：存在可控问题并及时修复；60分：出现重大缺陷、事故或明显质量风险',
+    completion: (row) => joinChineseLines([
+      `新增 ${row.additions} 行，删除 ${row.deletions} 行，活跃 ${row.activeDays} 天。`,
+      row.risks ? `风险/改进：${row.risks}` : ''
+    ]),
+    score: (row) => row.aiScore
+  },
+  {
+    project: '协作沟通与执行效率',
+    point: '配合产品、设计、测试及其他研发角色完成跨职能协作',
+    weight: 0.2,
+    scoringStandard: '100分：沟通主动、反馈及时且推动问题闭环；80分：协作基本顺畅；60分：沟通滞后或执行不到位影响排期',
+    completion: (row) => joinChineseLines([
+      row.notes,
+      row.overdueWorkItems > 0 ? `存在逾期工作项 ${row.overdueWorkItems} 个。` : '本月未记录逾期工作项。'
+    ]),
+    score: (row) => row.aiScore
+  },
+  {
+    project: '复盘改进与下月计划',
+    point: '形成阶段复盘，明确下月重点和持续改进动作',
+    weight: 0.1,
+    scoringStandard: '100分：复盘清晰且下月计划可执行；80分：计划基本明确；60分：缺少复盘或改进动作不清晰',
+    completion: (row, preview) => joinChineseLines([
+      row.nextMonthPlan,
+      preview.nextMonthFocus.length > 0 ? `团队下月重点：${preview.nextMonthFocus.join('；')}` : ''
+    ]),
+    score: (row) => row.aiScore
+  },
+  {
+    project: '考勤',
+    point: '按每月考勤结果进行评分',
+    weight: 0.05,
+    scoringStandard: 'a：迟到。迟到1～10分钟扣2.5分，迟到10～30分钟扣5分，迟到30分钟以上扣10分。\nb：早退。早退1～10分钟扣2.5分，早退10～30分钟扣5分，早退30分钟以上扣10分。\nc：旷工。旷工一次扣10分。\nd：缺卡。补卡规则外，每缺卡1次，扣2.5分。',
+    completion: () => '按公司考勤规则执行；如无补充，待 HR 考勤结果确认。',
+    score: () => 100
+  }
 ]
 
 function nowIso(): string {
@@ -878,120 +922,254 @@ export async function requestMonthlyPerformanceChat(input: MonthlyPerformanceCha
   return content
 }
 
-function styleHeaderRow(row: ExcelJS.Row): void {
-  row.font = { bold: true, color: { argb: 'FFFFFFFF' } }
-  row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E79' } }
-  row.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }
+const assessmentColumnWidths = [46, 50, 15, 63, 44, 15, 14, 16]
+const assessmentHeaders = ['考核项目', '考核要点', '权重', '评分标准', '完成情况', '自评分', '上级评分', '审核人']
+const assessmentInstruction =
+  '使用说明：\n1.考核项目中必须设定至少一项关键指标，其权重占比不得低于 35%；2.绩效综合得分=自评得分×30%+上级评分×70%'
+
+const blackCellBorder: Partial<ExcelJS.Borders> = {
+  top: { style: 'thin', color: { argb: 'FF000000' } },
+  left: { style: 'thin', color: { argb: 'FF000000' } },
+  bottom: { style: 'thin', color: { argb: 'FF000000' } },
+  right: { style: 'thin', color: { argb: 'FF000000' } }
 }
 
-function styleWorksheet(worksheet: ExcelJS.Worksheet): void {
-  worksheet.eachRow((row) => {
-    row.eachCell((cell) => {
-      cell.border = {
-        top: { style: 'thin', color: { argb: 'FFD9E2F3' } },
-        left: { style: 'thin', color: { argb: 'FFD9E2F3' } },
-        bottom: { style: 'thin', color: { argb: 'FFD9E2F3' } },
-        right: { style: 'thin', color: { argb: 'FFD9E2F3' } }
-      }
-      cell.alignment = { vertical: 'top', wrapText: true }
-    })
+function joinChineseLines(values: string[]): string {
+  return values.map((value) => value.trim()).filter(Boolean).join('\n') || '无'
+}
+
+function formatAssessmentCycle(startDate: string, endDate: string): string {
+  const start = startDate.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  const end = endDate.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+
+  if (!start || !end) {
+    return `${startDate} 至 ${endDate}`
+  }
+
+  return `${Number(start[1])}.${Number(start[2])}.${Number(start[3])}-${Number(end[2])}.${Number(end[3])}`
+}
+
+function sanitizeWorksheetName(value: string, fallback: string): string {
+  const name = value.trim().replace(/[\\/*?:[\]]+/g, '-').slice(0, 31)
+  return name || fallback
+}
+
+function createUniqueWorksheetName(value: string, usedNames: Set<string>, fallback: string): string {
+  const baseName = sanitizeWorksheetName(value, fallback)
+  let name = baseName
+  let index = 2
+
+  while (usedNames.has(name)) {
+    const suffix = `-${index}`
+    name = `${baseName.slice(0, 31 - suffix.length)}${suffix}`
+    index += 1
+  }
+
+  usedNames.add(name)
+  return name
+}
+
+function createRowsForAssessmentExport(preview: MonthlyPerformancePreview): MonthlyPerformanceRow[] {
+  if (preview.rows.length > 0) {
+    return preview.rows
+  }
+
+  return [
+    {
+      ...createEmptyMonthlyPerformanceRow({ name: '无人员数据', role: '', identity: '' }),
+      notes: preview.warnings.join('；') || '本月没有可用于绩效整理的人员数据'
+    }
+  ]
+}
+
+function setCellStyle(cell: ExcelJS.Cell, style: {
+  font?: Partial<ExcelJS.Font>
+  alignment?: Partial<ExcelJS.Alignment>
+  numFmt?: string
+  bold?: boolean
+} = {}): void {
+  cell.font = {
+    name: 'Calibri',
+    size: 11,
+    color: { argb: 'FF000000' },
+    bold: style.bold,
+    ...style.font
+  }
+  cell.alignment = {
+    vertical: 'middle',
+    ...style.alignment
+  }
+  cell.border = blackCellBorder
+
+  if (style.numFmt) {
+    cell.numFmt = style.numFmt
+  }
+}
+
+function applyAssessmentSheetStyles(worksheet: ExcelJS.Worksheet, itemStartRow: number, itemEndRow: number, totalRow: number, finalRow: number, signatureRow: number): void {
+  worksheet.properties.defaultRowHeight = 19
+  worksheet.properties.defaultColWidth = 14
+
+  for (let rowIndex = 1; rowIndex <= signatureRow; rowIndex += 1) {
+    for (let columnIndex = 1; columnIndex <= 8; columnIndex += 1) {
+      setCellStyle(worksheet.getCell(rowIndex, columnIndex))
+    }
+  }
+
+  worksheet.getRow(1).height = 38
+  worksheet.getRow(2).height = 34
+  worksheet.getRow(3).height = 50
+  worksheet.getRow(4).height = 34
+  worksheet.getRow(totalRow).height = 34
+  worksheet.getRow(finalRow).height = 34
+  worksheet.getRow(signatureRow).height = 52
+
+  for (let rowIndex = itemStartRow; rowIndex <= itemEndRow; rowIndex += 1) {
+    worksheet.getRow(rowIndex).height = 72
+  }
+
+  setCellStyle(worksheet.getCell('A1'), {
+    font: { size: 16 },
+    bold: true,
+    alignment: { horizontal: 'center', vertical: 'middle' }
   })
+
+  for (const cellAddress of ['A2', 'B2', 'C2', 'E2']) {
+    setCellStyle(worksheet.getCell(cellAddress), {
+      alignment: { horizontal: cellAddress === 'E2' ? 'center' : 'left', vertical: 'middle', wrapText: cellAddress === 'E2' }
+    })
+  }
+
+  setCellStyle(worksheet.getCell('A3'), {
+    alignment: { horizontal: 'left', vertical: 'middle', wrapText: true }
+  })
+
+  for (let columnIndex = 1; columnIndex <= 8; columnIndex += 1) {
+    setCellStyle(worksheet.getCell(4, columnIndex), {
+      alignment: { horizontal: 'center', vertical: 'middle', wrapText: true }
+    })
+  }
+
+  for (let rowIndex = itemStartRow; rowIndex <= itemEndRow; rowIndex += 1) {
+    for (const columnIndex of [1, 2, 4, 5]) {
+      setCellStyle(worksheet.getCell(rowIndex, columnIndex), {
+        font: { name: '微软雅黑', size: 10 },
+        alignment: { horizontal: 'left', vertical: 'middle', wrapText: true }
+      })
+    }
+
+    setCellStyle(worksheet.getCell(rowIndex, 3), {
+      font: { name: '微软雅黑', size: 10 },
+      alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
+      numFmt: '0%'
+    })
+
+    for (const columnIndex of [6, 7]) {
+      setCellStyle(worksheet.getCell(rowIndex, columnIndex), {
+        alignment: { horizontal: 'center', vertical: 'middle' },
+        numFmt: '0.0_ '
+      })
+    }
+
+    setCellStyle(worksheet.getCell(rowIndex, 8), {
+      alignment: { horizontal: 'center', vertical: 'middle', wrapText: true }
+    })
+  }
+
+  for (let columnIndex = 1; columnIndex <= 8; columnIndex += 1) {
+    setCellStyle(worksheet.getCell(totalRow, columnIndex), {
+      bold: true,
+      alignment: { horizontal: 'center', vertical: 'middle' },
+      numFmt: columnIndex === 3 ? '0%' : columnIndex === 6 || columnIndex === 7 ? '0.0_ ' : undefined
+    })
+    setCellStyle(worksheet.getCell(finalRow, columnIndex), {
+      bold: true,
+      alignment: { horizontal: 'center', vertical: 'middle' },
+      numFmt: columnIndex === 6 || columnIndex === 7 ? '0.0_ ' : undefined
+    })
+  }
+
+  for (let columnIndex = 1; columnIndex <= 8; columnIndex += 1) {
+    setCellStyle(worksheet.getCell(signatureRow, columnIndex), {
+      alignment: { horizontal: 'left', vertical: 'middle' }
+    })
+  }
 }
 
-function addListRows(worksheet: ExcelJS.Worksheet, title: string, values: string[]): void {
-  worksheet.addRow([])
-  worksheet.addRow([title])
-  const titleRow = worksheet.lastRow
+function addAssessmentWorksheet(workbook: ExcelJS.Workbook, preview: MonthlyPerformancePreview, row: MonthlyPerformanceRow, sheetName: string): void {
+  const worksheet = workbook.addWorksheet(sheetName)
+  worksheet.columns = assessmentColumnWidths.map((width) => ({ width }))
 
-  if (titleRow) {
-    titleRow.font = { bold: true }
-  }
+  worksheet.mergeCells('A1:H1')
+  worksheet.mergeCells('C2:D2')
+  worksheet.mergeCells('E2:H2')
+  worksheet.mergeCells('A3:H3')
 
-  if (values.length === 0) {
-    worksheet.addRow(['无'])
-    return
-  }
+  worksheet.getCell('A1').value = '绩效考核表'
+  worksheet.getCell('A2').value = '部门：技术部'
+  worksheet.getCell('B2').value = `岗位名称：${row.role || '技术部'}`
+  worksheet.getCell('C2').value = `姓名：${row.name}`
+  worksheet.getCell('E2').value = `考核周期：${formatAssessmentCycle(preview.startDate, preview.endDate)}`
+  worksheet.getCell('A3').value = assessmentInstruction
+  worksheet.getRow(4).values = assessmentHeaders
 
-  for (const value of values) {
-    worksheet.addRow([value])
-  }
+  const itemStartRow = 5
+  const assessmentRows = monthlyPerformanceAssessmentItems.map((item, index) => {
+    const itemRow = itemStartRow + index
+    const score = normalizeScore(item.score(row))
+    worksheet.getRow(itemRow).values = [
+      item.project,
+      item.point,
+      item.weight,
+      item.scoringStandard,
+      item.completion(row, preview),
+      score,
+      score,
+      ''
+    ]
+    return { row: itemRow, weight: item.weight, score }
+  })
+
+  const itemEndRow = itemStartRow + assessmentRows.length - 1
+  const totalRow = itemEndRow + 1
+  const finalRow = totalRow + 1
+  const signatureRow = finalRow + 1
+  const weightedScore = assessmentRows.reduce((sum, item) => sum + item.weight * item.score, 0)
+  const weightedScoreResult = Math.round(weightedScore * 10) / 10
+  const weightedTerms = assessmentRows.map((item) => `(F${item.row}*C${item.row})`).join('+')
+  const managerWeightedTerms = assessmentRows.map((item) => `(G${item.row}*C${item.row})`).join('+')
+
+  worksheet.getCell(totalRow, 2).value = '总权重'
+  worksheet.getCell(totalRow, 3).value = { formula: `SUM(C${itemStartRow}:C${itemEndRow})`, result: 1 }
+  worksheet.getCell(totalRow, 5).value = '合计得分'
+  worksheet.getCell(totalRow, 6).value = { formula: `SUM(${weightedTerms})`, result: weightedScoreResult }
+  worksheet.getCell(totalRow, 7).value = { formula: `SUM(${managerWeightedTerms})`, result: weightedScoreResult }
+
+  worksheet.mergeCells(`A${finalRow}:E${finalRow}`)
+  worksheet.mergeCells(`F${finalRow}:G${finalRow}`)
+  worksheet.getCell(finalRow, 1).value = '本期绩效综合得分'
+  worksheet.getCell(finalRow, 6).value = { formula: `F${totalRow}*0.3+G${totalRow}*0.7`, result: weightedScoreResult }
+
+  worksheet.mergeCells(`G${signatureRow}:H${signatureRow}`)
+  worksheet.getCell(signatureRow, 1).value = '被考核人签名：'
+  worksheet.getCell(signatureRow, 2).value = '日期：'
+  worksheet.getCell(signatureRow, 4).value = '考核人签名：'
+  worksheet.getCell(signatureRow, 5).value = '日期：'
+  worksheet.getCell(signatureRow, 6).value = 'CEO签字'
+
+  applyAssessmentSheetStyles(worksheet, itemStartRow, itemEndRow, totalRow, finalRow, signatureRow)
 }
 
 export function createMonthlyPerformanceWorkbook(preview: MonthlyPerformancePreview): ExcelJS.Workbook {
   const workbook = new ExcelJS.Workbook()
   workbook.creator = 'ForgeDesk'
   workbook.created = new Date(preview.generatedAt)
+  workbook.calcProperties.fullCalcOnLoad = true
 
-  const overview = workbook.addWorksheet('总览', {
-    views: [{ state: 'frozen', ySplit: 1 }]
-  })
-  overview.columns = [
-    { header: '指标', key: 'metric', width: 22 },
-    { header: '内容', key: 'value', width: 80 }
-  ]
-  overview.addRows([
-    ['项目', preview.projectName],
-    ['月份', preview.month],
-    ['统计范围', `${preview.startDate} 至 ${preview.endDate}`],
-    ['生成时间', preview.generatedAt],
-    ['提交总数', preview.totalCommits],
-    ['贡献人数', preview.contributorCount],
-    ['新增行', preview.totalAdditions],
-    ['删除行', preview.totalDeletions],
-    ['活跃天数', preview.activeDays],
-    ['AI 总结', preview.aiSummary || '无']
-  ])
-  addListRows(overview, '亮点', preview.highlights)
-  addListRows(overview, '风险', preview.risks)
-  addListRows(overview, '下月重点', preview.nextMonthFocus)
-  addListRows(overview, '生成提示', preview.warnings.length > 0 ? preview.warnings : ['无'])
-  styleHeaderRow(overview.getRow(1))
-  styleWorksheet(overview)
-
-  const detail = workbook.addWorksheet('人员绩效明细', {
-    views: [{ state: 'frozen', ySplit: 1 }]
-  })
-  detail.columns = detailHeaders.map((header) => ({ header, key: header, width: header.length > 5 ? 18 : 14 }))
-  detail.getColumn('邮箱/身份').width = 26
-  detail.getColumn('亮点').width = 32
-  detail.getColumn('风险/改进').width = 32
-  detail.getColumn('下月建议').width = 32
-  detail.getColumn('备注').width = 28
-  detail.autoFilter = {
-    from: 'A1',
-    to: `Q${Math.max(1, preview.rows.length + 1)}`
-  }
-  detail.addRows(
-    preview.rows.map((row) => [
-      row.name,
-      row.role,
-      row.identity,
-      row.commits,
-      row.additions,
-      row.deletions,
-      row.filesChanged,
-      row.activeDays,
-      row.completedWorkItems,
-      row.inProgressWorkItems,
-      row.overdueWorkItems,
-      row.aiScore,
-      row.performanceLevel,
-      row.highlights,
-      row.risks,
-      row.nextMonthPlan,
-      row.notes
-    ])
-  )
-
-  if (preview.rows.length === 0) {
-    detail.addRow(['无人员数据', '', '', 0, 0, 0, 0, 0, 0, 0, 0, 0, '待评估', '', '', '', preview.warnings.join('；')])
-  }
-
-  styleHeaderRow(detail.getRow(1))
-  styleWorksheet(detail)
-
-  for (const columnIndex of [4, 5, 6, 7, 8, 9, 10, 11, 12]) {
-    detail.getColumn(columnIndex).numFmt = '#,##0'
+  const usedNames = new Set<string>()
+  for (const row of createRowsForAssessmentExport(preview)) {
+    const sheetName = createUniqueWorksheetName(row.name, usedNames, '无人员数据')
+    addAssessmentWorksheet(workbook, preview, row, sheetName)
   }
 
   return workbook

@@ -40,7 +40,23 @@ export type DockerImageNoteTargetOption = {
   value: string
 }
 
+export type DockerContainerTerminalUserOption = {
+  label: string
+  value: string
+}
+
+export type DockerContainerTerminalRequest = Pick<TerminalOpenRequest, 'startupCommand' | 'title'>
 export type DockerImageRootTerminalRequest = Pick<TerminalOpenRequest, 'startupCommand' | 'title'>
+
+export const dockerContainerTerminalDefaultUser = 'root'
+
+export const dockerContainerTerminalUserOptions: DockerContainerTerminalUserOption[] = [
+  { label: 'root', value: 'root' },
+  { label: '默认用户', value: '' },
+  { label: 'node', value: 'node' },
+  { label: 'www-data', value: 'www-data' },
+  { label: 'nginx', value: 'nginx' }
+]
 
 function includesText(value: string, query: string): boolean {
   return value.toLowerCase().includes(query.toLowerCase())
@@ -150,6 +166,26 @@ export function createDockerImageRootTerminalRequest(image: DockerImageSummary):
   }
 }
 
+export function createDockerContainerTerminalRequest(
+  container: DockerContainerSummary,
+  user = dockerContainerTerminalDefaultUser
+): DockerContainerTerminalRequest {
+  const normalizedUser = user.trim()
+  const titleTarget = container.displayName || container.name || container.shortId
+  const args = ['docker', 'exec', '-it']
+
+  if (normalizedUser) {
+    args.push('-u', normalizedUser)
+  }
+
+  args.push(container.id, '/bin/sh')
+
+  return {
+    title: `${normalizedUser || 'default'} · ${titleTarget}`,
+    startupCommand: `${args.map(shellQuoteArg).join(' ')}\r`
+  }
+}
+
 export function getDockerContainerStatusMeta(state: string, status: string): DockerStatusMeta {
   const normalizedState = state.trim().toLowerCase()
   const fallbackLabel = status.trim() || 'unknown'
@@ -187,7 +223,7 @@ export function getDockerContainerTableLayout(): DockerTableLayout {
     { key: 'state', width: 150 },
     { key: 'image', width: 320 },
     { key: 'runtime', width: 170 },
-    { key: 'noteActions', width: 250 }
+    { key: 'noteActions', width: 310 }
   ]
 
   return {

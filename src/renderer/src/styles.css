@@ -51,6 +51,11 @@
   --diff-line-delete-bg: #fff0f0;
   --diff-line-number-bg: rgba(255, 255, 255, 0.42);
   --diff-line-number-border: rgba(230, 234, 241, 0.75);
+  --status-bar-bg: #f8fafc;
+  --status-bar-text: #334155;
+  --status-bar-muted: #64748b;
+  --status-bar-border: #d9e0ea;
+  --status-bar-hover-bg: #eef4ff;
 }
 
 [data-theme='dark'] {
@@ -106,6 +111,11 @@
   --diff-line-delete-bg: rgba(248, 113, 113, 0.13);
   --diff-line-number-bg: rgba(16, 23, 33, 0.72);
   --diff-line-number-border: rgba(38, 50, 68, 0.85);
+  --status-bar-bg: #101721;
+  --status-bar-text: #d8dee9;
+  --status-bar-muted: #94a3b8;
+  --status-bar-border: #263244;
+  --status-bar-hover-bg: #172236;
 }
 
 [data-theme='dark'] .service-provider-entry-card {
@@ -158,6 +168,8 @@
 
 [data-theme='dark'] .password-preset-summary,
 [data-theme='dark'] .password-env-block,
+[data-theme='dark'] .env-diff-task-item,
+[data-theme='dark'] .env-diff-text-card,
 [data-theme='dark'] .file-picker-card,
 [data-theme='dark'] .file-diff-summary .ant-statistic {
   background: var(--subtle-bg);
@@ -314,6 +326,50 @@ body {
   display: block;
 }
 
+.quick-build-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #98a2b3;
+  box-shadow: 0 0 0 2px rgba(152, 162, 179, 0.18);
+}
+
+.quick-build-status-dot.is-running {
+  background: #facc15;
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.28);
+}
+
+.quick-build-status-dot.is-success {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.18);
+}
+
+.quick-build-status-dot.is-error {
+  background: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18);
+}
+
+.quick-build-status-dot.is-cancelled {
+  background: #f97316;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.18);
+}
+
+.quick-build-tooltip {
+  display: grid;
+  gap: 4px;
+  max-width: 360px;
+}
+
+.quick-build-tooltip .ant-typography {
+  color: #ffffff;
+}
+
+.quick-build-tooltip span {
+  color: rgba(255, 255, 255, 0.88);
+  word-break: break-all;
+}
+
 .sidebar-nav,
 .sidebar-footer-menu {
   border-inline-end: 0 !important;
@@ -383,9 +439,166 @@ body {
 }
 
 .content {
-  padding: 28px;
+  padding: 28px 28px 52px;
   position: relative;
   min-width: 0;
+}
+
+.app-status-bar {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1001;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+  padding: 0 10px;
+  color: var(--status-bar-text);
+  background: var(--status-bar-bg);
+  border-top: 1px solid var(--status-bar-border);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.app-status-bar-error {
+  border-top-color: var(--danger-border-soft);
+}
+
+.app-status-bar-warning {
+  border-top-color: var(--warning-border-soft);
+}
+
+.app-status-bar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 8px;
+  color: inherit;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  white-space: nowrap;
+}
+
+button.app-status-bar-item {
+  cursor: pointer;
+}
+
+button.app-status-bar-item:hover {
+  background: var(--status-bar-hover-bg);
+}
+
+.app-status-bar-primary {
+  max-width: min(520px, 46vw);
+}
+
+.app-status-bar-primary span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-status-bar-spacer {
+  flex: 1;
+  min-width: 12px;
+}
+
+.app-status-bar-static {
+  color: var(--status-bar-muted);
+}
+
+.app-status-bar-quick-build {
+  font-weight: 600;
+}
+
+.app-status-bar-quick-build.is-running {
+  color: #a16207;
+  background: rgba(250, 204, 21, 0.16);
+}
+
+.app-status-bar-quick-build.is-success {
+  color: #15803d;
+}
+
+.app-status-bar-quick-build.is-error {
+  color: #b42318;
+}
+
+.app-status-bar-quick-build.is-cancelled {
+  color: #c2410c;
+}
+
+[data-theme='dark'] .app-status-bar-quick-build.is-running {
+  color: #fde68a;
+  background: rgba(250, 204, 21, 0.14);
+}
+
+[data-theme='dark'] .app-status-bar-quick-build.is-success {
+  color: #86efac;
+}
+
+[data-theme='dark'] .app-status-bar-quick-build.is-error {
+  color: #fca5a5;
+}
+
+[data-theme='dark'] .app-status-bar-quick-build.is-cancelled {
+  color: #fdba74;
+}
+
+.app-status-bar-version {
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.system-log-drawer {
+  width: 100%;
+}
+
+.system-log-list {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.system-log-item {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--card-bg);
+}
+
+.system-log-item-error {
+  border-color: var(--danger-border-soft);
+}
+
+.system-log-item-warning {
+  border-color: var(--warning-border-soft);
+}
+
+.system-log-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.system-log-item-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.system-log-message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .workspace-section {
@@ -905,6 +1118,20 @@ body {
   margin: 0;
 }
 
+.service-env-key-cell,
+.service-env-value-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.service-env-key-cell .table-text,
+.service-env-value-cell .service-env-value {
+  min-width: 0;
+  flex: 1;
+}
+
 .service-env-value {
   display: block;
   max-width: 320px;
@@ -1023,6 +1250,18 @@ body {
   min-width: 150px;
   max-width: 220px;
   flex: 0 1 170px;
+}
+
+.deployment-compact-alert {
+  padding: 6px 10px;
+}
+
+.deployment-compact-alert .ant-alert-message {
+  min-width: 0;
+}
+
+.deployment-compact-alert .ant-alert-action {
+  margin-inline-start: 8px;
 }
 
 .deployment-error-text {
@@ -1862,7 +2101,13 @@ body {
 
 .file-tool-layout {
   display: grid;
-  grid-template-columns: minmax(320px, 0.42fr) minmax(0, 1fr);
+  grid-template-columns: minmax(520px, 0.56fr) minmax(360px, 0.44fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.env-diff-workflow {
+  display: grid;
   gap: 16px;
   align-items: start;
 }
@@ -1979,6 +2224,209 @@ body {
   gap: 12px;
 }
 
+.env-diff-task-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.env-diff-task-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.env-diff-task-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+}
+
+.env-diff-task-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--card-bg);
+}
+
+.env-diff-task-item.is-active {
+  border-color: var(--primary-border);
+  background: var(--table-row-selected-bg);
+}
+
+.env-diff-task-select {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.env-diff-task-select .ant-typography {
+  max-width: 100%;
+}
+
+.env-diff-task-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.env-diff-input-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.env-diff-input-toolbar .ant-typography {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.env-diff-text-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.env-diff-text-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+}
+
+.env-diff-text-heading {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.env-diff-text-heading .ant-typography {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.env-diff-text-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.env-diff-text-title-row .ant-typography {
+  min-width: 0;
+}
+
+.env-diff-textarea {
+  min-height: 270px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.env-diff-file-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
+.env-diff-file-row .ant-typography {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.env-file-import-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 5px 11px;
+  color: var(--primary);
+  border: 1px solid var(--primary-border);
+  border-radius: 6px;
+  background: var(--primary-soft);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 20px;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.env-file-import-button:hover {
+  border-color: var(--primary);
+  background: var(--primary-surface);
+}
+
+.env-file-import-button input {
+  display: none;
+}
+
+.env-diff-result-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.env-diff-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.env-diff-table .ant-table-cell {
+  vertical-align: top;
+}
+
+.env-diff-variable-name {
+  color: var(--app-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  overflow-wrap: anywhere;
+}
+
+.env-diff-value-input.ant-input {
+  min-height: 36px;
+  padding: 7px 10px;
+  color: var(--app-text);
+  background: var(--card-bg);
+  border-color: var(--app-border);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.env-diff-value-input.ant-input::placeholder {
+  color: var(--app-muted);
+}
+
 .file-picker-card {
   display: grid;
   gap: 8px;
@@ -2018,7 +2466,7 @@ body {
 
 .file-diff-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -2037,6 +2485,7 @@ body {
 
 .file-missing-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -2262,11 +2711,20 @@ body {
 }
 
 .docker-cell-row,
-.docker-note-actions {
+.docker-note-actions,
+.docker-container-terminal-actions {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+.docker-container-terminal-actions {
+  flex-wrap: nowrap;
+}
+
+.docker-container-user-select {
+  width: 92px;
 }
 
 .docker-cell-text {
@@ -2833,7 +3291,7 @@ body {
 .release-task-dock {
   position: fixed;
   right: 24px;
-  bottom: 24px;
+  bottom: 40px;
   z-index: 1000;
 }
 
@@ -4042,6 +4500,15 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .env-diff-result-toolbar {
+    display: grid;
+    justify-content: stretch;
+  }
+
+  .env-diff-result-actions {
+    justify-content: flex-start;
+  }
+
   .project-detail-heading {
     display: grid;
     grid-template-columns: 1fr;
@@ -4091,7 +4558,7 @@ body {
 
   .release-task-dock {
     right: 16px;
-    bottom: 16px;
+    bottom: 40px;
   }
 
   .release-task-drawer {
@@ -4101,6 +4568,14 @@ body {
   .release-task-list {
     max-height: 180px;
     overflow: auto;
+  }
+
+  .env-diff-task-heading {
+    display: grid;
+  }
+
+  .env-diff-task-heading > .ant-btn {
+    justify-self: start;
   }
 
   .release-task-item-main .ant-typography {
@@ -4147,6 +4622,7 @@ body {
 
   .ai-settings-grid,
   .password-custom-grid,
+  .env-diff-text-grid,
   .file-diff-summary {
     grid-template-columns: 1fr;
   }

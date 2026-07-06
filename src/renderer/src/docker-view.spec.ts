@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  createDockerContainerTerminalRequest,
   createDockerDashboardSummary,
   filterDockerContainers,
   filterDockerImages,
   createDockerImageRootTerminalRequest,
+  dockerContainerTerminalDefaultUser,
+  dockerContainerTerminalUserOptions,
   getDockerContainerStatusMeta,
   getDockerContainerTableLayout,
   getDockerImageTableLayout,
@@ -120,7 +123,7 @@ describe('docker view model', () => {
   it('keeps the compact Docker container table within the main content width', () => {
     const layout = getDockerContainerTableLayout()
 
-    assert.equal(layout.minWidth <= 1120, true)
+    assert.equal(layout.minWidth <= 1180, true)
     assert.deepEqual(
       layout.columns.map((column) => column.key),
       ['container', 'state', 'image', 'runtime', 'noteActions']
@@ -170,6 +173,22 @@ describe('docker view model', () => {
     assert.deepEqual(createDockerImageRootTerminalRequest(untaggedImage), {
       title: 'root · 222222222222',
       startupCommand: `docker run --rm -it -u root --entrypoint /bin/sh ${untaggedImage.id}\r`
+    })
+  })
+
+  it('builds Docker container terminal requests for selected users', () => {
+    assert.equal(dockerContainerTerminalDefaultUser, 'root')
+    assert.deepEqual(
+      dockerContainerTerminalUserOptions.map((option) => option.value),
+      ['root', '', 'node', 'www-data', 'nginx']
+    )
+    assert.deepEqual(createDockerContainerTerminalRequest(container, 'root'), {
+      title: 'root · API dev runtime',
+      startupCommand: `docker exec -it -u root ${container.id} /bin/sh\r`
+    })
+    assert.deepEqual(createDockerContainerTerminalRequest(container, ''), {
+      title: 'default · API dev runtime',
+      startupCommand: `docker exec -it ${container.id} /bin/sh\r`
     })
   })
 

@@ -208,25 +208,32 @@ describe('monthly performance assistant', () => {
     assert.match(content, /已记录质量优先口径/)
   })
 
-  it('creates overview and detail worksheets with typed numeric cells', () => {
+  it('creates one assessment worksheet per person using the monthly performance template', () => {
     const workbook = createMonthlyPerformanceWorkbook(createPreview())
-    const overview = workbook.getWorksheet('总览')
-    const detail = workbook.getWorksheet('人员绩效明细')
+    const sheet = workbook.getWorksheet('Stone')
 
-    assert.ok(overview)
-    assert.ok(detail)
-    assert.equal(detail?.getCell('A1').value, '姓名')
-    assert.equal(detail?.getCell('D1').value, '提交数')
-    assert.equal(detail?.getCell('D2').value, 3)
-    assert.equal(typeof detail?.getCell('D2').value, 'number')
-    assert.equal(overview?.getCell('A1').value, '指标')
+    assert.ok(sheet)
+    assert.equal(workbook.worksheets.length, 1)
+    assert.equal(sheet?.getCell('A1').value, '绩效考核表')
+    assert.equal(sheet?.getCell('A2').value, '部门：技术部')
+    assert.equal(sheet?.getCell('B2').value, '岗位名称：Engineer')
+    assert.equal(sheet?.getCell('C2').value, '姓名：Stone')
+    assert.equal(sheet?.getCell('E2').value, '考核周期：2026.6.1-6.30')
+    assert.equal(sheet?.getCell('A4').value, '考核项目')
+    assert.equal(sheet?.getCell('A5').value, '研发交付与工作项推进')
+    assert.equal(sheet?.getCell('C5').value, 0.4)
+    assert.equal(sheet?.getCell('F5').value, 88)
+    assert.equal(sheet?.getCell('G5').value, 88)
+    assert.deepEqual(sheet?.getCell('C10').value, { formula: 'SUM(C5:C9)', result: 1 })
+    assert.deepEqual(sheet?.getCell('F11').value, { formula: 'F10*0.3+G10*0.7', result: 88.6 })
   })
 
-  it('adds an explicit empty data row when preview has no people', () => {
+  it('adds an explicit empty assessment worksheet when preview has no people', () => {
     const workbook = createMonthlyPerformanceWorkbook(createPreview({ rows: [], warnings: ['本月没有可用于绩效整理的人员数据'] }))
-    const detail = workbook.getWorksheet('人员绩效明细')
+    const sheet = workbook.getWorksheet('无人员数据')
 
-    assert.equal(detail?.getCell('A2').value, '无人员数据')
-    assert.match(String(detail?.getCell('Q2').value ?? ''), /本月没有可用于绩效整理的人员数据/)
+    assert.ok(sheet)
+    assert.equal(sheet?.getCell('C2').value, '姓名：无人员数据')
+    assert.match(String(sheet?.getCell('E7').value ?? ''), /本月没有可用于绩效整理的人员数据/)
   })
 })

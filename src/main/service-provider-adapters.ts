@@ -1190,6 +1190,8 @@ export async function listRailwayProjectEnvVars(
         continue
       }
 
+      const variableValue = variables[key]
+
       records.push({
         id: `${environment.externalEnvironmentId}:${key}`,
         key,
@@ -1200,7 +1202,8 @@ export async function listRailwayProjectEnvVars(
         comment: '',
         createdAt: '',
         updatedAt: '',
-        decrypted: false
+        decrypted: false,
+        value: variableValue === undefined || variableValue === null ? '' : String(variableValue)
       })
     }
   }
