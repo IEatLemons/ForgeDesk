@@ -58,6 +58,23 @@ export type ReleasePublishTaskViewModel = {
   log: string
 }
 
+export type ReleaseMetadataDefaults = {
+  releaseTitle: string
+  releaseNotes: string
+  commitMessage: string
+}
+
+export type ReleaseMetadataVersionChangeInput = {
+  repositoryName: string
+  previousVersion: string
+  previousTagName: string
+  nextVersion: string
+  nextTagName: string
+  releaseTitle: string
+  releaseNotes: string
+  commitMessage: string
+}
+
 export type ReleasePlatformOption = {
   key: 'github'
   name: string
@@ -66,6 +83,40 @@ export type ReleasePlatformOption = {
   statusLabel: string
   statusColor: string
   disabled: boolean
+}
+
+export function createDefaultReleaseMetadata(input: { repositoryName: string; version: string; tagName: string }): ReleaseMetadataDefaults {
+  const versionLabel = input.tagName.trim() || input.version.trim()
+
+  return {
+    releaseTitle: `${input.repositoryName} ${versionLabel}`.trim(),
+    releaseNotes: `发布 ${versionLabel}`.trim(),
+    commitMessage: `chore: release ${versionLabel}`.trim()
+  }
+}
+
+function updateDefaultField(currentValue: string, previousDefault: string, nextDefault: string): string {
+  const trimmedCurrentValue = currentValue.trim()
+  return !trimmedCurrentValue || trimmedCurrentValue === previousDefault ? nextDefault : currentValue
+}
+
+export function updateDefaultReleaseMetadataForVersionChange(input: ReleaseMetadataVersionChangeInput): ReleaseMetadataDefaults {
+  const previousDefaults = createDefaultReleaseMetadata({
+    repositoryName: input.repositoryName,
+    version: input.previousVersion,
+    tagName: input.previousTagName
+  })
+  const nextDefaults = createDefaultReleaseMetadata({
+    repositoryName: input.repositoryName,
+    version: input.nextVersion,
+    tagName: input.nextTagName
+  })
+
+  return {
+    releaseTitle: updateDefaultField(input.releaseTitle, previousDefaults.releaseTitle, nextDefaults.releaseTitle),
+    releaseNotes: updateDefaultField(input.releaseNotes, previousDefaults.releaseNotes, nextDefaults.releaseNotes),
+    commitMessage: updateDefaultField(input.commitMessage, previousDefaults.commitMessage, nextDefaults.commitMessage)
+  }
 }
 
 export function createReleasePlatformOptions(input: { plan: ReleasePublishPlanView | null }): ReleasePlatformOption[] {

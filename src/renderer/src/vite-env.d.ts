@@ -143,6 +143,10 @@ type TerminalSession = {
   signal?: number
 }
 
+type TerminalSessionSnapshot = TerminalSession & {
+  output: string[]
+}
+
 type TerminalDataEvent = {
   sessionId: string
   data: string
@@ -462,6 +466,23 @@ type ProjectBranchTagRecord = {
   color: string
 }
 
+type ProjectTerminalCommandRecord = {
+  id: string
+  projectId: string
+  name: string
+  command: string
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
+}
+
+type ProjectTerminalCommandInput = {
+  id?: string
+  projectId: string
+  name: string
+  command: string
+}
+
 type ServiceProviderType = 'railway' | 'vercel'
 
 type RailwayTokenType = 'account' | 'workspace' | 'project'
@@ -661,6 +682,129 @@ type VercelDomainConfig = {
   raw: Record<string, unknown>
 }
 
+type DockerResourceType = 'image' | 'container'
+
+type DockerResourceNoteRecord = {
+  resourceType: DockerResourceType
+  resourceKey: string
+  displayName: string
+  notes: string
+  createdAt: string
+  updatedAt: string
+}
+
+type DockerResourceNoteInput = {
+  resourceType: DockerResourceType
+  resourceKey: string
+  displayName?: string
+  notes?: string
+}
+
+type DockerImageSummary = {
+  id: string
+  shortId: string
+  repository: string
+  tag: string
+  digest: string
+  size: string
+  createdAt: string
+  createdSince: string
+  reference: string
+  tagResourceKey: string
+  imageIdResourceKey: string
+  noteResourceKey: string
+  displayName: string
+  note: DockerResourceNoteRecord | null
+}
+
+type DockerContainerSummary = {
+  id: string
+  shortId: string
+  name: string
+  image: string
+  state: string
+  status: string
+  ports: string
+  createdAt: string
+  runningFor: string
+  noteResourceKey: string
+  displayName: string
+  note: DockerResourceNoteRecord | null
+}
+
+type DockerContainerPortDetail = {
+  privatePort: string
+  type: string
+  hostIp: string
+  hostPort: string
+}
+
+type DockerContainerMountDetail = {
+  type: string
+  source: string
+  destination: string
+  mode: string
+  rw: boolean
+  name: string
+}
+
+type DockerContainerNetworkDetail = {
+  name: string
+  networkId: string
+  ipAddress: string
+  gateway: string
+  macAddress: string
+}
+
+type DockerContainerDetail = {
+  id: string
+  shortId: string
+  name: string
+  image: string
+  imageName: string
+  createdAt: string
+  startedAt: string
+  finishedAt: string
+  status: string
+  running: boolean
+  paused: boolean
+  restarting: boolean
+  pid: number
+  exitCode: number
+  restartCount: number
+  platform: string
+  driver: string
+  hostname: string
+  user: string
+  workingDir: string
+  entrypoint: string[]
+  command: string[]
+  env: string[]
+  ports: DockerContainerPortDetail[]
+  mounts: DockerContainerMountDetail[]
+  networks: DockerContainerNetworkDetail[]
+  labels: Record<string, string>
+  networkMode: string
+  restartPolicy: string
+  rawJson: string
+}
+
+type DockerSnapshot = {
+  images: DockerImageSummary[]
+  containers: DockerContainerSummary[]
+  notes: DockerResourceNoteRecord[]
+  checkedAt: string
+}
+
+type DockerEventSummary = {
+  id: string
+  type: string
+  action: string
+  status: string
+  time: string
+  actorAttributes: Record<string, string>
+}
+
 type ProjectRecord = {
   id: string
   name: string
@@ -796,6 +940,103 @@ type AiSettingsView = {
   apiKeyConfigured: boolean
   model: string
   temperature: number
+}
+
+type MonthlyPerformancePreviewInput = {
+  projectId: string
+  month: string
+  instruction: string
+}
+
+type MonthlyPerformanceRow = {
+  personId: string
+  name: string
+  role: string
+  identity: string
+  commits: number
+  additions: number
+  deletions: number
+  filesChanged: number
+  activeDays: number
+  completedWorkItems: number
+  inProgressWorkItems: number
+  overdueWorkItems: number
+  aiScore: number
+  performanceLevel: string
+  highlights: string
+  risks: string
+  nextMonthPlan: string
+  notes: string
+}
+
+type MonthlyPerformancePreview = {
+  projectId: string
+  projectName: string
+  month: string
+  startDate: string
+  endDate: string
+  generatedAt: string
+  totalCommits: number
+  totalAdditions: number
+  totalDeletions: number
+  activeDays: number
+  contributorCount: number
+  aiSummary: string
+  highlights: string[]
+  risks: string[]
+  nextMonthFocus: string[]
+  rows: MonthlyPerformanceRow[]
+  warnings: string[]
+}
+
+type MonthlyPerformanceExportInput = {
+  preview: MonthlyPerformancePreview
+}
+
+type MonthlyPerformanceExportResult = {
+  filePath: string | null
+}
+
+type MonthlyPerformanceMessageRole = 'user' | 'assistant'
+
+type MonthlyPerformanceChatMessage = {
+  id: string
+  role: MonthlyPerformanceMessageRole
+  content: string
+  createdAt: string
+}
+
+type MonthlyPerformanceSessionStatus = 'draft' | 'ready' | 'exported'
+
+type MonthlyPerformanceSession = {
+  id: string
+  projectId: string
+  projectName: string
+  month: string
+  title: string
+  status: MonthlyPerformanceSessionStatus
+  messages: MonthlyPerformanceChatMessage[]
+  preview: MonthlyPerformancePreview | null
+  filePath: string
+  createdAt: string
+  updatedAt: string
+  exportedAt: string
+}
+
+type MonthlyPerformanceSessionCreateInput = {
+  projectId: string
+  month: string
+}
+
+type MonthlyPerformanceSessionMessageInput = {
+  sessionId: string
+  projectId: string
+  month: string
+  content: string
+}
+
+type MonthlyPerformanceSessionExportInput = {
+  sessionId: string
 }
 
 type GithubTokenType = 'classic' | 'fine-grained-or-app' | 'unknown'
@@ -979,6 +1220,9 @@ interface Window {
     listProjectBranchTags: (projectId: string) => Promise<ProjectBranchTagRecord[]>
     saveProjectBranchTag: (input: { id?: string; projectId: string; label: string; branchName: string; color: string }) => Promise<ProjectBranchTagRecord>
     deleteProjectBranchTag: (projectId: string, tagId: string) => Promise<ProjectBranchTagRecord[]>
+    listProjectTerminalCommands: (projectId: string) => Promise<ProjectTerminalCommandRecord[]>
+    saveProjectTerminalCommand: (input: ProjectTerminalCommandInput) => Promise<ProjectTerminalCommandRecord>
+    deleteProjectTerminalCommand: (projectId: string, commandId: string) => Promise<ProjectTerminalCommandRecord[]>
     getPlaneSettings: () => Promise<PlaneSettings>
     savePlaneSettings: (input: PlaneSettingsInput) => Promise<PlaneSettings>
     testPlaneSettings: (input?: PlaneSettingsInput) => Promise<PlaneConnectionTestResult>
@@ -1015,6 +1259,14 @@ interface Window {
     verifyServiceDomain: (serviceId: string, domain: string) => Promise<ProjectServiceRecord>
     inspectServiceDomainConfig: (serviceId: string, domain: string) => Promise<VercelDomainConfig>
     listServiceRuntimeLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
+    getDockerSnapshot: () => Promise<DockerSnapshot>
+    getDockerContainerDetail: (containerId: string) => Promise<DockerContainerDetail>
+    saveDockerResourceNote: (input: DockerResourceNoteInput) => Promise<DockerSnapshot>
+    deleteDockerResourceNote: (resourceType: DockerResourceType, resourceKey: string) => Promise<DockerSnapshot>
+    startDockerWatch: () => Promise<void>
+    stopDockerWatch: () => Promise<void>
+    onDockerChanged: (listener: (event: DockerEventSummary) => void) => () => void
+    onDockerWatchError: (listener: (event: { message: string }) => void) => () => void
     saveProjectPerson: (input: { id?: string; projectId: string; displayName: string; role?: string; identities: Array<{ name: string; email: string }> }) => Promise<ProjectPersonRecord>
     deleteProjectPerson: (projectId: string, personId: string) => Promise<ProjectPersonRecord[]>
     scanRepositories: (paths: string[]) => Promise<ScannedRepository[]>
@@ -1035,6 +1287,13 @@ interface Window {
     createRsaPrivateKey: (input: RsaPrivateKeyCreateInput) => Promise<RsaPrivateKeyRecord>
     updateRsaPrivateKey: (input: RsaPrivateKeyUpdateInput) => Promise<RsaPrivateKeyRecord>
     deleteRsaPrivateKey: (id: string) => Promise<RsaPrivateKeyRecord[]>
+    previewMonthlyPerformance: (input: MonthlyPerformancePreviewInput) => Promise<MonthlyPerformancePreview>
+    exportMonthlyPerformance: (input: MonthlyPerformanceExportInput) => Promise<MonthlyPerformanceExportResult>
+    listMonthlyPerformanceSessions: () => Promise<MonthlyPerformanceSession[]>
+    createMonthlyPerformanceSession: (input: MonthlyPerformanceSessionCreateInput) => Promise<MonthlyPerformanceSession>
+    sendMonthlyPerformanceSessionMessage: (input: MonthlyPerformanceSessionMessageInput) => Promise<MonthlyPerformanceSession>
+    confirmMonthlyPerformanceSession: (input: { sessionId: string; projectId: string; month: string }) => Promise<MonthlyPerformanceSession>
+    exportMonthlyPerformanceSession: (input: MonthlyPerformanceSessionExportInput) => Promise<MonthlyPerformanceSession>
     generateSshKey: (input: string | SshKeyGenerationInput) => Promise<GitSetupStatus['sshPublicKeys'][number]>
     copySshPublicKey: (publicKeyPath: string) => Promise<void>
     copySshKeyPath: (path: string, kind: SshKeyKind) => Promise<void>
@@ -1054,6 +1313,7 @@ interface Window {
     saveTerminalRemoteHost: (input: TerminalRemoteHostInput) => Promise<TerminalRemoteHostRecord>
     deleteTerminalRemoteHost: (hostId: string) => Promise<TerminalRemoteHostRecord[]>
     getTerminalRemoteSshCommand: (hostId: string) => Promise<string>
+    listTerminals: () => Promise<TerminalSessionSnapshot[]>
     openTerminal: (input?: TerminalCreateInput) => Promise<TerminalSession>
     writeTerminal: (sessionId: string, data: string) => Promise<void>
     resizeTerminal: (sessionId: string, cols: number, rows: number) => Promise<void>

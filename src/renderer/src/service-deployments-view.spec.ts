@@ -8,6 +8,7 @@ import {
   filterDeploymentRows,
   getDeploymentRateLimitRetryMs,
   getNextDeploymentVisibleCount,
+  getDeploymentProjectTagStyle,
   getVisibleDeploymentRows,
   getDeploymentStatusMeta,
   selectDeploymentRefreshServices,
@@ -219,6 +220,18 @@ describe('service deployments view model', () => {
       other: 0
     })
     assert.deepEqual(getDeploymentStatusMeta('QUEUED'), { label: 'Queued', color: 'gold', badgeStatus: 'warning' })
+  })
+
+  it('creates stable project tag colors from project names', () => {
+    const unipieStyle = getDeploymentProjectTagStyle('UniPIE')
+    const unipieStyleAgain = getDeploymentProjectTagStyle('UniPIE')
+    const ukaStyle = getDeploymentProjectTagStyle('uka')
+
+    assert.deepEqual(unipieStyleAgain, unipieStyle)
+    assert.notDeepEqual(ukaStyle, unipieStyle)
+    assert.ok(unipieStyle.color.startsWith('#'))
+    assert.ok(unipieStyle.backgroundColor.startsWith('#'))
+    assert.ok(unipieStyle.borderColor.startsWith('#'))
   })
 
   it('limits deployment rows to an expandable visible batch', () => {

@@ -209,6 +209,7 @@ export type TerminalCreateInput = {
   reuseKey?: string
   cols?: number
   rows?: number
+  startupCommand?: string
 }
 
 export type TerminalSession = {
@@ -223,6 +224,10 @@ export type TerminalSession = {
   signal?: number
 }
 
+export type TerminalSessionSnapshot = TerminalSession & {
+  output: string[]
+}
+
 export type TerminalDataEvent = {
   sessionId: string
   data: string
@@ -232,6 +237,23 @@ export type TerminalExitEvent = {
   sessionId: string
   exitCode: number
   signal?: number
+}
+
+export type ProjectTerminalCommandRecord = {
+  id: string
+  projectId: string
+  name: string
+  command: string
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type ProjectTerminalCommandInput = {
+  id?: string
+  projectId: string
+  name: string
+  command: string
 }
 
 export type GitAddInput = {
@@ -758,6 +780,129 @@ export type VercelDomainInput = {
   redirectStatusCode?: number
 }
 
+export type DockerResourceType = 'image' | 'container'
+
+export type DockerResourceNote = {
+  resourceType: DockerResourceType
+  resourceKey: string
+  displayName: string
+  notes: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type DockerResourceNoteInput = {
+  resourceType: DockerResourceType
+  resourceKey: string
+  displayName?: string
+  notes?: string
+}
+
+export type DockerImageSummary = {
+  id: string
+  shortId: string
+  repository: string
+  tag: string
+  digest: string
+  size: string
+  createdAt: string
+  createdSince: string
+  reference: string
+  tagResourceKey: string
+  imageIdResourceKey: string
+  noteResourceKey: string
+  displayName: string
+  note: DockerResourceNote | null
+}
+
+export type DockerContainerSummary = {
+  id: string
+  shortId: string
+  name: string
+  image: string
+  state: string
+  status: string
+  ports: string
+  createdAt: string
+  runningFor: string
+  noteResourceKey: string
+  displayName: string
+  note: DockerResourceNote | null
+}
+
+export type DockerContainerPortDetail = {
+  privatePort: string
+  type: string
+  hostIp: string
+  hostPort: string
+}
+
+export type DockerContainerMountDetail = {
+  type: string
+  source: string
+  destination: string
+  mode: string
+  rw: boolean
+  name: string
+}
+
+export type DockerContainerNetworkDetail = {
+  name: string
+  networkId: string
+  ipAddress: string
+  gateway: string
+  macAddress: string
+}
+
+export type DockerContainerDetail = {
+  id: string
+  shortId: string
+  name: string
+  image: string
+  imageName: string
+  createdAt: string
+  startedAt: string
+  finishedAt: string
+  status: string
+  running: boolean
+  paused: boolean
+  restarting: boolean
+  pid: number
+  exitCode: number
+  restartCount: number
+  platform: string
+  driver: string
+  hostname: string
+  user: string
+  workingDir: string
+  entrypoint: string[]
+  command: string[]
+  env: string[]
+  ports: DockerContainerPortDetail[]
+  mounts: DockerContainerMountDetail[]
+  networks: DockerContainerNetworkDetail[]
+  labels: Record<string, string>
+  networkMode: string
+  restartPolicy: string
+  rawJson: string
+}
+
+export type DockerSnapshot = {
+  images: DockerImageSummary[]
+  containers: DockerContainerSummary[]
+  notes: DockerResourceNote[]
+  checkedAt: string
+}
+
+export type DockerEventSummary = {
+  id: string
+  type: string
+  action: string
+  status: string
+  time: string
+  actorAttributes: Record<string, string>
+}
+
 export type VercelDomainConfig = {
   configured: boolean
   misconfigured: boolean
@@ -836,6 +981,103 @@ export type AiSettingsView = {
   apiKeyConfigured: boolean
   model: string
   temperature: number
+}
+
+export type MonthlyPerformancePreviewInput = {
+  projectId: string
+  month: string
+  instruction: string
+}
+
+export type MonthlyPerformanceRow = {
+  personId: string
+  name: string
+  role: string
+  identity: string
+  commits: number
+  additions: number
+  deletions: number
+  filesChanged: number
+  activeDays: number
+  completedWorkItems: number
+  inProgressWorkItems: number
+  overdueWorkItems: number
+  aiScore: number
+  performanceLevel: string
+  highlights: string
+  risks: string
+  nextMonthPlan: string
+  notes: string
+}
+
+export type MonthlyPerformancePreview = {
+  projectId: string
+  projectName: string
+  month: string
+  startDate: string
+  endDate: string
+  generatedAt: string
+  totalCommits: number
+  totalAdditions: number
+  totalDeletions: number
+  activeDays: number
+  contributorCount: number
+  aiSummary: string
+  highlights: string[]
+  risks: string[]
+  nextMonthFocus: string[]
+  rows: MonthlyPerformanceRow[]
+  warnings: string[]
+}
+
+export type MonthlyPerformanceExportInput = {
+  preview: MonthlyPerformancePreview
+}
+
+export type MonthlyPerformanceExportResult = {
+  filePath: string | null
+}
+
+export type MonthlyPerformanceMessageRole = 'user' | 'assistant'
+
+export type MonthlyPerformanceChatMessage = {
+  id: string
+  role: MonthlyPerformanceMessageRole
+  content: string
+  createdAt: string
+}
+
+export type MonthlyPerformanceSessionStatus = 'draft' | 'ready' | 'exported'
+
+export type MonthlyPerformanceSession = {
+  id: string
+  projectId: string
+  projectName: string
+  month: string
+  title: string
+  status: MonthlyPerformanceSessionStatus
+  messages: MonthlyPerformanceChatMessage[]
+  preview: MonthlyPerformancePreview | null
+  filePath: string
+  createdAt: string
+  updatedAt: string
+  exportedAt: string
+}
+
+export type MonthlyPerformanceSessionCreateInput = {
+  projectId: string
+  month: string
+}
+
+export type MonthlyPerformanceSessionMessageInput = {
+  sessionId: string
+  projectId: string
+  month: string
+  content: string
+}
+
+export type MonthlyPerformanceSessionExportInput = {
+  sessionId: string
 }
 
 export type GithubTokenType = 'classic' | 'fine-grained-or-app' | 'unknown'

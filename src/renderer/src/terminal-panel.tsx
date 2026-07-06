@@ -1,19 +1,25 @@
 import {
   CloseOutlined,
   CodeOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  FileTextOutlined,
   PlusOutlined,
   ReloadOutlined
 } from '@ant-design/icons'
-import { Button, Empty, Space, Tooltip, Typography, message } from 'antd'
+import { Button, Empty, Form, Input, Modal, Popconfirm, Space, Spin, Tooltip, Typography, message } from 'antd'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import '@xterm/xterm/css/xterm.css'
 import { getErrorMessage as getNormalizedErrorMessage } from './error-messages'
+import type { ProjectTerminalCommandRecord, TerminalSessionSnapshot } from './data'
 import type { TerminalOpenRequest } from './terminal-panel-events'
 import {
   closeTerminalTab,
   createTerminalPanelState,
+  createTerminalPanelStateFromSessions,
+  filterRestorableTerminalPanelSessions,
   markTerminalTabExited,
   upsertTerminalTab,
   type TerminalPanelSession,
@@ -27,8 +33,15 @@ type TerminalHandle = {
 
 type TerminalWorkspaceProps = {
   defaultCwd?: string
+  defaultReuseKey?: string
   defaultTitle?: string
   openRequest?: TerminalOpenRequest | null
+  projectId?: string
+}
+
+type TerminalCommandForm = {
+  name: string
+  command: string
 }
 
 type TerminalPaneProps = {
@@ -160,9 +173,34 @@ function getTerminalRequestKey(request: TerminalOpenRequest): string {
   return `value:${request.projectId ?? ''}:${request.repositoryId ?? ''}:${request.cwd ?? ''}:${request.reuseKey ?? ''}:${request.title ?? ''}:${request.startupCommand ?? ''}`
 }
 
-export function TerminalWorkspace({ defaultCwd, defaultTitle, openRequest }: TerminalWorkspaceProps): JSX.Element {
+function toTerminalPanelSession(snapshot: TerminalSessionSnapshot): TerminalPanelSession {
+  const { output: _output, ...session } = snapshot
+  return session
+}
+
+function shouldHandleTerminalOpenRequest(request: TerminalOpenRequest, defaultCwd?: string, defaultReuseKey?: string): boolean {
+  if (defaultReuseKey) {
+    if (request.reuseKey) {
+      return request.reuseKey === defaultReuseKey
+    }
+
+    return !request.cwd || request.cwd === defaultCwd
+  }
+
+  return !defaultCwd || !request.cwd || request.cwd === defaultCwd
+}
+
+export function TerminalWorkspace({ defaultCwd, defaultReuseKey, defaultTitle, openRequest, projectId }: TerminalWorkspaceProps): JSX.Element {
   const [state, setState] = useState<TerminalPanelState>(() => createTerminalPanelState())
+  const [restored, setRestored] = useState(false)
+  const [commandModalOpen, setCommandModalOpen] = useState(false)
+  const [projectCommands, setProjectCommands] = useState<ProjectTerminalCommandRecord[]>([])
+  const [commandsLoading, setCommandsLoading] = useState(false)
+  const [savingCommand, setSavingCommand] = useState(false)
+  const [editingCommand, setEditingCommand] = useState<ProjectTerminalCommandRecord | null>(null)
+  const [commandForm] = Form.useForm<TerminalCommandForm>()
   const handledOpenRequestKeyRef = useRef<string | null>(null)
+  const latestOpenRequestRef = useRef<TerminalOpenRequest | null>(openRequest ?? null)
   const pendingOutputRef = useRef(new Map<string, string[]>())
   const terminalHandlesRef = useRef(new Map<string, TerminalHandle>())
   const activeTab = useMemo(() => getActiveTerminalTab(state), [state])
@@ -195,28 +233,109 @@ export function TerminalWorkspace({ defaultCwd, defaultTitle, openRequest }: Ter
   const openTerminal = useCallback(
     async (request: TerminalOpenRequest = {}) => {
       if (!window.forgeDesk) {
-        return
+        return null
       }
 
       try {
         const session = await window.forgeDesk.openTerminal({
           cols: 80,
           cwd: request.cwd ?? defaultCwd,
-          reuseKey: request.reuseKey,
+          reuseKey: request.reuseKey ?? defaultReuseKey,
           rows: 24,
           startupCommand: request.startupCommand,
           title: request.title ?? defaultTitle
         })
         setState((current) => upsertTerminalTab(current, session))
+        return session
       } catch (error) {
         reportError(error)
+        return null
       }
     },
-    [defaultCwd, defaultTitle, reportError]
+    [defaultCwd, defaultReuseKey, defaultTitle, reportError]
   )
 
   useEffect(() => {
+    latestOpenRequestRef.current = openRequest ?? null
+  }, [openRequest])
+
+  const loadProjectCommands = useCallback(async () => {
+    if (!projectId || !window.forgeDesk) {
+      setProjectCommands([])
+      return
+    }
+
+    setCommandsLoading(true)
+
+    try {
+      setProjectCommands(await window.forgeDesk.listProjectTerminalCommands(projectId))
+    } catch (error) {
+      reportError(error)
+    } finally {
+      setCommandsLoading(false)
+    }
+  }, [projectId, reportError])
+
+  useEffect(() => {
+    loadProjectCommands().catch(reportError)
+  }, [loadProjectCommands, reportError])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function restoreTerminals(): Promise<void> {
+      if (!window.forgeDesk) {
+        setRestored(true)
+        return
+      }
+
+      setRestored(false)
+      setState(createTerminalPanelState())
+      pendingOutputRef.current.clear()
+
+      try {
+        const snapshots = filterRestorableTerminalPanelSessions(await window.forgeDesk.listTerminals(), { defaultCwd, defaultReuseKey })
+
+        if (cancelled) {
+          return
+        }
+
+        if (snapshots.length > 0) {
+          for (const snapshot of snapshots) {
+            if (snapshot.output.length > 0) {
+              pendingOutputRef.current.set(snapshot.id, [...snapshot.output])
+            }
+          }
+          setState(createTerminalPanelStateFromSessions(snapshots.map(toTerminalPanelSession)))
+        } else if (!latestOpenRequestRef.current || !shouldHandleTerminalOpenRequest(latestOpenRequestRef.current, defaultCwd, defaultReuseKey)) {
+          await openTerminal()
+        } else {
+          setState(createTerminalPanelState())
+        }
+      } catch (error) {
+        if (!cancelled) {
+          reportError(error)
+        }
+      } finally {
+        if (!cancelled) {
+          setRestored(true)
+        }
+      }
+    }
+
+    restoreTerminals().catch(reportError)
+
+    return () => {
+      cancelled = true
+    }
+  }, [defaultCwd, defaultReuseKey, openTerminal, reportError])
+
+  useEffect(() => {
     if (!openRequest) {
+      return
+    }
+
+    if (!shouldHandleTerminalOpenRequest(openRequest, defaultCwd, defaultReuseKey)) {
       return
     }
 
@@ -228,7 +347,7 @@ export function TerminalWorkspace({ defaultCwd, defaultTitle, openRequest }: Ter
 
     handledOpenRequestKeyRef.current = requestKey
     openTerminal(openRequest).catch(reportError)
-  }, [openRequest, openTerminal, reportError])
+  }, [defaultCwd, defaultReuseKey, openRequest, openTerminal, reportError])
 
   useEffect(() => {
     if (!window.forgeDesk) {
@@ -290,7 +409,88 @@ export function TerminalWorkspace({ defaultCwd, defaultTitle, openRequest }: Ter
     await openTerminal({ cwd: tab.cwd, reuseKey: tab.reuseKey, title: tab.title })
   }, [activeTab, openTerminal])
 
+  const resetCommandForm = useCallback(() => {
+    setEditingCommand(null)
+    commandForm.resetFields()
+  }, [commandForm])
+
+  const saveProjectCommand = useCallback(
+    async (values: TerminalCommandForm) => {
+      if (!projectId || !window.forgeDesk) {
+        return
+      }
+
+      setSavingCommand(true)
+
+      try {
+        await window.forgeDesk.saveProjectTerminalCommand({
+          id: editingCommand?.id,
+          projectId,
+          name: values.name,
+          command: values.command
+        })
+        await loadProjectCommands()
+        resetCommandForm()
+        message.success('常用命令已保存')
+      } catch (error) {
+        reportError(error)
+      } finally {
+        setSavingCommand(false)
+      }
+    },
+    [editingCommand?.id, loadProjectCommands, projectId, reportError, resetCommandForm]
+  )
+
+  const deleteProjectCommand = useCallback(
+    async (commandId: string) => {
+      if (!projectId || !window.forgeDesk) {
+        return
+      }
+
+      try {
+        setProjectCommands(await window.forgeDesk.deleteProjectTerminalCommand(projectId, commandId))
+
+        if (editingCommand?.id === commandId) {
+          resetCommandForm()
+        }
+
+        message.success('常用命令已删除')
+      } catch (error) {
+        reportError(error)
+      }
+    },
+    [editingCommand?.id, projectId, reportError, resetCommandForm]
+  )
+
+  const fillTerminalCommand = useCallback(
+    async (command: ProjectTerminalCommandRecord) => {
+      if (!window.forgeDesk) {
+        return
+      }
+
+      let target = activeTab
+
+      if (!target || target.exited) {
+        target = await openTerminal()
+      }
+
+      if (!target) {
+        return
+      }
+
+      try {
+        await window.forgeDesk.writeTerminal(target.id, command.command)
+        setState((current) => ({ ...current, activeSessionId: target.id }))
+        setCommandModalOpen(false)
+      } catch (error) {
+        reportError(error)
+      }
+    },
+    [activeTab, openTerminal, reportError]
+  )
+
   const hasTabs = state.tabs.length > 0
+  const showCommandSidebar = Boolean(projectId && projectCommands.length > 0)
 
   return (
     <section className="terminal-workspace" aria-label="项目终端">
@@ -331,6 +531,13 @@ export function TerminalWorkspace({ defaultCwd, defaultTitle, openRequest }: Ter
           )}
         </div>
         <Space size={4} className="terminal-workspace-actions">
+          {projectId ? (
+            <Tooltip title="新增、编辑、删除常用命令">
+              <Button className="terminal-command-trigger" size="small" icon={<FileTextOutlined />} onClick={() => setCommandModalOpen(true)}>
+                管理命令
+              </Button>
+            </Tooltip>
+          ) : null}
           <Tooltip title="新建终端">
             <Button size="small" type="text" icon={<PlusOutlined />} onClick={() => openTerminal().catch(reportError)} />
           </Tooltip>
@@ -340,28 +547,125 @@ export function TerminalWorkspace({ defaultCwd, defaultTitle, openRequest }: Ter
         </Space>
       </div>
       <div className="terminal-workspace-body">
-        {hasTabs ? (
-          state.tabs.map((tab) => (
-            <TerminalPane
-              active={tab.id === state.activeSessionId}
-              key={tab.id}
-              onDispose={disposeTerminal}
-              onReady={registerTerminal}
-              onResize={resizeTerminal}
-              onWriteError={reportError}
-              session={tab}
-            />
-          ))
-        ) : (
-          <div className="terminal-empty">
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无终端会话">
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => openTerminal().catch(reportError)}>
-                新建终端
-              </Button>
-            </Empty>
-          </div>
-        )}
+        <div className="terminal-pane-stack">
+          {hasTabs ? (
+            state.tabs.map((tab) => (
+              <TerminalPane
+                active={tab.id === state.activeSessionId}
+                key={tab.id}
+                onDispose={disposeTerminal}
+                onReady={registerTerminal}
+                onResize={resizeTerminal}
+                onWriteError={reportError}
+                session={tab}
+              />
+            ))
+          ) : restored ? (
+            <div className="terminal-empty">
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无终端会话">
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => openTerminal().catch(reportError)}>
+                  新建终端
+                </Button>
+              </Empty>
+            </div>
+          ) : (
+            <div className="terminal-empty" />
+          )}
+        </div>
+        {showCommandSidebar ? (
+          <aside className="terminal-command-sidebar" aria-label="快捷指令">
+            <div className="terminal-command-sidebar-header">
+              <Typography.Text className="terminal-command-sidebar-title">快捷指令</Typography.Text>
+              <span className="terminal-command-sidebar-count">{projectCommands.length}</span>
+            </div>
+            <div className="terminal-command-shortcut-list">
+              {projectCommands.map((command) => (
+                <Tooltip key={command.id} title={command.command} placement="left">
+                  <button
+                    aria-label={`使用快捷指令 ${command.name}`}
+                    className="terminal-command-shortcut"
+                    type="button"
+                    onClick={() => fillTerminalCommand(command).catch(reportError)}
+                  >
+                    <span className="terminal-command-shortcut-name">{command.name}</span>
+                    <span className="terminal-command-shortcut-text">{command.command}</span>
+                  </button>
+                </Tooltip>
+              ))}
+            </div>
+          </aside>
+        ) : null}
       </div>
+      <Modal
+        className="terminal-command-modal"
+        title="管理常用命令"
+        open={commandModalOpen}
+        footer={null}
+        width={720}
+        onCancel={() => {
+          setCommandModalOpen(false)
+          resetCommandForm()
+        }}
+      >
+        <Space direction="vertical" size={16} className="terminal-command-manager">
+          <Form form={commandForm} layout="vertical" onFinish={saveProjectCommand}>
+            <div className="terminal-command-form-grid">
+              <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入命令名称' }]}>
+                <Input placeholder="例如 Dev" />
+              </Form.Item>
+              <Form.Item name="command" label="命令" rules={[{ required: true, message: '请输入命令内容' }]}>
+                <Input.TextArea rows={3} placeholder="例如 pnpm dev" />
+              </Form.Item>
+            </div>
+            <Space>
+              <Button type="primary" htmlType="submit" loading={savingCommand}>
+                {editingCommand ? '保存修改' : '新增命令'}
+              </Button>
+              {editingCommand ? <Button onClick={resetCommandForm}>取消编辑</Button> : null}
+            </Space>
+          </Form>
+          <Spin spinning={commandsLoading}>
+            {projectCommands.length > 0 ? (
+              <div className="terminal-command-list">
+                {projectCommands.map((command) => (
+                  <div className="terminal-command-row" key={command.id}>
+                    <div className="terminal-command-record-copy">
+                      <span className="terminal-command-name">{command.name}</span>
+                      <span className="terminal-command-text">{command.command}</span>
+                    </div>
+                    <Space size={2} className="terminal-command-actions">
+                      <Tooltip title="编辑">
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={<EditOutlined />}
+                          onClick={() => {
+                            setEditingCommand(command)
+                            commandForm.setFieldsValue({ name: command.name, command: command.command })
+                          }}
+                        />
+                      </Tooltip>
+                      <Popconfirm
+                        title="删除这个常用命令？"
+                        okText="删除"
+                        cancelText="取消"
+                        okButtonProps={{ danger: true }}
+                        onConfirm={() => deleteProjectCommand(command.id).catch(reportError)}
+                      >
+                        <Tooltip title="删除">
+                          <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+                        </Tooltip>
+                      </Popconfirm>
+                    </Space>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无常用命令" />
+            )}
+          </Spin>
+        </Space>
+      </Modal>
     </section>
   )
 }

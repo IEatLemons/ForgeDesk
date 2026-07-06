@@ -44,6 +44,9 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   listProjectBranchTags: (projectId: string) => ipcRenderer.invoke('project:branch-tags', projectId),
   saveProjectBranchTag: (input: { id?: string; projectId: string; label: string; branchName: string; color: string }) => ipcRenderer.invoke('project:branch-tag:save', input),
   deleteProjectBranchTag: (projectId: string, tagId: string) => ipcRenderer.invoke('project:branch-tag:delete', projectId, tagId),
+  listProjectTerminalCommands: (projectId: string) => ipcRenderer.invoke('project:terminal-commands:list', projectId),
+  saveProjectTerminalCommand: (input: ProjectTerminalCommandInput) => ipcRenderer.invoke('project:terminal-command:save', input),
+  deleteProjectTerminalCommand: (projectId: string, commandId: string) => ipcRenderer.invoke('project:terminal-command:delete', projectId, commandId),
   getPlaneSettings: () => ipcRenderer.invoke('plane:settings:get'),
   savePlaneSettings: (input: PlaneSettingsInput) => ipcRenderer.invoke('plane:settings:save', input),
   testPlaneSettings: (input?: PlaneSettingsInput) => ipcRenderer.invoke('plane:settings:test', input),
@@ -80,6 +83,22 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   verifyServiceDomain: (serviceId: string, domain: string) => ipcRenderer.invoke('service:domain:verify', serviceId, domain),
   inspectServiceDomainConfig: (serviceId: string, domain: string) => ipcRenderer.invoke('service:domain:config', serviceId, domain),
   listServiceRuntimeLogs: (serviceId: string, environmentName: string) => ipcRenderer.invoke('service:runtime:logs', serviceId, environmentName),
+  getDockerSnapshot: () => ipcRenderer.invoke('docker:snapshot'),
+  getDockerContainerDetail: (containerId: string) => ipcRenderer.invoke('docker:container:detail', containerId),
+  saveDockerResourceNote: (input: DockerResourceNoteInput) => ipcRenderer.invoke('docker:note:save', input),
+  deleteDockerResourceNote: (resourceType: DockerResourceType, resourceKey: string) => ipcRenderer.invoke('docker:note:delete', resourceType, resourceKey),
+  startDockerWatch: () => ipcRenderer.invoke('docker:watch:start'),
+  stopDockerWatch: () => ipcRenderer.invoke('docker:watch:stop'),
+  onDockerChanged: (listener: (event: DockerEventSummary) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, event: DockerEventSummary): void => listener(event)
+    ipcRenderer.on('docker:changed', wrapped)
+    return () => ipcRenderer.removeListener('docker:changed', wrapped)
+  },
+  onDockerWatchError: (listener: (event: { message: string }) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, event: { message: string }): void => listener(event)
+    ipcRenderer.on('docker:watch:error', wrapped)
+    return () => ipcRenderer.removeListener('docker:watch:error', wrapped)
+  },
   saveProjectPerson: (input: { id?: string; projectId: string; displayName: string; role?: string; identities: Array<{ name: string; email: string }> }) =>
     ipcRenderer.invoke('project:person:save', input),
   deleteProjectPerson: (projectId: string, personId: string) => ipcRenderer.invoke('project:person:delete', projectId, personId),
@@ -102,6 +121,13 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   createRsaPrivateKey: (input: RsaPrivateKeyCreateInput) => ipcRenderer.invoke('tools:rsa-private-keys:create', input),
   updateRsaPrivateKey: (input: RsaPrivateKeyUpdateInput) => ipcRenderer.invoke('tools:rsa-private-keys:update', input),
   deleteRsaPrivateKey: (id: string) => ipcRenderer.invoke('tools:rsa-private-keys:delete', id),
+  previewMonthlyPerformance: (input: MonthlyPerformancePreviewInput) => ipcRenderer.invoke('tools:monthly-performance:preview', input),
+  exportMonthlyPerformance: (input: MonthlyPerformanceExportInput) => ipcRenderer.invoke('tools:monthly-performance:export', input),
+  listMonthlyPerformanceSessions: () => ipcRenderer.invoke('tools:monthly-performance:sessions:list'),
+  createMonthlyPerformanceSession: (input: MonthlyPerformanceSessionCreateInput) => ipcRenderer.invoke('tools:monthly-performance:sessions:create', input),
+  sendMonthlyPerformanceSessionMessage: (input: MonthlyPerformanceSessionMessageInput) => ipcRenderer.invoke('tools:monthly-performance:sessions:message', input),
+  confirmMonthlyPerformanceSession: (input: { sessionId: string; projectId: string; month: string }) => ipcRenderer.invoke('tools:monthly-performance:sessions:confirm', input),
+  exportMonthlyPerformanceSession: (input: MonthlyPerformanceSessionExportInput) => ipcRenderer.invoke('tools:monthly-performance:sessions:export', input),
   generateSshKey: (input: string | SshKeyGenerationInput) => ipcRenderer.invoke('ssh:generate-key', input),
   copySshPublicKey: (publicKeyPath: string) => ipcRenderer.invoke('ssh:copy-public-key', publicKeyPath),
   copySshKeyPath: (path: string, kind: SshKeyKind) => ipcRenderer.invoke('ssh:copy-key-path', path, kind),
@@ -121,6 +147,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   saveTerminalRemoteHost: (input: TerminalRemoteHostInput) => ipcRenderer.invoke('terminal:remote-host:save', input),
   deleteTerminalRemoteHost: (hostId: string) => ipcRenderer.invoke('terminal:remote-host:delete', hostId),
   getTerminalRemoteSshCommand: (hostId: string) => ipcRenderer.invoke('terminal:remote-host:ssh-command', hostId),
+  listTerminals: () => ipcRenderer.invoke('terminal:list'),
   openTerminal: (input?: TerminalCreateInput) => ipcRenderer.invoke('terminal:create', input),
   writeTerminal: (sessionId: string, data: string) => ipcRenderer.invoke('terminal:write', sessionId, data),
   resizeTerminal: (sessionId: string, cols: number, rows: number) => ipcRenderer.invoke('terminal:resize', sessionId, cols, rows),

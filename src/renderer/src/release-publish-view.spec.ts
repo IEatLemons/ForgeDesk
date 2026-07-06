@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { createReleasePlatformOptions, createReleasePublishTaskView, createReleasePublishViewModel } from './release-publish-view.js'
+import {
+  createReleasePlatformOptions,
+  createReleasePublishTaskView,
+  createReleasePublishViewModel,
+  updateDefaultReleaseMetadataForVersionChange
+} from './release-publish-view.js'
 
 describe('release publish view model', () => {
   it('enables publishing only when checks are clean and a token is present', () => {
@@ -138,6 +143,40 @@ describe('release publish view model', () => {
     assert.equal(blocked.primaryDisabled, true)
     assert.equal(allowed.primaryLabel, '发布 v1.0.3')
     assert.equal(allowed.primaryDisabled, false)
+  })
+
+  it('keeps untouched release metadata aligned when the target version changes', () => {
+    const metadata = updateDefaultReleaseMetadataForVersionChange({
+      repositoryName: 'ForgeDesk',
+      previousVersion: '1.0.7',
+      previousTagName: 'v1.0.7',
+      nextVersion: '1.0.8',
+      nextTagName: 'v1.0.8',
+      releaseTitle: 'ForgeDesk v1.0.7',
+      releaseNotes: '发布 v1.0.7',
+      commitMessage: 'chore: release v1.0.7'
+    })
+
+    assert.equal(metadata.releaseTitle, 'ForgeDesk v1.0.8')
+    assert.equal(metadata.releaseNotes, '发布 v1.0.8')
+    assert.equal(metadata.commitMessage, 'chore: release v1.0.8')
+  })
+
+  it('preserves customized release metadata when the target version changes', () => {
+    const metadata = updateDefaultReleaseMetadataForVersionChange({
+      repositoryName: 'ForgeDesk',
+      previousVersion: '1.0.7',
+      previousTagName: 'v1.0.7',
+      nextVersion: '1.0.8',
+      nextTagName: 'v1.0.8',
+      releaseTitle: 'ForgeDesk stable build',
+      releaseNotes: '修复发布流程。',
+      commitMessage: 'release: stable mac build'
+    })
+
+    assert.equal(metadata.releaseTitle, 'ForgeDesk stable build')
+    assert.equal(metadata.releaseNotes, '修复发布流程。')
+    assert.equal(metadata.commitMessage, 'release: stable mac build')
   })
 
   it('summarizes background publish task status and logs', () => {

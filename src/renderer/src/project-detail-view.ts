@@ -5,6 +5,18 @@ export type ProjectDetailTabKey = 'data' | 'log-tree' | 'remote-alignment' | 'pl
 
 export type ProjectDetailTab = { key: ProjectDetailTabKey; label: string }
 
+export type ProjectDetailTabAvailability = {
+  hasBoundServices: boolean
+  hasRemoteAlignment: boolean
+  hasPlane: boolean
+}
+
+export type ProjectDetailRepositoryRemoteSource = {
+  remoteCount?: number
+  remotes?: Array<{ name?: string } | null> | null
+  remoteUrl?: string | null
+}
+
 export const PROJECT_DETAIL_TABS: ProjectDetailTab[] = [
   { key: 'log-tree', label: 'Log 树' },
   { key: 'data', label: '数据' },
@@ -16,12 +28,39 @@ export const PROJECT_DETAIL_TABS: ProjectDetailTab[] = [
 
 export const DEFAULT_PROJECT_DETAIL_TAB: ProjectDetailTabKey = 'log-tree'
 
-export function createProjectDetailTabs(hasBoundServices: boolean): ProjectDetailTab[] {
-  return PROJECT_DETAIL_TABS.filter((tab) => tab.key !== 'service-monitor' || hasBoundServices)
+export function getRepositoryRemoteCount(repository: ProjectDetailRepositoryRemoteSource): number {
+  const explicitRemoteCount =
+    typeof repository.remoteCount === 'number' && Number.isFinite(repository.remoteCount) ? Math.max(0, repository.remoteCount) : 0
+  const namedRemoteCount = repository.remotes?.filter((remote) => remote?.name).length ?? 0
+  const legacyRemoteCount = repository.remoteUrl ? 1 : 0
+
+  return Math.max(explicitRemoteCount, namedRemoteCount, legacyRemoteCount)
 }
 
-export function resolveProjectDetailTab(tab: ProjectDetailTabKey, hasBoundServices: boolean): ProjectDetailTabKey {
-  return createProjectDetailTabs(hasBoundServices).some((item) => item.key === tab) ? tab : DEFAULT_PROJECT_DETAIL_TAB
+export function hasProjectRemoteAlignment(repositories: ProjectDetailRepositoryRemoteSource[]): boolean {
+  return repositories.some((repository) => getRepositoryRemoteCount(repository) >= 2)
+}
+
+export function createProjectDetailTabs(availability: ProjectDetailTabAvailability): ProjectDetailTab[] {
+  return PROJECT_DETAIL_TABS.filter((tab) => {
+    if (tab.key === 'service-monitor') {
+      return availability.hasBoundServices
+    }
+
+    if (tab.key === 'remote-alignment') {
+      return availability.hasRemoteAlignment
+    }
+
+    if (tab.key === 'plane') {
+      return availability.hasPlane
+    }
+
+    return true
+  })
+}
+
+export function resolveProjectDetailTab(tab: ProjectDetailTabKey, availability: ProjectDetailTabAvailability): ProjectDetailTabKey {
+  return createProjectDetailTabs(availability).some((item) => item.key === tab) ? tab : DEFAULT_PROJECT_DETAIL_TAB
 }
 
 export type RepositorySummarySource = {

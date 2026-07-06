@@ -22,6 +22,7 @@ export const gitGraphColumnMinWidth = 152
 export const workingTreeCommitHash = '__FORGEDESK_WORKING_TREE__'
 export const gitLogRefreshPreferenceStorageKey = 'forgedesk.gitLogRefreshPreferences'
 export const gitLogRefreshPreferenceChangedEvent = 'forgedesk:git-log-refresh-preferences-changed'
+export const currentBranchRefColor = '#d4380d'
 export const gitLogRefreshIntervalBounds = {
   minSeconds: 10,
   maxSeconds: 600
@@ -64,6 +65,11 @@ export type WorkspaceStatusFileInput = {
   conflict?: boolean
 }
 
+export type WorkingTreeCommitOptions = {
+  currentBranch?: string
+  headHash?: string
+}
+
 export function getWorkspaceFileChangeStatus(file: WorkspaceStatusFileInput): string {
   if (file.conflict) {
     return 'U'
@@ -83,10 +89,55 @@ export function isWorkingTreeCommit(commit: { hash: string }): boolean {
   return commit.hash === workingTreeCommitHash
 }
 
+function getCommitRefs(commit: GraphCommitInput): string[] {
+  const refs = (commit as { refs?: unknown }).refs
+
+  return Array.isArray(refs) ? refs.filter((ref): ref is string => typeof ref === 'string') : []
+}
+
+function matchesCurrentHeadRef(ref: string, currentBranch: string): boolean {
+  const normalizedRef = ref.trim()
+
+  if (normalizedRef === 'HEAD') {
+    return true
+  }
+
+  if (!currentBranch) {
+    return normalizedRef.startsWith('HEAD -> ')
+  }
+
+  return normalizedRef === `HEAD -> ${currentBranch}` || normalizedRef === currentBranch || normalizedRef === `refs/heads/${currentBranch}`
+}
+
+export function getWorkingTreeParentHashes<TCommit extends GraphCommitInput>(
+  commits: TCommit[],
+  options: WorkingTreeCommitOptions = {}
+): string[] {
+  const headHash = options.headHash?.trim()
+
+  if (headHash && commits.some((commit) => commit.hash === headHash)) {
+    return [headHash]
+  }
+
+  const currentBranch = options.currentBranch?.trim() ?? ''
+  const headCommit = commits.find((commit) => getCommitRefs(commit).some((ref) => matchesCurrentHeadRef(ref, currentBranch)))
+
+  if (headCommit) {
+    return [headCommit.hash]
+  }
+
+  if (currentBranch || headHash) {
+    return []
+  }
+
+  return commits[0]?.hash ? [commits[0].hash] : []
+}
+
 export function createWorkingTreeCommit<TCommit extends GraphCommitInput>(
   commits: TCommit[],
   status: WorkspaceStatusInput | null | undefined,
-  createCommit: (input: { parentHashes: string[]; fileCount: number }) => TCommit
+  createCommit: (input: { parentHashes: string[]; fileCount: number }) => TCommit,
+  options: WorkingTreeCommitOptions = {}
 ): TCommit | null {
   const fileCount = status?.files?.length ?? 0
 
@@ -95,7 +146,7 @@ export function createWorkingTreeCommit<TCommit extends GraphCommitInput>(
   }
 
   return createCommit({
-    parentHashes: commits[0]?.hash ? [commits[0].hash] : [],
+    parentHashes: getWorkingTreeParentHashes(commits, options),
     fileCount
   })
 }
@@ -103,9 +154,10 @@ export function createWorkingTreeCommit<TCommit extends GraphCommitInput>(
 export function prependWorkingTreeCommit<TCommit extends GraphCommitInput>(
   commits: TCommit[],
   status: WorkspaceStatusInput | null | undefined,
-  createCommit: (input: { parentHashes: string[]; fileCount: number }) => TCommit
+  createCommit: (input: { parentHashes: string[]; fileCount: number }) => TCommit,
+  options: WorkingTreeCommitOptions = {}
 ): TCommit[] {
-  const workingTreeCommit = createWorkingTreeCommit(commits, status, createCommit)
+  const workingTreeCommit = createWorkingTreeCommit(commits, status, createCommit, options)
 
   return workingTreeCommit ? [workingTreeCommit, ...commits] : commits
 }
@@ -386,7 +438,7 @@ export function getRefShortBranchName(ref: string): string {
   return value.trim().replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '').replace(/^[^/]+\//, '')
 }
 
-export function getRefColor(ref: string, branchTags: BranchTagColorRule[] = []): RefTone | string {
+export function getRefColor(ref: string, branchTags: BranchTagColorRule[] = [], currentBranch = ''): RefTone | string {
   if (ref.startsWith('tag:')) {
     return 'gold'
   }
@@ -394,5 +446,9 @@ export function getRefColor(ref: string, branchTags: BranchTagColorRule[] = []):
   const shortName = getRefShortBranchName(ref)
   const branchTag = branchTags.find((tag) => tag.branchName === shortName)
 
-  return branchTag?.color || getRefTone(ref)
+  if (branchTag) {
+    return branchTag.color
+  }
+
+  return currentBranch && shortName === currentBranch ? currentBranchRefColor : getRefTone(ref)
 }

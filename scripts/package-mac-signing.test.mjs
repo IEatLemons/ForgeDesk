@@ -15,26 +15,26 @@ describe('legacy mac package signing helpers', () => {
 
     try {
       const appPath = join(root, 'ForgeDesk.app')
-      const framework = join(appPath, 'Contents', 'Frameworks', 'ReactiveObjC.framework')
+      const framework = join(appPath, 'Contents', 'Frameworks', 'Squirrel.framework')
       const versionA = join(framework, 'Versions', 'A')
       const versionCurrent = join(framework, 'Versions', 'Current')
 
       await mkdir(join(versionA, 'Resources'), { recursive: true })
       await mkdir(join(versionCurrent, 'Resources'), { recursive: true })
-      await createFile(join(versionA, 'ReactiveObjC'))
+      await createFile(join(versionA, 'Squirrel'))
       await createFile(join(versionA, 'Resources', 'Info.plist'))
-      await createFile(join(versionCurrent, 'ReactiveObjC'))
+      await createFile(join(versionCurrent, 'Squirrel'))
       await createFile(join(versionCurrent, 'Resources', 'Info.plist'))
-      await createFile(join(framework, 'ReactiveObjC'))
+      await createFile(join(framework, 'Squirrel'))
       await mkdir(join(framework, 'Resources'), { recursive: true })
 
       const normalized = normalizeMacFrameworks(appPath)
 
       assert.deepEqual(normalized, [framework])
       assert.equal(await readlink(versionCurrent), 'A')
-      assert.equal(await readlink(join(framework, 'ReactiveObjC')), join('Versions', 'Current', 'ReactiveObjC'))
+      assert.equal(await readlink(join(framework, 'Squirrel')), join('Versions', 'Current', 'Squirrel'))
       assert.equal(await readlink(join(framework, 'Resources')), join('Versions', 'Current', 'Resources'))
-      assert.equal((await stat(join(framework, 'ReactiveObjC'))).isFile(), true)
+      assert.equal((await stat(join(framework, 'Squirrel'))).isFile(), true)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

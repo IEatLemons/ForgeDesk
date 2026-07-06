@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { registerTerminalIpc } from './terminal-ipc.js'
-import type { TerminalSession } from './terminal-service.js'
+import type { TerminalSession, TerminalSessionSnapshot } from './terminal-service.js'
 
 type RegisteredHandler = (_event: unknown, ...args: unknown[]) => unknown
 
@@ -24,12 +24,17 @@ describe('terminal ipc', () => {
       shell: '/bin/zsh',
       title: 'ForgeDesk'
     }
+    const snapshot: TerminalSessionSnapshot = { ...session, output: ['ready'] }
     const calls: string[] = []
     const service = {
       close: (sessionId: string) => calls.push(`close:${sessionId}`),
       create: (input: unknown) => {
         calls.push(`create:${JSON.stringify(input)}`)
         return session
+      },
+      list: () => {
+        calls.push('list')
+        return [snapshot]
       },
       resize: (sessionId: string, cols: number, rows: number) => calls.push(`resize:${sessionId}:${cols}x${rows}`),
       write: (sessionId: string, data: string) => calls.push(`write:${sessionId}:${data}`)
@@ -38,13 +43,15 @@ describe('terminal ipc', () => {
 
     registerTerminalIpc(ipcMain, service)
 
-    assert.deepEqual(Array.from(ipcMain.handlers.keys()), ['terminal:create', 'terminal:write', 'terminal:resize', 'terminal:close'])
+    assert.deepEqual(Array.from(ipcMain.handlers.keys()), ['terminal:list', 'terminal:create', 'terminal:write', 'terminal:resize', 'terminal:close'])
+    assert.deepEqual(await ipcMain.handlers.get('terminal:list')?.({}), [snapshot])
     assert.deepEqual(await ipcMain.handlers.get('terminal:create')?.({}, { cwd: session.cwd, reuseKey: session.reuseKey }), session)
     await ipcMain.handlers.get('terminal:write')?.({}, session.id, 'npm test\r')
     await ipcMain.handlers.get('terminal:resize')?.({}, session.id, 120, 34)
     await ipcMain.handlers.get('terminal:close')?.({}, session.id)
 
     assert.deepEqual(calls, [
+      'list',
       `create:{"cwd":"${session.cwd}","reuseKey":"${session.reuseKey}"}`,
       `write:${session.id}:npm test\r`,
       `resize:${session.id}:120x34`,

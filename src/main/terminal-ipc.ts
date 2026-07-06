@@ -1,10 +1,11 @@
-import type { TerminalCreateInput, TerminalSession } from './terminal-service'
+import type { TerminalCreateInput, TerminalSession, TerminalSessionSnapshot } from './terminal-service'
 
 export type TerminalIpcMain = {
   handle: (channel: string, listener: (event: unknown, ...args: any[]) => unknown) => void
 }
 
 export type TerminalIpcService = {
+  list: () => TerminalSessionSnapshot[]
   create: (input?: TerminalCreateInput) => TerminalSession
   write: (sessionId: string, data: string) => void
   resize: (sessionId: string, cols: number, rows: number) => void
@@ -12,6 +13,7 @@ export type TerminalIpcService = {
 }
 
 export function registerTerminalIpc(ipcMain: TerminalIpcMain, service: TerminalIpcService): void {
+  ipcMain.handle('terminal:list', () => service.list())
   ipcMain.handle('terminal:create', (_event, input?: TerminalCreateInput) => service.create(input))
   ipcMain.handle('terminal:write', (_event, sessionId: string, data: string) => service.write(sessionId, data))
   ipcMain.handle('terminal:resize', (_event, sessionId: string, cols: number, rows: number) => service.resize(sessionId, cols, rows))

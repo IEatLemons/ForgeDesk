@@ -1,0 +1,113 @@
+<h2>Docker 管理页布局方向</h2>
+<p class="subtitle">目标是靠近 Docker Desktop 的容器管理体验，同时保留 ForgeDesk 的本地备注能力。</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="height:320px;border:1px solid #d9e0ea;background:#fbfcfe;display:grid;grid-template-columns:92px 1fr;font-size:10px;color:#1f2937;">
+        <div style="background:#f4f6fa;border-right:1px solid #e1e6ef;padding:14px 8px;display:grid;align-content:start;gap:8px;">
+          <div style="font-weight:700;">ForgeDesk</div>
+          <div style="background:#dbe8ff;color:#2563eb;padding:7px;border-radius:3px;">Containers</div>
+          <div style="padding:7px;">Images</div>
+          <div style="padding:7px;">Volumes</div>
+          <div style="padding:7px;">Logs</div>
+        </div>
+        <div style="padding:18px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
+            <div style="font-size:16px;font-weight:700;">Containers</div>
+            <div style="border:1px solid #bbf7d0;background:#f0fdf4;color:#15803d;border-radius:6px;padding:6px 10px;">监听中</div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:18px;">
+            <div><div style="font-weight:600;">Container CPU usage</div><div style="color:#0f766e;font-size:15px;font-weight:700;">11.29%</div></div>
+            <div><div style="font-weight:600;">Container memory usage</div><div style="color:#0f766e;font-size:15px;font-weight:700;">4.47GB / 15.23GB</div></div>
+          </div>
+          <div style="display:flex;gap:12px;align-items:center;margin-bottom:12px;">
+            <div style="border:1px solid #d1d5db;border-radius:4px;padding:8px;width:210px;color:#9ca3af;">Search</div>
+            <div style="color:#4b5563;">Only show running containers</div>
+          </div>
+          <div style="border-top:1px solid #e5e7eb;">
+            <div style="display:grid;grid-template-columns:1.2fr .8fr 1fr .8fr .8fr 1fr;gap:8px;padding:9px 0;font-weight:700;border-bottom:1px solid #e5e7eb;">
+              <span>Name</span><span>Container ID</span><span>Image</span><span>CPU</span><span>Last started</span><span>Actions</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1.2fr .8fr 1fr .8fr .8fr 1fr;gap:8px;padding:10px 0;border-bottom:1px solid #e5e7eb;">
+              <span>api-dev<br><small style="color:#64748b;">备注: 本地调试</small></span><span>fa01191597f7</span><span style="color:#2563eb;">merchant-api</span><span>4.06%</span><span>2 days ago</span><span>备注 · 启停 · 删除</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1.2fr .8fr 1fr .8fr .8fr 1fr;gap:8px;padding:10px 0;">
+              <span>worker-old</span><span>87f0c7453c1e</span><span style="color:#2563eb;">worker:dev</span><span>0%</span><span>13 days ago</span><span>备注 · 启动</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 推荐：Docker Desktop 单表</h3>
+      <p>容器页默认是 Docker Desktop 式列表，备注内联在名称/备注列和行级操作中；Images 仍在同页切换。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="height:320px;border:1px solid #d9e0ea;background:#fff;padding:18px;font-size:10px;color:#1f2937;">
+        <div style="display:flex;justify-content:space-between;margin-bottom:14px;">
+          <div style="font-size:16px;font-weight:700;">Docker</div>
+          <div style="border:1px solid #e5e7eb;border-radius:4px;padding:6px 10px;">刷新</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;">
+          <div style="border:1px solid #e5e7eb;border-radius:6px;padding:12px;">镜像<br><b style="font-size:15px;">12</b></div>
+          <div style="border:1px solid #e5e7eb;border-radius:6px;padding:12px;">容器<br><b style="font-size:15px;">6</b></div>
+          <div style="border:1px solid #e5e7eb;border-radius:6px;padding:12px;">运行中<br><b style="font-size:15px;">2</b></div>
+          <div style="border:1px solid #e5e7eb;border-radius:6px;padding:12px;">备注<br><b style="font-size:15px;">4</b></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <div style="background:#2563eb;color:white;border-radius:4px;padding:7px 12px;">容器 6</div>
+          <div style="border:1px solid #d1d5db;border-radius:4px;padding:7px 12px;">镜像 12</div>
+        </div>
+        <div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;font-weight:700;border-bottom:1px solid #e5e7eb;padding-bottom:8px;">
+            <span>容器</span><span>状态</span><span>镜像</span><span>备注</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;padding-top:9px;">
+            <span>api-dev</span><span>running</span><span>merchant-api</span><span>本地调试</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 保守：当前 ForgeDesk Tabs</h3>
+      <p>维持现有统计卡和容器/镜像 tab，只调整视觉密度；风险最低，但不像 Docker Desktop。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="height:320px;border:1px solid #d9e0ea;background:#fbfcfe;display:grid;grid-template-columns:1fr 170px;font-size:10px;color:#1f2937;">
+        <div style="padding:18px;border-right:1px solid #e5e7eb;">
+          <div style="font-size:16px;font-weight:700;margin-bottom:18px;">Containers</div>
+          <div style="display:flex;gap:10px;margin-bottom:12px;"><div style="border:1px solid #d1d5db;border-radius:4px;padding:8px;width:210px;color:#9ca3af;">Search</div><div>running only</div></div>
+          <div style="border-top:1px solid #e5e7eb;">
+            <div style="display:grid;grid-template-columns:1.2fr .8fr 1fr .8fr;gap:8px;padding:9px 0;font-weight:700;border-bottom:1px solid #e5e7eb;">
+              <span>Name</span><span>ID</span><span>Image</span><span>Actions</span>
+            </div>
+            <div style="background:#eff6ff;display:grid;grid-template-columns:1.2fr .8fr 1fr .8fr;gap:8px;padding:10px 0;border-bottom:1px solid #dbeafe;">
+              <span>api-dev</span><span>fa0119</span><span>merchant-api</span><span>备注 · 启停</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1.2fr .8fr 1fr .8fr;gap:8px;padding:10px 0;">
+              <span>worker-old</span><span>87f0c7</span><span>worker:dev</span><span>备注</span>
+            </div>
+          </div>
+        </div>
+        <div style="padding:14px;background:#ffffff;">
+          <div style="font-weight:700;margin-bottom:10px;">备注详情</div>
+          <div style="color:#64748b;margin-bottom:8px;">api-dev</div>
+          <div style="border:1px solid #e5e7eb;border-radius:4px;padding:8px;margin-bottom:8px;">显示名称</div>
+          <div style="border:1px solid #e5e7eb;border-radius:4px;padding:8px;height:92px;">本地调试容器，保留环境变量...</div>
+          <div style="margin-top:10px;color:#2563eb;">保存</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 增强：列表 + 备注侧栏</h3>
+      <p>管理动作仍像 Docker Desktop，选中行后右侧常驻备注编辑；备注更强，但页面更复杂。</p>
+    </div>
+  </div>
+</div>
