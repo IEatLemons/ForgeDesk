@@ -71,10 +71,11 @@ import {
   UserAddOutlined
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react'
 import type { FormInstance } from 'antd/es/form'
 import forgedeskLogoUrl from './assets/forgedesk-logo.svg'
 import type {
+  AppRuntimeInfo,
   AiSettingsView,
   AiConflictSuggestion,
   CliEnvironmentIssue,
@@ -113,6 +114,7 @@ import type {
   PlaneProjectContent,
   PlaneSettings,
   PlaneWorkItem,
+  QuickBuildTask,
   RemoteAlignmentBranch,
   RemoteAlignmentBranchStatus,
   RemoteAlignmentStatus,
@@ -139,7 +141,24 @@ import { APP_NAVIGATION_ITEMS, type AppNavigationKey } from './app-navigation'
 import { DockerPanel } from './docker-panel'
 import { createAppUpdateViewModel } from './app-update-view'
 import { createDiffResultLines, createSourceDiffLines, type DiffDisplayLine } from './diff-view'
-import { compareEnvFiles, formatVariableNames, type EnvFileDiffResult } from './env-file-diff'
+import {
+  compareEnvFiles,
+  createEnvFileDiffTask,
+  formatVariableNames,
+  parseEnvFileVariables,
+  readStoredEnvFileDiffActiveTaskId,
+  readStoredEnvFileDiffTasks,
+  updateEnvVariableValue,
+  writeStoredEnvFileDiffActiveTaskId,
+  writeStoredEnvFileDiffTasks,
+  type EnvFileDiffResult,
+  type EnvFileDiffRow,
+  type EnvFileDiffRowFilter,
+  type EnvFileDiffStatus,
+  type EnvFileDiffTask,
+  type EnvFileDiffTaskFile,
+  type EnvFileVariables
+} from './env-file-diff'
 import { getErrorMessage, isAiCredentialErrorMessage } from './error-messages'
 import {
   PUSH_ALL_REMOTES_VALUE,
@@ -219,9 +238,12 @@ import {
   type ReleasePublishActionKey
 } from './release-publish-view'
 import {
+  createDeploymentIssueSummary,
   createDeploymentFilterOptions,
   createDeploymentRows,
   createDeploymentStatusSummary,
+  createSystemLogEntry,
+  createSystemLogSummary,
   deploymentAutoRefreshIntervalMs,
   deploymentRateLimitFallbackMs,
   filterDeploymentRows,
@@ -233,11 +255,13 @@ import {
   isDeploymentRateLimitMessage,
   railwayDeploymentRefreshBatchSize,
   selectDeploymentRefreshServices,
-  summarizeDeploymentRefreshErrors,
   type DeploymentDashboardFilters,
   type DeploymentDashboardRow,
+  type DeploymentIssueSummary,
   type DeploymentRefreshCursor,
-  type DeploymentRefreshError
+  type DeploymentRefreshError,
+  type SystemLogEntry,
+  type SystemLogLevel
 } from './service-deployments-view'
 import { getServiceProviderGuide, type ServiceProviderGuideProvider } from './service-config-guide'
 import {
@@ -456,6 +480,142 @@ type VercelDomainForm = {
   gitBranch?: string
   redirect?: string
   redirectStatusCode?: number
+}
+
+const serviceEnvVarInitialVisibleCount = 24
+const serviceEnvVarLoadMoreCount = 24
+const serviceEnvVarLoadMoreThreshold = 48
+
+type SystemLogInput = Omit<SystemLogEntry, 'id' | 'time'>
+
+type SystemLogFilter = SystemLogLevel | 'all'
+
+type SystemLogHandler = (entry: SystemLogInput) => void
+
+type QuickBuildStatus = 'idle' | 'running' | 'success' | 'error' | 'cancelled'
+
+type QuickBuildState = {
+  status: QuickBuildStatus
+  command: string
+  cwd: string
+  taskId?: string
+  startedAt?: string
+  finishedAt?: string
+  exitCode?: number
+  signal?: string
+  log?: string
+  stdout?: string
+  stderr?: string
+  updatedAt?: string
+  message?: string
+}
+
+const quickBuildCommand = 'pnpm package:mac:legacy'
+
+function createInitialQuickBuildState(): QuickBuildState {
+  return {
+    command: quickBuildCommand,
+    cwd: '',
+    status: 'idle'
+  }
+}
+
+function formatQuickBuildTime(value?: string): string {
+  if (!value) {
+    return '未开始'
+  }
+
+  const timestamp = new Date(value)
+  return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString('zh-CN', { hour12: false })
+}
+
+function getQuickBuildStatusText(status: QuickBuildStatus): string {
+  switch (status) {
+    case 'running':
+      return '执行中'
+    case 'success':
+      return '已完成'
+    case 'error':
+      return '失败'
+    case 'cancelled':
+      return '已终止'
+    case 'idle':
+      return '未执行'
+  }
+}
+
+function mapQuickBuildTaskStatus(status: QuickBuildTask['status']): QuickBuildStatus {
+  switch (status) {
+    case 'running':
+      return 'running'
+    case 'succeeded':
+      return 'success'
+    case 'cancelled':
+      return 'cancelled'
+    case 'failed':
+      return 'error'
+  }
+}
+
+function createQuickBuildStateFromTask(task: QuickBuildTask | null, fallbackCwd = ''): QuickBuildState {
+  if (!task) {
+    return {
+      ...createInitialQuickBuildState(),
+      cwd: fallbackCwd
+    }
+  }
+
+  return {
+    command: task.command,
+    cwd: task.cwd,
+    exitCode: task.exitCode ?? undefined,
+    finishedAt: task.finishedAt,
+    log: task.log,
+    message: task.error || task.hint || task.phase,
+    signal: task.signal,
+    startedAt: task.startedAt,
+    status: mapQuickBuildTaskStatus(task.status),
+    stderr: task.stderr,
+    stdout: task.stdout,
+    taskId: task.id,
+    updatedAt: task.updatedAt
+  }
+}
+
+function formatQuickBuildLastOutput(log?: string): string {
+  const lines = (log ?? '').split('\n').map((line) => line.trim()).filter(Boolean)
+  const latest = lines.at(-1)
+
+  if (!latest) {
+    return '暂无输出'
+  }
+
+  return latest.length > 180 ? `${latest.slice(0, 180)}...` : latest
+}
+
+function getQuickBuildTaskResultTitle(task: QuickBuildTask): string {
+  if (task.status === 'succeeded') {
+    return '快速构建完成'
+  }
+
+  if (task.status === 'cancelled') {
+    return '快速构建已终止'
+  }
+
+  return `快速构建失败（退出码 ${task.exitCode ?? '-'}${task.signal ? `，信号 ${task.signal}` : ''}）`
+}
+
+function formatQuickBuildTaskLogMessage(task: QuickBuildTask): string {
+  const summary = [
+    `命令：${task.command}`,
+    `目录：${task.cwd}`,
+    `开始：${formatQuickBuildTime(task.startedAt)}`,
+    `结束：${formatQuickBuildTime(task.finishedAt)}`,
+    `退出码：${task.exitCode ?? '-'}`,
+    task.error ? `错误：${task.error}` : ''
+  ].filter(Boolean)
+
+  return [summary.join('\n'), task.log].filter(Boolean).join('\n\n')
 }
 
 function wait(ms: number): Promise<void> {
@@ -738,6 +898,152 @@ function getAvatarLabel(value: string): string {
   }
 
   return trimmed.slice(0, 1).toUpperCase()
+}
+
+function getSystemLogLevelMeta(level: SystemLogLevel): {
+  label: string
+  color: string
+  badgeStatus: 'success' | 'processing' | 'default' | 'error' | 'warning'
+} {
+  const levelMap: Record<SystemLogLevel, { label: string; color: string; badgeStatus: 'success' | 'processing' | 'default' | 'error' | 'warning' }> = {
+    success: { label: '成功', color: 'green', badgeStatus: 'success' },
+    info: { label: '信息', color: 'blue', badgeStatus: 'processing' },
+    warning: { label: '警告', color: 'gold', badgeStatus: 'warning' },
+    error: { label: '错误', color: 'red', badgeStatus: 'error' }
+  }
+
+  return levelMap[level]
+}
+
+function formatSystemLogCopyText(log: SystemLogEntry): string {
+  return [`${formatDateTime(log.time)} [${getSystemLogLevelMeta(log.level).label}] ${log.source} / ${log.title}`, log.message].join('\n')
+}
+
+function SystemLogDrawer({
+  open,
+  logs,
+  filter,
+  onFilterChange,
+  onClose,
+  onClear
+}: {
+  open: boolean
+  logs: SystemLogEntry[]
+  filter: SystemLogFilter
+  onFilterChange: (filter: SystemLogFilter) => void
+  onClose: () => void
+  onClear: () => void
+}): JSX.Element {
+  const visibleLogs = filter === 'all' ? logs : logs.filter((log) => log.level === filter)
+
+  return (
+    <Drawer
+      title="系统日志"
+      open={open}
+      width="min(860px, calc(100vw - 48px))"
+      onClose={onClose}
+      extra={
+        <Button size="small" disabled={logs.length === 0} onClick={onClear}>
+          清空
+        </Button>
+      }
+    >
+      <Space direction="vertical" size={12} className="system-log-drawer">
+        <Segmented
+          size="small"
+          value={filter}
+          onChange={(value) => onFilterChange(value as SystemLogFilter)}
+          options={[
+            { label: '全部', value: 'all' },
+            { label: '错误', value: 'error' },
+            { label: '警告', value: 'warning' },
+            { label: '信息', value: 'info' },
+            { label: '成功', value: 'success' }
+          ]}
+        />
+        <div className="system-log-list">
+          {visibleLogs.length > 0 ? (
+            visibleLogs.map((log) => {
+              const meta = getSystemLogLevelMeta(log.level)
+
+              return (
+                <div key={log.id} className={`system-log-item system-log-item-${log.level}`}>
+                  <div className="system-log-item-meta">
+                    <Badge status={meta.badgeStatus} />
+                    <Tag color={meta.color}>{meta.label}</Tag>
+                    <Typography.Text type="secondary">{formatDateTime(log.time)}</Typography.Text>
+                    <Typography.Text type="secondary">{log.source}</Typography.Text>
+                  </div>
+                  <div className="system-log-item-body">
+                    <Typography.Text strong>{log.title}</Typography.Text>
+                    <Typography.Text className="system-log-message" copyable={{ text: formatSystemLogCopyText(log) }}>
+                      {log.message}
+                    </Typography.Text>
+                  </div>
+                </div>
+              )
+            })
+          ) : (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日志" />
+          )}
+        </div>
+      </Space>
+    </Drawer>
+  )
+}
+
+function AppStatusBar({
+  summary,
+  refreshing,
+  showQuickBuildButton,
+  quickBuildState,
+  quickBuildTooltip,
+  versionLabel,
+  onQuickBuild,
+  onOpenLogs
+}: {
+  summary: ReturnType<typeof createSystemLogSummary>
+  refreshing: boolean
+  showQuickBuildButton: boolean
+  quickBuildState: QuickBuildState
+  quickBuildTooltip: JSX.Element
+  versionLabel: string
+  onQuickBuild: () => void
+  onOpenLogs: () => void
+}): JSX.Element {
+  const latest = summary.latest
+  const level = summary.error > 0 ? 'error' : summary.warning > 0 ? 'warning' : latest?.level ?? 'success'
+  const levelMeta = getSystemLogLevelMeta(level)
+  const issueLabel = summary.issueCount > 0 ? `${summary.issueCount} 异常` : '无异常'
+  const latestLabel = latest ? `${latest.title} · ${formatRelativeTime(latest.time)}` : '系统正常'
+
+  return (
+    <div className={`app-status-bar app-status-bar-${level}`}>
+      <button type="button" className="app-status-bar-item app-status-bar-primary" onClick={onOpenLogs}>
+        <Badge status={refreshing ? 'processing' : levelMeta.badgeStatus} />
+        <span>{refreshing ? '部署刷新中' : latestLabel}</span>
+      </button>
+      <button type="button" className="app-status-bar-item" onClick={onOpenLogs}>
+        <FileTextOutlined />
+        <span>系统日志 {summary.total}</span>
+      </button>
+      <button type="button" className="app-status-bar-item" onClick={onOpenLogs}>
+        <span>{issueLabel}</span>
+      </button>
+      <span className="app-status-bar-spacer" />
+      {showQuickBuildButton ? (
+        <Tooltip title={quickBuildTooltip} placement="topRight">
+          <button type="button" className={`app-status-bar-item app-status-bar-quick-build is-${quickBuildState.status}`} onClick={onQuickBuild}>
+            <ThunderboltOutlined />
+            <span>快速构建</span>
+            <span className={`quick-build-status-dot is-${quickBuildState.status}`} />
+          </button>
+        </Tooltip>
+      ) : null}
+      <span className="app-status-bar-item app-status-bar-static">Ready</span>
+      {versionLabel ? <span className="app-status-bar-item app-status-bar-static app-status-bar-version">{versionLabel}</span> : null}
+    </div>
+  )
 }
 
 function getRemoteAlignmentDetail(alignment: RemoteAlignmentSummary): string {
@@ -1534,12 +1840,18 @@ function SettingsPanel({
   onCreateProject,
   themePreference,
   resolvedTheme,
-  onThemePreferenceChange
+  onThemePreferenceChange,
+  onSystemLog,
+  onDeploymentRefreshActiveChange,
+  onOpenSystemLog
 }: {
   onCreateProject: () => void
   themePreference: ThemePreference
   resolvedTheme: ResolvedTheme
   onThemePreferenceChange: (preference: ThemePreference) => void
+  onSystemLog?: SystemLogHandler
+  onDeploymentRefreshActiveChange?: (active: boolean) => void
+  onOpenSystemLog?: () => void
 }): JSX.Element {
   const [gitIdentityForm] = Form.useForm<GitIdentityForm>()
   const [sshKeyForm] = Form.useForm<SshKeyForm>()
@@ -3018,7 +3330,14 @@ function SettingsPanel({
   }
 
   function renderServicesModule(): JSX.Element {
-    return <GlobalServiceCenterPanel onBack={() => setActiveSettingsModule('overview')} />
+    return (
+      <GlobalServiceCenterPanel
+        onBack={() => setActiveSettingsModule('overview')}
+        onSystemLog={onSystemLog}
+        onDeploymentRefreshActiveChange={onDeploymentRefreshActiveChange}
+        onOpenSystemLog={onOpenSystemLog}
+      />
+    )
   }
 
   function renderPlaneModule(): JSX.Element {
@@ -4579,6 +4898,9 @@ function ServiceDetailDrawer({
   const [savingEnvVar, setSavingEnvVar] = useState(false)
   const [revealedEnvValues, setRevealedEnvValues] = useState<Record<string, string>>({})
   const [workingEnvVarId, setWorkingEnvVarId] = useState<string | null>(null)
+  const [copyingEnvVarId, setCopyingEnvVarId] = useState<string | null>(null)
+  const [copyingAllEnvVars, setCopyingAllEnvVars] = useState(false)
+  const [envVarVisibleCount, setEnvVarVisibleCount] = useState(serviceEnvVarInitialVisibleCount)
   const [domainModalOpen, setDomainModalOpen] = useState(false)
   const [savingDomain, setSavingDomain] = useState(false)
   const [workingDomain, setWorkingDomain] = useState<string | null>(null)
@@ -4605,6 +4927,9 @@ function ServiceDetailDrawer({
     setEnvModalOpen(false)
     setEditingEnvVar(null)
     setRevealedEnvValues({})
+    setCopyingEnvVarId(null)
+    setCopyingAllEnvVars(false)
+    setEnvVarVisibleCount(serviceEnvVarInitialVisibleCount)
     setDomainModalOpen(false)
     setDomainConfig(null)
   }, [service?.id, open])
@@ -4701,6 +5026,7 @@ function ServiceDetailDrawer({
     setEnvVarsError('')
 
     try {
+      setEnvVarVisibleCount(serviceEnvVarInitialVisibleCount)
       setEnvVars(await window.forgeDesk.listServiceEnvVars(activeService.id))
     } catch (error) {
       setEnvVarsError(getErrorMessage(error))
@@ -4902,6 +5228,84 @@ function ServiceDetailDrawer({
   const monitorableDomains = activeService ? getMonitorableServiceDomains(activeService) : []
   const serviceCapabilities = activeService ? getServiceProviderCapabilities(activeService.provider) : null
   const isVercel = activeService?.provider === 'vercel'
+  const visibleEnvVarTotal = Math.min(envVarVisibleCount, envVars.length)
+  const visibleEnvVars = envVars.slice(0, visibleEnvVarTotal)
+  const hasMoreEnvVars = visibleEnvVarTotal < envVars.length
+
+  function hasRevealedEnvValue(envVar: ServiceEnvVarRecord): boolean {
+    return Object.prototype.hasOwnProperty.call(revealedEnvValues, envVar.id)
+  }
+
+  function getEnvVarKnownValue(envVar: ServiceEnvVarRecord): string | undefined {
+    return hasRevealedEnvValue(envVar) ? revealedEnvValues[envVar.id] : envVar.value
+  }
+
+  async function resolveEnvVarCopyValue(envVar: ServiceEnvVarRecord): Promise<string> {
+    const knownValue = getEnvVarKnownValue(envVar)
+
+    if (knownValue !== undefined) {
+      return knownValue
+    }
+
+    if (!activeService || !window.forgeDesk || !serviceCapabilities?.canManageEnvVars) {
+      throw new Error('当前平台未返回环境变量值')
+    }
+
+    const revealed = await window.forgeDesk.revealServiceEnvVar(activeService.id, envVar.id)
+    return revealed.value ?? ''
+  }
+
+  async function copyEnvVarValue(envVar: ServiceEnvVarRecord): Promise<void> {
+    setCopyingEnvVarId(envVar.id)
+
+    try {
+      const value = await resolveEnvVarCopyValue(envVar)
+      await copyText(value, `${envVar.key} 值已复制`, `${envVar.key} 值为空`, { allowEmpty: true })
+    } catch (error) {
+      message.error(getErrorMessage(error, '复制失败'))
+    } finally {
+      setCopyingEnvVarId(null)
+    }
+  }
+
+  async function copyAllEnvVars(): Promise<void> {
+    if (envVars.length === 0) {
+      message.warning('暂无环境变量')
+      return
+    }
+
+    setCopyingAllEnvVars(true)
+
+    try {
+      const lines: string[] = []
+
+      for (const envVar of envVars) {
+        const value = await resolveEnvVarCopyValue(envVar)
+        lines.push(`${envVar.key}=${value}`)
+      }
+
+      await copyText(lines.join('\n'), '环境变量已复制')
+    } catch (error) {
+      message.error(getErrorMessage(error, '复制失败'))
+    } finally {
+      setCopyingAllEnvVars(false)
+    }
+  }
+
+  function handleEnvVarsTableScroll(event: UIEvent<HTMLDivElement>): void {
+    if (!hasMoreEnvVars) {
+      return
+    }
+
+    const { scrollHeight, scrollTop, clientHeight } = event.currentTarget
+
+    if (scrollHeight - scrollTop - clientHeight > serviceEnvVarLoadMoreThreshold) {
+      return
+    }
+
+    setEnvVarVisibleCount((current) => Math.min(envVars.length, current + serviceEnvVarLoadMoreCount))
+  }
+
   const environmentColumns: ColumnsType<ProjectServiceEnvironment> = [
     {
       title: '环境',
@@ -4992,7 +5396,25 @@ function ServiceDetailDrawer({
       : [])
   ]
   const envColumns: ColumnsType<ServiceEnvVarRecord> = [
-    { title: 'Key', key: 'key', width: 220, render: (_, envVar) => <TableText value={envVar.key} /> },
+    {
+      title: 'Key',
+      key: 'key',
+      width: 260,
+      render: (_, envVar) => (
+        <div className="service-env-key-cell">
+          <TableText value={envVar.key} />
+          <Tooltip title="复制 Key">
+            <Button
+              aria-label={`复制 ${envVar.key} Key`}
+              size="small"
+              type="text"
+              icon={<CopyOutlined />}
+              onClick={() => copyText(envVar.key, `${envVar.key} Key 已复制`)}
+            />
+          </Tooltip>
+        </div>
+      )
+    },
     { title: '类型', dataIndex: 'type', key: 'type', width: 120, render: (type) => <Tag>{type}</Tag> },
     {
       title: '环境',
@@ -5006,22 +5428,34 @@ function ServiceDetailDrawer({
       key: 'value',
       width: 340,
       render: (_, envVar) => {
-        if (!serviceCapabilities?.canManageEnvVars) {
-          return <Typography.Text type="secondary">只读列表</Typography.Text>
-        }
-
-        const value = revealedEnvValues[envVar.id]
-        const displayValue = value || '••••••••'
+        const hasRevealedValue = hasRevealedEnvValue(envVar)
+        const knownValue = getEnvVarKnownValue(envVar)
+        const canCopyValue = knownValue !== undefined || Boolean(serviceCapabilities?.canManageEnvVars)
+        const shouldShowValue = hasRevealedValue || (envVar.decrypted && knownValue !== undefined)
+        const displayValue = shouldShowValue ? knownValue || '(空值)' : canCopyValue ? '••••••••' : '未返回'
 
         return (
-          <Typography.Text
-            className={value ? 'service-env-value revealed' : 'service-env-value'}
-            code={Boolean(value)}
-            type={value ? undefined : 'secondary'}
-            ellipsis={{ tooltip: displayValue }}
-          >
-            {displayValue}
-          </Typography.Text>
+          <div className="service-env-value-cell">
+            <Typography.Text
+              className={shouldShowValue ? 'service-env-value revealed' : 'service-env-value'}
+              code={shouldShowValue}
+              type={shouldShowValue ? undefined : 'secondary'}
+              ellipsis={{ tooltip: displayValue }}
+            >
+              {displayValue}
+            </Typography.Text>
+            <Tooltip title="复制值">
+              <Button
+                aria-label={`复制 ${envVar.key} 值`}
+                size="small"
+                type="text"
+                icon={<CopyOutlined />}
+                disabled={!canCopyValue}
+                loading={copyingEnvVarId === envVar.id}
+                onClick={() => copyEnvVarValue(envVar)}
+              />
+            </Tooltip>
+          </div>
         )
       }
     },
@@ -5221,6 +5655,9 @@ function ServiceDetailDrawer({
                         <Button icon={<ReloadOutlined />} loading={envVarsLoading} onClick={loadEnvVars}>
                           刷新
                         </Button>
+                        <Button icon={<CopyOutlined />} loading={copyingAllEnvVars} disabled={envVars.length === 0} onClick={copyAllEnvVars}>
+                          复制全部
+                        </Button>
                         {serviceCapabilities.canManageEnvVars ? (
                           <Button type="primary" icon={<PlusOutlined />} onClick={() => openEnvModal()}>
                             新增变量
@@ -5234,10 +5671,11 @@ function ServiceDetailDrawer({
                       rowKey="id"
                       size="small"
                       columns={envColumns}
-                      dataSource={envVars}
+                      dataSource={visibleEnvVars}
                       loading={envVarsLoading}
-                      pagination={{ pageSize: 8 }}
-                      scroll={{ x: 1350 }}
+                      pagination={false}
+                      scroll={{ x: 1350, y: 520 }}
+                      onScroll={handleEnvVarsTableScroll}
                       locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无环境变量" /> }}
                     />
                   </Space>
@@ -5401,13 +5839,23 @@ function ServiceDetailDrawer({
 
 type ServiceCenterView = 'deployments' | 'services'
 
-function GlobalServiceCenterPanel({ onBack }: { onBack?: () => void }): JSX.Element {
+function GlobalServiceCenterPanel({
+  onBack,
+  onSystemLog,
+  onDeploymentRefreshActiveChange,
+  onOpenSystemLog
+}: {
+  onBack?: () => void
+  onSystemLog?: SystemLogHandler
+  onDeploymentRefreshActiveChange?: (active: boolean) => void
+  onOpenSystemLog?: () => void
+}): JSX.Element {
   const [centerView, setCenterView] = useState<ServiceCenterView>(onBack ? 'services' : 'deployments')
   const [services, setServices] = useState<ProjectService[]>([])
   const [deploymentsByServiceId, setDeploymentsByServiceId] = useState<Record<string, ServiceDeploymentSummary[]>>({})
   const [deploymentFilters, setDeploymentFilters] = useState<DeploymentDashboardFilters>({})
   const [deploymentsLoading, setDeploymentsLoading] = useState(false)
-  const [deploymentsError, setDeploymentsError] = useState('')
+  const [deploymentIssueSummary, setDeploymentIssueSummary] = useState<DeploymentIssueSummary | null>(null)
   const [lastDeploymentRefreshAt, setLastDeploymentRefreshAt] = useState('')
   const [autoRefreshDeployments, setAutoRefreshDeployments] = useState(true)
   const [deploymentDatePickerKey, setDeploymentDatePickerKey] = useState(0)
@@ -5440,15 +5888,28 @@ function GlobalServiceCenterPanel({ onBack }: { onBack?: () => void }): JSX.Elem
     setDeploymentFilters((current) => ({ ...current, ...patch }))
   }
 
+  function writeDeploymentSystemLog(entry: Omit<SystemLogInput, 'source'>): void {
+    onSystemLog?.({
+      source: '服务中心',
+      ...entry
+    })
+  }
+
   async function loadDeploymentCenter(options: { silent?: boolean } = {}): Promise<void> {
     if (!window.forgeDesk || deploymentRefreshInFlightRef.current) {
       return
     }
 
     deploymentRefreshInFlightRef.current = true
+    onDeploymentRefreshActiveChange?.(true)
 
     if (!options.silent) {
       setDeploymentsLoading(true)
+      writeDeploymentSystemLog({
+        level: 'info',
+        title: '开始刷新部署',
+        message: '正在读取服务列表、缓存和平台部署历史。'
+      })
     }
 
     try {
@@ -5473,6 +5934,11 @@ function GlobalServiceCenterPanel({ onBack }: { onBack?: () => void }): JSX.Elem
       if (!options.silent && cachedEntries.some(([, deployments]) => deployments.length > 0)) {
         setServices(nextServices)
         setDeploymentsByServiceId(cachedDeploymentsByServiceId)
+        writeDeploymentSystemLog({
+          level: 'info',
+          title: '已加载部署缓存',
+          message: `${cachedEntries.filter(([, deployments]) => deployments.length > 0).length} 个服务先使用本地缓存展示。`
+        })
       }
 
       const now = Date.now()
@@ -5535,14 +6001,47 @@ function GlobalServiceCenterPanel({ onBack }: { onBack?: () => void }): JSX.Elem
 
       setServices(nextServices)
       setDeploymentsByServiceId(nextDeploymentsByServiceId)
-      setDeploymentsError(
-        summarizeDeploymentRefreshErrors(refreshErrors, providerServiceCounts)
-      )
+      const issueSummary = createDeploymentIssueSummary(refreshErrors, providerServiceCounts)
+
+      setDeploymentIssueSummary(issueSummary.issueCount > 0 ? issueSummary : null)
+
+      if (issueSummary.issueCount > 0) {
+        writeDeploymentSystemLog({
+          level: issueSummary.level,
+          title: issueSummary.title,
+          message: issueSummary.detail,
+          meta: {
+            compactMessage: issueSummary.message,
+            issueCount: issueSummary.issueCount
+          }
+        })
+      } else if (!options.silent) {
+        writeDeploymentSystemLog({
+          level: 'success',
+          title: '部署中心已刷新',
+          message: `已刷新 ${refreshPlan.services.length} 个服务，当前展示 ${Object.values(nextDeploymentsByServiceId).flat().length} 条部署记录。`
+        })
+      }
+
       setLastDeploymentRefreshAt(new Date().toISOString())
     } catch (error) {
-      setDeploymentsError(getErrorMessage(error))
+      const errorMessage = getErrorMessage(error)
+
+      setDeploymentIssueSummary({
+        issueCount: 1,
+        level: 'error',
+        title: '部署中心刷新失败',
+        message: errorMessage,
+        detail: errorMessage
+      })
+      writeDeploymentSystemLog({
+        level: 'error',
+        title: '部署中心刷新失败',
+        message: errorMessage
+      })
     } finally {
       deploymentRefreshInFlightRef.current = false
+      onDeploymentRefreshActiveChange?.(false)
 
       if (!options.silent) {
         setDeploymentsLoading(false)
@@ -5613,9 +6112,21 @@ function GlobalServiceCenterPanel({ onBack }: { onBack?: () => void }): JSX.Elem
             description: action === 'rollback' ? `Rollback from ForgeDesk to ${row.deploymentId}` : undefined
           })
           await loadDeploymentCenter()
+          writeDeploymentSystemLog({
+            level: 'success',
+            title: '部署操作已提交',
+            message: `${actionLabels[action]} ${row.serviceName} / ${row.deploymentId}`
+          })
           message.success(`${actionLabels[action]}已提交`)
         } catch (error) {
-          message.error(getErrorMessage(error))
+          const errorMessage = getErrorMessage(error)
+
+          writeDeploymentSystemLog({
+            level: 'error',
+            title: '部署操作失败',
+            message: `${actionLabels[action]} ${row.serviceName} / ${row.deploymentId}：${errorMessage}`
+          })
+          message.error(errorMessage)
         }
       }
     })
@@ -5858,7 +6369,26 @@ function GlobalServiceCenterPanel({ onBack }: { onBack?: () => void }): JSX.Elem
               重置
             </Button>
           </div>
-          {deploymentsError ? <Alert type="warning" showIcon message="部分部署暂不可用" description={<pre className="deployment-error-text">{deploymentsError}</pre>} /> : null}
+          {deploymentIssueSummary ? (
+            <Alert
+              className="deployment-compact-alert"
+              type={deploymentIssueSummary.level === 'error' ? 'error' : 'warning'}
+              showIcon
+              message={
+                <Space size={8} wrap>
+                  <Typography.Text strong>{deploymentIssueSummary.message}</Typography.Text>
+                  <Typography.Text type="secondary">{deploymentIssueSummary.issueCount} 项异常</Typography.Text>
+                </Space>
+              }
+              action={
+                onOpenSystemLog ? (
+                  <Button size="small" type="text" onClick={onOpenSystemLog}>
+                    查看日志
+                  </Button>
+                ) : null
+              }
+            />
+          ) : null}
           <Spin spinning={deploymentsLoading && deploymentRows.length === 0}>
             <div className="deployment-list">
               {filteredDeploymentRows.length > 0 ? (
@@ -12145,8 +12675,49 @@ type LoadedTextFile = {
   content: string
 }
 
-async function copyText(text: string, successText: string, emptyText = '没有可复制的内容'): Promise<void> {
-  if (!text.trim()) {
+const ENV_FILE_ACCEPT = '.env,.txt,.config,.conf,.local,.development,.production,.staging,.yaml,.yml'
+
+function getEnvDiffStatusLabel(status: EnvFileDiffStatus): string {
+  switch (status) {
+    case 'same':
+      return '相同'
+    case 'different':
+      return '值不同'
+    case 'missing-in-target':
+      return 'B 缺少'
+    case 'extra-in-target':
+      return 'B 多出'
+  }
+}
+
+function getEnvDiffStatusColor(status: EnvFileDiffStatus): string {
+  switch (status) {
+    case 'same':
+      return 'success'
+    case 'different':
+      return 'warning'
+    case 'missing-in-target':
+      return 'error'
+    case 'extra-in-target':
+      return 'processing'
+  }
+}
+
+function matchesEnvDiffFilter(row: EnvFileDiffRow, filter: EnvFileDiffRowFilter): boolean {
+  switch (filter) {
+    case 'missing':
+      return row.status === 'missing-in-target'
+    case 'extra':
+      return row.status === 'extra-in-target'
+    case 'different':
+      return row.status === 'different'
+    case 'all':
+      return true
+  }
+}
+
+async function copyText(text: string, successText: string, emptyText = '没有可复制的内容', options: { allowEmpty?: boolean } = {}): Promise<void> {
+  if (!options.allowEmpty && !text.trim()) {
     message.warning(emptyText)
     return
   }
@@ -12236,8 +12807,8 @@ function ToolsPanel(): JSX.Element {
             <DiffOutlined />
           </span>
           <span className="tool-entry-copy">
-            <Typography.Text strong>文件工具</Typography.Text>
-            <Typography.Text type="secondary">对比两个环境配置文件缺少的变量。</Typography.Text>
+            <Typography.Text strong>环境变量对比</Typography.Text>
+            <Typography.Text type="secondary">粘贴文本或导入文件，找出 B 缺少的变量。</Typography.Text>
           </span>
         </button>
         <button className="tool-entry-card" type="button" onClick={() => setActiveTool('rsa')}>
@@ -12863,7 +13434,20 @@ function MonthlyPerformanceTool({ onBack }: { onBack: () => void }): JSX.Element
       width: 320,
       render: (_, session) => (
         <Space direction="vertical" size={2}>
-          <Typography.Text strong>{session.title}</Typography.Text>
+          <Space size={8} wrap>
+            <Typography.Text strong>{session.title}</Typography.Text>
+            <Button
+              className="table-link-button"
+              size="small"
+              type="link"
+              onClick={(event) => {
+                event.stopPropagation()
+                setActiveSession(session)
+              }}
+            >
+              查看
+            </Button>
+          </Space>
           <Typography.Text type="secondary">{session.projectName} · {session.month}</Typography.Text>
         </Space>
       )
@@ -12955,6 +13539,10 @@ function MonthlyPerformanceTool({ onBack }: { onBack: () => void }): JSX.Element
           dataSource={sessions}
           loading={loadingSessions}
           pagination={false}
+          onRow={(session) => ({
+            className: 'clickable-table-row',
+            onClick: () => setActiveSession(session)
+          })}
           scroll={{ x: 1220 }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有月度绩效记录" /> }}
         />
@@ -13234,13 +13822,180 @@ function RsaPrivateKeyTool({ onBack }: { onBack: () => void }): JSX.Element {
 }
 
 function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
-  const [sourceFile, setSourceFile] = useState<LoadedTextFile | null>(null)
-  const [targetFile, setTargetFile] = useState<LoadedTextFile | null>(null)
+  const [tasks, setTasks] = useState<EnvFileDiffTask[]>(() => {
+    const storedTasks = readStoredEnvFileDiffTasks()
+    return storedTasks.length > 0 ? storedTasks : [createEnvFileDiffTask()]
+  })
+  const [activeTaskId, setActiveTaskId] = useState(() => readStoredEnvFileDiffActiveTaskId())
+  const activeTask = useMemo(() => tasks.find((task) => task.id === activeTaskId) ?? tasks[0] ?? null, [activeTaskId, tasks])
+  const sourceText = activeTask?.sourceText ?? ''
+  const targetText = activeTask?.targetText ?? ''
+  const sourceFile = activeTask?.sourceFile ?? null
+  const targetFile = activeTask?.targetFile ?? null
+  const resultFilter = activeTask?.resultFilter ?? 'all'
+  const sourceVariables: EnvFileVariables = useMemo(() => parseEnvFileVariables(sourceText), [sourceText])
+  const targetVariables: EnvFileVariables = useMemo(() => parseEnvFileVariables(targetText), [targetText])
   const diffResult: EnvFileDiffResult | null = useMemo(
-    () => (sourceFile && targetFile ? compareEnvFiles(sourceFile.content, targetFile.content) : null),
-    [sourceFile, targetFile]
+    () => (sourceText.trim() || targetText.trim() ? compareEnvFiles(sourceText, targetText) : null),
+    [sourceText, targetText]
   )
+  const visibleRows = useMemo(() => diffResult?.rows.filter((row) => matchesEnvDiffFilter(row, resultFilter)) ?? [], [diffResult, resultFilter])
   const missingVariablesText = diffResult ? formatVariableNames(diffResult.missingInTarget) : ''
+  const hasAnyInput = Boolean(sourceText.trim() || targetText.trim() || sourceFile || targetFile)
+
+  useEffect(() => {
+    writeStoredEnvFileDiffTasks(tasks)
+  }, [tasks])
+
+  useEffect(() => {
+    if (activeTask && activeTask.id !== activeTaskId) {
+      setActiveTaskId(activeTask.id)
+    }
+  }, [activeTask, activeTaskId])
+
+  useEffect(() => {
+    writeStoredEnvFileDiffActiveTaskId(activeTask?.id ?? '')
+  }, [activeTask?.id])
+
+  function sortTasks(nextTasks: EnvFileDiffTask[]): EnvFileDiffTask[] {
+    return [...nextTasks].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  }
+
+  function commitActiveTask(patch: Partial<EnvFileDiffTask>): void {
+    if (!activeTask) {
+      return
+    }
+
+    const updatedAt = new Date().toISOString()
+    setTasks((current) =>
+      sortTasks(
+        current.map((task) =>
+          task.id === activeTask.id
+            ? {
+                ...task,
+                ...patch,
+                updatedAt
+              }
+            : task
+        )
+      )
+    )
+  }
+
+  function createTask(): void {
+    const task = createEnvFileDiffTask()
+    setTasks((current) => [task, ...current])
+    setActiveTaskId(task.id)
+  }
+
+  function deleteTask(taskId: string): void {
+    const remainingTasks = tasks.filter((task) => task.id !== taskId)
+    const fallbackTask = remainingTasks[0] ?? createEnvFileDiffTask()
+    const nextTasks = remainingTasks.length > 0 ? remainingTasks : [fallbackTask]
+
+    setTasks(nextTasks)
+
+    if (!activeTask || taskId === activeTask.id || !nextTasks.some((task) => task.id === activeTask.id)) {
+      setActiveTaskId(nextTasks[0].id)
+    }
+
+    message.success('对比任务已删除')
+  }
+
+  function getTaskFileMeta(file: LoadedTextFile): EnvFileDiffTaskFile {
+    return {
+      name: file.name,
+      size: file.size
+    }
+  }
+
+  function getTaskDisplayTitle(task: EnvFileDiffTask): string {
+    const fileLabels = [
+      task.sourceFile ? `A: ${task.sourceFile.name}` : '',
+      task.targetFile ? `B: ${task.targetFile.name}` : ''
+    ].filter(Boolean)
+
+    if (fileLabels.length > 0) {
+      return fileLabels.join(' / ')
+    }
+
+    return `${task.title} · ${formatRsaPrivateKeyTime(task.createdAt)}`
+  }
+
+  function getTaskSummary(task: EnvFileDiffTask): string {
+    if (!task.sourceText.trim() && !task.targetText.trim()) {
+      return `空任务 · 创建 ${formatRsaPrivateKeyTime(task.createdAt)}`
+    }
+
+    const taskDiff = compareEnvFiles(task.sourceText, task.targetText)
+    return [
+      `更新 ${formatRsaPrivateKeyTime(task.updatedAt)}`,
+      `A ${taskDiff.sourceVariables.length}`,
+      `B ${taskDiff.targetVariables.length}`,
+      `B 缺少 ${taskDiff.missingInTarget.length}`,
+      `值不同 ${taskDiff.differentValues.length}`
+    ].join(' · ')
+  }
+
+  function updateVariableValue(variableName: string, target: 'source' | 'target', value: string): void {
+    if (target === 'source') {
+      commitActiveTask({
+        sourceText: updateEnvVariableValue(sourceText, variableName, value),
+        sourceFile: null
+      })
+      return
+    }
+
+    commitActiveTask({
+      targetText: updateEnvVariableValue(targetText, variableName, value),
+      targetFile: null
+    })
+  }
+
+  function renderValueInput(value: string, variableName: string, target: 'source' | 'target', isMissing: boolean): JSX.Element {
+    const environmentName = target === 'source' ? '环境 A' : '环境 B'
+
+    return (
+      <Input.TextArea
+        className="env-diff-value-input"
+        value={value}
+        autoSize={{ minRows: 1, maxRows: 4 }}
+        placeholder={isMissing ? `未设置，输入后写入${environmentName}` : '空值'}
+        onChange={(event) => updateVariableValue(variableName, target, event.target.value)}
+      />
+    )
+  }
+
+  const diffColumns: ColumnsType<EnvFileDiffRow> = [
+    {
+      title: '变量名',
+      dataIndex: 'variableName',
+      key: 'variableName',
+      width: 280,
+      render: (value: string) => <Typography.Text className="env-diff-variable-name">{value}</Typography.Text>
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 120,
+      render: (status: EnvFileDiffStatus) => <Tag color={getEnvDiffStatusColor(status)}>{getEnvDiffStatusLabel(status)}</Tag>
+    },
+    {
+      title: '环境 A 值',
+      dataIndex: 'sourceValue',
+      key: 'sourceValue',
+      width: 360,
+      render: (value: string, row) => renderValueInput(value, row.variableName, 'source', row.status === 'extra-in-target')
+    },
+    {
+      title: '环境 B 值',
+      dataIndex: 'targetValue',
+      key: 'targetValue',
+      width: 360,
+      render: (value: string, row) => renderValueInput(value, row.variableName, 'target', row.status === 'missing-in-target')
+    }
+  ]
 
   async function chooseFile(file: File | undefined, target: 'source' | 'target'): Promise<void> {
     if (!file) {
@@ -13251,13 +14006,63 @@ function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
       const loadedFile = await readTextFile(file)
 
       if (target === 'source') {
-        setSourceFile(loadedFile)
+        commitActiveTask({
+          sourceFile: getTaskFileMeta(loadedFile),
+          sourceText: loadedFile.content
+        })
       } else {
-        setTargetFile(loadedFile)
+        commitActiveTask({
+          targetFile: getTaskFileMeta(loadedFile),
+          targetText: loadedFile.content
+        })
       }
     } catch (error) {
       message.error(getErrorMessage(error, '读取文件失败'))
     }
+  }
+
+  function updateInputText(value: string, target: 'source' | 'target'): void {
+    if (target === 'source') {
+      commitActiveTask({
+        sourceFile: null,
+        sourceText: value
+      })
+      return
+    }
+
+    commitActiveTask({
+      targetFile: null,
+      targetText: value
+    })
+  }
+
+  function clearInputs(): void {
+    commitActiveTask({
+      sourceText: '',
+      targetText: '',
+      sourceFile: null,
+      targetFile: null,
+      resultFilter: 'all'
+    })
+  }
+
+  function updateResultFilter(filter: EnvFileDiffRowFilter): void {
+    commitActiveTask({ resultFilter: filter })
+  }
+
+  function renderInputMeta(parsedVariables: EnvFileVariables, text: string, file: EnvFileDiffTaskFile | null): JSX.Element {
+    if (!text.trim()) {
+      return <Typography.Text type="secondary">等待输入</Typography.Text>
+    }
+
+    const ignoredText = parsedVariables.ignoredLineCount > 0 ? `，${parsedVariables.ignoredLineCount} 行未识别` : ''
+
+    return (
+      <Typography.Text type="secondary">
+        {parsedVariables.variableNames.length} 个变量{ignoredText}
+        {file ? ` · ${file.name} · ${formatFileSize(file.size)}` : ''}
+      </Typography.Text>
+    )
   }
 
   return (
@@ -13267,105 +14072,205 @@ function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
           <Button className="tool-back-button" icon={<ArrowLeftOutlined />} onClick={onBack}>
             工具
           </Button>
-          <Typography.Title level={2}>文件工具</Typography.Title>
-          <Typography.Text type="secondary">对比两个环境配置文件，找出 B 比 A 少的变量名。</Typography.Text>
+          <Typography.Title level={2}>环境变量对比</Typography.Title>
+          <Typography.Text type="secondary">按任务保留每次对比，手动删除前返回工具页也不会消失。</Typography.Text>
         </div>
       </div>
 
-      <div className="file-tool-layout">
-        <div className="panel file-picker-panel">
-          <div className="password-tool-heading">
-            <span className="password-tool-icon">
-              <UploadOutlined />
-            </span>
-            <div>
-              <Typography.Title level={3}>选择文件</Typography.Title>
-              <Typography.Text type="secondary">A 是基准，B 是要检查的目标。</Typography.Text>
+      <div className="env-diff-workflow">
+        <div className="panel env-diff-task-panel">
+          <div className="env-diff-task-heading">
+            <div className="password-tool-heading">
+              <span className="password-tool-icon">
+                <DiffOutlined />
+              </span>
+              <div>
+                <Typography.Title level={3}>对比任务</Typography.Title>
+                <Typography.Text type="secondary">选择历史对比继续编辑，或新建一条任务。</Typography.Text>
+              </div>
             </div>
+            <Button type="primary" icon={<PlusOutlined />} onClick={createTask}>
+              新建对比
+            </Button>
           </div>
 
-          <div className="file-picker-grid">
-            <label className="file-picker-card">
-              <span className="file-picker-title">A 基准文件</span>
-              <span className="file-picker-description">变量完整的一份配置。</span>
-              <input
-                accept=".env,.txt,.config,.conf,.local,.development,.production,.staging,.yaml,.yml"
-                type="file"
-                onChange={(event) => {
-                  void chooseFile(event.target.files?.[0], 'source')
-                }}
-              />
-              {sourceFile ? (
-                <span className="file-picker-selected">
-                  {sourceFile.name} · {formatFileSize(sourceFile.size)}
-                </span>
-              ) : (
-                <span className="file-picker-empty">选择 A 文件</span>
-              )}
-            </label>
-
-            <label className="file-picker-card">
-              <span className="file-picker-title">B 目标文件</span>
-              <span className="file-picker-description">需要检查是否缺变量的一份配置。</span>
-              <input
-                accept=".env,.txt,.config,.conf,.local,.development,.production,.staging,.yaml,.yml"
-                type="file"
-                onChange={(event) => {
-                  void chooseFile(event.target.files?.[0], 'target')
-                }}
-              />
-              {targetFile ? (
-                <span className="file-picker-selected">
-                  {targetFile.name} · {formatFileSize(targetFile.size)}
-                </span>
-              ) : (
-                <span className="file-picker-empty">选择 B 文件</span>
-              )}
-            </label>
+          <div className="env-diff-task-list">
+            {tasks.map((task) => (
+              <div className={`env-diff-task-item${task.id === activeTask?.id ? ' is-active' : ''}`} key={task.id}>
+                <button className="env-diff-task-select" type="button" onClick={() => setActiveTaskId(task.id)}>
+                  <Typography.Text strong className="table-text" ellipsis={{ tooltip: getTaskDisplayTitle(task) }}>
+                    {getTaskDisplayTitle(task)}
+                  </Typography.Text>
+                  <Typography.Text className="env-diff-task-meta" type="secondary">
+                    {getTaskSummary(task)}
+                  </Typography.Text>
+                </button>
+                <Popconfirm
+                  title="删除这个对比任务？"
+                  description="删除后不会再保留这次对比内容。"
+                  okText="删除"
+                  cancelText="取消"
+                  onConfirm={() => deleteTask(task.id)}
+                >
+                  <Tooltip title="删除">
+                    <Button danger size="small" icon={<DeleteOutlined />} />
+                  </Tooltip>
+                </Popconfirm>
+              </div>
+            ))}
           </div>
         </div>
 
-        <div className="panel file-diff-panel">
+        <div className="panel file-picker-panel">
+          <div className="password-tool-heading">
+            <span className="password-tool-icon">
+              <FileTextOutlined />
+            </span>
+            <div>
+              <Typography.Title level={3}>输入环境</Typography.Title>
+              <Typography.Text type="secondary">环境 A 是基准，环境 B 是要检查和补齐的目标。</Typography.Text>
+            </div>
+          </div>
+
+          <div className="env-diff-input-toolbar">
+            <Typography.Text type="secondary">粘贴后可以直接编辑，也可以从文件导入后继续调整。</Typography.Text>
+            <Button size="small" icon={<DeleteOutlined />} disabled={!hasAnyInput} onClick={clearInputs}>
+              清空
+            </Button>
+          </div>
+
+          <div className="env-diff-text-grid">
+            <div className="env-diff-text-card">
+              <div className="env-diff-text-heading">
+                <div className="env-diff-text-title-row">
+                  <Typography.Text strong>环境 A（基准）</Typography.Text>
+                  <Button size="small" icon={<CopyOutlined />} disabled={!sourceText.trim()} onClick={() => copyText(sourceText, '环境 A 已复制')}>
+                    复制环境 A
+                  </Button>
+                </div>
+                {renderInputMeta(sourceVariables, sourceText, sourceFile)}
+              </div>
+              <Input.TextArea
+                className="env-diff-textarea"
+                value={sourceText}
+                placeholder={'直接粘贴环境 A，例如：\nDATABASE_URL=...\nexport REDIS_URL=...\nJWT_SECRET=...'}
+                rows={14}
+                onChange={(event) => updateInputText(event.target.value, 'source')}
+              />
+              <div className="env-diff-file-row">
+                <label className="env-file-import-button">
+                  <UploadOutlined />
+                  <span>导入环境 A 文件</span>
+                  <input
+                    accept={ENV_FILE_ACCEPT}
+                    type="file"
+                    onChange={(event) => {
+                      void chooseFile(event.target.files?.[0], 'source')
+                    }}
+                  />
+                </label>
+                <Typography.Text type="secondary">{sourceFile ? `${sourceFile.name} · ${formatFileSize(sourceFile.size)}` : '也可以直接粘贴 .env 内容'}</Typography.Text>
+              </div>
+            </div>
+
+            <div className="env-diff-text-card">
+              <div className="env-diff-text-heading">
+                <div className="env-diff-text-title-row">
+                  <Typography.Text strong>环境 B</Typography.Text>
+                  <Button size="small" icon={<CopyOutlined />} disabled={!targetText.trim()} onClick={() => copyText(targetText, '环境 B 已复制')}>
+                    复制环境 B
+                  </Button>
+                </div>
+                {renderInputMeta(targetVariables, targetText, targetFile)}
+              </div>
+              <Input.TextArea
+                className="env-diff-textarea"
+                value={targetText}
+                placeholder={'直接粘贴环境 B，例如：\nDATABASE_URL=...\nREDIS_URL=...'}
+                rows={14}
+                onChange={(event) => updateInputText(event.target.value, 'target')}
+              />
+              <div className="env-diff-file-row">
+                <label className="env-file-import-button">
+                  <UploadOutlined />
+                  <span>导入环境 B 文件</span>
+                  <input
+                    accept={ENV_FILE_ACCEPT}
+                    type="file"
+                    onChange={(event) => {
+                      void chooseFile(event.target.files?.[0], 'target')
+                    }}
+                  />
+                </label>
+                <Typography.Text type="secondary">{targetFile ? `${targetFile.name} · ${formatFileSize(targetFile.size)}` : '也可以直接粘贴 .env 内容'}</Typography.Text>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="panel file-diff-panel env-diff-result-panel">
           <div className="password-tool-heading">
             <span className="password-tool-icon">
               <DiffOutlined />
             </span>
             <div>
-              <Typography.Title level={3}>对比结果</Typography.Title>
-              <Typography.Text type="secondary">重点看 B 缺少的环境变量名称。</Typography.Text>
+              <Typography.Title level={3}>对比结果表格</Typography.Title>
+              <Typography.Text type="secondary">查看每个变量在环境 A 和环境 B 中的值。</Typography.Text>
             </div>
           </div>
 
           {!diffResult ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择 A 和 B 后显示结果" />
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="粘贴环境 A 或环境 B 后显示表格" />
           ) : (
             <div className="file-diff-result">
               <div className="file-diff-summary">
                 <Statistic title="A 变量数" value={diffResult.sourceVariables.length} />
                 <Statistic title="B 变量数" value={diffResult.targetVariables.length} />
                 <Statistic title="B 缺少" value={diffResult.missingInTarget.length} valueStyle={{ color: diffResult.missingInTarget.length > 0 ? '#cf1322' : '#389e0d' }} />
+                <Statistic title="值不同" value={diffResult.differentValues.length} valueStyle={{ color: diffResult.differentValues.length > 0 ? '#d46b08' : '#389e0d' }} />
               </div>
 
-              {diffResult.missingInTarget.length > 0 ? (
-                <div className="file-missing-panel">
-                  <div className="file-missing-heading">
-                    <Typography.Text strong>B 文件缺少这些变量名</Typography.Text>
-                    <Button type="primary" icon={<CopyOutlined />} onClick={() => copyText(missingVariablesText, '缺少变量名已复制')}>
-                      复制变量名
-                    </Button>
-                  </div>
-                  <pre className="file-variable-list">{missingVariablesText}</pre>
-                </div>
-              ) : (
-                <Alert type="success" showIcon message="B 文件没有缺少 A 文件中的变量名" />
-              )}
+              {diffResult.sourceIgnoredLineCount > 0 || diffResult.targetIgnoredLineCount > 0 ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={`已忽略未识别行：A ${diffResult.sourceIgnoredLineCount} 行，B ${diffResult.targetIgnoredLineCount} 行`}
+                />
+              ) : null}
 
-              {diffResult.extraInTarget.length > 0 && (
-                <div className="file-extra-panel">
-                  <Typography.Text type="secondary">B 额外多出的变量</Typography.Text>
-                  <pre className="file-variable-list secondary">{formatVariableNames(diffResult.extraInTarget)}</pre>
+              <div className="env-diff-result-toolbar">
+                <Segmented
+                  value={resultFilter}
+                  options={[
+                    { label: `全部 ${diffResult.rows.length}`, value: 'all' },
+                    { label: `B 缺少 ${diffResult.missingInTarget.length}`, value: 'missing' },
+                    { label: `B 多出 ${diffResult.extraInTarget.length}`, value: 'extra' },
+                    { label: `值不同 ${diffResult.differentValues.length}`, value: 'different' }
+                  ]}
+                  onChange={(value) => updateResultFilter(value as EnvFileDiffRowFilter)}
+                />
+                <div className="env-diff-result-actions">
+                  <Button icon={<CopyOutlined />} disabled={!diffResult.missingInTarget.length} onClick={() => copyText(missingVariablesText, 'B 缺少变量名已复制')}>
+                    复制 B 缺少变量名
+                  </Button>
+                  <Button icon={<CopyOutlined />} disabled={!sourceText.trim()} onClick={() => copyText(sourceText, '环境 A 已复制')}>
+                    复制环境 A
+                  </Button>
+                  <Button icon={<CopyOutlined />} disabled={!targetText.trim()} onClick={() => copyText(targetText, '环境 B 已复制')}>
+                    复制环境 B
+                  </Button>
                 </div>
-              )}
+              </div>
+
+              <Table<EnvFileDiffRow>
+                className="content-table env-diff-table"
+                rowKey="id"
+                columns={diffColumns}
+                dataSource={visibleRows}
+                scroll={{ x: 1120 }}
+                pagination={false}
+                locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选没有结果" /> }}
+              />
             </div>
           )}
         </div>
@@ -13605,11 +14510,19 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const [activeKey, setActiveKey] = useState<AppNavigationKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
   const [terminalOpenRequest, setTerminalOpenRequest] = useState<TerminalOpenRequest | null>(null)
+  const [systemLogs, setSystemLogs] = useState<SystemLogEntry[]>([])
+  const [systemLogDrawerOpen, setSystemLogDrawerOpen] = useState(false)
+  const [systemLogFilter, setSystemLogFilter] = useState<SystemLogFilter>('all')
+  const [deploymentRefreshActive, setDeploymentRefreshActive] = useState(false)
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateState>({
     status: 'idle',
     currentVersion: ''
   })
+  const [appRuntimeInfo, setAppRuntimeInfo] = useState<AppRuntimeInfo | null>(null)
+  const [quickBuildState, setQuickBuildState] = useState<QuickBuildState>(() => createInitialQuickBuildState())
   const terminalOpenRequestIdRef = useRef(0)
+  const quickBuildStateRef = useRef(quickBuildState)
+  const systemLogSummary = useMemo(() => createSystemLogSummary(systemLogs), [systemLogs])
 
   useEffect(() => {
     let cancelled = false
@@ -13630,6 +14543,37 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       cancelled = true
     }
   }, [loadWorkspace])
+
+  useEffect(() => {
+    quickBuildStateRef.current = quickBuildState
+  }, [quickBuildState])
+
+  useEffect(() => {
+    if (!window.forgeDesk) {
+      return undefined
+    }
+
+    let mounted = true
+
+    window.forgeDesk
+      .getAppRuntimeInfo()
+      .then((info) => {
+        if (!mounted) {
+          return
+        }
+
+        setAppRuntimeInfo(info)
+        setQuickBuildState((current) => ({
+          ...current,
+          cwd: current.cwd || info.projectRoot
+        }))
+      })
+      .catch((error) => message.error(getErrorMessage(error)))
+
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   useEffect(() => {
     if (!window.forgeDesk) {
@@ -13655,6 +14599,69 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     }
   }, [])
 
+  useEffect(() => {
+    if (!window.forgeDesk) {
+      return undefined
+    }
+
+    let mounted = true
+
+    window.forgeDesk
+      .getQuickBuildTask()
+      .then((task) => {
+        if (!mounted) {
+          return
+        }
+
+        const nextState = createQuickBuildStateFromTask(task, appRuntimeInfo?.projectRoot || quickBuildStateRef.current.cwd)
+        quickBuildStateRef.current = nextState
+        setQuickBuildState(nextState)
+      })
+      .catch((error) => message.error(getErrorMessage(error)))
+
+    const unsubscribe = window.forgeDesk.onQuickBuildTaskUpdated((task) => {
+      const previous = quickBuildStateRef.current
+      const nextState = createQuickBuildStateFromTask(task, appRuntimeInfo?.projectRoot || previous.cwd)
+
+      quickBuildStateRef.current = nextState
+      setQuickBuildState(nextState)
+
+      if (!task || task.status === 'running' || previous.taskId !== task.id || previous.status !== 'running') {
+        return
+      }
+
+      const resultTitle = getQuickBuildTaskResultTitle(task)
+      const success = task.status === 'succeeded'
+
+      appendSystemLog({
+        level: success ? 'success' : task.status === 'cancelled' ? 'warning' : 'error',
+        source: '快速构建',
+        title: resultTitle,
+        message: formatQuickBuildTaskLogMessage(task),
+        meta: {
+          command: task.command,
+          cwd: task.cwd,
+          exitCode: task.exitCode,
+          signal: task.signal,
+          taskId: task.id
+        }
+      })
+
+      if (success) {
+        message.success('快速构建完成')
+      } else if (task.status === 'cancelled') {
+        message.warning('快速构建已终止')
+      } else {
+        message.error(resultTitle)
+      }
+    })
+
+    return () => {
+      mounted = false
+      unsubscribe()
+    }
+  }, [appRuntimeInfo?.projectRoot])
+
   const navigationIcons: Record<AppNavigationKey, JSX.Element> = {
     overview: <DashboardOutlined />,
     services: <ThunderboltOutlined />,
@@ -13672,6 +14679,23 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     icon: navigationIcons[item.key]
   }))
   const appVersionLabel = appUpdateState.currentVersion ? `v${appUpdateState.currentVersion}` : ''
+  const showQuickBuildButton = appRuntimeInfo?.isDevelopmentBuild === true
+  const quickBuildTooltip = (
+    <div className="quick-build-tooltip">
+      <Typography.Text strong>快速构建</Typography.Text>
+      <span>状态：{getQuickBuildStatusText(quickBuildState.status)}</span>
+      <span>命令：{quickBuildState.command}</span>
+      <span>目录：{quickBuildState.cwd || appRuntimeInfo?.projectRoot || '识别中'}</span>
+      <span>开始：{formatQuickBuildTime(quickBuildState.startedAt)}</span>
+      {quickBuildState.finishedAt ? <span>结束：{formatQuickBuildTime(quickBuildState.finishedAt)}</span> : null}
+      {quickBuildState.updatedAt ? <span>更新：{formatQuickBuildTime(quickBuildState.updatedAt)}</span> : null}
+      {quickBuildState.exitCode !== undefined ? <span>退出码：{quickBuildState.exitCode}</span> : null}
+      {quickBuildState.signal ? <span>信号：{quickBuildState.signal}</span> : null}
+      {quickBuildState.message ? <span>信息：{quickBuildState.message}</span> : null}
+      <span>最近输出：{formatQuickBuildLastOutput(quickBuildState.log)}</span>
+      {appRuntimeInfo ? <span>环境：{appRuntimeInfo.isDevServer ? '开发服务' : '开发构建'}</span> : null}
+    </div>
+  )
 
   function openTerminalRequest(request: Omit<TerminalOpenRequest, 'requestId'>): void {
     terminalOpenRequestIdRef.current += 1
@@ -13681,6 +14705,82 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   function openGlobalTerminalRequest(request: Omit<TerminalOpenRequest, 'requestId'>): void {
     openTerminalRequest(request)
     setActiveKey('terminal')
+  }
+
+  async function startQuickBuild(): Promise<void> {
+    const cwd = appRuntimeInfo?.projectRoot || quickBuildState.cwd
+
+    if (!window.forgeDesk || !cwd) {
+      message.error('当前环境无法启动快速构建')
+      return
+    }
+
+    if (quickBuildState.status === 'running') {
+      message.info('快速构建正在后台运行')
+      return
+    }
+
+    const startedAt = new Date().toISOString()
+    const runningState: QuickBuildState = {
+      command: quickBuildCommand,
+      cwd,
+      message: '正在执行快速构建',
+      startedAt,
+      status: 'running'
+    }
+
+    quickBuildStateRef.current = runningState
+    setQuickBuildState(runningState)
+    appendSystemLog({
+      level: 'info',
+      source: '快速构建',
+      title: '开始快速构建',
+      message: `正在执行 ${quickBuildCommand}`,
+      meta: {
+        command: quickBuildCommand,
+        cwd
+      }
+    })
+
+    try {
+      const task = await window.forgeDesk.startQuickBuild({ cwd })
+      const nextState = createQuickBuildStateFromTask(task, cwd)
+
+      quickBuildStateRef.current = nextState
+      setQuickBuildState(nextState)
+      message.success('快速构建已在后台开始')
+    } catch (error) {
+      const errorMessage = getErrorMessage(error, '快速构建启动失败')
+      const nextState: QuickBuildState = {
+        ...runningState,
+        finishedAt: new Date().toISOString(),
+        message: errorMessage,
+        status: 'error'
+      }
+
+      quickBuildStateRef.current = nextState
+      setQuickBuildState(nextState)
+      appendSystemLog({
+        level: 'error',
+        source: '快速构建',
+        title: '快速构建启动失败',
+        message: errorMessage,
+        meta: {
+          command: quickBuildCommand,
+          cwd
+        }
+      })
+      message.error(errorMessage)
+    }
+  }
+
+  function appendSystemLog(entry: SystemLogInput): void {
+    setSystemLogs((current) => [createSystemLogEntry(entry), ...current].slice(0, 300))
+  }
+
+  function clearSystemLogs(): void {
+    setSystemLogs([])
+    setSystemLogFilter('all')
   }
 
   if (activeKey === 'terminal') {
@@ -13717,7 +14817,6 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             <div className="brand-copy">
               <div className="brand-heading">
                 <Typography.Title level={4}>ForgeDesk</Typography.Title>
-                {appVersionLabel && <span className="brand-version">{appVersionLabel}</span>}
               </div>
             </div>
           </div>
@@ -13745,6 +14844,9 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
               themePreference={themePreference}
               resolvedTheme={resolvedTheme}
               onThemePreferenceChange={onThemePreferenceChange}
+              onSystemLog={appendSystemLog}
+              onDeploymentRefreshActiveChange={setDeploymentRefreshActive}
+              onOpenSystemLog={() => setSystemLogDrawerOpen(true)}
               onCreateProject={() => {
                 setActiveKey('overview')
                 setCreatingProject(true)
@@ -13753,7 +14855,11 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           )}
           {!loadingWorkspace && activeKey === 'services' && (
             <section className="workspace-section">
-              <GlobalServiceCenterPanel />
+              <GlobalServiceCenterPanel
+                onSystemLog={appendSystemLog}
+                onDeploymentRefreshActiveChange={setDeploymentRefreshActive}
+                onOpenSystemLog={() => setSystemLogDrawerOpen(true)}
+              />
             </section>
           )}
           {!loadingWorkspace && activeKey === 'docker' && <DockerPanel onOpenTerminalRequest={openGlobalTerminalRequest} />}
@@ -13767,6 +14873,24 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('overview')} />
         </Layout.Content>
       </Layout>
+      <SystemLogDrawer
+        open={systemLogDrawerOpen}
+        logs={systemLogs}
+        filter={systemLogFilter}
+        onFilterChange={setSystemLogFilter}
+        onClose={() => setSystemLogDrawerOpen(false)}
+        onClear={clearSystemLogs}
+      />
+      <AppStatusBar
+        summary={systemLogSummary}
+        refreshing={deploymentRefreshActive}
+        showQuickBuildButton={showQuickBuildButton}
+        quickBuildState={quickBuildState}
+        quickBuildTooltip={quickBuildTooltip}
+        versionLabel={appVersionLabel}
+        onQuickBuild={() => startQuickBuild().catch((error) => message.error(getErrorMessage(error, '快速构建启动失败')))}
+        onOpenLogs={() => setSystemLogDrawerOpen(true)}
+      />
       <ReleasePublishTaskDock />
     </Layout>
   )

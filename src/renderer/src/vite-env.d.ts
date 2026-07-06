@@ -216,6 +216,41 @@ type TerminalExitEvent = {
   signal?: number
 }
 
+type AppRuntimeInfo = {
+  version: string
+  isPackaged: boolean
+  isDevelopmentBuild: boolean
+  isDevServer: boolean
+  appPath: string
+  projectRoot: string
+}
+
+type QuickBuildTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+type QuickBuildStartInput = {
+  cwd?: string
+}
+
+type QuickBuildTask = {
+  id: string
+  command: string
+  cwd: string
+  status: QuickBuildTaskStatus
+  phase: string
+  hint: string
+  lastOutputAt: string
+  processPid?: number
+  startedAt: string
+  updatedAt: string
+  finishedAt?: string
+  log: string
+  stdout: string
+  stderr: string
+  exitCode: number | null
+  signal?: string
+  error?: string
+}
+
 type GitAddInput = {
   mode: 'all' | 'paths'
   paths: string[]
@@ -1433,6 +1468,11 @@ interface Window {
     getAppUpdateState: () => Promise<AppUpdateState>
     checkAppUpdate: () => Promise<AppUpdateState>
     installAppUpdate: () => Promise<AppUpdateState>
+    getAppRuntimeInfo: () => Promise<AppRuntimeInfo>
+    startQuickBuild: (input?: QuickBuildStartInput) => Promise<QuickBuildTask>
+    getQuickBuildTask: () => Promise<QuickBuildTask | null>
+    cancelQuickBuild: () => Promise<QuickBuildTask>
+    onQuickBuildTaskUpdated: (listener: (task: QuickBuildTask | null) => void) => () => void
     onAppUpdateState: (listener: (state: AppUpdateState) => void) => () => void
     openAppReleases: () => Promise<void>
     openGitDownload: () => Promise<void>

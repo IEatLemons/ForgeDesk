@@ -1155,7 +1155,9 @@ describe('service monitoring storage', () => {
     }
 
     assert.equal((await listServiceDeployments(db, service.id, {}, fetcher))[0].id, 'dep_1')
-    assert.equal((await listServiceEnvVars(db, service.id, fetcher))[0].key, 'API_URL')
+    const railwayEnvVars = await listServiceEnvVars(db, service.id, fetcher)
+    assert.equal(railwayEnvVars[0].key, 'API_URL')
+    assert.equal(railwayEnvVars[0].value, 'https://api.example.com')
     assert.equal((await listServiceEnvironmentLogs(db, service.id, 'production', fetcher))[0].message, 'build ready')
     assert.equal((await listServiceRuntimeLogs(db, service.id, 'production', fetcher))[0].message, 'runtime ready')
     await assert.rejects(() => revealServiceEnvVar(db, service.id, 'env_1', fetcher), /Railway 环境变量只支持只读查看/)

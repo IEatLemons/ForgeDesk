@@ -297,6 +297,41 @@ export type TerminalExitEvent = {
   signal?: number
 }
 
+export type AppRuntimeInfo = {
+  version: string
+  isPackaged: boolean
+  isDevelopmentBuild: boolean
+  isDevServer: boolean
+  appPath: string
+  projectRoot: string
+}
+
+export type QuickBuildTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+export type QuickBuildStartInput = {
+  cwd?: string
+}
+
+export type QuickBuildTask = {
+  id: string
+  command: string
+  cwd: string
+  status: QuickBuildTaskStatus
+  phase: string
+  hint: string
+  lastOutputAt: string
+  processPid?: number
+  startedAt: string
+  updatedAt: string
+  finishedAt?: string
+  log: string
+  stdout: string
+  stderr: string
+  exitCode: number | null
+  signal?: string
+  error?: string
+}
+
 export type ProjectTerminalCommandRecord = {
   id: string
   projectId: string

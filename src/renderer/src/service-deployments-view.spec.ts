@@ -4,6 +4,9 @@ import {
   createDeploymentFilterOptions,
   createDeploymentRows,
   createDeploymentStatusSummary,
+  createDeploymentIssueSummary,
+  createSystemLogEntry,
+  createSystemLogSummary,
   deploymentAutoRefreshIntervalMs,
   filterDeploymentRows,
   getDeploymentRateLimitRetryMs,
@@ -267,6 +270,102 @@ describe('service deployments view model', () => {
       ),
       'Railway 部署读取触发平台限流，已使用本地缓存并暂停刷新，约 24 分钟后再试。（影响 18 个服务）\nweb: Vercel token expired'
     )
+  })
+
+  it('groups repeated deployment authorization errors into a compact issue summary', () => {
+    const errors = [
+      {
+        provider: 'vercel' as const,
+        serviceName: 'konwkit-demo',
+        message:
+          '读取 Vercel 部署历史失败：403 Forbidden {"error":{"code":"forbidden","message":"Not authorized: Trying to access resource under scope \\"alfajayucans-projects\\"."}}'
+      },
+      {
+        provider: 'vercel' as const,
+        serviceName: 'uni-pie-website',
+        message:
+          '读取 Vercel 部署历史失败：403 Forbidden {"error":{"code":"forbidden","message":"Not authorized: Trying to access resource under scope \\"alfajayucans-projects\\"."}}'
+      },
+      {
+        provider: 'vercel' as const,
+        serviceName: 'uni-pie-admin',
+        message:
+          '读取 Vercel 部署历史失败：403 Forbidden {"error":{"code":"forbidden","message":"Not authorized: Trying to access resource under scope \\"alfajayucans-projects\\"."}}'
+      }
+    ]
+
+    assert.deepEqual(createDeploymentIssueSummary(errors, { vercel: 7 }), {
+      issueCount: 3,
+      level: 'error',
+      title: '部分部署暂不可用',
+      message: 'Vercel 部署读取权限异常，影响 7 个服务；请检查 Token scope 或重新授权。',
+      detail: summarizeDeploymentRefreshErrors(errors, { vercel: 7 })
+    })
+  })
+
+  it('keeps rate-limit deployment issues compact while preserving retry details', () => {
+    const retryMessage = '读取 Railway 部署失败：429 Too Many Requests Rate limit exceeded, please try again in 1394.866 seconds.'
+    const summary = createDeploymentIssueSummary(
+      [
+        { provider: 'railway', serviceName: 'Redis', message: retryMessage },
+        { provider: 'railway', serviceName: 'Postgres', message: retryMessage }
+      ],
+      { railway: 18 }
+    )
+
+    assert.equal(summary.issueCount, 2)
+    assert.equal(summary.level, 'warning')
+    assert.equal(summary.title, '部分部署暂不可用')
+    assert.equal(summary.message, 'Railway 部署读取触发平台限流，已使用本地缓存并暂停刷新，约 24 分钟后再试。（影响 18 个服务）')
+    assert.equal(summary.detail, summary.message)
+  })
+
+  it('creates session system log entries and status summaries', () => {
+    const first = createSystemLogEntry(
+      {
+        level: 'info',
+        source: '服务中心',
+        title: '开始刷新部署',
+        message: '准备刷新 3 个服务'
+      },
+      { id: 'log-1', time: '2026-07-05T10:00:00.000Z' }
+    )
+    const second = createSystemLogEntry(
+      {
+        level: 'error',
+        source: '服务中心',
+        title: '部分部署暂不可用',
+        message: 'Vercel 部署读取权限异常，影响 7 个服务'
+      },
+      { id: 'log-2', time: '2026-07-05T10:00:10.000Z' }
+    )
+
+    assert.deepEqual(first, {
+      id: 'log-1',
+      time: '2026-07-05T10:00:00.000Z',
+      level: 'info',
+      source: '服务中心',
+      title: '开始刷新部署',
+      message: '准备刷新 3 个服务'
+    })
+    assert.deepEqual(createSystemLogSummary([second, first]), {
+      total: 2,
+      success: 0,
+      info: 1,
+      warning: 0,
+      error: 1,
+      issueCount: 1,
+      latest: second
+    })
+    assert.deepEqual(createSystemLogSummary([]), {
+      total: 0,
+      success: 0,
+      info: 0,
+      warning: 0,
+      error: 0,
+      issueCount: 0,
+      latest: null
+    })
   })
 
   it('selects deployment refresh services in provider batches', () => {

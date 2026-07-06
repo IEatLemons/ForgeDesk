@@ -73,6 +73,36 @@ export type DeploymentRefreshError = {
   message: string
 }
 
+export type SystemLogLevel = 'success' | 'info' | 'warning' | 'error'
+
+export type SystemLogEntry = {
+  id: string
+  time: string
+  level: SystemLogLevel
+  source: string
+  title: string
+  message: string
+  meta?: Record<string, unknown>
+}
+
+export type SystemLogSummary = {
+  total: number
+  success: number
+  info: number
+  warning: number
+  error: number
+  issueCount: number
+  latest: SystemLogEntry | null
+}
+
+export type DeploymentIssueSummary = {
+  issueCount: number
+  level: SystemLogLevel
+  title: string
+  message: string
+  detail: string
+}
+
 export type DeploymentRefreshService = Pick<ProjectService, 'id' | 'provider'>
 
 export type DeploymentRefreshCursor = Partial<Record<ProjectService['provider'], number>>
@@ -82,6 +112,8 @@ export const deploymentVisibleBatchSize = 60
 export const railwayDeploymentRefreshBatchSize = 4
 export const deploymentAutoRefreshIntervalMs = 300_000
 export const deploymentRateLimitFallbackMs = 60_000
+
+let systemLogSequence = 0
 
 const deploymentProjectTagPalette: DeploymentProjectTagStyle[] = [
   { color: '#0f766e', backgroundColor: '#ccfbf1', borderColor: '#5eead4' },
@@ -349,6 +381,40 @@ export function getDeploymentRateLimitRetryMs(message: string): number {
   return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds * 1000) : 0
 }
 
+export function createSystemLogEntry(
+  input: Omit<SystemLogEntry, 'id' | 'time'>,
+  options: Partial<Pick<SystemLogEntry, 'id' | 'time'>> = {}
+): SystemLogEntry {
+  const time = options.time ?? new Date().toISOString()
+  const id = options.id ?? `${time}-${systemLogSequence}`
+
+  systemLogSequence += 1
+
+  return {
+    id,
+    time,
+    ...input
+  }
+}
+
+export function createSystemLogSummary(logs: SystemLogEntry[]): SystemLogSummary {
+  return logs.reduce<SystemLogSummary>(
+    (summary, log) => {
+      summary.total += 1
+      summary[log.level] += 1
+
+      if (!summary.latest || timestampValue(log.time) > timestampValue(summary.latest.time)) {
+        summary.latest = log
+      }
+
+      summary.issueCount = summary.error + summary.warning
+
+      return summary
+    },
+    { total: 0, success: 0, info: 0, warning: 0, error: 0, issueCount: 0, latest: null }
+  )
+}
+
 function formatRetryDelay(ms: number): string {
   const minutes = Math.max(1, Math.ceil(ms / 60_000))
 
@@ -400,6 +466,63 @@ export function summarizeDeploymentRefreshErrors(
   }
 
   return messages.join('\n')
+}
+
+function isAuthorizationErrorMessage(message: string): boolean {
+  return /(?:\b401\b|\b403\b|forbidden|unauthorized|not authorized|scope|token)/i.test(message)
+}
+
+export function createDeploymentIssueSummary(
+  errors: DeploymentRefreshError[],
+  providerServiceCounts: Partial<Record<ProjectService['provider'], number>> = {}
+): DeploymentIssueSummary {
+  if (errors.length === 0) {
+    return {
+      issueCount: 0,
+      level: 'info',
+      title: '',
+      message: '',
+      detail: ''
+    }
+  }
+
+  const detail = summarizeDeploymentRefreshErrors(errors, providerServiceCounts)
+  const hasRateLimit = errors.some((error) => isDeploymentRateLimitMessage(error.message))
+  const nonRateLimitErrors = errors.filter((error) => !isDeploymentRateLimitMessage(error.message))
+  const providersWithAuthErrors = new Set(
+    nonRateLimitErrors.filter((error) => isAuthorizationErrorMessage(error.message)).map((error) => error.provider)
+  )
+
+  if (hasRateLimit && nonRateLimitErrors.length === 0) {
+    return {
+      issueCount: errors.length,
+      level: 'warning',
+      title: '部分部署暂不可用',
+      message: detail,
+      detail
+    }
+  }
+
+  if (providersWithAuthErrors.size === 1 && nonRateLimitErrors.length === errors.length) {
+    const provider = [...providersWithAuthErrors][0]
+    const affectedServices = providerServiceCounts[provider] ?? errors.length
+
+    return {
+      issueCount: errors.length,
+      level: 'error',
+      title: '部分部署暂不可用',
+      message: `${getProviderLabel(provider)} 部署读取权限异常，影响 ${affectedServices} 个服务；请检查 Token scope 或重新授权。`,
+      detail
+    }
+  }
+
+  return {
+    issueCount: errors.length,
+    level: hasRateLimit ? 'warning' : 'error',
+    title: '部分部署暂不可用',
+    message: `${errors.length} 项部署刷新异常，详情请查看系统日志。`,
+    detail
+  }
 }
 
 export function selectDeploymentRefreshServices<T extends DeploymentRefreshService>(

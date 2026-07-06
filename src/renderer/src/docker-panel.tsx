@@ -15,8 +15,11 @@ import type {
   DockerSnapshot
 } from './data'
 import {
+  createDockerContainerTerminalRequest,
   createDockerImageRootTerminalRequest,
   createDockerDashboardSummary,
+  dockerContainerTerminalDefaultUser,
+  dockerContainerTerminalUserOptions,
   filterDockerContainers,
   filterDockerImages,
   getDockerContainerStatusMeta,
@@ -185,6 +188,7 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
   const [containerDetail, setContainerDetail] = useState<DockerContainerDetail | null>(null)
   const [containerDetailLoading, setContainerDetailLoading] = useState(false)
   const [containerDetailError, setContainerDetailError] = useState('')
+  const [containerTerminalUsers, setContainerTerminalUsers] = useState<Record<string, string>>({})
   const [selectedImage, setSelectedImage] = useState<DockerImageSummary | null>(null)
   const [devEnvironmentOpen, setDevEnvironmentOpen] = useState(false)
   const [creatingDevEnvironment, setCreatingDevEnvironment] = useState(false)
@@ -465,6 +469,23 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
     setContainerDetailLoading(false)
   }
 
+  function isContainerRunning(container: DockerContainerSummary): boolean {
+    return container.state.trim().toLowerCase() === 'running'
+  }
+
+  function updateContainerTerminalUser(containerId: string, user: string): void {
+    setContainerTerminalUsers((current) => ({ ...current, [containerId]: user }))
+  }
+
+  function openContainerTerminal(container: DockerContainerSummary, user: string): void {
+    if (!isContainerRunning(container)) {
+      message.warning('容器未运行，无法进入终端')
+      return
+    }
+
+    onOpenTerminalRequest?.(createDockerContainerTerminalRequest(container, user))
+  }
+
   function changeNoteResourceKey(resourceKey: string): void {
     if (!editingNote) {
       return
@@ -592,47 +613,70 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
       title: '备注 / 操作',
       key: 'noteActions',
       width: containerTableLayout.columns[4].width,
-      render: (_, container) => (
-        <div className="docker-note-action-cell">
-          {container.note?.notes ? renderCompactMutedText(container.note.notes) : <Typography.Text type="secondary">-</Typography.Text>}
-          <div className="docker-note-actions">
-            <Button
-              size="small"
-              icon={<InfoCircleOutlined />}
-              onClick={(event) => {
-                event.stopPropagation()
-                openContainerDetails(container)
-              }}
-            >
-              详情
-            </Button>
-            <Button
-              size="small"
-              icon={<EditOutlined />}
-              onClick={(event) => {
-                event.stopPropagation()
-                openContainerNote(container)
-              }}
-            >
-              备注
-            </Button>
-            {container.note ? (
+      render: (_, container) => {
+        const terminalUser = containerTerminalUsers[container.id] ?? dockerContainerTerminalDefaultUser
+        const terminalDisabled = !onOpenTerminalRequest || !isContainerRunning(container)
+
+        return (
+          <div className="docker-note-action-cell">
+            {container.note?.notes ? renderCompactMutedText(container.note.notes) : <Typography.Text type="secondary">-</Typography.Text>}
+            <div className="docker-container-terminal-actions" onClick={(event) => event.stopPropagation()}>
+              <Select
+                size="small"
+                className="docker-container-user-select"
+                value={terminalUser}
+                options={dockerContainerTerminalUserOptions}
+                disabled={terminalDisabled}
+                onChange={(value) => updateContainerTerminalUser(container.id, value)}
+              />
               <Button
                 size="small"
-                danger
-                icon={<DeleteOutlined />}
-                loading={workingNoteKey === container.note.resourceKey}
+                icon={<CodeOutlined />}
+                disabled={terminalDisabled}
+                onClick={() => openContainerTerminal(container, terminalUser)}
+              >
+                终端
+              </Button>
+            </div>
+            <div className="docker-note-actions">
+              <Button
+                size="small"
+                icon={<InfoCircleOutlined />}
                 onClick={(event) => {
                   event.stopPropagation()
-                  confirmDeleteNote('container', container.noteResourceKey)
+                  openContainerDetails(container)
                 }}
               >
-                删除
+                详情
               </Button>
-            ) : null}
+              <Button
+                size="small"
+                icon={<EditOutlined />}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  openContainerNote(container)
+                }}
+              >
+                备注
+              </Button>
+              {container.note ? (
+                <Button
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                  loading={workingNoteKey === container.note.resourceKey}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    confirmDeleteNote('container', container.noteResourceKey)
+                  }}
+                >
+                  删除
+                </Button>
+              ) : null}
+            </div>
           </div>
-        </div>
-      )
+        )
+      }
     }
   ]
 

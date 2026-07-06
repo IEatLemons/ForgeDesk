@@ -174,6 +174,15 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   getAppUpdateState: () => ipcRenderer.invoke('app:update:get-state'),
   checkAppUpdate: () => ipcRenderer.invoke('app:update:check'),
   installAppUpdate: () => ipcRenderer.invoke('app:update:install'),
+  getAppRuntimeInfo: () => ipcRenderer.invoke('app:runtime-info'),
+  startQuickBuild: (input?: QuickBuildStartInput) => ipcRenderer.invoke('quick-build:start', input),
+  getQuickBuildTask: () => ipcRenderer.invoke('quick-build:get'),
+  cancelQuickBuild: () => ipcRenderer.invoke('quick-build:cancel'),
+  onQuickBuildTaskUpdated: (listener: (task: QuickBuildTask | null) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, task: QuickBuildTask | null): void => listener(task)
+    ipcRenderer.on('quick-build:task-updated', wrapped)
+    return () => ipcRenderer.removeListener('quick-build:task-updated', wrapped)
+  },
   onAppUpdateState: (listener: (state: AppUpdateState) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, state: AppUpdateState): void => listener(state)
     ipcRenderer.on('app:update:state', wrapped)
