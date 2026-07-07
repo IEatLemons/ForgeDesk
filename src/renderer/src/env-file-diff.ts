@@ -248,6 +248,14 @@ function getOpenQuote(value: string): string | null {
   return null
 }
 
+function isPemBlockStart(value: string): boolean {
+  return /^-----BEGIN [A-Z0-9][A-Z0-9 ]*-----$/.test(value.trim())
+}
+
+function isPemBlockEnd(value: string): boolean {
+  return /^-----END [A-Z0-9][A-Z0-9 ]*-----$/.test(value.trim())
+}
+
 function readEnvVariable(line: string): EnvFileVariable | null {
   const normalized = line.replace(/^\uFEFF/, '').trim()
 
@@ -299,6 +307,27 @@ function readEnvVariableBlock(lines: string[], startLineIndex: number): EnvFileV
   const openQuote = getOpenQuote(variable.value)
 
   if (!openQuote) {
+    if (isPemBlockStart(variable.value) && !isPemBlockEnd(variable.value)) {
+      const valueLines = [variable.value]
+      const rawLines = [lines[startLineIndex]]
+
+      for (let lineIndex = startLineIndex + 1; lineIndex < lines.length; lineIndex += 1) {
+        valueLines.push(lines[lineIndex])
+        rawLines.push(lines[lineIndex])
+
+        if (isPemBlockEnd(lines[lineIndex])) {
+          return {
+            variable: {
+              ...variable,
+              value: valueLines.join('\n'),
+              rawLine: rawLines.join('\n')
+            },
+            endLineIndex: lineIndex
+          }
+        }
+      }
+    }
+
     return {
       variable,
       endLineIndex: startLineIndex
@@ -414,6 +443,14 @@ export function compareEnvFiles(sourceContent: string, targetContent: string): E
 
 export function formatVariableNames(variableNames: string[]): string {
   return variableNames.join('\n')
+}
+
+export function formatEnvVariableRows(variables: EnvFileVariable[]): string {
+  return variables.map((variable) => `${variable.name}=${variable.value}`).join('\n')
+}
+
+export function formatEnvVariableValues(variables: EnvFileVariable[]): string {
+  return variables.map((variable) => variable.value).join('\n')
 }
 
 export function updateEnvVariableValue(content: string, variableName: string, value: string): string {

@@ -2336,6 +2336,10 @@ button.app-status-bar-item:hover {
   min-width: 0;
 }
 
+.env-diff-copy-control {
+  flex: 0 0 auto;
+}
+
 .env-diff-textarea {
   min-height: 270px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;

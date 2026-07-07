@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  areDockerSnapshotsEquivalent,
   createDockerContainerTerminalRequest,
   createDockerDashboardSummary,
   filterDockerContainers,
@@ -13,7 +14,8 @@ import {
   getDockerImageTableLayout,
   getDockerWatchStatusMeta,
   getDockerImageDefaultNoteResourceKey,
-  getDockerImageNoteTargetOptions
+  getDockerImageNoteTargetOptions,
+  shouldRefreshDockerSnapshotForEvent
 } from './docker-view.js'
 import type { DockerContainerSummary, DockerImageSummary, DockerSnapshot } from './data.js'
 
@@ -223,5 +225,29 @@ describe('docker view model', () => {
       label: '监听异常',
       color: 'red'
     })
+  })
+
+  it('ignores noisy Docker exec events when deciding whether to refresh the inventory', () => {
+    assert.equal(shouldRefreshDockerSnapshotForEvent({ type: 'container', action: 'exec_die', status: '' }), false)
+    assert.equal(shouldRefreshDockerSnapshotForEvent({ type: 'container', action: 'start', status: '' }), true)
+    assert.equal(shouldRefreshDockerSnapshotForEvent({ type: 'image', action: 'pull', status: '' }), true)
+    assert.equal(shouldRefreshDockerSnapshotForEvent({ type: 'container', action: 'attach', status: '' }), false)
+  })
+
+  it('treats Docker snapshots with only a new checkedAt timestamp as equivalent', () => {
+    assert.equal(
+      areDockerSnapshotsEquivalent(snapshot, {
+        ...snapshot,
+        checkedAt: '2026-07-03T02:00:00.000Z'
+      }),
+      true
+    )
+    assert.equal(
+      areDockerSnapshotsEquivalent(snapshot, {
+        ...snapshot,
+        containers: [{ ...container, state: 'exited' }, exitedContainer]
+      }),
+      false
+    )
   })
 })

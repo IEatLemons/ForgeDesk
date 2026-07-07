@@ -51,7 +51,7 @@ import {
   type GitPushTarget,
   type GitStatusFile
 } from './git-workspace'
-import { extractConflictSections, type ConflictSection } from './merge-conflicts'
+import { extractConflictSections, hasConflictMarkers, type ConflictSection } from './merge-conflicts'
 import {
   deleteProjectBranchTag as deleteProjectBranchTagRecord,
   listProjectBranchTags as listProjectBranchTagRecords,
@@ -3719,6 +3719,10 @@ function startRepositoryReleasePublishTask(repositoryId: string, input: Reposito
 async function applyRepositoryConflictResolution(repositoryId: string, filePath: string, content: string): Promise<GitOperationResult> {
   const repository = getRepositoryOrThrow(repositoryId)
   const normalizedPath = resolveRepositoryFilePath(repository, filePath)
+
+  if (hasConflictMarkers(content)) {
+    throw new Error('AI 建议仍包含冲突标记，请重新生成或手动处理')
+  }
 
   await writeFile(normalizedPath, content, 'utf8')
 

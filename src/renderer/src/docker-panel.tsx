@@ -2,13 +2,15 @@ import { CodeOutlined, DeleteOutlined, EditOutlined, InfoCircleOutlined, ReloadO
 import { Alert, Badge, Button, Col, Descriptions, Drawer, Empty, Form, Input, Modal, Row, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { DockerContainerSummary, DockerImageSummary, DockerResourceNote, DockerResourceType, DockerSnapshot } from './data'
+import type { DockerContainerSummary, DockerEventSummary, DockerImageSummary, DockerResourceNote, DockerResourceType, DockerSnapshot } from './data'
 import {
+  areDockerSnapshotsEquivalent,
   createDockerContainerTerminalRequest,
   createDockerImageRootTerminalRequest,
   createDockerDashboardSummary,
   dockerContainerTerminalDefaultUser,
   dockerContainerTerminalUserOptions,
+  dockerSnapshotAutoRefreshDelayMs,
   filterDockerContainers,
   filterDockerImages,
   getDockerContainerStatusMeta,
@@ -16,7 +18,8 @@ import {
   getDockerImageDefaultNoteResourceKey,
   getDockerImageNoteTargetOptions,
   getDockerImageTableLayout,
-  getDockerWatchStatusMeta
+  getDockerWatchStatusMeta,
+  shouldRefreshDockerSnapshotForEvent
 } from './docker-view'
 import { getErrorMessage } from './error-messages'
 import type { TerminalOpenRequest } from './terminal-panel-events'
@@ -40,6 +43,11 @@ type DockerPanelProps = {
   onOpenTerminalRequest?: (request: Omit<TerminalOpenRequest, 'requestId'>) => void
 }
 
+type DockerSnapshotLoadOptions = {
+  silent?: boolean
+  skipUnchanged?: boolean
+}
+
 function formatDockerTime(value: string): string {
   if (!value) {
     return '-'
@@ -51,6 +59,10 @@ function formatDockerTime(value: string): string {
 
 function findNote(snapshot: DockerSnapshot | null, resourceType: DockerResourceType, resourceKey: string): DockerResourceNote | null {
   return snapshot?.notes.find((note) => note.resourceType === resourceType && note.resourceKey === resourceKey) ?? null
+}
+
+function createDockerEventLabel(event: DockerEventSummary): string {
+  return [event.type, event.action || event.status, event.id ? event.id.slice(0, 12) : ''].filter(Boolean).join(' · ')
 }
 
 function renderMutedText(value: string, fallback = '-'): JSX.Element {
@@ -92,11 +104,54 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
   const [savingNote, setSavingNote] = useState(false)
   const [workingNoteKey, setWorkingNoteKey] = useState('')
   const [noteForm] = Form.useForm<DockerNoteForm>()
+  const snapshotRef = useRef<DockerSnapshot | null>(null)
   const refreshInFlightRef = useRef(false)
+  const pendingRefreshRef = useRef(false)
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
 
-  async function loadSnapshot(options: { silent?: boolean } = {}): Promise<void> {
-    if (!window.forgeDesk || refreshInFlightRef.current) {
+  function applySnapshot(nextSnapshot: DockerSnapshot): void {
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+  }
+
+  function clearQueuedSnapshotRefresh(): void {
+    if (!refreshTimerRef.current) {
+      return
+    }
+
+    clearTimeout(refreshTimerRef.current)
+    refreshTimerRef.current = null
+  }
+
+  function queueSnapshotRefresh(): void {
+    if (!mountedRef.current) {
+      return
+    }
+
+    clearQueuedSnapshotRefresh()
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null
+      void loadSnapshot({ silent: true, skipUnchanged: true })
+    }, dockerSnapshotAutoRefreshDelayMs)
+  }
+
+  function refreshSnapshotNow(): void {
+    pendingRefreshRef.current = false
+    clearQueuedSnapshotRefresh()
+    void loadSnapshot()
+  }
+
+  async function loadSnapshot(options: DockerSnapshotLoadOptions = {}): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    if (refreshInFlightRef.current) {
+      if (options.silent) {
+        pendingRefreshRef.current = true
+      }
+
       return
     }
 
@@ -110,7 +165,10 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
       const nextSnapshot = await window.forgeDesk.getDockerSnapshot()
 
       if (mountedRef.current) {
-        setSnapshot(nextSnapshot)
+        if (!options.skipUnchanged || !snapshotRef.current || !areDockerSnapshotsEquivalent(snapshotRef.current, nextSnapshot)) {
+          applySnapshot(nextSnapshot)
+        }
+
         setErrorMessage('')
       }
     } catch (error) {
@@ -122,6 +180,11 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
 
       if (!options.silent && mountedRef.current) {
         setLoading(false)
+      }
+
+      if (pendingRefreshRef.current && mountedRef.current) {
+        pendingRefreshRef.current = false
+        queueSnapshotRefresh()
       }
     }
   }
@@ -137,8 +200,12 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
     }
 
     const removeChangedListener = window.forgeDesk.onDockerChanged((event) => {
-      setLastEventLabel([event.type, event.action || event.status, event.id ? event.id.slice(0, 12) : ''].filter(Boolean).join(' · '))
-      void loadSnapshot({ silent: true })
+      if (!shouldRefreshDockerSnapshotForEvent(event)) {
+        return
+      }
+
+      setLastEventLabel(createDockerEventLabel(event))
+      queueSnapshotRefresh()
     })
     const removeWatchErrorListener = window.forgeDesk.onDockerWatchError((event) => {
       setWatchError(event.message)
@@ -165,6 +232,8 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
       removeChangedListener()
       removeWatchErrorListener()
       setWatching(false)
+      pendingRefreshRef.current = false
+      clearQueuedSnapshotRefresh()
       void window.forgeDesk.stopDockerWatch()
     }
   }, [])
@@ -271,7 +340,7 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
         displayName: values.displayName,
         notes: values.notes
       })
-      setSnapshot(nextSnapshot)
+      applySnapshot(nextSnapshot)
       setEditingNote(null)
       noteForm.resetFields()
       message.success('Docker 备注已保存')
@@ -298,7 +367,7 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
 
         try {
           const nextSnapshot = await window.forgeDesk.deleteDockerResourceNote(resourceType, resourceKey)
-          setSnapshot(nextSnapshot)
+          applySnapshot(nextSnapshot)
           message.success('Docker 备注已删除')
         } catch (error) {
           message.error(getErrorMessage(error))
@@ -517,7 +586,7 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
           </Space>
           <Space wrap>
             <Tag color={watchStatus.color}>{watchStatus.label}</Tag>
-            <Button icon={<ReloadOutlined />} loading={loading} onClick={() => loadSnapshot()}>
+            <Button icon={<ReloadOutlined />} loading={loading} onClick={refreshSnapshotNow}>
               刷新
             </Button>
           </Space>
@@ -530,7 +599,7 @@ export function DockerPanel({ onOpenTerminalRequest }: DockerPanelProps): JSX.El
             showIcon
             message="Docker 暂不可用"
             description={errorMessage}
-            action={<Button onClick={() => loadSnapshot()}>重试</Button>}
+            action={<Button onClick={refreshSnapshotNow}>重试</Button>}
           />
         ) : null}
         {watchError ? <Alert className="docker-alert" type="info" showIcon message="Docker 监听未运行" description={watchError} /> : null}

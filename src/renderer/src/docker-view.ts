@@ -1,4 +1,4 @@
-import type { DockerContainerSummary, DockerImageSummary, DockerSnapshot } from './data'
+import type { DockerContainerSummary, DockerEventSummary, DockerImageSummary, DockerSnapshot } from './data'
 import type { TerminalOpenRequest } from './terminal-panel-events'
 
 type BadgeStatus = 'success' | 'processing' | 'default' | 'error' | 'warning'
@@ -49,6 +49,28 @@ export type DockerContainerTerminalRequest = Pick<TerminalOpenRequest, 'startupC
 export type DockerImageRootTerminalRequest = Pick<TerminalOpenRequest, 'startupCommand' | 'title'>
 
 export const dockerContainerTerminalDefaultUser = 'root'
+export const dockerSnapshotAutoRefreshDelayMs = 800
+
+const dockerContainerRefreshActions = new Set([
+  'commit',
+  'create',
+  'destroy',
+  'die',
+  'health_status',
+  'kill',
+  'oom',
+  'pause',
+  'prune',
+  'remove',
+  'rename',
+  'restart',
+  'start',
+  'stop',
+  'unpause',
+  'update'
+])
+
+const dockerImageRefreshActions = new Set(['build', 'commit', 'delete', 'import', 'load', 'prune', 'pull', 'remove', 'tag', 'untag'])
 
 export const dockerContainerTerminalUserOptions: DockerContainerTerminalUserOption[] = [
   { label: 'root', value: 'root' },
@@ -79,6 +101,49 @@ export function createDockerDashboardSummary(snapshot: DockerSnapshot): DockerDa
     runningContainerCount: snapshot.containers.filter((container) => container.state.toLowerCase() === 'running').length,
     notedResourceCount: snapshot.notes.length
   }
+}
+
+function normalizeDockerEventAction(event: Pick<DockerEventSummary, 'action' | 'status'>): string {
+  return (event.action || event.status).trim().toLowerCase().split(':')[0].trim()
+}
+
+export function shouldRefreshDockerSnapshotForEvent(event: Pick<DockerEventSummary, 'type' | 'action' | 'status'>): boolean {
+  const type = event.type.trim().toLowerCase()
+  const action = normalizeDockerEventAction(event)
+
+  if (!type || !action) {
+    return true
+  }
+
+  if (action.startsWith('exec_')) {
+    return false
+  }
+
+  if (type === 'container') {
+    return dockerContainerRefreshActions.has(action)
+  }
+
+  if (type === 'image') {
+    return dockerImageRefreshActions.has(action)
+  }
+
+  return true
+}
+
+function sortByStableKey<T>(items: T[], getKey: (item: T) => string): T[] {
+  return [...items].sort((left, right) => getKey(left).localeCompare(getKey(right)))
+}
+
+function createDockerSnapshotSignature(snapshot: DockerSnapshot): string {
+  return JSON.stringify({
+    images: sortByStableKey(snapshot.images, (image) => image.noteResourceKey || image.id),
+    containers: sortByStableKey(snapshot.containers, (container) => container.id),
+    notes: sortByStableKey(snapshot.notes, (note) => `${note.resourceType}:${note.resourceKey}`)
+  })
+}
+
+export function areDockerSnapshotsEquivalent(left: DockerSnapshot, right: DockerSnapshot): boolean {
+  return createDockerSnapshotSignature(left) === createDockerSnapshotSignature(right)
 }
 
 export function filterDockerContainers(

@@ -5,6 +5,8 @@ import {
   createEnvFileDiffTask,
   envFileDiffActiveTaskStorageKey,
   envFileDiffTasksStorageKey,
+  formatEnvVariableRows,
+  formatEnvVariableValues,
   formatVariableNames,
   normalizeEnvFileDiffTasks,
   parseEnvFileVariables,
@@ -113,6 +115,26 @@ UCARD_OMNIVAULT_TIMEOUT="30"
       result.variables[0].value,
       `"-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvPiYJicmvPB+URw6636N\nv8HMsQn+ovbvELwiCpFA8s3b8dVbAcOkZbXlKqhKlSynv9pCITKonDVZh1jgtq8M\n-----END PUBLIC KEY-----"`
     )
+  })
+
+  it('parses unquoted PEM blocks as one environment variable', () => {
+    const result = parseEnvFileVariables(`
+UNIPIE_OMNIVAULT_WEBHOOK_PUBLIC_KEY=-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtestLineOne
+v8HMsQn+ovbvELwiCpFA8s3b8dVbAcOkZbXlKqhKlSynv9pCITKtestTwo
+8wIDAQAB
+-----END PUBLIC KEY-----
+UNIPIE_OMNIVAULT_TIMEOUT=10
+`)
+
+    assert.deepEqual(result.variableNames, ['UNIPIE_OMNIVAULT_WEBHOOK_PUBLIC_KEY', 'UNIPIE_OMNIVAULT_TIMEOUT'])
+    assert.equal(result.ignoredLineCount, 0)
+    assert.equal(
+      result.variables[0].value,
+      '-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtestLineOne\nv8HMsQn+ovbvELwiCpFA8s3b8dVbAcOkZbXlKqhKlSynv9pCITKtestTwo\n8wIDAQAB\n-----END PUBLIC KEY-----'
+    )
+    assert.equal(formatEnvVariableRows(result.variables), `${result.variables[0].name}=${result.variables[0].value}\nUNIPIE_OMNIVAULT_TIMEOUT=10`)
+    assert.equal(formatEnvVariableValues(result.variables), `${result.variables[0].value}\n10`)
   })
 
   it('updates an existing variable value for table editing', () => {

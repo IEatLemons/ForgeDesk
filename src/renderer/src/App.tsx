@@ -10,6 +10,7 @@ import {
   DatePicker,
   Descriptions,
   Drawer,
+  Dropdown,
   Empty,
   Form,
   Input,
@@ -45,6 +46,7 @@ import {
   DeleteOutlined,
   DiffOutlined,
   DesktopOutlined,
+  DownOutlined,
   DownloadOutlined,
   EditOutlined,
   ArrowLeftOutlined,
@@ -72,6 +74,7 @@ import {
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react'
+import type { MenuProps } from 'antd'
 import type { FormInstance } from 'antd/es/form'
 import forgedeskLogoUrl from './assets/forgedesk-logo.svg'
 import type {
@@ -141,6 +144,8 @@ import { createDiffResultLines, createSourceDiffLines, type DiffDisplayLine } fr
 import {
   compareEnvFiles,
   createEnvFileDiffTask,
+  formatEnvVariableRows,
+  formatEnvVariableValues,
   formatVariableNames,
   parseEnvFileVariables,
   readStoredEnvFileDiffActiveTaskId,
@@ -7738,12 +7743,17 @@ function GitPushModal({ open, repositories, onClose, onChanged }: GitActionModal
 
 function GitMergeModal({ open, repositories, onClose, onChanged }: GitActionModalProps): JSX.Element {
   const { updateRepository } = useForgeDeskStore()
+  const [aiSettingsForm] = Form.useForm<AiSettingsForm>()
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
   const [status, setStatus] = useState<GitWorkspaceStatus | null>(null)
   const [sourceBranch, setSourceBranch] = useState('')
   const [targetBranch, setTargetBranch] = useState('')
   const [analysis, setAnalysis] = useState<GitMergeAnalysis | null>(null)
+  const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
+  const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
   const [loadingStatus, setLoadingStatus] = useState(false)
+  const [loadingAiSettings, setLoadingAiSettings] = useState(false)
+  const [savingAiSettings, setSavingAiSettings] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
   const [merging, setMerging] = useState(false)
   const [suggestingFilePath, setSuggestingFilePath] = useState<string | null>(null)
@@ -7894,8 +7904,72 @@ function GitMergeModal({ open, repositories, onClose, onChanged }: GitActionModa
     }
   }
 
+  async function refreshMergeAiSettings(): Promise<AiSettingsView | null> {
+    if (!window.forgeDesk) {
+      setAiSettings(null)
+      return null
+    }
+
+    setLoadingAiSettings(true)
+
+    try {
+      const settings = await window.forgeDesk.getAiSettings()
+      setAiSettings(settings)
+      populateAiSettingsForm(aiSettingsForm, settings)
+      return settings
+    } catch (error) {
+      message.error(getErrorMessage(error))
+      return null
+    } finally {
+      setLoadingAiSettings(false)
+    }
+  }
+
+  async function saveMergeAiSettings(): Promise<void> {
+    const values = await aiSettingsForm.validateFields()
+
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中保存 AI 设置')
+      return
+    }
+
+    setSavingAiSettings(true)
+
+    try {
+      const apiKey = values.apiKey?.trim()
+      const settings = await window.forgeDesk.saveAiSettings({
+        enabled: values.enabled,
+        provider: values.provider,
+        baseUrl: values.baseUrl,
+        apiKey: apiKey || undefined,
+        model: values.model,
+        temperature: Number(values.temperature)
+      })
+      setAiSettings(settings)
+      aiSettingsForm.setFieldValue('apiKey', '')
+
+      if (isAiSettingsReady(settings)) {
+        setAiSettingsModalOpen(false)
+      }
+
+      message.success('AI 设置已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingAiSettings(false)
+    }
+  }
+
   async function suggestConflictResolution(conflict: GitConflictFile): Promise<void> {
     if (!selectedRepository || !window.forgeDesk) {
+      return
+    }
+
+    const settings = await refreshMergeAiSettings()
+
+    if (!isAiSettingsReady(settings)) {
+      message.info('请先填写并启用 AI API Key')
+      setAiSettingsModalOpen(true)
       return
     }
 
@@ -7904,7 +7978,12 @@ function GitMergeModal({ open, repositories, onClose, onChanged }: GitActionModa
     try {
       setPreviewSuggestion(await window.forgeDesk.suggestConflictResolution(selectedRepository.id, conflict.path))
     } catch (error) {
-      message.error(getErrorMessage(error))
+      const errorMessage = getErrorMessage(error)
+      message.error(errorMessage)
+
+      if (isAiCredentialErrorMessage(errorMessage)) {
+        setAiSettingsModalOpen(true)
+      }
     } finally {
       setSuggestingFilePath(null)
     }
@@ -7945,6 +8024,16 @@ function GitMergeModal({ open, repositories, onClose, onChanged }: GitActionModa
         </Button>,
         <Button key="refresh" icon={<ReloadOutlined />} loading={loadingStatus} onClick={refreshWorkspaceStatus}>
           刷新状态
+        </Button>,
+        <Button
+          key="ai-settings"
+          icon={<SettingOutlined />}
+          onClick={() => {
+            setAiSettingsModalOpen(true)
+            void refreshMergeAiSettings()
+          }}
+        >
+          AI 设置
         </Button>,
         <Button key="confirm" disabled={!analysis?.ok} loading={merging} onClick={() => analysis && confirmMerge(analysis)}>
           确认合并
@@ -8060,24 +8149,45 @@ function GitMergeModal({ open, repositories, onClose, onChanged }: GitActionModa
       >
         <Input.TextArea value={previewSuggestion?.suggestedContent ?? ''} readOnly autoSize={{ minRows: 14, maxRows: 26 }} />
       </Modal>
+      <Modal
+        title="AI 设置"
+        open={aiSettingsModalOpen}
+        footer={null}
+        width="min(760px, calc(100vw - 48px))"
+        onCancel={() => setAiSettingsModalOpen(false)}
+      >
+        <AiSettingsSection
+          form={aiSettingsForm}
+          settings={aiSettings}
+          loading={loadingAiSettings}
+          saving={savingAiSettings}
+          onRefresh={refreshMergeAiSettings}
+          onSave={saveMergeAiSettings}
+        />
+      </Modal>
     </Modal>
   )
 }
 
 function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JSX.Element {
   const { updateRepository } = useForgeDeskStore()
+  const [aiSettingsForm] = Form.useForm<AiSettingsForm>()
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
   const [status, setStatus] = useState<GitWorkspaceStatus | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [commitMessage, setCommitMessage] = useState('')
   const [commitTag, setCommitTag] = useState('')
   const [tagRecommendation, setTagRecommendation] = useState<RepositoryReleaseTagRecommendation | null>(null)
+  const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
+  const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
   const [pushRemote, setPushRemote] = useState('origin')
   const [pushBranch, setPushBranch] = useState('')
   const [mergeSource, setMergeSource] = useState('')
   const [working, setWorking] = useState(false)
   const [loadingStatus, setLoadingStatus] = useState(false)
   const [loadingTagRecommendation, setLoadingTagRecommendation] = useState(false)
+  const [loadingAiSettings, setLoadingAiSettings] = useState(false)
+  const [savingAiSettings, setSavingAiSettings] = useState(false)
   const [suggestingFilePath, setSuggestingFilePath] = useState<string | null>(null)
   const [previewSuggestion, setPreviewSuggestion] = useState<AiConflictSuggestion | null>(null)
   const [applyingSuggestion, setApplyingSuggestion] = useState(false)
@@ -8133,6 +8243,62 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
       message.warning(getErrorMessage(error))
     } finally {
       setLoadingTagRecommendation(false)
+    }
+  }
+
+  async function refreshWorkspaceAiSettings(): Promise<AiSettingsView | null> {
+    if (!window.forgeDesk) {
+      setAiSettings(null)
+      return null
+    }
+
+    setLoadingAiSettings(true)
+
+    try {
+      const settings = await window.forgeDesk.getAiSettings()
+      setAiSettings(settings)
+      populateAiSettingsForm(aiSettingsForm, settings)
+      return settings
+    } catch (error) {
+      message.error(getErrorMessage(error))
+      return null
+    } finally {
+      setLoadingAiSettings(false)
+    }
+  }
+
+  async function saveWorkspaceAiSettings(): Promise<void> {
+    const values = await aiSettingsForm.validateFields()
+
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中保存 AI 设置')
+      return
+    }
+
+    setSavingAiSettings(true)
+
+    try {
+      const apiKey = values.apiKey?.trim()
+      const settings = await window.forgeDesk.saveAiSettings({
+        enabled: values.enabled,
+        provider: values.provider,
+        baseUrl: values.baseUrl,
+        apiKey: apiKey || undefined,
+        model: values.model,
+        temperature: Number(values.temperature)
+      })
+      setAiSettings(settings)
+      aiSettingsForm.setFieldValue('apiKey', '')
+
+      if (isAiSettingsReady(settings)) {
+        setAiSettingsModalOpen(false)
+      }
+
+      message.success('AI 设置已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingAiSettings(false)
     }
   }
 
@@ -8199,12 +8365,25 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
       return
     }
 
+    const settings = await refreshWorkspaceAiSettings()
+
+    if (!isAiSettingsReady(settings)) {
+      message.info('请先填写并启用 AI API Key')
+      setAiSettingsModalOpen(true)
+      return
+    }
+
     setSuggestingFilePath(conflict.path)
 
     try {
       setPreviewSuggestion(await window.forgeDesk.suggestConflictResolution(selectedRepository.id, conflict.path))
     } catch (error) {
-      message.error(getErrorMessage(error))
+      const errorMessage = getErrorMessage(error)
+      message.error(errorMessage)
+
+      if (isAiCredentialErrorMessage(errorMessage)) {
+        setAiSettingsModalOpen(true)
+      }
     } finally {
       setSuggestingFilePath(null)
     }
@@ -8291,6 +8470,15 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
           />
           <Button icon={<ReloadOutlined />} loading={loadingStatus} onClick={refreshWorkspaceStatus}>
             刷新工作区
+          </Button>
+          <Button
+            icon={<SettingOutlined />}
+            onClick={() => {
+              setAiSettingsModalOpen(true)
+              void refreshWorkspaceAiSettings()
+            }}
+          >
+            AI 设置
           </Button>
         </Space>
       </div>
@@ -8422,6 +8610,22 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
         width="min(920px, calc(100vw - 64px))"
       >
         <Input.TextArea value={previewSuggestion?.suggestedContent ?? ''} readOnly autoSize={{ minRows: 14, maxRows: 26 }} />
+      </Modal>
+      <Modal
+        title="AI 设置"
+        open={aiSettingsModalOpen}
+        footer={null}
+        width="min(760px, calc(100vw - 48px))"
+        onCancel={() => setAiSettingsModalOpen(false)}
+      >
+        <AiSettingsSection
+          form={aiSettingsForm}
+          settings={aiSettings}
+          loading={loadingAiSettings}
+          saving={savingAiSettings}
+          onRefresh={refreshWorkspaceAiSettings}
+          onSave={saveWorkspaceAiSettings}
+        />
       </Modal>
       <RepositoryReleaseModal
         open={releaseModalOpen}
@@ -12664,6 +12868,10 @@ function matchesEnvDiffFilter(row: EnvFileDiffRow, filter: EnvFileDiffRowFilter)
   }
 }
 
+type EnvEnvironmentCopyMode = 'content' | 'values'
+type EnvMissingVariablesCopyMode = 'names' | 'rows'
+type EnvDiffInputTarget = 'source' | 'target'
+
 async function copyText(text: string, successText: string, emptyText = '没有可复制的内容', options: { allowEmpty?: boolean } = {}): Promise<void> {
   if (!options.allowEmpty && !text.trim()) {
     message.warning(emptyText)
@@ -13524,6 +13732,14 @@ function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
   )
   const visibleRows = useMemo(() => diffResult?.rows.filter((row) => matchesEnvDiffFilter(row, resultFilter)) ?? [], [diffResult, resultFilter])
   const missingVariablesText = diffResult ? formatVariableNames(diffResult.missingInTarget) : ''
+  const missingVariableRowsText = useMemo(() => {
+    if (!diffResult) {
+      return ''
+    }
+
+    const missingVariableNames = new Set(diffResult.missingInTarget)
+    return formatEnvVariableRows(sourceVariables.variables.filter((variable) => missingVariableNames.has(variable.name)))
+  }, [diffResult, sourceVariables.variables])
   const hasAnyInput = Boolean(sourceText.trim() || targetText.trim() || sourceFile || targetFile)
 
   useEffect(() => {
@@ -13733,6 +13949,80 @@ function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
     commitActiveTask({ resultFilter: filter })
   }
 
+  function copyEnvironment(target: EnvDiffInputTarget, mode: EnvEnvironmentCopyMode): void {
+    const environmentName = target === 'source' ? '环境 A' : '环境 B'
+    const text = target === 'source' ? sourceText : targetText
+    const parsedVariables = target === 'source' ? sourceVariables : targetVariables
+
+    if (mode === 'values') {
+      void copyText(formatEnvVariableValues(parsedVariables.variables), `${environmentName} 变量值已复制`)
+      return
+    }
+
+    void copyText(text, `${environmentName} 已复制`)
+  }
+
+  function copyMissingVariables(mode: EnvMissingVariablesCopyMode): void {
+    if (mode === 'rows') {
+      void copyText(missingVariableRowsText, 'B 缺少变量行已复制')
+      return
+    }
+
+    void copyText(missingVariablesText, 'B 缺少变量名已复制')
+  }
+
+  function getEnvironmentCopyMenu(target: EnvDiffInputTarget): MenuProps {
+    const parsedVariables = target === 'source' ? sourceVariables : targetVariables
+
+    return {
+      items: [
+        { key: 'content', label: '复制完整内容' },
+        { key: 'values', label: '只复制变量值', disabled: parsedVariables.variables.length === 0 }
+      ],
+      onClick: ({ key }) => copyEnvironment(target, key as EnvEnvironmentCopyMode)
+    }
+  }
+
+  function renderEnvironmentCopyControl(target: EnvDiffInputTarget, size: 'small' | 'middle' = 'middle'): JSX.Element {
+    const environmentName = target === 'source' ? '环境 A' : '环境 B'
+    const buttonText = target === 'source' ? '复制环境 A' : '复制环境 B'
+    const text = target === 'source' ? sourceText : targetText
+    const disabled = !text.trim()
+
+    return (
+      <Space.Compact className="env-diff-copy-control">
+        <Button size={size} icon={<CopyOutlined />} disabled={disabled} onClick={() => copyEnvironment(target, 'content')}>
+          {buttonText}
+        </Button>
+        <Dropdown disabled={disabled} menu={getEnvironmentCopyMenu(target)} trigger={['click']}>
+          <Button size={size} aria-label={`${environmentName}复制选项`} disabled={disabled} icon={<DownOutlined />} />
+        </Dropdown>
+      </Space.Compact>
+    )
+  }
+
+  function renderMissingVariablesCopyControl(): JSX.Element {
+    const disabled = !diffResult?.missingInTarget.length
+    const menu: MenuProps = {
+      items: [
+        { key: 'names', label: '只复制变量名' },
+        { key: 'rows', label: '复制变量行' }
+      ],
+      onClick: ({ key }) => copyMissingVariables(key as EnvMissingVariablesCopyMode)
+    }
+
+    return (
+      <Space.Compact className="env-diff-copy-control">
+        <Button icon={<CopyOutlined />} disabled={disabled} onClick={() => copyMissingVariables('names')}>
+          复制 B 缺少变量名
+        </Button>
+        <Dropdown disabled={disabled} menu={menu} trigger={['click']}>
+          <Button aria-label="B 缺少变量复制选项" disabled={disabled} icon={<DownOutlined />} />
+        </Dropdown>
+      </Space.Compact>
+    )
+  }
+
   function renderInputMeta(parsedVariables: EnvFileVariables, text: string, file: EnvFileDiffTaskFile | null): JSX.Element {
     if (!text.trim()) {
       return <Typography.Text type="secondary">等待输入</Typography.Text>
@@ -13827,9 +14117,7 @@ function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
               <div className="env-diff-text-heading">
                 <div className="env-diff-text-title-row">
                   <Typography.Text strong>环境 A（基准）</Typography.Text>
-                  <Button size="small" icon={<CopyOutlined />} disabled={!sourceText.trim()} onClick={() => copyText(sourceText, '环境 A 已复制')}>
-                    复制环境 A
-                  </Button>
+                  {renderEnvironmentCopyControl('source', 'small')}
                 </div>
                 {renderInputMeta(sourceVariables, sourceText, sourceFile)}
               </div>
@@ -13860,9 +14148,7 @@ function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
               <div className="env-diff-text-heading">
                 <div className="env-diff-text-title-row">
                   <Typography.Text strong>环境 B</Typography.Text>
-                  <Button size="small" icon={<CopyOutlined />} disabled={!targetText.trim()} onClick={() => copyText(targetText, '环境 B 已复制')}>
-                    复制环境 B
-                  </Button>
+                  {renderEnvironmentCopyControl('target', 'small')}
                 </div>
                 {renderInputMeta(targetVariables, targetText, targetFile)}
               </div>
@@ -13933,15 +14219,9 @@ function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
                   onChange={(value) => updateResultFilter(value as EnvFileDiffRowFilter)}
                 />
                 <div className="env-diff-result-actions">
-                  <Button icon={<CopyOutlined />} disabled={!diffResult.missingInTarget.length} onClick={() => copyText(missingVariablesText, 'B 缺少变量名已复制')}>
-                    复制 B 缺少变量名
-                  </Button>
-                  <Button icon={<CopyOutlined />} disabled={!sourceText.trim()} onClick={() => copyText(sourceText, '环境 A 已复制')}>
-                    复制环境 A
-                  </Button>
-                  <Button icon={<CopyOutlined />} disabled={!targetText.trim()} onClick={() => copyText(targetText, '环境 B 已复制')}>
-                    复制环境 B
-                  </Button>
+                  {renderMissingVariablesCopyControl()}
+                  {renderEnvironmentCopyControl('source')}
+                  {renderEnvironmentCopyControl('target')}
                 </div>
               </div>
 

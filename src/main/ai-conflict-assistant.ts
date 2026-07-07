@@ -1,5 +1,6 @@
 import { createAiNetworkError, createAiRequestError } from './ai-errors.js'
 import { buildAiRequestHeaders, type AiSettings } from './ai-settings.js'
+import { hasConflictMarkers } from './merge-conflicts.js'
 
 export type ConflictResolutionSuggestion = {
   filePath: string
@@ -62,6 +63,10 @@ export async function requestConflictResolutionSuggestion(input: {
 
   if (!suggestedContent.trim()) {
     throw new Error('AI 没有返回可用的合并内容')
+  }
+
+  if (hasConflictMarkers(suggestedContent)) {
+    throw new Error('AI 返回的内容仍包含冲突标记，请重新生成或手动处理')
   }
 
   return { filePath: input.filePath, suggestedContent }

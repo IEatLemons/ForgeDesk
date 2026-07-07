@@ -54,4 +54,33 @@ describe('ai conflict assistant', () => {
       /请先在公共设置里启用 AI/
     )
   })
+
+  it('rejects suggestions that still contain conflict markers', async () => {
+    const fakeFetch = async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> feature\n' } }]
+        }),
+        { status: 200 }
+      )
+
+    await assert.rejects(
+      () =>
+        requestConflictResolutionSuggestion({
+          settings: {
+            enabled: true,
+            provider: 'openai-compatible',
+            baseUrl: 'https://llm.example.com/v1',
+            apiKey: 'secret',
+            model: 'gpt-test',
+            temperature: 0.2
+          },
+          repositoryName: 'repo',
+          filePath: 'file.ts',
+          conflictedContent: '<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> feature\n',
+          fetchImpl: fakeFetch as typeof fetch
+        }),
+      /仍包含冲突标记/
+    )
+  })
 })
