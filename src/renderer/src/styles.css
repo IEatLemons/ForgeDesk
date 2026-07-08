@@ -237,6 +237,10 @@
   border-color: var(--primary-border);
 }
 
+[data-theme='dark'] .release-platform-card-selected {
+  border-color: var(--primary);
+}
+
 [data-theme='dark'] .release-platform-icon {
   background: var(--card-bg);
   box-shadow: inset 0 0 0 1px var(--primary-border);
@@ -244,6 +248,7 @@
 
 [data-theme='dark'] .release-publish-log,
 [data-theme='dark'] .release-background-task-card,
+[data-theme='dark'] .release-artifact-item,
 [data-theme='dark'] .release-task-item {
   background: var(--card-bg);
   border-color: var(--app-border-soft);
@@ -2108,8 +2113,15 @@ button.app-status-bar-item:hover {
 
 .env-diff-workflow {
   display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+}
+
+.env-diff-main-stack {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
 }
 
 .excel-tool-layout {
@@ -2117,6 +2129,68 @@ button.app-status-bar-item:hover {
   grid-template-columns: minmax(320px, 0.38fr) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+}
+
+.cli-env-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.42fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.cli-env-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cli-env-summary-item,
+.cli-env-file-row,
+.cli-env-command-row,
+.cli-env-path-panel {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+}
+
+.cli-env-summary-item {
+  display: grid;
+  gap: 6px;
+}
+
+.cli-env-file-list {
+  display: grid;
+  gap: 10px;
+}
+
+.cli-env-file-row,
+.cli-env-command-row {
+  display: grid;
+  gap: 6px;
+}
+
+.cli-env-path-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.cli-env-path-panel pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  color: var(--app-text);
+  border: 1px solid var(--code-border);
+  border-radius: 8px;
+  background: var(--code-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .file-picker-panel,
@@ -2227,6 +2301,10 @@ button.app-status-bar-item:hover {
 .env-diff-task-panel {
   display: grid;
   gap: 12px;
+  position: sticky;
+  top: 18px;
+  max-height: calc(100vh - 132px);
+  overflow: hidden;
 }
 
 .env-diff-task-heading {
@@ -2239,17 +2317,18 @@ button.app-status-bar-item:hover {
 
 .env-diff-task-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 8px;
+  max-height: calc(100vh - 292px);
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .env-diff-task-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
+  align-items: start;
   min-width: 0;
-  padding: 10px;
+  overflow: hidden;
   border: 1px solid var(--app-border-soft);
   border-radius: 8px;
   background: var(--card-bg);
@@ -2262,15 +2341,19 @@ button.app-status-bar-item:hover {
 
 .env-diff-task-select {
   display: grid;
-  gap: 3px;
+  gap: 5px;
   min-width: 0;
-  padding: 0;
+  padding: 10px 12px;
   color: inherit;
   border: 0;
   background: transparent;
   cursor: pointer;
   font: inherit;
   text-align: left;
+}
+
+.env-diff-task-title {
+  line-height: 20px;
 }
 
 .env-diff-task-select .ant-typography {
@@ -2283,9 +2366,24 @@ button.app-status-bar-item:hover {
   white-space: nowrap;
 }
 
+.env-diff-task-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.env-diff-task-counts .ant-tag {
+  margin-inline-end: 0;
+}
+
+.env-diff-task-delete.ant-btn {
+  margin: 10px 10px 0 0;
+}
+
 .env-diff-input-toolbar {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  align-items: end;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
@@ -2294,6 +2392,29 @@ button.app-status-bar-item:hover {
 .env-diff-input-toolbar .ant-typography {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.env-diff-current-task {
+  display: grid;
+  gap: 6px;
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.env-diff-task-title-input.ant-input {
+  max-width: 520px;
+}
+
+.env-diff-input-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.env-diff-input-actions .ant-tag {
+  margin-inline-end: 0;
 }
 
 .env-diff-text-grid {
@@ -2552,6 +2673,28 @@ button.app-status-bar-item:hover {
   max-width: 1480px;
 }
 
+.settings-category-list {
+  display: grid;
+  gap: 24px;
+}
+
+.settings-category-section {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-category-heading {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-category-title.ant-typography {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
 .settings-module-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
@@ -2684,6 +2827,53 @@ button.app-status-bar-item:hover {
 
 .docker-search {
   width: min(420px, 100%);
+}
+
+.docker-dev-environment-form,
+.docker-dev-environment-form .ant-form,
+.docker-dev-environment-path {
+  width: 100%;
+}
+
+.docker-dev-environment-task {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+}
+
+.docker-dev-environment-task-failed {
+  border-color: rgba(255, 77, 79, 0.35);
+}
+
+.docker-dev-environment-task-succeeded {
+  border-color: rgba(82, 196, 26, 0.35);
+}
+
+.docker-dev-environment-task-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.docker-dev-environment-task-meta {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.28fr) minmax(220px, 0.36fr) minmax(220px, 0.36fr);
+  gap: 10px;
+}
+
+.docker-dev-environment-task-meta > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.docker-dev-environment-log {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
 }
 
 .docker-compact-table {
@@ -3188,6 +3378,10 @@ button.app-status-bar-item:hover {
   min-width: 0;
 }
 
+.release-platform-heading {
+  justify-content: space-between;
+}
+
 .release-platform-list {
   display: grid;
   gap: 8px;
@@ -3203,11 +3397,17 @@ button.app-status-bar-item:hover {
   border: 1px solid var(--primary-border-soft);
   border-radius: 8px;
   background: var(--primary-surface);
+  cursor: pointer;
 }
 
 .release-platform-card-active {
   border-color: var(--primary-border);
   background: var(--table-row-selected-bg);
+}
+
+.release-platform-card-selected {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
 }
 
 .release-platform-card-disabled {
@@ -3290,6 +3490,24 @@ button.app-status-bar-item:hover {
   display: grid;
   gap: 6px;
   min-width: 0;
+}
+
+.release-artifact-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.release-artifact-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--subtle-bg);
 }
 
 .release-task-dock {
@@ -4499,9 +4717,20 @@ button.app-status-bar-item:hover {
 @media (max-width: 1180px) {
   .password-tool-layout,
   .file-tool-layout,
+  .env-diff-workflow,
   .excel-tool-layout,
+  .cli-env-layout,
   .monthly-performance-chat-shell {
     grid-template-columns: 1fr;
+  }
+
+  .env-diff-task-panel {
+    position: static;
+    max-height: none;
+  }
+
+  .env-diff-task-list {
+    max-height: 280px;
   }
 
   .env-diff-result-toolbar {
@@ -4582,6 +4811,10 @@ button.app-status-bar-item:hover {
     justify-self: start;
   }
 
+  .env-diff-input-actions {
+    justify-content: flex-start;
+  }
+
   .release-task-item-main .ant-typography {
     max-width: calc(100vw - 180px);
   }
@@ -4627,8 +4860,15 @@ button.app-status-bar-item:hover {
   .ai-settings-grid,
   .password-custom-grid,
   .env-diff-text-grid,
-  .file-diff-summary {
+  .file-diff-summary,
+  .cli-env-summary-grid,
+  .docker-dev-environment-task-meta {
     grid-template-columns: 1fr;
+  }
+
+  .docker-dev-environment-task-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .conflict-file-row {

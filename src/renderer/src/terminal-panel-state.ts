@@ -22,6 +22,11 @@ export type TerminalRestoreCriteria = {
   defaultReuseKey?: string
 }
 
+export type TerminalFocusCriteria = {
+  cwd?: string
+  reuseKey?: string
+}
+
 export function createTerminalPanelState(): TerminalPanelState {
   return {
     activeSessionId: null,
@@ -29,8 +34,26 @@ export function createTerminalPanelState(): TerminalPanelState {
   }
 }
 
-export function createTerminalPanelStateFromSessions(sessions: TerminalPanelSession[]): TerminalPanelState {
-  const activeSession = sessions.find((session) => !session.exited) ?? sessions[0] ?? null
+function findPreferredTerminalSession(sessions: TerminalPanelSession[], criteria: TerminalFocusCriteria = {}): TerminalPanelSession | null {
+  const preferredByReuseKey = criteria.reuseKey
+    ? sessions.find((session) => session.reuseKey === criteria.reuseKey && !session.exited) ??
+      sessions.find((session) => session.reuseKey === criteria.reuseKey) ??
+      null
+    : null
+
+  if (preferredByReuseKey) {
+    return preferredByReuseKey
+  }
+
+  const preferredByCwd = criteria.cwd
+    ? sessions.find((session) => session.cwd === criteria.cwd && !session.exited) ?? sessions.find((session) => session.cwd === criteria.cwd) ?? null
+    : null
+
+  return preferredByCwd ?? sessions.find((session) => !session.exited) ?? sessions[0] ?? null
+}
+
+export function createTerminalPanelStateFromSessions(sessions: TerminalPanelSession[], focusCriteria: TerminalFocusCriteria = {}): TerminalPanelState {
+  const activeSession = findPreferredTerminalSession(sessions, focusCriteria)
 
   return {
     activeSessionId: activeSession?.id ?? null,

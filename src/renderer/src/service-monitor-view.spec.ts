@@ -135,10 +135,10 @@ describe('service monitor view helpers', () => {
     assert.equal(getProjectServiceStats([railwayService]).domainCount, 2)
   })
 
-  it('marks Railway service detail controls as readonly', () => {
+  it('enables Railway deployment actions while keeping env vars and domains managed by provider rules', () => {
     assert.deepEqual(getServiceProviderCapabilities('railway'), {
       canListDeployments: true,
-      canRunDeploymentActions: false,
+      canRunDeploymentActions: true,
       canReadEnvVars: true,
       canManageEnvVars: false,
       canReadRuntimeLogs: true,

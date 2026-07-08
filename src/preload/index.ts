@@ -32,6 +32,9 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   listRepositoryReleasePublishTasks: (repositoryId?: string) => ipcRenderer.invoke('repository:release-publish-tasks:list', repositoryId),
   getRepositoryReleasePublishTask: (taskId: string) => ipcRenderer.invoke('repository:release-publish-task:get', taskId),
   cancelRepositoryReleasePublishTask: (taskId: string) => ipcRenderer.invoke('repository:release-publish-task:cancel', taskId),
+  getRepositoryCodemagicBinding: (repositoryId: string) => ipcRenderer.invoke('repository:codemagic-binding:get', repositoryId),
+  saveRepositoryCodemagicBinding: (input: CodemagicRepositoryBindingInput) => ipcRenderer.invoke('repository:codemagic-binding:save', input),
+  deleteRepositoryCodemagicBinding: (repositoryId: string) => ipcRenderer.invoke('repository:codemagic-binding:delete', repositoryId),
   suggestConflictResolution: (repositoryId: string, filePath: string) => ipcRenderer.invoke('repository:conflict:suggest', repositoryId, filePath),
   applyConflictResolution: (repositoryId: string, filePath: string, content: string) => ipcRenderer.invoke('repository:conflict:apply', repositoryId, filePath, content),
   listRepositoryCommitFiles: (repositoryId: string, commitHash: string) => ipcRenderer.invoke('repository:commit-files', repositoryId, commitHash),
@@ -73,7 +76,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   listServiceEnvironmentLogs: (serviceId: string, environmentName: string) => ipcRenderer.invoke('service:environment:logs', serviceId, environmentName),
   listCachedServiceDeployments: (serviceId: string, options?: ServiceDeploymentListOptions) => ipcRenderer.invoke('service:deployments:cached:list', serviceId, options),
   listServiceDeployments: (serviceId: string, options?: ServiceDeploymentListOptions) => ipcRenderer.invoke('service:deployments:list', serviceId, options),
-  runServiceDeploymentAction: (serviceId: string, input: VercelDeploymentActionInput) => ipcRenderer.invoke('service:deployment:action', serviceId, input),
+  runServiceDeploymentAction: (serviceId: string, input: ServiceDeploymentActionInput) => ipcRenderer.invoke('service:deployment:action', serviceId, input),
   listServiceEnvVars: (serviceId: string) => ipcRenderer.invoke('service:env:list', serviceId),
   revealServiceEnvVar: (serviceId: string, envVarId: string) => ipcRenderer.invoke('service:env:reveal', serviceId, envVarId),
   saveServiceEnvVar: (serviceId: string, input: VercelEnvVarInput) => ipcRenderer.invoke('service:env:save', serviceId, input),
@@ -85,6 +88,8 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   listServiceRuntimeLogs: (serviceId: string, environmentName: string) => ipcRenderer.invoke('service:runtime:logs', serviceId, environmentName),
   getDockerSnapshot: () => ipcRenderer.invoke('docker:snapshot'),
   getDockerContainerDetail: (containerId: string) => ipcRenderer.invoke('docker:container:detail', containerId),
+  createDockerDevEnvironment: (input: DockerDevEnvironmentInput) => ipcRenderer.invoke('docker:dev-environment:create', input),
+  listDockerDevEnvironmentTasks: () => ipcRenderer.invoke('docker:dev-environment:tasks'),
   saveDockerResourceNote: (input: DockerResourceNoteInput) => ipcRenderer.invoke('docker:note:save', input),
   deleteDockerResourceNote: (resourceType: DockerResourceType, resourceKey: string) => ipcRenderer.invoke('docker:note:delete', resourceType, resourceKey),
   startDockerWatch: () => ipcRenderer.invoke('docker:watch:start'),
@@ -98,6 +103,11 @@ contextBridge.exposeInMainWorld('forgeDesk', {
     const wrapped = (_event: Electron.IpcRendererEvent, event: { message: string }): void => listener(event)
     ipcRenderer.on('docker:watch:error', wrapped)
     return () => ipcRenderer.removeListener('docker:watch:error', wrapped)
+  },
+  onDockerDevEnvironmentProgress: (listener: (event: DockerDevEnvironmentTaskSnapshot) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, event: DockerDevEnvironmentTaskSnapshot): void => listener(event)
+    ipcRenderer.on('docker:dev-environment:progress', wrapped)
+    return () => ipcRenderer.removeListener('docker:dev-environment:progress', wrapped)
   },
   saveProjectPerson: (input: { id?: string; projectId: string; displayName: string; role?: string; identities: Array<{ name: string; email: string }> }) =>
     ipcRenderer.invoke('project:person:save', input),
@@ -117,10 +127,19 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   saveGithubToken: (input: GithubTokenInput) => ipcRenderer.invoke('settings:github-tokens:save', input),
   refreshGithubToken: (tokenId: string) => ipcRenderer.invoke('settings:github-tokens:refresh', tokenId),
   deleteGithubToken: (tokenId: string) => ipcRenderer.invoke('settings:github-tokens:delete', tokenId),
+  listCodemagicTokens: () => ipcRenderer.invoke('settings:codemagic-tokens:list'),
+  saveCodemagicToken: (input: CodemagicTokenInput) => ipcRenderer.invoke('settings:codemagic-tokens:save', input),
+  refreshCodemagicToken: (tokenId: string) => ipcRenderer.invoke('settings:codemagic-tokens:refresh', tokenId),
+  deleteCodemagicToken: (tokenId: string) => ipcRenderer.invoke('settings:codemagic-tokens:delete', tokenId),
+  listCodemagicTeams: (tokenId: string) => ipcRenderer.invoke('codemagic:teams:list', tokenId),
+  listCodemagicApps: (input: CodemagicAppListInput) => ipcRenderer.invoke('codemagic:apps:list', input),
+  createCodemagicArtifactPublicUrl: (input: CodemagicArtifactPublicUrlInput) => ipcRenderer.invoke('codemagic:artifact:public-url', input),
   listRsaPrivateKeys: () => ipcRenderer.invoke('tools:rsa-private-keys:list'),
   createRsaPrivateKey: (input: RsaPrivateKeyCreateInput) => ipcRenderer.invoke('tools:rsa-private-keys:create', input),
   updateRsaPrivateKey: (input: RsaPrivateKeyUpdateInput) => ipcRenderer.invoke('tools:rsa-private-keys:update', input),
   deleteRsaPrivateKey: (id: string) => ipcRenderer.invoke('tools:rsa-private-keys:delete', id),
+  inspectCliEnvironment: () => ipcRenderer.invoke('tools:cli-environment:inspect'),
+  repairCliEnvironment: () => ipcRenderer.invoke('tools:cli-environment:repair'),
   previewMonthlyPerformance: (input: MonthlyPerformancePreviewInput) => ipcRenderer.invoke('tools:monthly-performance:preview', input),
   exportMonthlyPerformance: (input: MonthlyPerformanceExportInput) => ipcRenderer.invoke('tools:monthly-performance:export', input),
   listMonthlyPerformanceSessions: () => ipcRenderer.invoke('tools:monthly-performance:sessions:list'),

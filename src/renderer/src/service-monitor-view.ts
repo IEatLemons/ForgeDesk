@@ -78,7 +78,7 @@ export function getServiceProviderLabel(provider: ServiceProviderType): string {
 export function getServiceProviderCapabilities(provider: ServiceProviderType): ServiceProviderCapabilities {
   return {
     canListDeployments: true,
-    canRunDeploymentActions: provider === 'vercel',
+    canRunDeploymentActions: provider === 'vercel' || provider === 'railway',
     canReadEnvVars: true,
     canManageEnvVars: provider === 'vercel',
     canReadRuntimeLogs: true,

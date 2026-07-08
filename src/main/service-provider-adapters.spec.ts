@@ -2,22 +2,29 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   addVercelProjectDomain,
+  cancelRailwayDeployment,
   cancelVercelDeployment,
+  deployRailwayServiceInstance,
   inspectVercelDomainConfig,
   listRailwayDeployments,
   listRailwayProjectEnvVars,
   listVercelDeployments,
   listVercelProjectEnvVars,
   promoteVercelDeployment,
+  readRailwayDeployment,
   readRailwayDeploymentLogs,
   readRailwayEnvironmentLogs,
   readVercelEnvVar,
   readVercelRuntimeLogs,
+  redeployRailwayDeployment,
   redeployVercelDeployment,
   removeVercelProjectEnvVar,
   removeVercelProjectDomain,
+  restartRailwayDeployment,
+  rollbackRailwayDeployment,
   rollbackVercelDeployment,
   saveVercelProjectEnvVar,
+  stopRailwayDeployment,
   syncRailwayProviderServices,
   syncVercelProviderServices,
   type ServiceProviderFetch,
@@ -713,6 +720,95 @@ describe('service provider adapters', () => {
     )
   })
 
+  it('runs Railway deployment actions with project token auth', async () => {
+    const requests: Array<{ query: string; variables: Record<string, unknown>; projectToken: string; authorization: string }> = []
+    const fetcher: ServiceProviderFetch = async (_url, init) => {
+      const { query, variables } = parseGraphqlBody(init)
+      const headers = init?.headers as Record<string, string>
+
+      requests.push({
+        query,
+        variables,
+        projectToken: String(headers['Project-Access-Token'] ?? ''),
+        authorization: String(headers.Authorization ?? '')
+      })
+
+      if (query.includes('deployment(id: $id)')) {
+        return createJsonResponse({
+          data: {
+            deployment: {
+              id: variables.id,
+              canRedeploy: true,
+              canRollback: true,
+              deploymentStopped: false,
+              environmentId: 'env_1',
+              projectId: 'railway-project',
+              serviceId: 'svc_1',
+              status: 'SUCCESS',
+              url: 'api.up.railway.app',
+              meta: { commitSha: 'abc123' }
+            }
+          }
+        })
+      }
+
+      if (query.includes('deploymentRedeploy')) {
+        return createJsonResponse({
+          data: {
+            deploymentRedeploy: {
+              id: variables.id,
+              canRedeploy: true,
+              canRollback: false,
+              deploymentStopped: false,
+              environmentId: 'env_1',
+              projectId: 'railway-project',
+              serviceId: 'svc_1',
+              status: 'BUILDING',
+              url: 'api.up.railway.app',
+              meta: { commitSha: 'def456' }
+            }
+          }
+        })
+      }
+
+      if (query.includes('serviceInstanceDeployV2')) {
+        return createJsonResponse({ data: { serviceInstanceDeployV2: 'dep_new' } })
+      }
+
+      if (query.includes('deploymentRestart')) {
+        return createJsonResponse({ data: { deploymentRestart: true } })
+      }
+
+      if (query.includes('deploymentRollback')) {
+        return createJsonResponse({ data: { deploymentRollback: true } })
+      }
+
+      if (query.includes('deploymentStop')) {
+        return createJsonResponse({ data: { deploymentStop: true } })
+      }
+
+      return createJsonResponse({ data: { deploymentCancel: true } })
+    }
+    const connection = { token: 'railway-project-token', railwayTokenType: 'project' as const }
+
+    assert.equal(await deployRailwayServiceInstance(connection, 'svc_1', 'env_1', fetcher), 'dep_new')
+    assert.equal((await readRailwayDeployment(connection, 'dep_old', fetcher)).canRollback, true)
+    assert.equal((await redeployRailwayDeployment(connection, 'dep_old', fetcher)).state, 'BUILDING')
+    await restartRailwayDeployment(connection, 'dep_old', fetcher)
+    await rollbackRailwayDeployment(connection, 'dep_old', fetcher)
+    await stopRailwayDeployment(connection, 'dep_old', fetcher)
+    await cancelRailwayDeployment(connection, 'dep_old', fetcher)
+
+    assert.equal(requests.some((request) => request.query.includes('serviceInstanceDeployV2') && request.variables.serviceId === 'svc_1'), true)
+    assert.equal(requests.some((request) => request.query.includes('deploymentRedeploy') && request.variables.id === 'dep_old'), true)
+    assert.equal(requests.some((request) => request.query.includes('deploymentRestart')), true)
+    assert.equal(requests.some((request) => request.query.includes('deploymentRollback')), true)
+    assert.equal(requests.some((request) => request.query.includes('deploymentStop')), true)
+    assert.equal(requests.some((request) => request.query.includes('deploymentCancel')), true)
+    assert.equal(requests.every((request) => request.projectToken === 'railway-project-token'), true)
+    assert.equal(requests.every((request) => request.authorization === ''), true)
+  })
+
   it('lists Railway deployments, variables and logs as readonly provider data', async () => {
     const requests: string[] = []
     const fetcher: ServiceProviderFetch = async (_url, init) => {
@@ -743,6 +839,12 @@ describe('service provider adapters', () => {
               {
                 node: {
                   id: 'dep_1',
+                  canRedeploy: true,
+                  canRollback: true,
+                  deploymentStopped: false,
+                  environmentId: 'env_1',
+                  projectId: 'railway-project',
+                  serviceId: 'svc_1',
                   status: 'SUCCESS',
                   url: 'api.up.railway.app',
                   createdAt: '2026-06-23T00:00:00.000Z',
@@ -757,7 +859,7 @@ describe('service provider adapters', () => {
       })
     }
 
-    const deployments = await listRailwayDeployments({ token: 'railway-token', railwayTokenType: 'account' }, 'railway-project', 'svc_1', 'env_1', {}, fetcher)
+    const deployments = await listRailwayDeployments({ token: 'railway-token', railwayTokenType: 'account' }, 'railway-project', 'svc_1', 'env_1', {}, fetcher, 'production')
     const envVars = await listRailwayProjectEnvVars(
       { token: 'railway-token', railwayTokenType: 'account' },
       'railway-project',
@@ -770,6 +872,13 @@ describe('service provider adapters', () => {
 
     assert.equal(deployments[0].id, 'dep_1')
     assert.equal(deployments[0].commitSha, 'abc123')
+    assert.equal(deployments[0].target, 'production')
+    assert.equal(deployments[0].environmentId, 'env_1')
+    assert.equal(deployments[0].projectId, 'railway-project')
+    assert.equal(deployments[0].serviceId, 'svc_1')
+    assert.equal(deployments[0].canRedeploy, true)
+    assert.equal(deployments[0].canRollback, true)
+    assert.equal(deployments[0].deploymentStopped, false)
     assert.deepEqual(envVars.map((envVar) => `${envVar.target[0]}:${envVar.key}`).sort(), ['production:API_URL', 'production:SECRET_KEY'])
     assert.equal(envVars.find((envVar) => envVar.key === 'API_URL')?.value, 'https://api.example.com')
     assert.equal(envVars.find((envVar) => envVar.key === 'SECRET_KEY')?.value, '${{shared.SECRET_KEY}}')

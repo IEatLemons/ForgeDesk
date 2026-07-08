@@ -13,6 +13,33 @@ import { requestReleaseSuggestion, type ReleaseSuggestion } from './ai-release-a
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
 import { collectCloseGuardActivities, createCloseGuardPrompt, type CloseGuardAction, type CloseGuardActivity } from './app-close-guard'
 import { registerAppUpdateIpc } from './app-updates'
+import { inspectCliEnvironment, repairCliEnvironment, type CliEnvironmentRepairResult, type CliEnvironmentSnapshot } from './cli-environment'
+import {
+  cancelCodemagicBuild,
+  createCodemagicArtifactPublicUrl,
+  deleteCodemagicToken,
+  getCodemagicBuild,
+  getCodemagicTokenSecret,
+  listCodemagicApps,
+  listCodemagicTeams,
+  listCodemagicTokens,
+  refreshCodemagicToken,
+  saveCodemagicToken,
+  startCodemagicBuild,
+  type CodemagicApp,
+  type CodemagicArtifact,
+  type CodemagicBuild,
+  type CodemagicTokenInput,
+  type CodemagicTokenView
+} from './codemagic'
+import {
+  deleteCodemagicRepositoryBinding as deleteCodemagicRepositoryBindingRecord,
+  getCodemagicRepositoryBinding as getCodemagicRepositoryBindingRecord,
+  migrateCodemagicRepositoryBindingTable,
+  saveCodemagicRepositoryBinding as saveCodemagicRepositoryBindingRecord,
+  type CodemagicRepositoryBinding,
+  type CodemagicRepositoryBindingInput
+} from './codemagic-bindings'
 import { buildGitAuthorLookup, resolveGitAuthorDisplay, type GitAuthorLookup } from './git-author-mapping'
 import { parseControlledGitCommand, validateRepositoryRemoteName } from './git-controls'
 import {
@@ -123,6 +150,7 @@ import {
   createReleaseTagName,
   createReleaseVersionRecommendation,
   type ReleasePlan,
+  type ReleasePublishProvider,
   type ReleasePublishActionKey,
   type ReleaseScriptName,
   type ReleaseVersionRecommendation
@@ -132,6 +160,7 @@ import {
   listReleasePublishTasks as listStoredReleasePublishTasks,
   migrateReleasePublishTaskTable,
   saveReleasePublishTask,
+  type ReleasePublishArtifact,
   type ReleasePublishTaskSnapshot as StoredReleasePublishTaskSnapshot,
   type ReleasePublishTaskStatus
 } from './release-publish-tasks'
@@ -173,10 +202,10 @@ import {
   type ServiceConnectionRecord,
   type ServiceDeploymentListOptions,
   type ServiceDeploymentSummary,
+  type ServiceDeploymentActionInput,
   type ServiceExternalProjectAliasInput,
   type ServiceEnvVarRecord,
   type ServiceMonitorCheckRecord,
-  type VercelDeploymentActionInput,
   type VercelDomainConfig,
   type VercelDomainInput,
   type VercelEnvVarInput,
@@ -252,6 +281,18 @@ type RepositoryRemoteInput = {
   pushUrl?: string
 }
 
+type CodemagicAppListInput = {
+  tokenId: string
+  teamId?: string
+  name?: string
+}
+
+type CodemagicArtifactPublicUrlInput = {
+  tokenId: string
+  secureFilename: string
+  expiresAt?: number
+}
+
 type GitCommandRequest = {
   repositoryId: string
   command: string
@@ -294,6 +335,7 @@ type GitCommitMessageInput = {
 
 type RepositoryReleasePrepareInput = {
   targetVersion?: string
+  provider?: ReleasePublishProvider
 }
 
 type RepositoryReleasePreparation = {
@@ -312,6 +354,7 @@ type RepositoryReleaseSuggestionInput = {
 type RepositoryReleaseTagRecommendation = ReleaseVersionRecommendation
 
 type RepositoryReleasePublishInput = {
+  provider?: ReleasePublishProvider
   version: string
   tagName: string
   releaseTitle: string
@@ -319,20 +362,38 @@ type RepositoryReleasePublishInput = {
   commitMessage: string
   githubTokenId?: string
   githubToken?: string
+  codemagicTokenId?: string
+  codemagicTeamId?: string
+  codemagicAppId?: string
+  codemagicAppName?: string
+  codemagicWorkflowId?: string
+  codemagicWorkflowName?: string
+  codemagicDefaultBranch?: string
+  codemagicLabels?: string[]
+  saveCodemagicBinding?: boolean
   releaseActions?: ReleasePublishActionKey[]
 }
 
 type RepositoryReleasePublishResult = {
   ok: boolean
+  provider: ReleasePublishProvider
   repository: RepositoryRecord
   plan: ReleasePlan
   stdout: string
   stderr: string
   exitCode: number | null
+  externalBuildId?: string
+  externalBuildUrl?: string
+  externalStatus?: string
+  externalWorkflow?: string
+  externalBranch?: string
+  externalTag?: string
+  artifacts?: ReleasePublishArtifact[]
 }
 
 type RepositoryReleasePublishTaskSnapshot = StoredReleasePublishTaskSnapshot<ReleasePlan, RepositoryRecord> & {
   selectedScript: ReleaseScriptName
+  provider: ReleasePublishProvider
   status: ReleasePublishTaskStatus
 }
 
@@ -341,6 +402,8 @@ type ReleasePublishCallbacks = {
   onOutput?: (stream: 'stdout' | 'stderr', chunk: string) => void
   onPhase?: (phase: string, index: number, total: number) => void
   onProcess?: (child: ChildProcessWithoutNullStreams) => void
+  onCodemagicBuild?: (build: CodemagicBuild, externalBuildUrl: string) => void
+  onExternalCancel?: (cancel: () => Promise<void>) => void
   shouldCancel?: () => boolean
 }
 
@@ -543,6 +606,7 @@ const terminalService = new TerminalService({
 })
 const releasePublishTasks = new Map<string, RepositoryReleasePublishTaskSnapshot>()
 const releasePublishTaskProcesses = new Map<string, ChildProcessWithoutNullStreams>()
+const releasePublishTaskExternalCancelers = new Map<string, () => Promise<void>>()
 const releaseTaskMaxLogLength = 1024 * 1024
 const releaseTaskHistoryLimit = 20
 const releasePublishPhaseTotal = 9
@@ -618,7 +682,7 @@ function stopRunningCloseGuardActivities(): void {
     }
 
     try {
-      cancelRepositoryReleasePublishTask(task.id)
+      void cancelRepositoryReleasePublishTask(task.id).catch((error) => console.warn('Failed to cancel release task while quitting', error))
     } catch (error) {
       console.warn('Failed to cancel release task while quitting', error)
     }
@@ -1554,6 +1618,7 @@ function migrateDatabase(db: Database.Database): void {
   migrateDockerTables(db)
   migrateTerminalRemoteShortcutTables(db)
   migratePlaneIntegrationTables(db)
+  migrateCodemagicRepositoryBindingTable(db)
   migrateReleasePublishTaskTable(db)
   migrateMonthlyPerformanceTables(db)
 
@@ -3227,6 +3292,7 @@ async function prepareRepositoryRelease(repositoryId: string, input: RepositoryR
     repositoryName: repository.name,
     currentVersion: packageInfo.version,
     targetVersion: input.targetVersion,
+    provider: input.provider,
     headCommit,
     statusFileCount: status.files.length,
     localTagCommit,
@@ -3343,6 +3409,91 @@ async function resolveGithubReleaseToken(input: RepositoryReleasePublishInput): 
   return input.githubToken?.trim() || ''
 }
 
+function getReleaseProvider(input: RepositoryReleasePublishInput): ReleasePublishProvider {
+  return input.provider === 'codemagic' ? 'codemagic' : 'github'
+}
+
+function normalizeReleaseLabels(labels: string[] | undefined): string[] {
+  return Array.from(new Set((labels ?? []).map((label) => label.trim()).filter(Boolean)))
+}
+
+function createCodemagicBuildUrl(appId: string, buildId: string): string {
+  return appId && buildId ? `https://codemagic.io/app/${encodeURIComponent(appId)}/build/${encodeURIComponent(buildId)}` : ''
+}
+
+function mapCodemagicArtifactForRelease(artifact: CodemagicArtifact): ReleasePublishArtifact {
+  return {
+    name: artifact.name,
+    type: artifact.type,
+    sizeInBytes: artifact.sizeInBytes,
+    downloadUrl: artifact.downloadUrl,
+    versionCode: artifact.versionCode || undefined,
+    versionName: artifact.versionName || undefined
+  }
+}
+
+type ResolvedCodemagicReleaseConfig = {
+  token: string
+  tokenId: string
+  teamId: string
+  appId: string
+  appName: string
+  workflowId: string
+  workflowName: string
+  defaultBranch: string
+  labels: string[]
+}
+
+async function resolveCodemagicReleaseConfig(repository: RepositoryRecord, input: RepositoryReleasePublishInput): Promise<ResolvedCodemagicReleaseConfig> {
+  const existingBinding = getCodemagicRepositoryBindingRecord(getDatabase(), repository.id)
+  const tokenId = (input.codemagicTokenId || existingBinding?.tokenId || '').trim()
+  const appId = (input.codemagicAppId || existingBinding?.appId || '').trim()
+  const workflowId = (input.codemagicWorkflowId || existingBinding?.workflowId || '').trim()
+  const teamId = (input.codemagicTeamId ?? existingBinding?.teamId ?? '').trim()
+  const appName = (input.codemagicAppName ?? existingBinding?.appName ?? '').trim()
+  const workflowName = (input.codemagicWorkflowName ?? existingBinding?.workflowName ?? '').trim()
+  const defaultBranch = (input.codemagicDefaultBranch ?? existingBinding?.defaultBranch ?? repository.currentBranch ?? repository.defaultBranch ?? '').trim()
+  const labels = normalizeReleaseLabels(input.codemagicLabels?.length ? input.codemagicLabels : existingBinding?.labels)
+
+  if (!tokenId) {
+    throw new Error('请先选择 Codemagic Token')
+  }
+
+  if (!appId) {
+    throw new Error('请先绑定 Codemagic App ID')
+  }
+
+  if (!workflowId) {
+    throw new Error('请先绑定 Codemagic Workflow ID')
+  }
+
+  if (input.saveCodemagicBinding) {
+    saveCodemagicRepositoryBindingRecord(getDatabase(), {
+      repositoryId: repository.id,
+      tokenId,
+      teamId,
+      appId,
+      appName,
+      workflowId,
+      workflowName,
+      defaultBranch,
+      labels
+    })
+  }
+
+  return {
+    token: await getCodemagicTokenSecret(app.getPath('userData'), tokenId),
+    tokenId,
+    teamId,
+    appId,
+    appName,
+    workflowId,
+    workflowName,
+    defaultBranch,
+    labels
+  }
+}
+
 async function updateGithubReleaseDetails(repository: RepositoryRecord, input: RepositoryReleasePublishInput, token: string): Promise<string> {
   const githubRepository = parseGithubRemote(repository.remoteUrl || repository.remotes.find((remote) => remote.name === 'origin')?.fetchUrl || '')
 
@@ -3397,11 +3548,183 @@ function throwIfReleaseCancelled(callbacks: ReleasePublishCallbacks): void {
   }
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
+}
+
+function isCodemagicBuildActive(status: string): boolean {
+  return ['initializing', 'queued', 'preparing', 'fetching', 'testing', 'building', 'publishing', 'finishing'].includes(status.trim().toLowerCase())
+}
+
+function isCodemagicBuildSuccessful(status: string): boolean {
+  return status.trim().toLowerCase() === 'finished'
+}
+
+async function publishRepositoryCodemagicRelease(
+  repositoryId: string,
+  input: RepositoryReleasePublishInput,
+  callbacks: ReleasePublishCallbacks = {}
+): Promise<RepositoryReleasePublishResult> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const version = input.version.trim()
+  const tagName = input.tagName.trim()
+  const expectedTagName = createReleaseTagName(version)
+  const releaseActions = input.releaseActions ?? []
+  const selectedActionSet = new Set(releaseActions)
+  const phaseTotal = 7
+
+  callbacks.onPhase?.('准备 Codemagic 发布参数', 1, phaseTotal)
+  callbacks.onLog?.(`准备 Codemagic 构建 ${repository.name} ${tagName}`)
+  throwIfReleaseCancelled(callbacks)
+  const codemagic = await resolveCodemagicReleaseConfig(repository, input)
+
+  if (tagName !== expectedTagName) {
+    throw new Error(`Tag 应为 ${expectedTagName}`)
+  }
+
+  callbacks.onPhase?.('检查发布计划', 2, phaseTotal)
+  callbacks.onLog?.('检查 Codemagic 发布计划')
+  throwIfReleaseCancelled(callbacks)
+  const initialPreparation = await prepareRepositoryRelease(repositoryId, { targetVersion: version, provider: 'codemagic' })
+  const initialIssues = getUnresolvedReleaseIssues(initialPreparation.plan, releaseActions)
+
+  if (!initialPreparation.plan.canPublish && initialIssues.length > 0) {
+    throw new Error(initialIssues.join('\n') || '发布前检查未通过')
+  }
+
+  const shouldCommitWorkspaceChanges = selectedActionSet.has('commit-workspace-changes')
+  const shouldReplaceLocalTag = selectedActionSet.has('replace-local-tag')
+
+  callbacks.onPhase?.('写入版本并创建提交', 3, phaseTotal)
+  throwIfReleaseCancelled(callbacks)
+  if (initialPreparation.plan.currentVersion !== version) {
+    callbacks.onLog?.(`写入 package.json 版本：${initialPreparation.plan.currentVersion} -> ${version}`)
+    await writeRepositoryPackageVersion(repository.localPath, version)
+  }
+
+  if (shouldCommitWorkspaceChanges) {
+    callbacks.onLog?.('暂存当前工作区全部改动')
+    await runGitInPathStrict(repository.localPath, ['add', '--all'])
+  } else if (initialPreparation.plan.currentVersion !== version) {
+    callbacks.onLog?.('暂存 package.json 版本改动')
+    await runGitInPathStrict(repository.localPath, ['add', 'package.json'])
+  }
+
+  if (initialPreparation.plan.currentVersion !== version || shouldCommitWorkspaceChanges) {
+    callbacks.onLog?.(`创建版本提交：${input.commitMessage.trim() || `chore: release ${tagName}`}`)
+    await runGitInPathStrict(repository.localPath, ['commit', '-m', input.commitMessage.trim() || `chore: release ${tagName}`])
+  } else {
+    callbacks.onLog?.('版本提交已是最新，跳过提交')
+  }
+
+  callbacks.onPhase?.('处理版本 Tag', 4, phaseTotal)
+  throwIfReleaseCancelled(callbacks)
+  if (shouldReplaceLocalTag) {
+    callbacks.onLog?.(`删除本地旧 Tag：${tagName}`)
+    await runGitInPathStrict(repository.localPath, ['tag', '-d', tagName])
+  }
+
+  const finalPreparation = await prepareRepositoryRelease(repositoryId, { targetVersion: version, provider: 'codemagic' })
+  const finalIssues = getUnresolvedReleaseIssues(finalPreparation.plan, releaseActions)
+
+  if (!finalPreparation.plan.canPublish && finalIssues.length > 0) {
+    throw new Error(finalIssues.join('\n') || '版本提交后发布前检查未通过')
+  }
+
+  const localTagCommit = await runGitInPathOptional(repository.localPath, ['rev-parse', '-q', '--verify', `${tagName}^{}`])
+
+  if (!localTagCommit) {
+    callbacks.onLog?.(`创建本地 Tag：${tagName}`)
+    await runGitInPathStrict(repository.localPath, ['tag', tagName])
+  } else {
+    callbacks.onLog?.(`本地 Tag ${tagName} 已在当前提交上`)
+  }
+
+  callbacks.onPhase?.('推送分支和 Tag', 5, phaseTotal)
+  throwIfReleaseCancelled(callbacks)
+  const branch = await runGitInPath(repository.localPath, ['branch', '--show-current'])
+
+  await withSavedSshPassphrases(async (env) => {
+    if (branch) {
+      callbacks.onLog?.(`推送当前分支到 origin/${branch}`)
+      await runGitInPathStrict(repository.localPath, ['push', 'origin', branch], { env })
+    } else {
+      callbacks.onLog?.('当前不在命名分支上，跳过分支推送')
+    }
+
+    callbacks.onLog?.(`推送 Tag 到 origin/${tagName}`)
+    await runGitInPathStrict(repository.localPath, ['push', 'origin', tagName], { env })
+  })
+
+  callbacks.onPhase?.('启动 Codemagic 构建', 6, phaseTotal)
+  throwIfReleaseCancelled(callbacks)
+  callbacks.onLog?.(`启动 Codemagic workflow：${codemagic.workflowName || codemagic.workflowId}`)
+  const started = await startCodemagicBuild(codemagic.token, {
+    appId: codemagic.appId,
+    workflowId: codemagic.workflowId,
+    tag: tagName,
+    labels: ['forgedesk', repository.name, ...codemagic.labels]
+  })
+  const externalBuildUrl = createCodemagicBuildUrl(codemagic.appId, started.buildId)
+  callbacks.onLog?.(`Codemagic Build ID：${started.buildId}`)
+  callbacks.onExternalCancel?.(() => cancelCodemagicBuild(codemagic.token, started.buildId))
+
+  callbacks.onPhase?.('等待 Codemagic 构建完成', 7, phaseTotal)
+  let latestBuild: CodemagicBuild | null = null
+  let lastStatus = ''
+
+  while (true) {
+    throwIfReleaseCancelled(callbacks)
+    latestBuild = await getCodemagicBuild(codemagic.token, started.buildId)
+    callbacks.onCodemagicBuild?.(latestBuild, externalBuildUrl)
+
+    if (latestBuild.status !== lastStatus) {
+      callbacks.onLog?.(`Codemagic 状态：${latestBuild.status}`)
+      lastStatus = latestBuild.status
+    }
+
+    if (!isCodemagicBuildActive(latestBuild.status)) {
+      break
+    }
+
+    await delay(5000)
+  }
+
+  const ok = isCodemagicBuildSuccessful(latestBuild.status)
+  const artifacts = latestBuild.artifacts.map(mapCodemagicArtifactForRelease)
+  const artifactSummary = artifacts.length
+    ? artifacts.map((artifact) => `${artifact.name}${artifact.versionName ? ` (${artifact.versionName})` : ''}`).join('\n')
+    : ''
+
+  callbacks.onLog?.(ok ? 'Codemagic 构建完成' : `Codemagic 构建未成功完成：${latestBuild.status}`)
+
+  return {
+    ok,
+    provider: 'codemagic',
+    repository: await rescanRepositoryRecord(repository),
+    plan: finalPreparation.plan,
+    stdout: artifactSummary,
+    stderr: ok ? '' : `Codemagic build ${latestBuild.status}`,
+    exitCode: ok ? 0 : 1,
+    externalBuildId: latestBuild.id || started.buildId,
+    externalBuildUrl,
+    externalStatus: latestBuild.status,
+    externalWorkflow: latestBuild.workflowName || codemagic.workflowName || codemagic.workflowId,
+    externalBranch: latestBuild.branch || branch || codemagic.defaultBranch,
+    externalTag: latestBuild.tag || tagName,
+    artifacts
+  }
+}
+
 async function publishRepositoryRelease(
   repositoryId: string,
   input: RepositoryReleasePublishInput,
   callbacks: ReleasePublishCallbacks = {}
 ): Promise<RepositoryReleasePublishResult> {
+  if (getReleaseProvider(input) === 'codemagic') {
+    return publishRepositoryCodemagicRelease(repositoryId, input, callbacks)
+  }
+
   const repository = getRepositoryOrThrow(repositoryId)
   const version = input.version.trim()
   const tagName = input.tagName.trim()
@@ -3516,11 +3839,13 @@ async function publishRepositoryRelease(
   callbacks.onLog?.('刷新仓库状态')
   return {
     ok: scriptResult.ok,
+    provider: 'github',
     repository: await rescanRepositoryRecord(repository),
     plan: finalPreparation.plan,
     stdout,
     stderr,
-    exitCode: scriptResult.exitCode
+    exitCode: scriptResult.exitCode,
+    artifacts: []
   }
 }
 
@@ -3558,6 +3883,20 @@ async function runRepositoryReleasePublishTask(task: RepositoryReleasePublishTas
         releasePublishTaskProcesses.set(task.id, child)
         updateReleaseTask(task, { processPid: child.pid })
       },
+      onCodemagicBuild: (build, externalBuildUrl) => {
+        updateReleaseTask(task, {
+          externalBuildId: build.id || task.externalBuildId,
+          externalBuildUrl,
+          externalStatus: build.status,
+          externalWorkflow: build.workflowName || build.workflowId,
+          externalBranch: build.branch,
+          externalTag: build.tag,
+          artifacts: build.artifacts.map(mapCodemagicArtifactForRelease)
+        })
+      },
+      onExternalCancel: (cancel) => {
+        releasePublishTaskExternalCancelers.set(task.id, cancel)
+      },
       shouldCancel: () => task.status === 'cancelled'
     })
     const finishedAt = new Date().toISOString()
@@ -3576,17 +3915,25 @@ async function runRepositoryReleasePublishTask(task: RepositoryReleasePublishTas
     updateReleaseTask(task, {
       status: result.ok ? 'succeeded' : 'failed',
       finishedAt,
-      phase: result.ok ? '发布完成' : '发布失败',
-      phaseIndex: releasePublishPhaseTotal,
-      phaseTotal: releasePublishPhaseTotal,
+      phase: result.ok ? (result.provider === 'codemagic' ? 'Codemagic 构建完成' : '发布完成') : '发布失败',
+      phaseIndex: task.phaseTotal || releasePublishPhaseTotal,
+      phaseTotal: task.phaseTotal || releasePublishPhaseTotal,
       stdout: result.stdout,
       stderr: result.stderr,
       exitCode: result.exitCode,
       plan: result.plan,
       repository: result.repository,
-      selectedScript: result.plan.selectedScript
+      selectedScript: result.plan.selectedScript,
+      provider: result.provider,
+      externalBuildId: result.externalBuildId,
+      externalBuildUrl: result.externalBuildUrl,
+      externalStatus: result.externalStatus,
+      externalWorkflow: result.externalWorkflow,
+      externalBranch: result.externalBranch,
+      externalTag: result.externalTag,
+      artifacts: result.artifacts ?? []
     })
-    appendReleaseTaskLog(task, result.ok ? `${task.tagName} 发布流程已完成` : `${task.tagName} 发布脚本未成功完成`)
+    appendReleaseTaskLog(task, result.ok ? `${task.tagName} 发布流程已完成` : `${task.tagName} 发布任务未成功完成`)
   } catch (error) {
     const finishedAt = new Date().toISOString()
     const errorMessage = getUnknownErrorMessage(error, '发布失败')
@@ -3615,6 +3962,7 @@ async function runRepositoryReleasePublishTask(task: RepositoryReleasePublishTas
     appendReleaseTaskLog(task, `发布失败：${errorMessage}`)
   } finally {
     releasePublishTaskProcesses.delete(task.id)
+    releasePublishTaskExternalCancelers.delete(task.id)
     pruneReleaseTaskHistory()
   }
 }
@@ -3654,7 +4002,7 @@ function stopReleaseTaskProcess(task: RepositoryReleasePublishTaskSnapshot): voi
   }, 5000)
 }
 
-function cancelRepositoryReleasePublishTask(taskId: string): RepositoryReleasePublishTaskSnapshot {
+async function cancelRepositoryReleasePublishTask(taskId: string): Promise<RepositoryReleasePublishTaskSnapshot> {
   const task = releasePublishTasks.get(taskId)
 
   if (!task) {
@@ -3668,11 +4016,29 @@ function cancelRepositoryReleasePublishTask(taskId: string): RepositoryReleasePu
   updateReleaseTask(task, {
     status: 'cancelled',
     phase: '正在终止发布',
-    hint: '已请求终止发布进程。可能已经创建了 Tag、Release 或部分上传资产，重试前请检查 GitHub Releases。',
+    hint: task.provider === 'codemagic'
+      ? '已请求终止 Codemagic 构建。可能已经创建了 Tag 或部分构建产物，重试前请检查 Codemagic。'
+      : '已请求终止发布进程。可能已经创建了 Tag、Release 或部分上传资产，重试前请检查 GitHub Releases。',
     finishedAt: new Date().toISOString()
   })
-  appendReleaseTaskLog(task, '已请求终止发布进程')
-  stopReleaseTaskProcess(task)
+  appendReleaseTaskLog(task, task.provider === 'codemagic' ? '已请求终止 Codemagic 构建' : '已请求终止发布进程')
+
+  if (task.provider === 'codemagic') {
+    const externalCancel = releasePublishTaskExternalCancelers.get(task.id)
+
+    if (externalCancel) {
+      try {
+        await externalCancel()
+        appendReleaseTaskLog(task, 'Codemagic 取消请求已提交')
+      } catch (error) {
+        appendReleaseTaskLog(task, `Codemagic 取消请求提交失败：${getUnknownErrorMessage(error)}`)
+      }
+    } else {
+      appendReleaseTaskLog(task, 'Codemagic 构建 ID 尚未生成，已停止本地轮询')
+    }
+  } else {
+    stopReleaseTaskProcess(task)
+  }
 
   return getReleaseTaskSnapshot(task)
 }
@@ -3680,6 +4046,7 @@ function cancelRepositoryReleasePublishTask(taskId: string): RepositoryReleasePu
 function startRepositoryReleasePublishTask(repositoryId: string, input: RepositoryReleasePublishInput): RepositoryReleasePublishTaskSnapshot {
   const repository = getRepositoryOrThrow(repositoryId)
   const runningTask = Array.from(releasePublishTasks.values()).find((task) => task.repositoryId === repositoryId && task.status === 'running')
+  const provider = getReleaseProvider(input)
 
   if (runningTask) {
     appendReleaseTaskLog(runningTask, '已有发布任务正在运行，已返回当前任务')
@@ -3691,6 +4058,7 @@ function startRepositoryReleasePublishTask(repositoryId: string, input: Reposito
     id: randomUUID(),
     repositoryId,
     repositoryName: repository.name,
+    provider,
     version: input.version.trim(),
     tagName: input.tagName.trim(),
     releaseTitle: input.releaseTitle.trim(),
@@ -3698,7 +4066,7 @@ function startRepositoryReleasePublishTask(repositoryId: string, input: Reposito
     status: 'running',
     phase: '等待后台任务启动',
     phaseIndex: 0,
-    phaseTotal: releasePublishPhaseTotal,
+    phaseTotal: provider === 'codemagic' ? 7 : releasePublishPhaseTotal,
     hint: '后台任务已创建，马上开始检查发布条件。',
     lastOutputAt: now,
     startedAt: now,
@@ -3706,7 +4074,8 @@ function startRepositoryReleasePublishTask(repositoryId: string, input: Reposito
     log: '',
     stdout: '',
     stderr: '',
-    exitCode: null
+    exitCode: null,
+    artifacts: []
   }
 
   releasePublishTasks.set(task.id, task)
@@ -4113,6 +4482,18 @@ ipcMain.handle('repository:release-publish-task:cancel', async (_event, taskId: 
   cancelRepositoryReleasePublishTask(taskId)
 )
 
+ipcMain.handle('repository:codemagic-binding:get', async (_event, repositoryId: string): Promise<CodemagicRepositoryBinding | null> =>
+  getCodemagicRepositoryBindingRecord(getDatabase(), repositoryId)
+)
+
+ipcMain.handle('repository:codemagic-binding:save', async (_event, input: CodemagicRepositoryBindingInput): Promise<CodemagicRepositoryBinding> =>
+  saveCodemagicRepositoryBindingRecord(getDatabase(), input)
+)
+
+ipcMain.handle('repository:codemagic-binding:delete', async (_event, repositoryId: string): Promise<void> =>
+  deleteCodemagicRepositoryBindingRecord(getDatabase(), repositoryId)
+)
+
 ipcMain.handle('repository:conflict:apply', async (_event, repositoryId: string, filePath: string, content: string): Promise<GitOperationResult> =>
   applyRepositoryConflictResolution(repositoryId, filePath, content)
 )
@@ -4248,7 +4629,7 @@ ipcMain.handle(
 
 ipcMain.handle(
   'service:deployment:action',
-  async (_event, serviceId: string, input: VercelDeploymentActionInput): Promise<ProjectServiceRecord> =>
+  async (_event, serviceId: string, input: ServiceDeploymentActionInput): Promise<ProjectServiceRecord> =>
     runServiceDeploymentActionRecord(getDatabase(), serviceId, input)
 )
 
@@ -4406,6 +4787,33 @@ ipcMain.handle('settings:github-tokens:refresh', async (_event, tokenId: string)
 
 ipcMain.handle('settings:github-tokens:delete', async (_event, tokenId: string): Promise<GithubTokenView[]> => deleteGithubToken(app.getPath('userData'), tokenId))
 
+ipcMain.handle('settings:codemagic-tokens:list', async (): Promise<CodemagicTokenView[]> => listCodemagicTokens(app.getPath('userData')))
+
+ipcMain.handle('settings:codemagic-tokens:save', async (_event, input: CodemagicTokenInput): Promise<CodemagicTokenView[]> => saveCodemagicToken(app.getPath('userData'), input))
+
+ipcMain.handle('settings:codemagic-tokens:refresh', async (_event, tokenId: string): Promise<CodemagicTokenView[]> => refreshCodemagicToken(app.getPath('userData'), tokenId))
+
+ipcMain.handle('settings:codemagic-tokens:delete', async (_event, tokenId: string): Promise<CodemagicTokenView[]> => deleteCodemagicToken(app.getPath('userData'), tokenId))
+
+ipcMain.handle('codemagic:teams:list', async (_event, tokenId: string) =>
+  listCodemagicTeams(await getCodemagicTokenSecret(app.getPath('userData'), tokenId))
+)
+
+ipcMain.handle('codemagic:apps:list', async (_event, input: CodemagicAppListInput): Promise<CodemagicApp[]> =>
+  listCodemagicApps(await getCodemagicTokenSecret(app.getPath('userData'), input.tokenId), {
+    teamId: input.teamId,
+    name: input.name
+  })
+)
+
+ipcMain.handle('codemagic:artifact:public-url', async (_event, input: CodemagicArtifactPublicUrlInput): Promise<{ url: string; expiresAt: string }> =>
+  createCodemagicArtifactPublicUrl(
+    await getCodemagicTokenSecret(app.getPath('userData'), input.tokenId),
+    input.secureFilename,
+    input.expiresAt ?? Math.floor(Date.now() / 1000) + 60 * 60
+  )
+)
+
 ipcMain.handle('ssh:generate-key', async (_event, input: string | SshKeyGenerationInput): Promise<GitSetupStatus['sshPublicKeys'][number]> => {
   const comment = (typeof input === 'string' ? input : input.email).trim()
 
@@ -4540,6 +4948,10 @@ ipcMain.handle('tools:rsa-private-keys:update', async (_event, input: RsaPrivate
 ipcMain.handle('tools:rsa-private-keys:delete', async (_event, id: string): Promise<RsaPrivateKeyRecord[]> => {
   return deleteRsaPrivateKeyRecord(getDatabase(), id)
 })
+
+ipcMain.handle('tools:cli-environment:inspect', async (): Promise<CliEnvironmentSnapshot> => inspectCliEnvironment())
+
+ipcMain.handle('tools:cli-environment:repair', async (): Promise<CliEnvironmentRepairResult> => repairCliEnvironment())
 
 ipcMain.handle('tools:monthly-performance:preview', async (_event, input: MonthlyPerformancePreviewInput): Promise<MonthlyPerformancePreview> => {
   return createMonthlyPerformancePreview(input)

@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
+  createDockerDevContainerCliArgs,
+  createDockerDevEnvironment,
+  createDockerDevEnvironmentConfig,
+  createDockerDevEnvironmentRunSteps,
   createDockerSnapshot,
   createDockerCommandRunner,
   deleteDockerResourceNote,
+  formatDockerProcessCommand,
   listDockerResourceNotes,
   migrateDockerTables,
   parseDockerContainerLines,
@@ -95,6 +103,110 @@ function createDatabase(): TestDatabase {
 }
 
 describe('docker local inventory', () => {
+  it('creates a root devcontainer config with Docker-in-Docker enabled by default', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgedesk-docker-dev-env-'))
+
+    try {
+      const result = await createDockerDevEnvironment({
+        hostPath: root,
+        name: 'API Dev',
+        workspaceFolder: '/workspace',
+        system: 'ubuntu-24.04'
+      })
+      const config = JSON.parse(await readFile(result.configPath, 'utf8'))
+
+      assert.equal(result.configPath, join(root, '.devcontainer', 'devcontainer.json'))
+      assert.equal(config.name, 'API Dev')
+      assert.equal(config.image, 'mcr.microsoft.com/devcontainers/base:ubuntu-24.04')
+      assert.equal(config.remoteUser, 'root')
+      assert.equal(config.containerUser, 'root')
+      assert.equal(config.updateRemoteUserUID, false)
+      assert.equal(config.workspaceFolder, '/workspace')
+      assert.equal(config.workspaceMount, 'source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached')
+      assert.match(result.containerName, /^forgedesk-dev-api-dev-[a-f0-9]{8}$/)
+      assert.equal(config.privileged, true)
+      assert.deepEqual(config.features, {
+        'ghcr.io/devcontainers/features/docker-in-docker:2': {
+          version: 'latest',
+          moby: true
+        }
+      })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('builds devcontainer config without Docker-in-Docker when disabled', () => {
+    const result = createDockerDevEnvironmentConfig({
+      hostPath: '/Users/stone/project',
+      workspaceFolder: '/workspaces/project',
+      system: 'node-22',
+      enableDockerInDocker: false
+    })
+
+    assert.equal(result.image, 'mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm')
+    assert.equal('features' in result.config, false)
+    assert.equal('privileged' in result.config, false)
+    assert.match(result.content, /"remoteUser": "root"/)
+  })
+
+  it('builds devcontainer and docker run commands for a visible root container', () => {
+    const result = createDockerDevEnvironmentConfig({
+      hostPath: '/Users/stone/project',
+      name: 'Project Dev',
+      workspaceFolder: '/workspace',
+      system: 'ubuntu-24.04'
+    })
+    const cliArgs = createDockerDevContainerCliArgs(result)
+    const steps = createDockerDevEnvironmentRunSteps(result)
+    const runStep = steps.at(-1)
+
+    assert.deepEqual(cliArgs.slice(0, 5), ['up', '--workspace-folder', '/Users/stone/project', '--config', '/Users/stone/project/.devcontainer/devcontainer.json'])
+    assert.ok(cliArgs.includes('--remove-existing-container'))
+    assert.equal(steps[0].args.join(' '), 'pull mcr.microsoft.com/devcontainers/base:ubuntu-24.04')
+    assert.equal(steps[1].allowMissingContainer, true)
+    assert.ok(runStep)
+    assert.ok(runStep.args.includes('-d'))
+    assert.ok(runStep.args.includes('--name'))
+    assert.ok(runStep.args.includes(result.containerName))
+    assert.ok(runStep.args.includes('--user'))
+    assert.ok(runStep.args.includes('root'))
+    assert.ok(runStep.args.includes('--privileged'))
+    assert.ok(runStep.args.includes(`type=bind,source=/Users/stone/project,target=/workspace`))
+    assert.ok(runStep.args.includes('forgedesk.dev-environment=true'))
+    assert.match(formatDockerProcessCommand(runStep.file, runStep.args), /docker run -d/)
+  })
+
+  it('does not overwrite an existing devcontainer config unless requested', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgedesk-docker-dev-env-'))
+
+    try {
+      const devcontainerDir = join(root, '.devcontainer')
+      await mkdir(devcontainerDir, { recursive: true })
+      await writeFile(join(devcontainerDir, 'devcontainer.json'), '{}')
+
+      await assert.rejects(
+        () =>
+          createDockerDevEnvironment({
+            hostPath: root,
+            system: 'debian-12'
+          }),
+        /已存在/
+      )
+
+      await createDockerDevEnvironment({
+        hostPath: root,
+        system: 'debian-12',
+        overwrite: true
+      })
+      const config = JSON.parse(await readFile(join(devcontainerDir, 'devcontainer.json'), 'utf8'))
+
+      assert.equal(config.image, 'mcr.microsoft.com/devcontainers/base:debian-12')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('adds command context and Docker-specific hints when a Docker command fails', async () => {
     const runner = createDockerCommandRunner((_file, _args, _options, callback) => {
       callback(new Error('Command failed: docker container ls --all'), '', 'permission denied while trying to connect to the docker API')

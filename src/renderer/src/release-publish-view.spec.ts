@@ -98,6 +98,42 @@ describe('release publish view model', () => {
     assert.equal(platforms[0]?.name, 'GitHub Releases')
     assert.equal(platforms[0]?.statusLabel, '已对接')
     assert.equal(platforms[0]?.disabled, false)
+    assert.equal(platforms[1]?.key, 'codemagic')
+    assert.equal(platforms[1]?.statusLabel, '待配置')
+  })
+
+  it('requires Codemagic binding before remote builds', () => {
+    const plan = {
+      repositoryName: 'Mobile',
+      provider: 'codemagic' as const,
+      currentVersion: '2.0.0',
+      suggestedVersion: '2.0.1',
+      suggestedTagName: 'v2.0.1',
+      selectedScript: '' as const,
+      needsVersionBump: true,
+      canPublish: true,
+      issues: [],
+      warnings: [],
+      availableActions: [],
+      documentationSources: []
+    }
+    const blocked = createReleasePublishViewModel({
+      plan,
+      provider: 'codemagic',
+      githubToken: '',
+      codemagicReady: false
+    })
+    const allowed = createReleasePublishViewModel({
+      plan,
+      provider: 'codemagic',
+      githubToken: '',
+      codemagicReady: true
+    })
+
+    assert.equal(blocked.primaryLabel, '配置 Codemagic')
+    assert.equal(blocked.primaryDisabled, true)
+    assert.equal(allowed.primaryLabel, '构建 v2.0.1')
+    assert.equal(allowed.primaryDisabled, false)
   })
 
   it('allows publishing when every release issue is selected for publish-time handling', () => {

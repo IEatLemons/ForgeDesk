@@ -81,6 +81,13 @@ import type {
   AppRuntimeInfo,
   AiSettingsView,
   AiConflictSuggestion,
+  CliEnvironmentIssue,
+  CliEnvironmentRepairResult,
+  CliEnvironmentSnapshot,
+  CodemagicApp,
+  CodemagicRepositoryBinding,
+  CodemagicTeam,
+  CodemagicTokenView,
   ContributorSummary,
   GitCommandResult,
   GitBranchSwitchInput,
@@ -189,6 +196,7 @@ import {
   type PasswordToolMode
 } from './password-generator'
 import {
+  applyBranchColorsToGraphRows,
   buildBranchGroups,
   createGraphRows,
   currentBranchRefColor,
@@ -201,6 +209,7 @@ import {
   getCommitAuthorFilterValue,
   getGraphCellBottomLaneIndexes,
   getGitGraphColumnWidth,
+  getGraphLaneColor,
   isWorkingTreeCommit,
   getNextVisibleCommitCount,
   normalizeGitLogRefreshPreferences,
@@ -209,7 +218,7 @@ import {
   prependWorkingTreeCommit,
   gitGraphLaneWidth,
   workingTreeCommitHash,
-  type GitGraphRow,
+  type BranchColoredGitGraphRow,
   type GitLogRefreshPreferences
 } from './git-log-view'
 import {
@@ -237,9 +246,11 @@ import {
   createReleasePublishTaskView,
   createReleasePublishViewModel,
   updateDefaultReleaseMetadataForVersionChange,
-  type ReleasePublishActionKey
+  type ReleasePublishActionKey,
+  type ReleasePublishProvider
 } from './release-publish-view'
 import {
+  canRunServiceDeploymentAction,
   createDeploymentIssueSummary,
   createDeploymentFilterOptions,
   createDeploymentRows,
@@ -262,6 +273,7 @@ import {
   type DeploymentIssueSummary,
   type DeploymentRefreshCursor,
   type DeploymentRefreshError,
+  type ServiceDeploymentAction,
   type SystemLogEntry,
   type SystemLogLevel
 } from './service-deployments-view'
@@ -312,7 +324,13 @@ type SshPassphraseForm = {
   confirmPassphrase: string
 }
 
-type SettingsModuleKey = 'overview' | 'appearance' | 'git' | 'github' | 'private' | 'public' | 'config' | 'services' | 'plane' | 'ai' | 'updates' | 'log-refresh'
+type SettingsModuleKey = 'overview' | 'appearance' | 'git' | 'github' | 'codemagic' | 'private' | 'public' | 'config' | 'services' | 'plane' | 'ai' | 'updates' | 'log-refresh'
+type SettingsOverviewModuleKey = Exclude<SettingsModuleKey, 'overview'>
+type SettingsOverviewCategory = {
+  title: string
+  description: string
+  keys: SettingsOverviewModuleKey[]
+}
 
 type AppProps = {
   themePreference: ThemePreference
@@ -345,6 +363,11 @@ type AiSettingsForm = {
 }
 
 type GithubTokenForm = {
+  name: string
+  token?: string
+}
+
+type CodemagicTokenForm = {
   name: string
   token?: string
 }
@@ -1096,7 +1119,6 @@ function getProjectRemoteAlignmentStats(repositories: Repository[]): {
   )
 }
 
-const graphLaneColors = ['#1677ff', '#13c2c2', '#722ed1', '#fa8c16', '#52c41a', '#eb2f96', '#2f54eb']
 const graphRowHeight = 46
 const graphRowMiddle = graphRowHeight / 2
 const graphLineOverflow = 2
@@ -1106,10 +1128,6 @@ const commitGraphBatchSize = 60
 type RepositoryLogCommit = GitCommit & {
   isWorkingTreeCommit?: boolean
   worktreeFiles?: GitCommitFileChange[]
-}
-
-function getGraphLaneColor(index: number): string {
-  return graphLaneColors[index % graphLaneColors.length]
 }
 
 function createGraphParentPath({
@@ -1131,7 +1149,7 @@ function createGraphParentPath({
   ].join(' ')
 }
 
-function CommitGraphCell({ commit }: { commit: GitGraphRow<RepositoryLogCommit> }): JSX.Element {
+function CommitGraphCell({ commit }: { commit: BranchColoredGitGraphRow<RepositoryLogCommit> }): JSX.Element {
   const isMerge = commit.parentHashes.length > 1
   const isWorkingTree = isWorkingTreeCommit(commit)
   const graphCellBottomLaneIndexes = getGraphCellBottomLaneIndexes(commit)
@@ -1147,7 +1165,7 @@ function CommitGraphCell({ commit }: { commit: GitGraphRow<RepositoryLogCommit> 
   const svgWidth = Math.max(42, laneCount * gitGraphLaneWidth)
   const xForLane = (index: number): number => index * gitGraphLaneWidth + gitGraphLaneWidth / 2
   const parentEdges = commit.graphParentEdges.filter((edge) => edge.fromLaneIndex !== edge.toLaneIndex)
-  const getLaneColor = (laneIndex: number): string => (isWorkingTree ? '#98a2b3' : getGraphLaneColor(laneIndex))
+  const getLaneColor = (laneIndex: number): string => (isWorkingTree ? '#98a2b3' : commit.graphLaneColors[laneIndex] ?? getGraphLaneColor(laneIndex))
 
   return (
     <div className={isWorkingTree ? 'commit-graph-cell is-working-tree' : 'commit-graph-cell'}>
@@ -1219,7 +1237,7 @@ function CommitGraphContinuation({
   commit,
   columnWidth
 }: {
-  commit: GitGraphRow<RepositoryLogCommit>
+  commit: BranchColoredGitGraphRow<RepositoryLogCommit>
   columnWidth: number
 }): JSX.Element {
   const isWorkingTree = isWorkingTreeCommit(commit)
@@ -1241,7 +1259,7 @@ function CommitGraphContinuation({
           <line
             key={`expanded-bottom-${laneIndex}`}
             className={laneIndex === commit.graphLaneIndex ? 'commit-graph-line is-active' : 'commit-graph-line'}
-            stroke={isWorkingTree ? '#98a2b3' : getGraphLaneColor(laneIndex)}
+            stroke={isWorkingTree ? '#98a2b3' : commit.graphLaneColors[laneIndex] ?? getGraphLaneColor(laneIndex)}
             x1={xForLane(laneIndex)}
             x2={xForLane(laneIndex)}
             y1={-graphLineOverflow}
@@ -1304,7 +1322,7 @@ function CommitInlineDetail({
   currentBranch,
   canOpenDiff
 }: {
-  commit: GitGraphRow<RepositoryLogCommit>
+  commit: BranchColoredGitGraphRow<RepositoryLogCommit>
   files: GitCommitFileChange[]
   selectedFile: GitCommitFileChange | null
   loadingFiles: boolean
@@ -1855,6 +1873,7 @@ function SettingsPanel({
   const [sshPassphraseForm] = Form.useForm<SshPassphraseForm>()
   const [aiSettingsForm] = Form.useForm<AiSettingsForm>()
   const [githubTokenForm] = Form.useForm<GithubTokenForm>()
+  const [codemagicTokenForm] = Form.useForm<CodemagicTokenForm>()
   const [planeSettingsForm] = Form.useForm<PlaneSettingsForm>()
   const [gitLogRefreshPreferences, setGitLogRefreshPreferences] = useGitLogRefreshPreferences()
   const [gitStatus, setGitStatus] = useState<GitSetupStatus | null>(null)
@@ -1862,6 +1881,8 @@ function SettingsPanel({
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
   const [githubTokens, setGithubTokens] = useState<GithubTokenView[]>([])
   const [editingGithubToken, setEditingGithubToken] = useState<GithubTokenView | null>(null)
+  const [codemagicTokens, setCodemagicTokens] = useState<CodemagicTokenView[]>([])
+  const [editingCodemagicToken, setEditingCodemagicToken] = useState<CodemagicTokenView | null>(null)
   const [planeSettings, setPlaneSettings] = useState<PlaneSettings | null>(null)
   const [planeTestResult, setPlaneTestResult] = useState<PlaneConnectionTestResult | null>(null)
   const [sshConfigContent, setSshConfigContent] = useState('')
@@ -1875,12 +1896,15 @@ function SettingsPanel({
   const [loadingSshConfig, setLoadingSshConfig] = useState(false)
   const [loadingAiSettings, setLoadingAiSettings] = useState(false)
   const [loadingGithubTokens, setLoadingGithubTokens] = useState(false)
+  const [loadingCodemagicTokens, setLoadingCodemagicTokens] = useState(false)
   const [loadingPlaneSettings, setLoadingPlaneSettings] = useState(false)
   const [savingIdentity, setSavingIdentity] = useState(false)
   const [savingSshConfig, setSavingSshConfig] = useState(false)
   const [savingAiSettings, setSavingAiSettings] = useState(false)
   const [savingGithubToken, setSavingGithubToken] = useState(false)
   const [checkingGithubTokenId, setCheckingGithubTokenId] = useState<string | null>(null)
+  const [savingCodemagicToken, setSavingCodemagicToken] = useState(false)
+  const [checkingCodemagicTokenId, setCheckingCodemagicTokenId] = useState<string | null>(null)
   const [savingPlaneSettings, setSavingPlaneSettings] = useState(false)
   const [testingPlaneSettings, setTestingPlaneSettings] = useState(false)
   const [generatingSsh, setGeneratingSsh] = useState(false)
@@ -2007,6 +2031,23 @@ function SettingsPanel({
     }
   }
 
+  async function refreshCodemagicTokens(): Promise<void> {
+    if (!window.forgeDesk) {
+      setCodemagicTokens([])
+      return
+    }
+
+    setLoadingCodemagicTokens(true)
+
+    try {
+      setCodemagicTokens(await window.forgeDesk.listCodemagicTokens())
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingCodemagicTokens(false)
+    }
+  }
+
   async function refreshPlaneSettings(): Promise<void> {
     if (!window.forgeDesk) {
       setPlaneSettings(null)
@@ -2032,6 +2073,7 @@ function SettingsPanel({
     refreshSshConfig()
     refreshAiSettings()
     refreshGithubTokens()
+    refreshCodemagicTokens()
     refreshPlaneSettings()
   }, [])
 
@@ -2040,6 +2082,7 @@ function SettingsPanel({
   const gitReady = Boolean(gitStatus?.gitAvailable && gitStatus.userName && gitStatus.userEmail)
   const aiReady = isAiSettingsReady(aiSettings)
   const githubTokenReady = githubTokens.length > 0
+  const codemagicTokenReady = codemagicTokens.length > 0
   const planeReady = isPlaneSettingsReady(planeSettings)
   const sshReady = sshPrivateKeys.length + sshPublicKeys.length > 0
   const sshPassphraseCount = sshPrivateKeys.filter((key) => key.hasPassphrase).length
@@ -2173,6 +2216,40 @@ function SettingsPanel({
     }
   }
 
+  async function saveCodemagicToken(): Promise<void> {
+    const values = await codemagicTokenForm.validateFields()
+
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中保存 Codemagic Token')
+      return
+    }
+
+    const token = values.token?.trim()
+
+    if (!token && !editingCodemagicToken) {
+      message.warning('请填写 Codemagic API Token')
+      return
+    }
+
+    setSavingCodemagicToken(true)
+
+    try {
+      const tokens = await window.forgeDesk.saveCodemagicToken({
+        id: editingCodemagicToken?.id,
+        name: values.name.trim(),
+        token: token || undefined
+      })
+      setCodemagicTokens(tokens)
+      setEditingCodemagicToken(null)
+      codemagicTokenForm.resetFields()
+      message.success(token ? 'Codemagic Token 已保存，账号信息已更新' : 'Codemagic Token 已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingCodemagicToken(false)
+    }
+  }
+
   function editGithubToken(token: GithubTokenView): void {
     setEditingGithubToken(token)
     githubTokenForm.setFieldsValue({
@@ -2184,6 +2261,19 @@ function SettingsPanel({
   function cancelGithubTokenEdit(): void {
     setEditingGithubToken(null)
     githubTokenForm.resetFields()
+  }
+
+  function editCodemagicToken(token: CodemagicTokenView): void {
+    setEditingCodemagicToken(token)
+    codemagicTokenForm.setFieldsValue({
+      name: token.name,
+      token: ''
+    })
+  }
+
+  function cancelCodemagicTokenEdit(): void {
+    setEditingCodemagicToken(null)
+    codemagicTokenForm.resetFields()
   }
 
   async function refreshGithubTokenScopes(tokenId: string): Promise<void> {
@@ -2204,6 +2294,24 @@ function SettingsPanel({
     }
   }
 
+  async function refreshCodemagicTokenInfo(tokenId: string): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中刷新 Codemagic Token')
+      return
+    }
+
+    setCheckingCodemagicTokenId(tokenId)
+
+    try {
+      setCodemagicTokens(await window.forgeDesk.refreshCodemagicToken(tokenId))
+      message.success('Codemagic Token 信息已更新')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setCheckingCodemagicTokenId(null)
+    }
+  }
+
   async function deleteGithubToken(tokenId: string): Promise<void> {
     if (!window.forgeDesk) {
       message.warning('请在 ForgeDesk 桌面应用中删除 GitHub Token')
@@ -2219,6 +2327,26 @@ function SettingsPanel({
       }
 
       message.success('GitHub Token 已删除')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    }
+  }
+
+  async function deleteCodemagicToken(tokenId: string): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中删除 Codemagic Token')
+      return
+    }
+
+    try {
+      const tokens = await window.forgeDesk.deleteCodemagicToken(tokenId)
+      setCodemagicTokens(tokens)
+
+      if (editingCodemagicToken?.id === tokenId) {
+        cancelCodemagicTokenEdit()
+      }
+
+      message.success('Codemagic Token 已删除')
     } catch (error) {
       message.error(getErrorMessage(error))
     }
@@ -2623,7 +2751,7 @@ function SettingsPanel({
   }
 
   const settingsModules: Array<{
-    key: Exclude<SettingsModuleKey, 'overview'>
+    key: SettingsOverviewModuleKey
     title: string
     description: string
     icon: JSX.Element
@@ -2661,6 +2789,14 @@ function SettingsPanel({
       icon: <GithubOutlined />,
       meta: githubTokenReady ? `${githubTokens.length} 个` : '需要配置',
       tone: githubTokenReady ? 'ok' : 'warning'
+    },
+    {
+      key: 'codemagic',
+      title: 'Codemagic Token',
+      description: '保存移动端远程构建和包同步使用的 API Token。',
+      icon: <UploadOutlined />,
+      meta: codemagicTokenReady ? `${codemagicTokens.length} 个` : '需要配置',
+      tone: codemagicTokenReady ? 'ok' : 'warning'
     },
     {
       key: 'private',
@@ -2719,6 +2855,29 @@ function SettingsPanel({
       icon: <SettingOutlined />,
       meta: aiReady ? '已启用' : aiSettings?.apiKeyConfigured ? '未启用' : '需要配置',
       tone: aiReady ? 'ok' : aiSettings?.apiKeyConfigured ? 'neutral' : 'warning'
+    }
+  ]
+  const settingsModuleByKey = new Map(settingsModules.map((module) => [module.key, module]))
+  const settingsOverviewCategories: SettingsOverviewCategory[] = [
+    {
+      title: '个性化',
+      description: '控制界面外观和日常视图刷新。',
+      keys: ['appearance', 'log-refresh']
+    },
+    {
+      title: 'Git 与 SSH',
+      description: '管理提交身份、密钥和 SSH 连接配置。',
+      keys: ['git', 'private', 'public', 'config']
+    },
+    {
+      title: '集成与服务',
+      description: '配置外部账号、服务平台、Plane 和 AI 能力。',
+      keys: ['github', 'codemagic', 'services', 'plane', 'ai']
+    },
+    {
+      title: '应用维护',
+      description: '检查、下载并安装 ForgeDesk 新版本。',
+      keys: ['updates']
     }
   ]
 
@@ -3288,6 +3447,104 @@ function SettingsPanel({
     )
   }
 
+  function renderCodemagicTokensModule(): JSX.Element {
+    const codemagicTokenColumns: ColumnsType<CodemagicTokenView> = [
+      {
+        title: '名称',
+        key: 'name',
+        render: (_, token) => (
+          <Space direction="vertical" size={2}>
+            <Typography.Text strong>{token.name}</Typography.Text>
+            <Typography.Text type="secondary">
+              {token.userId ? `User ${token.userId}` : '未读取账号'} · ****{token.tokenLastFour || '----'}
+            </Typography.Text>
+          </Space>
+        )
+      },
+      {
+        title: '可见资源',
+        key: 'resources',
+        render: (_, token) => (
+          <Space wrap size={[4, 4]}>
+            <Tag color="blue">{token.teamCount} 个团队</Tag>
+            <Tag color="green">{token.appCount} 个应用</Tag>
+            <Typography.Text type="secondary">{token.permissionSummary}</Typography.Text>
+          </Space>
+        )
+      },
+      {
+        title: '校验时间',
+        key: 'checkedAt',
+        width: 190,
+        render: (_, token) => <Typography.Text type="secondary">{token.lastCheckedAt ? new Date(token.lastCheckedAt).toLocaleString() : '未校验'}</Typography.Text>
+      },
+      {
+        title: '操作',
+        key: 'actions',
+        width: 250,
+        render: (_, token) => (
+          <Space wrap>
+            <Button size="small" icon={<EditOutlined />} onClick={() => editCodemagicToken(token)}>
+              编辑
+            </Button>
+            <Button size="small" icon={<ReloadOutlined />} loading={checkingCodemagicTokenId === token.id} onClick={() => refreshCodemagicTokenInfo(token.id)}>
+              刷新信息
+            </Button>
+            <Popconfirm title="删除这个 Codemagic Token？" okText="删除" cancelText="取消" onConfirm={() => deleteCodemagicToken(token.id)}>
+              <Button size="small" danger icon={<DeleteOutlined />}>
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+        )
+      }
+    ]
+
+    return (
+      <div className="panel settings-module-panel">
+        {renderModuleHeader(
+          'Codemagic Token',
+          '保存触发 Codemagic workflow、读取构建状态和同步构建包使用的 API Token。',
+          <Button icon={<ReloadOutlined />} loading={loadingCodemagicTokens} onClick={refreshCodemagicTokens}>
+            重新读取
+          </Button>
+        )}
+        <Alert
+          className="settings-module-alert"
+          type={codemagicTokenReady ? 'success' : 'info'}
+          showIcon
+          message={codemagicTokenReady ? `已保存 ${codemagicTokens.length} 个 Codemagic Token` : '保存 Token 后可以在发布时绑定 Codemagic App'}
+          description="Codemagic API Token 可在 Codemagic 的 Teams / Personal Account / Integrations / Codemagic API 页面查看。ForgeDesk 只在本机保存密钥。"
+        />
+        <Form form={codemagicTokenForm} layout="vertical" className="settings-management-form github-token-form">
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入 Token 名称' }]}>
+            <Input placeholder="例如 移动端构建 Token" />
+          </Form.Item>
+          <Form.Item name="token" label="Codemagic API Token">
+            <Input.Password placeholder={editingCodemagicToken ? '留空只更新名称' : 'Codemagic API Token'} />
+          </Form.Item>
+          <Space wrap>
+            <Button type="primary" icon={<SaveOutlined />} loading={savingCodemagicToken} onClick={saveCodemagicToken}>
+              {editingCodemagicToken ? '保存修改' : '保存 Token'}
+            </Button>
+            {editingCodemagicToken ? <Button onClick={cancelCodemagicTokenEdit}>取消编辑</Button> : null}
+          </Space>
+        </Form>
+        <Table
+          rowKey="id"
+          size="small"
+          className="github-token-table"
+          loading={loadingCodemagicTokens}
+          columns={codemagicTokenColumns}
+          dataSource={codemagicTokens}
+          pagination={false}
+          scroll={{ x: 860 }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无 Codemagic Token" /> }}
+        />
+      </div>
+    )
+  }
+
   function renderAiModule(): JSX.Element {
     return (
       <AiSettingsSection
@@ -3375,32 +3632,52 @@ function SettingsPanel({
 
   function renderOverview(): JSX.Element {
     return (
-      <div className="settings-module-grid">
-        {settingsModules.map((module) => (
-          <button
-            className={`settings-entry-card settings-entry-card-${module.tone}`}
-            key={module.key}
-            type="button"
-            onClick={() => setActiveSettingsModule(module.key)}
-          >
-            <span className="settings-entry-icon">{module.icon}</span>
-            <span className="settings-entry-copy">
-              <span className="settings-entry-title-row">
-                <Typography.Text strong className="settings-entry-title">
-                  {module.title}
-                </Typography.Text>
-                <Tag
-                  className="settings-entry-meta"
-                  color={module.tone === 'ok' ? 'green' : module.tone === 'warning' ? 'gold' : module.tone === 'danger' ? 'red' : 'default'}
-                >
-                  {module.meta}
-                </Tag>
-              </span>
-              <Typography.Text className="settings-entry-description" type="secondary">
-                {module.description}
-              </Typography.Text>
-            </span>
-          </button>
+      <div className="settings-category-list">
+        {settingsOverviewCategories.map((category) => (
+          <section className="settings-category-section" key={category.title}>
+            <div className="settings-category-heading">
+              <Typography.Title className="settings-category-title" level={3}>
+                {category.title}
+              </Typography.Title>
+              <Typography.Text type="secondary">{category.description}</Typography.Text>
+            </div>
+            <div className="settings-module-grid">
+              {category.keys.map((key) => {
+                const module = settingsModuleByKey.get(key)
+
+                if (!module) {
+                  return null
+                }
+
+                return (
+                  <button
+                    className={`settings-entry-card settings-entry-card-${module.tone}`}
+                    key={module.key}
+                    type="button"
+                    onClick={() => setActiveSettingsModule(module.key)}
+                  >
+                    <span className="settings-entry-icon">{module.icon}</span>
+                    <span className="settings-entry-copy">
+                      <span className="settings-entry-title-row">
+                        <Typography.Text strong className="settings-entry-title">
+                          {module.title}
+                        </Typography.Text>
+                        <Tag
+                          className="settings-entry-meta"
+                          color={module.tone === 'ok' ? 'green' : module.tone === 'warning' ? 'gold' : module.tone === 'danger' ? 'red' : 'default'}
+                        >
+                          {module.meta}
+                        </Tag>
+                      </span>
+                      <Typography.Text className="settings-entry-description" type="secondary">
+                        {module.description}
+                      </Typography.Text>
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </section>
         ))}
       </div>
     )
@@ -3416,6 +3693,8 @@ function SettingsPanel({
         return renderLogRefreshModule()
       case 'github':
         return renderGithubTokensModule()
+      case 'codemagic':
+        return renderCodemagicTokensModule()
       case 'private':
         return renderPrivateModule()
       case 'public':
@@ -4819,6 +5098,48 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
   )
 }
 
+const serviceDeploymentActionLabels: Record<ServiceDeploymentAction, string> = {
+  deploy: '部署',
+  redeploy: '重新部署',
+  restart: '重启部署',
+  stop: '停止部署',
+  cancel: '取消部署',
+  promote: '提升为生产',
+  rollback: '回滚到此部署'
+}
+
+function isDangerousDeploymentAction(action: ServiceDeploymentAction): boolean {
+  return ['cancel', 'promote', 'rollback', 'stop'].includes(action)
+}
+
+function getDeploymentActionConfirmContent(provider: ServiceProviderType, action: ServiceDeploymentAction): string {
+  if (provider === 'railway') {
+    if (action === 'deploy') {
+      return '这个操作会在 Railway 环境中触发一次新部署。'
+    }
+
+    if (action === 'restart') {
+      return '这个操作会重启正在运行的 Railway 部署，不会重新构建。'
+    }
+
+    if (action === 'stop') {
+      return '这个操作会停止当前正在运行的 Railway 部署。'
+    }
+
+    if (action === 'cancel') {
+      return '这个操作会取消正在构建、部署、等待或排队中的 Railway 部署。'
+    }
+
+    if (action === 'rollback') {
+      return '这个操作会把 Railway 环境回滚到该部署。'
+    }
+
+    return '这个操作会提交到 Railway。'
+  }
+
+  return action === 'promote' || action === 'rollback' ? '这个操作会改变生产流量指向。' : '操作会提交到 Vercel。'
+}
+
 function ServiceDetailDrawer({
   service,
   open,
@@ -4934,23 +5255,18 @@ function ServiceDetailDrawer({
     }
   }
 
-  function runDeploymentAction(deployment: ServiceDeploymentSummary, action: 'redeploy' | 'cancel' | 'promote' | 'rollback'): void {
+  function runDeploymentAction(deployment: ServiceDeploymentSummary, action: ServiceDeploymentAction): void {
     if (!activeService || !window.forgeDesk) {
       return
     }
 
-    const actionLabels = {
-      redeploy: '重新部署',
-      cancel: '取消部署',
-      promote: '提升为生产',
-      rollback: '回滚到此部署'
-    }
-    const dangerous = action !== 'redeploy'
+    const actionLabel = serviceDeploymentActionLabels[action]
+    const dangerous = isDangerousDeploymentAction(action)
 
     Modal.confirm({
-      title: `${actionLabels[action]} ${deployment.id}？`,
-      content: action === 'promote' || action === 'rollback' ? '这个操作会改变生产流量指向。' : '操作会提交到 Vercel。',
-      okText: actionLabels[action],
+      title: `${actionLabel} ${deployment.id}？`,
+      content: getDeploymentActionConfirmContent(activeService.provider, action),
+      okText: actionLabel,
       cancelText: '取消',
       okButtonProps: { danger: dangerous },
       onOk: async () => {
@@ -4962,7 +5278,33 @@ function ServiceDetailDrawer({
           })
           applyServiceUpdate(nextService)
           await loadDeployments()
-          message.success(`${actionLabels[action]}已提交`)
+          message.success(`${actionLabel}已提交`)
+        } catch (error) {
+          message.error(getErrorMessage(error))
+        }
+      }
+    })
+  }
+
+  function runEnvironmentDeployment(environment: ProjectServiceEnvironment): void {
+    if (!activeService || !window.forgeDesk || activeService.provider !== 'railway') {
+      return
+    }
+
+    Modal.confirm({
+      title: `部署 ${environment.name}？`,
+      content: getDeploymentActionConfirmContent(activeService.provider, 'deploy'),
+      okText: serviceDeploymentActionLabels.deploy,
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const nextService = await window.forgeDesk.runServiceDeploymentAction(activeService.id, {
+            action: 'deploy',
+            environmentId: environment.externalEnvironmentId
+          })
+          applyServiceUpdate(nextService)
+          await loadDeployments()
+          message.success('部署已提交')
         } catch (error) {
           message.error(getErrorMessage(error))
         }
@@ -5288,9 +5630,14 @@ function ServiceDetailDrawer({
     {
       title: '操作',
       key: 'actions',
-      width: 190,
+      width: activeService?.provider === 'railway' ? 260 : 190,
       render: (_, environment) => (
         <Space wrap size={6}>
+          {activeService?.provider === 'railway' ? (
+            <Button size="small" icon={<UploadOutlined />} disabled={!environment.externalEnvironmentId} onClick={() => runEnvironmentDeployment(environment)}>
+              部署
+            </Button>
+          ) : null}
           <Button size="small" icon={<FileTextOutlined />} disabled={!environment.latestDeploymentId} onClick={() => loadEnvironmentLogs(environment, 'build')}>
             构建
           </Button>
@@ -5306,6 +5653,55 @@ function ServiceDetailDrawer({
       )
     }
   ]
+  function renderServiceDeploymentActions(deployment: ServiceDeploymentSummary): JSX.Element | null {
+    if (!activeService) {
+      return null
+    }
+
+    if (activeService.provider === 'railway') {
+      const railwayActions: Array<{ action: ServiceDeploymentAction; icon?: JSX.Element; danger?: boolean; tooltip: string }> = [
+        { action: 'redeploy', icon: <ReloadOutlined />, tooltip: 'Redeploy' },
+        { action: 'restart', icon: <ThunderboltOutlined />, tooltip: 'Restart deployment' },
+        { action: 'rollback', icon: <ArrowLeftOutlined />, danger: true, tooltip: 'Rollback to this deployment' },
+        { action: 'stop', icon: <CloseCircleOutlined />, danger: true, tooltip: 'Stop running deployment' },
+        { action: 'cancel', icon: <CloseCircleOutlined />, danger: true, tooltip: 'Cancel queued or building deployment' }
+      ]
+
+      return (
+        <Space wrap size={6}>
+          {railwayActions.map(({ action, icon, danger, tooltip }) => {
+            const enabled = canRunServiceDeploymentAction(activeService.provider, deployment, action)
+
+            return (
+              <Tooltip key={action} title={enabled ? tooltip : `${serviceDeploymentActionLabels[action]} 当前不可用`}>
+                <Button size="small" danger={danger} disabled={!enabled} icon={icon} onClick={() => runDeploymentAction(deployment, action)}>
+                  {serviceDeploymentActionLabels[action]}
+                </Button>
+              </Tooltip>
+            )
+          })}
+        </Space>
+      )
+    }
+
+    return (
+      <Space wrap size={6}>
+        <Button size="small" icon={<ReloadOutlined />} onClick={() => runDeploymentAction(deployment, 'redeploy')}>
+          Redeploy
+        </Button>
+        <Button size="small" danger disabled={!canRunServiceDeploymentAction(activeService.provider, deployment, 'cancel')} onClick={() => runDeploymentAction(deployment, 'cancel')}>
+          Cancel
+        </Button>
+        <Button size="small" onClick={() => runDeploymentAction(deployment, 'promote')}>
+          Promote
+        </Button>
+        <Button size="small" danger onClick={() => runDeploymentAction(deployment, 'rollback')}>
+          Rollback
+        </Button>
+      </Space>
+    )
+  }
+
   const deploymentColumns: ColumnsType<ServiceDeploymentSummary> = [
     { title: '部署', key: 'id', width: 170, render: (_, deployment) => <TableText value={deployment.id || '-'} /> },
     {
@@ -5327,23 +5723,8 @@ function ServiceDetailDrawer({
           {
             title: '操作',
             key: 'actions',
-            width: 300,
-            render: (_: unknown, deployment: ServiceDeploymentSummary) => (
-              <Space wrap size={6}>
-                <Button size="small" icon={<ReloadOutlined />} onClick={() => runDeploymentAction(deployment, 'redeploy')}>
-                  Redeploy
-                </Button>
-                <Button size="small" danger onClick={() => runDeploymentAction(deployment, 'cancel')}>
-                  Cancel
-                </Button>
-                <Button size="small" onClick={() => runDeploymentAction(deployment, 'promote')}>
-                  Promote
-                </Button>
-                <Button size="small" danger onClick={() => runDeploymentAction(deployment, 'rollback')}>
-                  Rollback
-                </Button>
-              </Space>
-            )
+            width: activeService?.provider === 'railway' ? 520 : 300,
+            render: (_: unknown, deployment: ServiceDeploymentSummary) => renderServiceDeploymentActions(deployment)
           }
         ]
       : [])
@@ -6038,23 +6419,18 @@ function GlobalServiceCenterPanel({
     return /^https?:\/\//i.test(row.deploymentUrl) ? row.deploymentUrl : `https://${row.deploymentUrl}`
   }
 
-  function runDeploymentAction(row: DeploymentDashboardRow, action: 'redeploy' | 'cancel' | 'promote' | 'rollback'): void {
-    if (!window.forgeDesk || row.provider !== 'vercel') {
+  function runDeploymentAction(row: DeploymentDashboardRow, action: ServiceDeploymentAction): void {
+    if (!window.forgeDesk) {
       return
     }
 
-    const actionLabels = {
-      redeploy: '重新部署',
-      cancel: '取消部署',
-      promote: '提升为生产',
-      rollback: '回滚到此部署'
-    }
-    const dangerous = action !== 'redeploy'
+    const actionLabel = serviceDeploymentActionLabels[action]
+    const dangerous = isDangerousDeploymentAction(action)
 
     Modal.confirm({
-      title: `${actionLabels[action]} ${row.deploymentId}？`,
-      content: action === 'promote' || action === 'rollback' ? '这个操作会改变生产流量指向。' : '操作会提交到 Vercel。',
-      okText: actionLabels[action],
+      title: `${actionLabel} ${row.deploymentId}？`,
+      content: getDeploymentActionConfirmContent(row.provider, action),
+      okText: actionLabel,
       cancelText: '取消',
       okButtonProps: { danger: dangerous },
       onOk: async () => {
@@ -6068,16 +6444,16 @@ function GlobalServiceCenterPanel({
           writeDeploymentSystemLog({
             level: 'success',
             title: '部署操作已提交',
-            message: `${actionLabels[action]} ${row.serviceName} / ${row.deploymentId}`
+            message: `${actionLabel} ${row.serviceName} / ${row.deploymentId}`
           })
-          message.success(`${actionLabels[action]}已提交`)
+          message.success(`${actionLabel}已提交`)
         } catch (error) {
           const errorMessage = getErrorMessage(error)
 
           writeDeploymentSystemLog({
             level: 'error',
             title: '部署操作失败',
-            message: `${actionLabels[action]} ${row.serviceName} / ${row.deploymentId}：${errorMessage}`
+            message: `${actionLabel} ${row.serviceName} / ${row.deploymentId}：${errorMessage}`
           })
           message.error(errorMessage)
         }
@@ -6086,64 +6462,48 @@ function GlobalServiceCenterPanel({
   }
 
   function renderDeploymentActionButtons(row: DeploymentDashboardRow): JSX.Element | null {
-    if (row.provider !== 'vercel') {
+    if (row.provider !== 'vercel' && row.provider !== 'railway') {
       return null
     }
 
-    const cancelable = ['BUILDING', 'DEPLOYING', 'INITIALIZING', 'QUEUED', 'PENDING'].includes(row.state.toUpperCase())
+    const actions: Array<{ action: ServiceDeploymentAction; icon: JSX.Element; danger?: boolean; tooltip: string }> =
+      row.provider === 'railway'
+        ? [
+            { action: 'redeploy', icon: <ReloadOutlined />, tooltip: 'Redeploy' },
+            { action: 'restart', icon: <ThunderboltOutlined />, tooltip: 'Restart deployment' },
+            { action: 'rollback', icon: <ArrowLeftOutlined />, danger: true, tooltip: 'Rollback to this deployment' },
+            { action: 'stop', icon: <CloseCircleOutlined />, danger: true, tooltip: 'Stop running deployment' },
+            { action: 'cancel', icon: <CloseCircleOutlined />, danger: true, tooltip: 'Cancel queued or building deployment' }
+          ]
+        : [
+            { action: 'redeploy', icon: <ReloadOutlined />, tooltip: 'Redeploy' },
+            { action: 'promote', icon: <UploadOutlined />, tooltip: 'Promote to production' },
+            { action: 'rollback', icon: <ArrowLeftOutlined />, tooltip: 'Rollback to this deployment' },
+            { action: 'cancel', icon: <CloseCircleOutlined />, danger: true, tooltip: 'Cancel deployment' }
+          ]
 
     return (
       <Space size={2} className="deployment-row-actions">
-        <Tooltip title="Redeploy">
-          <Button
-            type="text"
-            size="small"
-            aria-label={`Redeploy ${row.deploymentId}`}
-            icon={<ReloadOutlined />}
-            onClick={(event) => {
-              event.stopPropagation()
-              runDeploymentAction(row, 'redeploy')
-            }}
-          />
-        </Tooltip>
-        <Tooltip title="Promote to production">
-          <Button
-            type="text"
-            size="small"
-            aria-label={`Promote ${row.deploymentId}`}
-            icon={<UploadOutlined />}
-            onClick={(event) => {
-              event.stopPropagation()
-              runDeploymentAction(row, 'promote')
-            }}
-          />
-        </Tooltip>
-        <Tooltip title="Rollback to this deployment">
-          <Button
-            type="text"
-            size="small"
-            aria-label={`Rollback to ${row.deploymentId}`}
-            icon={<ArrowLeftOutlined />}
-            onClick={(event) => {
-              event.stopPropagation()
-              runDeploymentAction(row, 'rollback')
-            }}
-          />
-        </Tooltip>
-        <Tooltip title={cancelable ? 'Cancel deployment' : 'Only running deployments can be canceled'}>
-          <Button
-            type="text"
-            size="small"
-            danger
-            disabled={!cancelable}
-            aria-label={`Cancel ${row.deploymentId}`}
-            icon={<CloseCircleOutlined />}
-            onClick={(event) => {
-              event.stopPropagation()
-              runDeploymentAction(row, 'cancel')
-            }}
-          />
-        </Tooltip>
+        {actions.map(({ action, icon, danger, tooltip }) => {
+          const enabled = canRunServiceDeploymentAction(row.provider, row.sourceDeployment, action)
+
+          return (
+            <Tooltip key={action} title={enabled ? tooltip : `${serviceDeploymentActionLabels[action]} 当前不可用`}>
+              <Button
+                type="text"
+                size="small"
+                danger={danger}
+                disabled={!enabled}
+                aria-label={`${serviceDeploymentActionLabels[action]} ${row.deploymentId}`}
+                icon={icon}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  runDeploymentAction(row, action)
+                }}
+              />
+            </Tooltip>
+          )
+        })}
       </Space>
     )
   }
@@ -6989,9 +7349,23 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const [releaseTitle, setReleaseTitle] = useState('')
   const [releaseNotes, setReleaseNotes] = useState('')
   const [releaseCommitMessage, setReleaseCommitMessage] = useState('')
+  const [releaseProvider, setReleaseProvider] = useState<ReleasePublishProvider>('github')
   const [githubToken, setGithubToken] = useState('')
   const [githubTokens, setGithubTokens] = useState<GithubTokenView[]>([])
   const [selectedGithubTokenId, setSelectedGithubTokenId] = useState('')
+  const [codemagicTokens, setCodemagicTokens] = useState<CodemagicTokenView[]>([])
+  const [codemagicTeams, setCodemagicTeams] = useState<CodemagicTeam[]>([])
+  const [codemagicApps, setCodemagicApps] = useState<CodemagicApp[]>([])
+  const [codemagicBinding, setCodemagicBinding] = useState<CodemagicRepositoryBinding | null>(null)
+  const [selectedCodemagicTokenId, setSelectedCodemagicTokenId] = useState('')
+  const [selectedCodemagicTeamId, setSelectedCodemagicTeamId] = useState('')
+  const [codemagicAppId, setCodemagicAppId] = useState('')
+  const [codemagicAppName, setCodemagicAppName] = useState('')
+  const [codemagicWorkflowId, setCodemagicWorkflowId] = useState('')
+  const [codemagicWorkflowName, setCodemagicWorkflowName] = useState('')
+  const [codemagicDefaultBranch, setCodemagicDefaultBranch] = useState('')
+  const [codemagicLabelsText, setCodemagicLabelsText] = useState('forgedesk')
+  const [saveCodemagicBinding, setSaveCodemagicBinding] = useState(true)
   const [selectedReleaseActions, setSelectedReleaseActions] = useState<ReleasePublishActionKey[]>([])
   const [activePublishTaskId, setActivePublishTaskId] = useState('')
   const [activePublishTask, setActivePublishTask] = useState<RepositoryReleasePublishTask | null>(null)
@@ -7002,18 +7376,30 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const [publishing, setPublishing] = useState(false)
   const [loadingAiSettings, setLoadingAiSettings] = useState(false)
   const [loadingGithubTokens, setLoadingGithubTokens] = useState(false)
+  const [loadingCodemagicTokens, setLoadingCodemagicTokens] = useState(false)
+  const [loadingCodemagicTeams, setLoadingCodemagicTeams] = useState(false)
+  const [loadingCodemagicApps, setLoadingCodemagicApps] = useState(false)
+  const [loadingCodemagicBinding, setLoadingCodemagicBinding] = useState(false)
   const [savingAiSettings, setSavingAiSettings] = useState(false)
   const [cancellingPublishTask, setCancellingPublishTask] = useState(false)
   const handledActivePublishTaskIdsRef = useRef<Set<string>>(new Set())
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
   const selectedGithubToken = githubTokens.find((token) => token.id === selectedGithubTokenId) ?? null
+  const selectedCodemagicToken = codemagicTokens.find((token) => token.id === selectedCodemagicTokenId) ?? null
+  const codemagicReady = Boolean(selectedCodemagicTokenId && codemagicAppId.trim() && codemagicWorkflowId.trim())
   const releaseView = useMemo(
-    () => createReleasePublishViewModel({ plan: preparation?.plan ?? null, githubToken: selectedGithubTokenId || githubToken, selectedActions: selectedReleaseActions }),
-    [githubToken, preparation, selectedGithubTokenId, selectedReleaseActions]
+    () => createReleasePublishViewModel({
+      plan: preparation?.plan ?? null,
+      githubToken: selectedGithubTokenId || githubToken,
+      provider: releaseProvider,
+      codemagicReady,
+      selectedActions: selectedReleaseActions
+    }),
+    [codemagicReady, githubToken, preparation, releaseProvider, selectedGithubTokenId, selectedReleaseActions]
   )
   const releasePlatformOptions = useMemo(
-    () => createReleasePlatformOptions({ plan: preparation?.plan ?? null }),
-    [preparation]
+    () => createReleasePlatformOptions({ plan: preparation?.plan ?? null, codemagicBound: Boolean(codemagicBinding) }),
+    [codemagicBinding, preparation]
   )
   const activePublishTaskView = useMemo(
     () => createReleasePublishTaskView({ task: activePublishTask }),
@@ -7026,6 +7412,21 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
       value: token.id
     })),
     [githubTokens]
+  )
+  const codemagicTokenOptions = useMemo(
+    () => codemagicTokens.map((token) => ({
+      label: `${token.name}${token.userId ? ` · ${token.userId}` : ''} · ****${token.tokenLastFour || '----'}`,
+      value: token.id
+    })),
+    [codemagicTokens]
+  )
+  const codemagicTeamOptions = useMemo(
+    () => codemagicTeams.map((team) => ({ label: team.name || team.id, value: team.id })),
+    [codemagicTeams]
+  )
+  const codemagicAppOptions = useMemo(
+    () => codemagicApps.map((appItem) => ({ label: `${appItem.name}${appItem.archived ? ' · archived' : ''}`, value: appItem.id })),
+    [codemagicApps]
   )
 
   useEffect(() => {
@@ -7076,7 +7477,9 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     try {
       const firstPreparation = await window.forgeDesk.prepareRepositoryRelease(
         selectedRepository.id,
-        targetVersionOverride?.trim() ? { targetVersion: targetVersionOverride.trim() } : undefined
+        targetVersionOverride?.trim()
+          ? { targetVersion: targetVersionOverride.trim(), provider: releaseProvider }
+          : { provider: releaseProvider }
       )
       const shouldRecheckSuggestedVersion =
         !targetVersionOverride &&
@@ -7084,7 +7487,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
         firstPreparation.plan.suggestedVersion &&
         firstPreparation.plan.suggestedVersion !== firstPreparation.plan.currentVersion
       const nextPreparation = shouldRecheckSuggestedVersion
-        ? await window.forgeDesk.prepareRepositoryRelease(selectedRepository.id, { targetVersion: firstPreparation.plan.suggestedVersion })
+        ? await window.forgeDesk.prepareRepositoryRelease(selectedRepository.id, { targetVersion: firstPreparation.plan.suggestedVersion, provider: releaseProvider })
         : firstPreparation
 
       applyReleasePreparation(nextPreparation, preserveTextFields)
@@ -7124,6 +7527,114 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     }
   }
 
+  function applyCodemagicBinding(binding: CodemagicRepositoryBinding | null): void {
+    setCodemagicBinding(binding)
+
+    if (!binding) {
+      setCodemagicAppId('')
+      setCodemagicAppName('')
+      setCodemagicWorkflowId('')
+      setCodemagicWorkflowName('')
+      setCodemagicDefaultBranch(selectedRepository?.currentBranch || selectedRepository?.defaultBranch || '')
+      setCodemagicLabelsText('forgedesk')
+      return
+    }
+
+    setSelectedCodemagicTokenId((current) => current || binding.tokenId)
+    setSelectedCodemagicTeamId(binding.teamId)
+    setCodemagicAppId(binding.appId)
+    setCodemagicAppName(binding.appName)
+    setCodemagicWorkflowId(binding.workflowId)
+    setCodemagicWorkflowName(binding.workflowName)
+    setCodemagicDefaultBranch(binding.defaultBranch || selectedRepository?.currentBranch || selectedRepository?.defaultBranch || '')
+    setCodemagicLabelsText(binding.labels.length ? binding.labels.join(', ') : 'forgedesk')
+  }
+
+  async function refreshReleaseCodemagicTokens(binding?: CodemagicRepositoryBinding | null): Promise<void> {
+    if (!window.forgeDesk) {
+      setCodemagicTokens([])
+      setSelectedCodemagicTokenId('')
+      return
+    }
+
+    setLoadingCodemagicTokens(true)
+
+    try {
+      const tokens = await window.forgeDesk.listCodemagicTokens()
+      setCodemagicTokens(tokens)
+      setSelectedCodemagicTokenId((current) => {
+        if (current && tokens.some((token) => token.id === current)) {
+          return current
+        }
+
+        if (binding?.tokenId && tokens.some((token) => token.id === binding.tokenId)) {
+          return binding.tokenId
+        }
+
+        return tokens[0]?.id ?? ''
+      })
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingCodemagicTokens(false)
+    }
+  }
+
+  async function refreshReleaseCodemagicBinding(): Promise<CodemagicRepositoryBinding | null> {
+    if (!selectedRepository || !window.forgeDesk) {
+      applyCodemagicBinding(null)
+      return null
+    }
+
+    setLoadingCodemagicBinding(true)
+
+    try {
+      const binding = await window.forgeDesk.getRepositoryCodemagicBinding(selectedRepository.id)
+      applyCodemagicBinding(binding)
+      return binding
+    } catch (error) {
+      message.error(getErrorMessage(error))
+      applyCodemagicBinding(null)
+      return null
+    } finally {
+      setLoadingCodemagicBinding(false)
+    }
+  }
+
+  async function refreshReleaseCodemagicTeams(tokenId = selectedCodemagicTokenId): Promise<void> {
+    if (!window.forgeDesk || !tokenId) {
+      setCodemagicTeams([])
+      return
+    }
+
+    setLoadingCodemagicTeams(true)
+
+    try {
+      setCodemagicTeams(await window.forgeDesk.listCodemagicTeams(tokenId))
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingCodemagicTeams(false)
+    }
+  }
+
+  async function refreshReleaseCodemagicApps(tokenId = selectedCodemagicTokenId, teamId = selectedCodemagicTeamId): Promise<void> {
+    if (!window.forgeDesk || !tokenId) {
+      setCodemagicApps([])
+      return
+    }
+
+    setLoadingCodemagicApps(true)
+
+    try {
+      setCodemagicApps(await window.forgeDesk.listCodemagicApps({ tokenId, teamId: teamId || undefined }))
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingCodemagicApps(false)
+    }
+  }
+
   useEffect(() => {
     if (!open || !selectedRepository) {
       return
@@ -7133,13 +7644,57 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     setReleaseTitle('')
     setReleaseNotes('')
     setReleaseCommitMessage('')
+    setReleaseProvider('github')
     setGithubToken('')
+    setCodemagicTeams([])
+    setCodemagicApps([])
+    setCodemagicBinding(null)
+    setSelectedCodemagicTokenId('')
+    setSelectedCodemagicTeamId('')
+    setCodemagicAppId('')
+    setCodemagicAppName('')
+    setCodemagicWorkflowId('')
+    setCodemagicWorkflowName('')
+    setCodemagicDefaultBranch(selectedRepository.currentBranch || selectedRepository.defaultBranch || '')
+    setCodemagicLabelsText('forgedesk')
+    setSaveCodemagicBinding(true)
     setSelectedReleaseActions([])
     setActivePublishTaskId('')
     setActivePublishTask(null)
     loadReleasePreparation()
     refreshReleaseGithubTokens()
+    refreshReleaseCodemagicBinding()
+      .then((binding) => refreshReleaseCodemagicTokens(binding))
+      .catch((error) => message.error(getErrorMessage(error)))
   }, [open, selectedRepository?.id])
+
+  useEffect(() => {
+    if (!open || !selectedRepository) {
+      return
+    }
+
+    loadReleasePreparation(targetVersion, true)
+  }, [releaseProvider])
+
+  useEffect(() => {
+    if (!open || !selectedCodemagicTokenId) {
+      setCodemagicTeams([])
+      setCodemagicApps([])
+      return
+    }
+
+    refreshReleaseCodemagicTeams(selectedCodemagicTokenId)
+    refreshReleaseCodemagicApps(selectedCodemagicTokenId, selectedCodemagicTeamId)
+  }, [open, selectedCodemagicTokenId])
+
+  useEffect(() => {
+    if (!open || !selectedCodemagicTokenId) {
+      setCodemagicApps([])
+      return
+    }
+
+    refreshReleaseCodemagicApps(selectedCodemagicTokenId, selectedCodemagicTeamId)
+  }, [open, selectedCodemagicTeamId])
 
   useEffect(() => {
     if (!activePublishTaskId || !window.forgeDesk) {
@@ -7315,17 +7870,34 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
       return
     }
 
+    if (releaseProvider === 'codemagic' && !codemagicReady) {
+      message.warning('请先选择 Codemagic Token，并填写 App ID 和 Workflow ID')
+      return
+    }
+
     setPublishing(true)
 
     try {
       const task = await window.forgeDesk.startRepositoryReleasePublishTask(selectedRepository.id, {
+        provider: releaseProvider,
         version,
         tagName: releaseTagName,
         releaseTitle: title,
         releaseNotes: notes,
         commitMessage,
-        githubTokenId: selectedGithubTokenId || undefined,
-        githubToken: selectedGithubTokenId ? undefined : githubToken.trim() || undefined,
+        githubTokenId: releaseProvider === 'github' ? selectedGithubTokenId || undefined : undefined,
+        githubToken: releaseProvider === 'github' && !selectedGithubTokenId ? githubToken.trim() || undefined : undefined,
+        codemagicTokenId: releaseProvider === 'codemagic' ? selectedCodemagicTokenId || undefined : undefined,
+        codemagicTeamId: releaseProvider === 'codemagic' ? selectedCodemagicTeamId || undefined : undefined,
+        codemagicAppId: releaseProvider === 'codemagic' ? codemagicAppId.trim() || undefined : undefined,
+        codemagicAppName: releaseProvider === 'codemagic' ? codemagicAppName.trim() || undefined : undefined,
+        codemagicWorkflowId: releaseProvider === 'codemagic' ? codemagicWorkflowId.trim() || undefined : undefined,
+        codemagicWorkflowName: releaseProvider === 'codemagic' ? codemagicWorkflowName.trim() || undefined : undefined,
+        codemagicDefaultBranch: releaseProvider === 'codemagic' ? codemagicDefaultBranch.trim() || undefined : undefined,
+        codemagicLabels: releaseProvider === 'codemagic'
+          ? codemagicLabelsText.split(',').map((label) => label.trim()).filter(Boolean)
+          : undefined,
+        saveCodemagicBinding: releaseProvider === 'codemagic' ? saveCodemagicBinding : undefined,
         releaseActions: selectedReleaseActions
       })
 
@@ -7363,7 +7935,11 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
       width: 560,
       content: (
         <Space direction="vertical" size={8}>
-          <Typography.Text>将按当前仓库 package.json 中的 {preparation?.plan.selectedScript || '发布'} 脚本执行。</Typography.Text>
+          <Typography.Text>
+            {releaseProvider === 'codemagic'
+              ? `将触发 Codemagic workflow：${codemagicWorkflowName || codemagicWorkflowId || '未命名 workflow'}。`
+              : `将按当前仓库 package.json 中的 ${preparation?.plan.selectedScript || '发布'} 脚本执行。`}
+          </Typography.Text>
           {targetVersion !== preparation?.plan.currentVersion ? (
             <Typography.Text type="warning">
               发布前会把版本从 {preparation?.plan.currentVersion} 更新到 {targetVersion}，并提交版本号改动。
@@ -7381,10 +7957,10 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
                 ))}
             </Space>
           ) : null}
-          <Typography.Text type="secondary">执行过程会进入后台任务，可以关闭窗口继续操作，并随时查看发布日志。</Typography.Text>
+          <Typography.Text type="secondary">执行过程会进入后台任务，可以关闭窗口继续操作，并随时查看发布日志和构建包。</Typography.Text>
         </Space>
       ),
-      okText: '开始发布',
+      okText: releaseProvider === 'codemagic' ? '开始构建' : '开始发布',
       cancelText: '取消',
       onOk: () => {
         void publishReleaseAfterConfirm()
@@ -7432,15 +8008,38 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
         </Space>
 
         <div className="release-platform-section">
-          <Typography.Text strong>已对接平台</Typography.Text>
+          <Space wrap className="release-platform-heading">
+            <Typography.Text strong>发布平台</Typography.Text>
+            <Segmented
+              size="small"
+              value={releaseProvider}
+              options={[
+                { label: 'GitHub Releases', value: 'github' },
+                { label: 'Codemagic', value: 'codemagic' }
+              ]}
+              onChange={(value) => setReleaseProvider(value as ReleasePublishProvider)}
+            />
+          </Space>
           <div className="release-platform-list">
             {releasePlatformOptions.map((platform) => (
               <div
                 key={platform.key}
-                className={['release-platform-card', platform.disabled ? 'release-platform-card-disabled' : 'release-platform-card-active'].join(' ')}
+                role="button"
+                tabIndex={0}
+                className={[
+                  'release-platform-card',
+                  platform.disabled ? 'release-platform-card-disabled' : 'release-platform-card-active',
+                  releaseProvider === platform.key ? 'release-platform-card-selected' : ''
+                ].join(' ')}
+                onClick={() => setReleaseProvider(platform.key)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    setReleaseProvider(platform.key)
+                  }
+                }}
               >
                 <span className="release-platform-icon">
-                  <GithubOutlined />
+                  {platform.key === 'github' ? <GithubOutlined /> : <UploadOutlined />}
                 </span>
                 <span className="release-platform-body">
                   <span className="release-platform-title-row">
@@ -7506,7 +8105,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
           <Col xs={24}>
             <Input value={releaseCommitMessage} addonBefore="版本提交" placeholder="chore: release v1.0.3" onChange={(event) => setReleaseCommitMessage(event.target.value)} />
           </Col>
-          {plan?.selectedScript === 'publish:mac' ? (
+          {releaseProvider === 'github' && plan?.selectedScript === 'publish:mac' ? (
             <Col xs={24}>
               <Space direction="vertical" size={8} className="release-github-token-picker">
                 <Space.Compact className="full-width-control">
@@ -7540,6 +8139,107 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
               </Space>
             </Col>
           ) : null}
+          {releaseProvider === 'codemagic' ? (
+            <Col xs={24}>
+              <Space direction="vertical" size={10} className="release-github-token-picker">
+                <Alert
+                  type={codemagicReady ? 'success' : 'warning'}
+                  showIcon
+                  message={codemagicReady ? 'Codemagic 绑定已就绪' : '请完成 Codemagic 绑定'}
+                  description={codemagicReady
+                    ? `将用 ${codemagicAppName || codemagicAppId} / ${codemagicWorkflowName || codemagicWorkflowId} 构建 ${tagName || targetVersion}。`
+                    : '选择 Token 后可以读取 App 列表；Workflow ID 需要与 codemagic.yaml 或 Codemagic UI 中的 workflow id 一致。'}
+                />
+                <Space.Compact className="full-width-control">
+                  <Select
+                    allowClear
+                    value={selectedCodemagicTokenId || undefined}
+                    className="release-github-token-select"
+                    loading={loadingCodemagicTokens}
+                    placeholder={codemagicTokens.length > 0 ? '选择已保存的 Codemagic Token' : '设置里还没有保存 Codemagic Token'}
+                    options={codemagicTokenOptions}
+                    onChange={(value) => {
+                      setSelectedCodemagicTokenId(value ?? '')
+                      setCodemagicTeams([])
+                      setCodemagicApps([])
+                    }}
+                  />
+                  <Tooltip title="重新读取已保存 Token">
+                    <Button icon={<ReloadOutlined />} loading={loadingCodemagicTokens} onClick={() => refreshReleaseCodemagicTokens(codemagicBinding)} />
+                  </Tooltip>
+                </Space.Compact>
+                {selectedCodemagicToken ? (
+                  <Space wrap size={[4, 4]}>
+                    <Tag color="blue">{selectedCodemagicToken.teamCount} 个团队</Tag>
+                    <Tag color="green">{selectedCodemagicToken.appCount} 个应用</Tag>
+                    <Typography.Text type="secondary">校验：{selectedCodemagicToken.lastCheckedAt ? new Date(selectedCodemagicToken.lastCheckedAt).toLocaleString() : '未校验'}</Typography.Text>
+                  </Space>
+                ) : null}
+                <Row gutter={[12, 8]}>
+                  <Col xs={24} md={12}>
+                    <Space.Compact className="full-width-control">
+                      <Select
+                        allowClear
+                        value={selectedCodemagicTeamId || undefined}
+                        className="release-github-token-select"
+                        loading={loadingCodemagicTeams}
+                        placeholder="Codemagic Team（个人应用可留空）"
+                        options={codemagicTeamOptions}
+                        onChange={(value) => setSelectedCodemagicTeamId(value ?? '')}
+                      />
+                      <Tooltip title="读取团队">
+                        <Button icon={<ReloadOutlined />} disabled={!selectedCodemagicTokenId} loading={loadingCodemagicTeams} onClick={() => refreshReleaseCodemagicTeams()} />
+                      </Tooltip>
+                    </Space.Compact>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Space.Compact className="full-width-control">
+                      <Select
+                        allowClear
+                        value={codemagicApps.some((appItem) => appItem.id === codemagicAppId) ? codemagicAppId : undefined}
+                        className="release-github-token-select"
+                        loading={loadingCodemagicApps}
+                        placeholder="从 Codemagic App 列表选择"
+                        options={codemagicAppOptions}
+                        onChange={(value) => {
+                          const appItem = codemagicApps.find((item) => item.id === value)
+                          setCodemagicAppId(value ?? '')
+                          setCodemagicAppName(appItem?.name ?? '')
+                        }}
+                      />
+                      <Tooltip title="读取 App 列表">
+                        <Button icon={<ReloadOutlined />} disabled={!selectedCodemagicTokenId} loading={loadingCodemagicApps} onClick={() => refreshReleaseCodemagicApps()} />
+                      </Tooltip>
+                    </Space.Compact>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Input value={codemagicAppId} addonBefore="App ID" placeholder="60a0b1c2d3e4f56789abcdef" onChange={(event) => setCodemagicAppId(event.target.value)} />
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Input value={codemagicAppName} addonBefore="App 名称" placeholder="可选，仅用于显示" onChange={(event) => setCodemagicAppName(event.target.value)} />
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Input value={codemagicWorkflowId} addonBefore="Workflow ID" placeholder="release" onChange={(event) => setCodemagicWorkflowId(event.target.value)} />
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Input value={codemagicWorkflowName} addonBefore="Workflow 名称" placeholder="可选，仅用于显示" onChange={(event) => setCodemagicWorkflowName(event.target.value)} />
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Input value={codemagicDefaultBranch} addonBefore="默认分支" placeholder={selectedRepository?.currentBranch || 'main'} onChange={(event) => setCodemagicDefaultBranch(event.target.value)} />
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Input value={codemagicLabelsText} addonBefore="Labels" placeholder="forgedesk, production" onChange={(event) => setCodemagicLabelsText(event.target.value)} />
+                  </Col>
+                  <Col xs={24}>
+                    <Checkbox checked={saveCodemagicBinding} onChange={(event) => setSaveCodemagicBinding(event.target.checked)}>
+                      保存为当前仓库的 Codemagic 绑定
+                    </Checkbox>
+                    {loadingCodemagicBinding ? <Typography.Text type="secondary"> 正在读取绑定...</Typography.Text> : null}
+                  </Col>
+                </Row>
+              </Space>
+            </Col>
+          ) : null}
         </Row>
 
         {activePublishTask ? (
@@ -7553,7 +8253,13 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
               <Space>
                 <Typography.Text type="secondary">更新：{new Date(activePublishTask.updatedAt).toLocaleString()}</Typography.Text>
                 {activePublishTaskView.canCancel ? (
-                  <Popconfirm title="终止这个发布任务？" description="可能已经创建 Tag、Release 或上传了部分文件，重试前需要检查 GitHub Releases。" okText="终止" cancelText="取消" onConfirm={cancelActivePublishTask}>
+                  <Popconfirm
+                    title="终止这个发布任务？"
+                    description={activePublishTask.provider === 'codemagic' ? '可能已经创建 Tag 或远程构建产物，重试前需要检查 Codemagic。' : '可能已经创建 Tag、Release 或上传了部分文件，重试前需要检查 GitHub Releases。'}
+                    okText="终止"
+                    cancelText="取消"
+                    onConfirm={cancelActivePublishTask}
+                  >
                     <Button danger size="small" loading={cancellingPublishTask}>
                       终止
                     </Button>
@@ -7563,9 +8269,35 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
             </div>
             <div className="release-task-progress-row">
               <Typography.Text type="secondary">当前步骤：{activePublishTaskView.phase}</Typography.Text>
+              {activePublishTask.externalBuildUrl ? (
+                <Button size="small" icon={<LinkOutlined />} href={activePublishTask.externalBuildUrl} target="_blank" rel="noreferrer">
+                  打开 Codemagic Build
+                </Button>
+              ) : null}
               <Alert type={activePublishTask.status === 'failed' ? 'error' : activePublishTask.status === 'cancelled' ? 'warning' : 'info'} showIcon message={activePublishTaskView.hint} />
               <Progress percent={activePublishTaskView.progressPercent} size="small" status={activePublishTask.status === 'failed' || activePublishTask.status === 'cancelled' ? 'exception' : activePublishTask.status === 'succeeded' ? 'success' : 'active'} />
             </div>
+            {activePublishTask.artifacts?.length ? (
+              <div className="release-artifact-list">
+                {activePublishTask.artifacts.map((artifact) => (
+                  <div key={`${artifact.name}-${artifact.downloadUrl}`} className="release-artifact-item">
+                    <Space direction="vertical" size={0}>
+                      <Typography.Text strong>{artifact.name}</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {[artifact.type, artifact.versionName, artifact.versionCode ? `build ${artifact.versionCode}` : '', formatFileSize(artifact.sizeInBytes)]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </Typography.Text>
+                    </Space>
+                    {artifact.downloadUrl ? (
+                      <Button size="small" icon={<DownloadOutlined />} href={artifact.downloadUrl} target="_blank" rel="noreferrer">
+                        下载
+                      </Button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <div className="release-publish-log">
               <Typography.Text copyable>{activePublishTaskView.log}</Typography.Text>
             </div>
@@ -8798,7 +9530,13 @@ function ReleasePublishTaskDock(): JSX.Element | null {
                   <Space>
                     <Typography.Text type="secondary">更新：{formatReleaseTaskTime(activeTask.updatedAt)}</Typography.Text>
                     {activeTaskView.canCancel ? (
-                      <Popconfirm title="终止这个发布任务？" description="可能已经创建 Tag、Release 或上传了部分文件，重试前需要检查 GitHub Releases。" okText="终止" cancelText="取消" onConfirm={() => cancelReleaseTask(activeTask)}>
+                      <Popconfirm
+                        title="终止这个发布任务？"
+                        description={activeTask.provider === 'codemagic' ? '可能已经创建 Tag 或远程构建产物，重试前需要检查 Codemagic。' : '可能已经创建 Tag、Release 或上传了部分文件，重试前需要检查 GitHub Releases。'}
+                        okText="终止"
+                        cancelText="取消"
+                        onConfirm={() => cancelReleaseTask(activeTask)}
+                      >
                         <Button danger size="small" loading={cancellingTaskId === activeTask.id}>
                           终止发布
                         </Button>
@@ -8811,8 +9549,13 @@ function ReleasePublishTaskDock(): JSX.Element | null {
                   <Descriptions.Item label="仓库">{activeTask.repositoryName}</Descriptions.Item>
                   <Descriptions.Item label="Tag">{activeTask.tagName}</Descriptions.Item>
                   <Descriptions.Item label="版本">{activeTask.version}</Descriptions.Item>
+                  <Descriptions.Item label="平台">{activeTask.provider === 'codemagic' ? 'Codemagic' : 'GitHub Releases'}</Descriptions.Item>
                   <Descriptions.Item label="当前步骤">{activeTaskView.phase}</Descriptions.Item>
-                  <Descriptions.Item label="脚本">{activeTask.selectedScript || activeTask.plan?.selectedScript || '-'}</Descriptions.Item>
+                  <Descriptions.Item label={activeTask.provider === 'codemagic' ? 'Workflow' : '脚本'}>
+                    {activeTask.provider === 'codemagic' ? activeTask.externalWorkflow || '-' : activeTask.selectedScript || activeTask.plan?.selectedScript || '-'}
+                  </Descriptions.Item>
+                  {activeTask.externalBuildId ? <Descriptions.Item label="Build ID">{activeTask.externalBuildId}</Descriptions.Item> : null}
+                  {activeTask.externalStatus ? <Descriptions.Item label="远程状态">{activeTask.externalStatus}</Descriptions.Item> : null}
                   <Descriptions.Item label="开始时间">{formatReleaseTaskTime(activeTask.startedAt)}</Descriptions.Item>
                   <Descriptions.Item label="最后输出">{formatReleaseTaskTime(activeTask.lastOutputAt)}</Descriptions.Item>
                   <Descriptions.Item label="结束时间">{formatReleaseTaskTime(activeTask.finishedAt)}</Descriptions.Item>
@@ -8820,6 +9563,32 @@ function ReleasePublishTaskDock(): JSX.Element | null {
                   <Descriptions.Item label="标题">{activeTask.releaseTitle || '-'}</Descriptions.Item>
                 </Descriptions>
                 <Progress percent={activeTaskView.progressPercent} status={activeTask.status === 'failed' || activeTask.status === 'cancelled' ? 'exception' : activeTask.status === 'succeeded' ? 'success' : 'active'} />
+                {activeTask.externalBuildUrl ? (
+                  <Button size="small" icon={<LinkOutlined />} href={activeTask.externalBuildUrl} target="_blank" rel="noreferrer">
+                    打开 Codemagic Build
+                  </Button>
+                ) : null}
+                {activeTask.artifacts?.length ? (
+                  <div className="release-artifact-list">
+                    {activeTask.artifacts.map((artifact) => (
+                      <div key={`${activeTask.id}-${artifact.name}-${artifact.downloadUrl}`} className="release-artifact-item">
+                        <Space direction="vertical" size={0}>
+                          <Typography.Text strong>{artifact.name}</Typography.Text>
+                          <Typography.Text type="secondary">
+                            {[artifact.type, artifact.versionName, artifact.versionCode ? `build ${artifact.versionCode}` : '', formatFileSize(artifact.sizeInBytes)]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </Typography.Text>
+                        </Space>
+                        {artifact.downloadUrl ? (
+                          <Button size="small" icon={<DownloadOutlined />} href={artifact.downloadUrl} target="_blank" rel="noreferrer">
+                            下载
+                          </Button>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 {activeTask.error ? <Alert type="error" showIcon message={activeTask.error} /> : null}
                 <div className="release-publish-log release-task-log">
                   <Typography.Text copyable>{activeTaskView.log}</Typography.Text>
@@ -10027,10 +10796,12 @@ function CreateProjectModal({
 
 function ProjectOverview({
   onCreateProject,
-  onOpenSettings
+  onOpenSettings,
+  onOpenTerminalRequest
 }: {
   onCreateProject: () => void
   onOpenSettings: () => void
+  onOpenTerminalRequest: (request: Omit<TerminalOpenRequest, 'requestId'>) => void
 }): JSX.Element {
   const { projects, repositories, selectedProjectId, summaries, deleteProject, setProjectSummary, setSelectedProjectId, updateRepository } = useForgeDeskStore()
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null)
@@ -10087,9 +10858,10 @@ function ProjectOverview({
   const hasGitData = Boolean(summary && summary.totalCommits > 0)
   const selectedProjectTerminalRequest = selectedProject ? createProjectTerminalOpenRequest(selectedProject) : null
 
-  function queueTerminalOpen(request: TerminalOpenRequest): void {
+  function queueTerminalOpen(request: Omit<TerminalOpenRequest, 'requestId'>): void {
     terminalRequestSeqRef.current += 1
     setTerminalOpenRequest({ ...request, requestId: terminalRequestSeqRef.current })
+    onOpenTerminalRequest(request)
   }
 
   function openProjectTerminal(project: Project): void {
@@ -11936,8 +12708,10 @@ function RepositoryLogTree({
         : filteredCommits,
     [activeRepositoryForLog, commitBranch, filteredCommits, workspaceCommitFiles, workspaceStatus]
   )
+  const activeBranchName = workspaceStatus?.branch || activeRepositoryForLog?.currentBranch || ''
   const graphRows = useMemo(() => createGraphRows(graphCommits), [graphCommits])
-  const visibleGraphRows = useMemo(() => graphRows.slice(0, visibleCommitCount), [graphRows, visibleCommitCount])
+  const coloredGraphRows = useMemo(() => applyBranchColorsToGraphRows(graphRows, branchTags, activeBranchName), [activeBranchName, branchTags, graphRows])
+  const visibleGraphRows = useMemo(() => coloredGraphRows.slice(0, visibleCommitCount), [coloredGraphRows, visibleCommitCount])
   const graphColumnWidth = useMemo(() => getGitGraphColumnWidth(visibleGraphRows), [visibleGraphRows])
   const hasMoreCommits = visibleCommitCount < graphRows.length
   const authorOptions = useMemo(
@@ -12376,7 +13150,7 @@ function RepositoryLogTree({
                 title: '提交',
                 dataIndex: 'message',
                 key: 'message',
-                render: (_, commit) => <CommitMessageCell commit={commit} branchTags={branchTags} currentBranch={activeRepository.currentBranch} />
+                render: (_, commit) => <CommitMessageCell commit={commit} branchTags={branchTags} currentBranch={activeBranchName} />
               },
               { title: '提交人', key: 'author', width: 210, render: (_, commit) => <CommitAuthorCell commit={commit} /> },
               {
@@ -12406,7 +13180,7 @@ function RepositoryLogTree({
                     loadingFiles={loadingFiles}
                     graphColumnWidth={graphColumnWidth}
                     branchTags={branchTags}
-                    currentBranch={activeRepository.currentBranch}
+                    currentBranch={activeBranchName}
                     canOpenDiff={!isWorkingTreeCommit(commit)}
                     onSelectFile={(file) => {
                       selectCommitFile(file)
@@ -12807,7 +13581,7 @@ function createCustomPasswordToolItem(input: {
 }
 
 type PasswordWorkflowMode = 'preset' | 'custom'
-type ToolKey = 'password' | 'file' | 'rsa' | 'excel'
+type ToolKey = 'password' | 'file' | 'rsa' | 'excel' | 'cli-environment'
 type ExcelToolKey = 'monthly-performance'
 
 type RsaPrivateKeyGenerationForm = {
@@ -12935,6 +13709,10 @@ function ToolsPanel(): JSX.Element {
     return <ExcelTool onBack={() => setActiveTool(null)} />
   }
 
+  if (activeTool === 'cli-environment') {
+    return <CliEnvironmentTool onBack={() => setActiveTool(null)} />
+  }
+
   return (
     <section className="workspace-section tools-workspace">
       <div className="section-heading">
@@ -12981,6 +13759,267 @@ function ToolsPanel(): JSX.Element {
             <Typography.Text type="secondary">用 AI 整理数据并生成工作簿。</Typography.Text>
           </span>
         </button>
+        <button className="tool-entry-card" type="button" onClick={() => setActiveTool('cli-environment')}>
+          <span className="password-tool-icon">
+            <CodeOutlined />
+          </span>
+          <span className="tool-entry-copy">
+            <Typography.Text strong>命令行环境</Typography.Text>
+            <Typography.Text type="secondary">检测 profile、PATH、Git 提示符。</Typography.Text>
+          </span>
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function splitCliEnvironmentPath(value: string, platform: CliEnvironmentSnapshot['platform']): string[] {
+  const delimiter = platform === 'win32' ? ';' : ':'
+
+  return value
+    .split(delimiter)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function getCliEnvironmentIssueAlertType(issue: CliEnvironmentIssue): 'success' | 'warning' | 'error' | 'info' {
+  if (issue.status === 'error') {
+    return 'error'
+  }
+
+  if (issue.status === 'warning') {
+    return 'warning'
+  }
+
+  return 'success'
+}
+
+function getCliEnvironmentStatus(snapshot: CliEnvironmentSnapshot | null): { type: 'success' | 'warning' | 'info'; message: string; description: string } {
+  if (!snapshot) {
+    return { type: 'info', message: '等待检测', description: '正在读取当前 shell 配置。' }
+  }
+
+  if (snapshot.issues.length === 0) {
+    return { type: 'success', message: '命令行环境正常', description: '新的 ForgeDesk 终端可以读取用户环境，并已有目录颜色和 Git 开发提示。' }
+  }
+
+  return { type: 'warning', message: '命令行环境需要修复', description: `发现 ${snapshot.issues.length} 个可改进项，其中 ${snapshot.repairableActions.length} 个可以自动修复。` }
+}
+
+function CliEnvironmentTool({ onBack }: { onBack: () => void }): JSX.Element {
+  const [snapshot, setSnapshot] = useState<CliEnvironmentSnapshot | null>(null)
+  const [repairResult, setRepairResult] = useState<CliEnvironmentRepairResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [repairing, setRepairing] = useState(false)
+  const [openingTerminal, setOpeningTerminal] = useState(false)
+  const statusView = getCliEnvironmentStatus(snapshot)
+  const mergedPathItems = snapshot ? splitCliEnvironmentPath(snapshot.mergedPath, snapshot.platform).slice(0, 14) : []
+  const repairDisabled = !snapshot || snapshot.repairableActions.length === 0 || repairing || loading
+
+  async function refreshEnvironment(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLoading(true)
+
+    try {
+      setSnapshot(await window.forgeDesk.inspectCliEnvironment())
+      setRepairResult(null)
+    } catch (error) {
+      message.error(getErrorMessage(error, '检测命令行环境失败'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function repairEnvironment(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setRepairing(true)
+
+    try {
+      const result = await window.forgeDesk.repairCliEnvironment()
+      setRepairResult(result)
+      setSnapshot(result.snapshot)
+      message.success(result.appliedActions.length > 0 ? '命令行环境已修复' : '没有需要修复的项目')
+    } catch (error) {
+      message.error(getErrorMessage(error, '修复命令行环境失败'))
+    } finally {
+      setRepairing(false)
+    }
+  }
+
+  async function openVerificationTerminal(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setOpeningTerminal(true)
+
+    try {
+      await window.forgeDesk.openTerminal({
+        title: '命令行环境验证',
+        startupCommand: 'echo "ForgeDesk CLI environment"; echo "SHELL=$SHELL"; echo "PATH=$PATH"; command -v git; git --version; echo; echo "ls -al preview:"; ls -al; \r'
+      })
+      message.success('验证终端已打开')
+    } catch (error) {
+      message.error(getErrorMessage(error, '打开验证终端失败'))
+    } finally {
+      setOpeningTerminal(false)
+    }
+  }
+
+  useEffect(() => {
+    void refreshEnvironment()
+  }, [])
+
+  return (
+    <section className="workspace-section tools-workspace">
+      <div className="section-heading">
+        <div>
+          <Button className="tool-back-button" icon={<ArrowLeftOutlined />} onClick={onBack}>
+            工具
+          </Button>
+          <Typography.Title level={2}>命令行环境</Typography.Title>
+          <Typography.Text type="secondary">检测 shell 启动链、PATH、Git 和开发提示符。</Typography.Text>
+        </div>
+        <Space wrap>
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={() => refreshEnvironment()}>
+            重新检测
+          </Button>
+          <Button icon={<DesktopOutlined />} loading={openingTerminal} onClick={() => openVerificationTerminal()}>
+            打开验证终端
+          </Button>
+          <Button type="primary" icon={<ToolOutlined />} disabled={repairDisabled} loading={repairing} onClick={() => repairEnvironment()}>
+            自动修复
+          </Button>
+        </Space>
+      </div>
+
+      <div className="cli-env-layout">
+        <div className="panel cli-env-status-panel">
+          <div className="password-tool-heading">
+            <span className="password-tool-icon">
+              <CodeOutlined />
+            </span>
+            <div>
+              <Typography.Title level={3}>环境状态</Typography.Title>
+              <Typography.Text type="secondary">新建终端会使用这里检测到的 shell 配置。</Typography.Text>
+            </div>
+          </div>
+
+          <Spin spinning={loading && !snapshot}>
+            <Space direction="vertical" size={14} className="full-width-control">
+              <Alert type={statusView.type} showIcon message={statusView.message} description={statusView.description} />
+
+              {snapshot && (
+                <>
+                  <div className="cli-env-summary-grid">
+                    <div className="cli-env-summary-item">
+                      <Typography.Text type="secondary">Shell</Typography.Text>
+                      <Typography.Text code ellipsis={{ tooltip: snapshot.shell }}>{snapshot.shellName}</Typography.Text>
+                    </div>
+                    <div className="cli-env-summary-item">
+                      <Typography.Text type="secondary">.profile</Typography.Text>
+                      <Tag color={snapshot.profileSourcedFromLoginFile ? 'green' : 'gold'}>{snapshot.profileSourcedFromLoginFile ? '已加载' : '未加载'}</Tag>
+                    </div>
+                    <div className="cli-env-summary-item">
+                      <Typography.Text type="secondary">Git Prompt</Typography.Text>
+                      <Tag color={snapshot.promptConfigured ? 'green' : 'gold'}>{snapshot.promptProvider || '未配置'}</Tag>
+                    </div>
+                    <div className="cli-env-summary-item">
+                      <Typography.Text type="secondary">ls 颜色</Typography.Text>
+                      <Tag color={snapshot.listingColorsConfigured ? 'green' : 'gold'}>{snapshot.listingColorProvider || '未开启'}</Tag>
+                    </div>
+                    <div className="cli-env-summary-item">
+                      <Typography.Text type="secondary">PNPM_HOME</Typography.Text>
+                      <Typography.Text ellipsis={{ tooltip: snapshot.pnpmHome || '未读取' }}>{snapshot.pnpmHome || '-'}</Typography.Text>
+                    </div>
+                  </div>
+
+                  <div className="cli-env-file-list">
+                    {snapshot.configFiles.map((file) => (
+                      <div className="cli-env-file-row" key={file.key}>
+                        <Space size={8} wrap>
+                          <Typography.Text strong>{file.label}</Typography.Text>
+                          <Tag color={file.exists ? 'blue' : 'default'}>{file.exists ? '存在' : '缺失'}</Tag>
+                          {file.managed && <Tag color="green">ForgeDesk</Tag>}
+                        </Space>
+                        <Typography.Text type="secondary" ellipsis={{ tooltip: file.path }}>{file.path}</Typography.Text>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </Space>
+          </Spin>
+        </div>
+
+        <div className="panel cli-env-details-panel">
+          <div className="password-tool-heading">
+            <span className="password-tool-icon">
+              <DashboardOutlined />
+            </span>
+            <div>
+              <Typography.Title level={3}>检测结果</Typography.Title>
+              <Typography.Text type="secondary">Git、ls、PATH 和可修复项。</Typography.Text>
+            </div>
+          </div>
+
+          {!snapshot ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="正在检测命令行环境" />
+          ) : (
+            <Space direction="vertical" size={14} className="full-width-control">
+              {snapshot.commands.map((command) => (
+                <div className="cli-env-command-row" key={command.name}>
+                  <Space size={8} wrap>
+                    <Typography.Text strong>{command.name}</Typography.Text>
+                    <Tag color={command.available ? 'green' : 'red'}>{command.available ? '可用' : '缺失'}</Tag>
+                    {command.version && <Tag>{command.version}</Tag>}
+                  </Space>
+                  <Typography.Text type={command.available ? 'secondary' : 'danger'} ellipsis={{ tooltip: command.path || command.error }}>
+                    {command.path || command.error || '-'}
+                  </Typography.Text>
+                </div>
+              ))}
+
+              {snapshot.issues.length > 0 ? (
+                <Space direction="vertical" size={10} className="full-width-control">
+                  {snapshot.issues.map((issue) => (
+                    <Alert key={issue.id} type={getCliEnvironmentIssueAlertType(issue)} showIcon message={issue.title} description={issue.detail} />
+                  ))}
+                </Space>
+              ) : (
+                <Alert type="success" showIcon message="没有发现需要处理的问题" />
+              )}
+
+              <div className="cli-env-path-panel">
+                <div className="cli-env-path-heading">
+                  <Typography.Text strong>合并后的 PATH</Typography.Text>
+                  <Button size="small" icon={<CopyOutlined />} onClick={() => copyText(snapshot.mergedPath, 'PATH 已复制')}>
+                    复制
+                  </Button>
+                </div>
+                <pre>{mergedPathItems.map((item, index) => `${index + 1}. ${item}`).join('\n') || '未读取到 PATH'}</pre>
+              </div>
+
+              {repairResult && (
+                <Alert
+                  type={repairResult.appliedActions.length > 0 ? 'success' : 'info'}
+                  showIcon
+                  message={repairResult.appliedActions.length > 0 ? '修复已完成' : '没有写入新配置'}
+                  description={[
+                    ...repairResult.changedFiles.map((file) => `已更新：${file}`),
+                    ...repairResult.backupFiles.map((file) => `备份：${file}`)
+                  ].join('\n') || '当前配置已经满足检测项。'}
+                />
+              )}
+            </Space>
+          )}
+        </div>
       </div>
     </section>
   )
@@ -13718,6 +14757,7 @@ function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
     return storedTasks.length > 0 ? storedTasks : [createEnvFileDiffTask()]
   })
   const [activeTaskId, setActiveTaskId] = useState(() => readStoredEnvFileDiffActiveTaskId())
+  const [taskQuery, setTaskQuery] = useState('')
   const activeTask = useMemo(() => tasks.find((task) => task.id === activeTaskId) ?? tasks[0] ?? null, [activeTaskId, tasks])
   const sourceText = activeTask?.sourceText ?? ''
   const targetText = activeTask?.targetText ?? ''
@@ -13741,6 +14781,45 @@ function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
     return formatEnvVariableRows(sourceVariables.variables.filter((variable) => missingVariableNames.has(variable.name)))
   }, [diffResult, sourceVariables.variables])
   const hasAnyInput = Boolean(sourceText.trim() || targetText.trim() || sourceFile || targetFile)
+  const activeIssueCount = diffResult ? diffResult.missingInTarget.length + diffResult.extraInTarget.length + diffResult.differentValues.length : 0
+  const normalizedTaskQuery = taskQuery.trim().toLowerCase()
+  const taskListItems = useMemo(
+    () =>
+      tasks.map((task) => {
+        const hasTaskInput = Boolean(task.sourceText.trim() || task.targetText.trim() || task.sourceFile || task.targetFile)
+        const taskDiff = hasTaskInput ? compareEnvFiles(task.sourceText, task.targetText) : null
+        const displayTitle = getTaskDisplayTitle(task)
+        const fileLabel = getTaskFileLabel(task)
+        const issueCount = taskDiff ? taskDiff.missingInTarget.length + taskDiff.extraInTarget.length + taskDiff.differentValues.length : 0
+        const variableCount = taskDiff ? new Set([...taskDiff.sourceVariables, ...taskDiff.targetVariables]).size : 0
+        const searchText = [
+          displayTitle,
+          fileLabel,
+          task.title,
+          task.sourceFile?.name ?? '',
+          task.targetFile?.name ?? '',
+          ...(taskDiff?.sourceVariables ?? []),
+          ...(taskDiff?.targetVariables ?? [])
+        ]
+          .join(' ')
+          .toLowerCase()
+
+        return {
+          task,
+          displayTitle,
+          fileLabel,
+          hasTaskInput,
+          issueCount,
+          variableCount,
+          searchText
+        }
+      }),
+    [tasks]
+  )
+  const visibleTaskListItems = useMemo(
+    () => (normalizedTaskQuery ? taskListItems.filter((item) => item.searchText.includes(normalizedTaskQuery)) : taskListItems),
+    [normalizedTaskQuery, taskListItems]
+  )
 
   useEffect(() => {
     writeStoredEnvFileDiffTasks(tasks)
@@ -13809,31 +14888,39 @@ function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
   }
 
   function getTaskDisplayTitle(task: EnvFileDiffTask): string {
+    const customTitle = task.title.trim()
     const fileLabels = [
       task.sourceFile ? `A: ${task.sourceFile.name}` : '',
       task.targetFile ? `B: ${task.targetFile.name}` : ''
     ].filter(Boolean)
 
+    if (customTitle && customTitle !== '环境变量对比') {
+      return customTitle
+    }
+
     if (fileLabels.length > 0) {
       return fileLabels.join(' / ')
     }
 
-    return `${task.title} · ${formatRsaPrivateKeyTime(task.createdAt)}`
+    return `环境变量对比 · ${formatRsaPrivateKeyTime(task.createdAt)}`
   }
 
-  function getTaskSummary(task: EnvFileDiffTask): string {
-    if (!task.sourceText.trim() && !task.targetText.trim()) {
-      return `空任务 · 创建 ${formatRsaPrivateKeyTime(task.createdAt)}`
-    }
+  function getTaskFileLabel(task: EnvFileDiffTask): string {
+    const fileLabels = [
+      task.sourceFile ? `A ${task.sourceFile.name}` : '',
+      task.targetFile ? `B ${task.targetFile.name}` : ''
+    ].filter(Boolean)
 
-    const taskDiff = compareEnvFiles(task.sourceText, task.targetText)
-    return [
-      `更新 ${formatRsaPrivateKeyTime(task.updatedAt)}`,
-      `A ${taskDiff.sourceVariables.length}`,
-      `B ${taskDiff.targetVariables.length}`,
-      `B 缺少 ${taskDiff.missingInTarget.length}`,
-      `值不同 ${taskDiff.differentValues.length}`
-    ].join(' · ')
+    return fileLabels.length > 0 ? fileLabels.join(' / ') : `更新 ${formatRsaPrivateKeyTime(task.updatedAt)}`
+  }
+
+  function updateTaskTitle(value: string): void {
+    commitActiveTask({ title: value })
+  }
+
+  function normalizeTaskTitle(): void {
+    const nextTitle = activeTask?.title.trim() || '环境变量对比'
+    commitActiveTask({ title: nextTitle })
   }
 
   function updateVariableValue(variableName: string, target: 'source' | 'target', value: string): void {
@@ -14051,7 +15138,7 @@ function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
       </div>
 
       <div className="env-diff-workflow">
-        <div className="panel env-diff-task-panel">
+        <aside className="panel env-diff-task-panel">
           <div className="env-diff-task-heading">
             <div className="password-tool-heading">
               <span className="password-tool-icon">
@@ -14059,7 +15146,7 @@ function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
               </span>
               <div>
                 <Typography.Title level={3}>对比任务</Typography.Title>
-                <Typography.Text type="secondary">选择历史对比继续编辑，或新建一条任务。</Typography.Text>
+                <Typography.Text type="secondary">{tasks.length} 条任务，选择一条继续编辑。</Typography.Text>
               </div>
             </div>
             <Button type="primary" icon={<PlusOutlined />} onClick={createTask}>
@@ -14067,175 +15154,208 @@ function FileDiffTool({ onBack }: { onBack: () => void }): JSX.Element {
             </Button>
           </div>
 
-          <div className="env-diff-task-list">
-            {tasks.map((task) => (
-              <div className={`env-diff-task-item${task.id === activeTask?.id ? ' is-active' : ''}`} key={task.id}>
-                <button className="env-diff-task-select" type="button" onClick={() => setActiveTaskId(task.id)}>
-                  <Typography.Text strong className="table-text" ellipsis={{ tooltip: getTaskDisplayTitle(task) }}>
-                    {getTaskDisplayTitle(task)}
+          <Input
+            allowClear
+            className="env-diff-task-search"
+            placeholder="搜索任务、文件或变量"
+            prefix={<SearchOutlined />}
+            value={taskQuery}
+            onChange={(event) => setTaskQuery(event.target.value)}
+          />
+
+          <div className="env-diff-task-list" role="list">
+            {visibleTaskListItems.map((item) => (
+              <div className={`env-diff-task-item${item.task.id === activeTask?.id ? ' is-active' : ''}`} key={item.task.id} role="listitem">
+                <button className="env-diff-task-select" type="button" aria-pressed={item.task.id === activeTask?.id} onClick={() => setActiveTaskId(item.task.id)}>
+                  <Typography.Text strong className="env-diff-task-title" ellipsis={{ tooltip: item.displayTitle }}>
+                    {item.displayTitle}
                   </Typography.Text>
                   <Typography.Text className="env-diff-task-meta" type="secondary">
-                    {getTaskSummary(task)}
+                    {item.fileLabel}
                   </Typography.Text>
+                  <div className="env-diff-task-counts">
+                    <Tag>{item.hasTaskInput ? `${item.variableCount} 变量` : '空任务'}</Tag>
+                    <Tag color={item.issueCount > 0 ? 'orange' : item.hasTaskInput ? 'green' : 'default'}>
+                      {item.hasTaskInput ? (item.issueCount > 0 ? `${item.issueCount} 待处理` : '已一致') : '待输入'}
+                    </Tag>
+                  </div>
                 </button>
                 <Popconfirm
                   title="删除这个对比任务？"
                   description="删除后不会再保留这次对比内容。"
                   okText="删除"
                   cancelText="取消"
-                  onConfirm={() => deleteTask(task.id)}
+                  onConfirm={() => deleteTask(item.task.id)}
                 >
                   <Tooltip title="删除">
-                    <Button danger size="small" icon={<DeleteOutlined />} />
+                    <Button className="env-diff-task-delete" danger size="small" icon={<DeleteOutlined />} />
                   </Tooltip>
                 </Popconfirm>
               </div>
             ))}
-          </div>
-        </div>
 
-        <div className="panel file-picker-panel">
-          <div className="password-tool-heading">
-            <span className="password-tool-icon">
-              <FileTextOutlined />
-            </span>
-            <div>
-              <Typography.Title level={3}>输入环境</Typography.Title>
-              <Typography.Text type="secondary">环境 A 是基准，环境 B 是要检查和补齐的目标。</Typography.Text>
-            </div>
+            {visibleTaskListItems.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的任务" /> : null}
           </div>
+        </aside>
 
-          <div className="env-diff-input-toolbar">
-            <Typography.Text type="secondary">粘贴后可以直接编辑，也可以从文件导入后继续调整。</Typography.Text>
-            <Button size="small" icon={<DeleteOutlined />} disabled={!hasAnyInput} onClick={clearInputs}>
-              清空
-            </Button>
-          </div>
-
-          <div className="env-diff-text-grid">
-            <div className="env-diff-text-card">
-              <div className="env-diff-text-heading">
-                <div className="env-diff-text-title-row">
-                  <Typography.Text strong>环境 A（基准）</Typography.Text>
-                  {renderEnvironmentCopyControl('source', 'small')}
-                </div>
-                {renderInputMeta(sourceVariables, sourceText, sourceFile)}
-              </div>
-              <Input.TextArea
-                className="env-diff-textarea"
-                value={sourceText}
-                placeholder={'直接粘贴环境 A，例如：\nDATABASE_URL=...\nexport REDIS_URL=...\nJWT_SECRET=...'}
-                rows={14}
-                onChange={(event) => updateInputText(event.target.value, 'source')}
-              />
-              <div className="env-diff-file-row">
-                <label className="env-file-import-button">
-                  <UploadOutlined />
-                  <span>导入环境 A 文件</span>
-                  <input
-                    accept={ENV_FILE_ACCEPT}
-                    type="file"
-                    onChange={(event) => {
-                      void chooseFile(event.target.files?.[0], 'source')
-                    }}
-                  />
-                </label>
-                <Typography.Text type="secondary">{sourceFile ? `${sourceFile.name} · ${formatFileSize(sourceFile.size)}` : '也可以直接粘贴 .env 内容'}</Typography.Text>
+        <div className="env-diff-main-stack">
+          <div className="panel file-picker-panel">
+            <div className="password-tool-heading">
+              <span className="password-tool-icon">
+                <FileTextOutlined />
+              </span>
+              <div>
+                <Typography.Title level={3}>输入环境</Typography.Title>
+                <Typography.Text type="secondary">环境 A 是基准，环境 B 是要检查和补齐的目标。</Typography.Text>
               </div>
             </div>
 
-            <div className="env-diff-text-card">
-              <div className="env-diff-text-heading">
-                <div className="env-diff-text-title-row">
-                  <Typography.Text strong>环境 B</Typography.Text>
-                  {renderEnvironmentCopyControl('target', 'small')}
-                </div>
-                {renderInputMeta(targetVariables, targetText, targetFile)}
-              </div>
-              <Input.TextArea
-                className="env-diff-textarea"
-                value={targetText}
-                placeholder={'直接粘贴环境 B，例如：\nDATABASE_URL=...\nREDIS_URL=...'}
-                rows={14}
-                onChange={(event) => updateInputText(event.target.value, 'target')}
-              />
-              <div className="env-diff-file-row">
-                <label className="env-file-import-button">
-                  <UploadOutlined />
-                  <span>导入环境 B 文件</span>
-                  <input
-                    accept={ENV_FILE_ACCEPT}
-                    type="file"
-                    onChange={(event) => {
-                      void chooseFile(event.target.files?.[0], 'target')
-                    }}
-                  />
-                </label>
-                <Typography.Text type="secondary">{targetFile ? `${targetFile.name} · ${formatFileSize(targetFile.size)}` : '也可以直接粘贴 .env 内容'}</Typography.Text>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="panel file-diff-panel env-diff-result-panel">
-          <div className="password-tool-heading">
-            <span className="password-tool-icon">
-              <DiffOutlined />
-            </span>
-            <div>
-              <Typography.Title level={3}>对比结果表格</Typography.Title>
-              <Typography.Text type="secondary">查看每个变量在环境 A 和环境 B 中的值。</Typography.Text>
-            </div>
-          </div>
-
-          {!diffResult ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="粘贴环境 A 或环境 B 后显示表格" />
-          ) : (
-            <div className="file-diff-result">
-              <div className="file-diff-summary">
-                <Statistic title="A 变量数" value={diffResult.sourceVariables.length} />
-                <Statistic title="B 变量数" value={diffResult.targetVariables.length} />
-                <Statistic title="B 缺少" value={diffResult.missingInTarget.length} valueStyle={{ color: diffResult.missingInTarget.length > 0 ? '#cf1322' : '#389e0d' }} />
-                <Statistic title="值不同" value={diffResult.differentValues.length} valueStyle={{ color: diffResult.differentValues.length > 0 ? '#d46b08' : '#389e0d' }} />
-              </div>
-
-              {diffResult.sourceIgnoredLineCount > 0 || diffResult.targetIgnoredLineCount > 0 ? (
-                <Alert
-                  type="info"
-                  showIcon
-                  message={`已忽略未识别行：A ${diffResult.sourceIgnoredLineCount} 行，B ${diffResult.targetIgnoredLineCount} 行`}
+            <div className="env-diff-input-toolbar">
+              <div className="env-diff-current-task">
+                <Typography.Text type="secondary">任务名称</Typography.Text>
+                <Input
+                  className="env-diff-task-title-input"
+                  value={activeTask?.title ?? ''}
+                  placeholder="给这次对比起个名字"
+                  onBlur={normalizeTaskTitle}
+                  onChange={(event) => updateTaskTitle(event.target.value)}
                 />
-              ) : null}
+              </div>
+              <div className="env-diff-input-actions">
+                <Tag color={activeIssueCount > 0 ? 'orange' : diffResult ? 'green' : 'default'}>
+                  {diffResult ? (activeIssueCount > 0 ? `${activeIssueCount} 项待处理` : '当前任务已一致') : '等待输入'}
+                </Tag>
+                <Button size="small" icon={<DeleteOutlined />} disabled={!hasAnyInput} onClick={clearInputs}>
+                  清空
+                </Button>
+              </div>
+            </div>
 
-              <div className="env-diff-result-toolbar">
-                <Segmented
-                  value={resultFilter}
-                  options={[
-                    { label: `全部 ${diffResult.rows.length}`, value: 'all' },
-                    { label: `B 缺少 ${diffResult.missingInTarget.length}`, value: 'missing' },
-                    { label: `B 多出 ${diffResult.extraInTarget.length}`, value: 'extra' },
-                    { label: `值不同 ${diffResult.differentValues.length}`, value: 'different' }
-                  ]}
-                  onChange={(value) => updateResultFilter(value as EnvFileDiffRowFilter)}
+            <div className="env-diff-text-grid">
+              <div className="env-diff-text-card">
+                <div className="env-diff-text-heading">
+                  <div className="env-diff-text-title-row">
+                    <Typography.Text strong>环境 A（基准）</Typography.Text>
+                    {renderEnvironmentCopyControl('source', 'small')}
+                  </div>
+                  {renderInputMeta(sourceVariables, sourceText, sourceFile)}
+                </div>
+                <Input.TextArea
+                  className="env-diff-textarea"
+                  value={sourceText}
+                  placeholder={'直接粘贴环境 A，例如：\nDATABASE_URL=...\nexport REDIS_URL=...\nJWT_SECRET=...'}
+                  rows={14}
+                  onChange={(event) => updateInputText(event.target.value, 'source')}
                 />
-                <div className="env-diff-result-actions">
-                  {renderMissingVariablesCopyControl()}
-                  {renderEnvironmentCopyControl('source')}
-                  {renderEnvironmentCopyControl('target')}
+                <div className="env-diff-file-row">
+                  <label className="env-file-import-button">
+                    <UploadOutlined />
+                    <span>导入环境 A 文件</span>
+                    <input
+                      accept={ENV_FILE_ACCEPT}
+                      type="file"
+                      onChange={(event) => {
+                        void chooseFile(event.target.files?.[0], 'source')
+                      }}
+                    />
+                  </label>
+                  <Typography.Text type="secondary">{sourceFile ? `${sourceFile.name} · ${formatFileSize(sourceFile.size)}` : '也可以直接粘贴 .env 内容'}</Typography.Text>
                 </div>
               </div>
 
-              <Table<EnvFileDiffRow>
-                className="content-table env-diff-table"
-                rowKey="id"
-                columns={diffColumns}
-                dataSource={visibleRows}
-                scroll={{ x: 1120 }}
-                pagination={false}
-                locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选没有结果" /> }}
-              />
+              <div className="env-diff-text-card">
+                <div className="env-diff-text-heading">
+                  <div className="env-diff-text-title-row">
+                    <Typography.Text strong>环境 B</Typography.Text>
+                    {renderEnvironmentCopyControl('target', 'small')}
+                  </div>
+                  {renderInputMeta(targetVariables, targetText, targetFile)}
+                </div>
+                <Input.TextArea
+                  className="env-diff-textarea"
+                  value={targetText}
+                  placeholder={'直接粘贴环境 B，例如：\nDATABASE_URL=...\nREDIS_URL=...'}
+                  rows={14}
+                  onChange={(event) => updateInputText(event.target.value, 'target')}
+                />
+                <div className="env-diff-file-row">
+                  <label className="env-file-import-button">
+                    <UploadOutlined />
+                    <span>导入环境 B 文件</span>
+                    <input
+                      accept={ENV_FILE_ACCEPT}
+                      type="file"
+                      onChange={(event) => {
+                        void chooseFile(event.target.files?.[0], 'target')
+                      }}
+                    />
+                  </label>
+                  <Typography.Text type="secondary">{targetFile ? `${targetFile.name} · ${formatFileSize(targetFile.size)}` : '也可以直接粘贴 .env 内容'}</Typography.Text>
+                </div>
+              </div>
             </div>
-          )}
+          </div>
+
+          <div className="panel file-diff-panel env-diff-result-panel">
+            <div className="password-tool-heading">
+              <span className="password-tool-icon">
+                <DiffOutlined />
+              </span>
+              <div>
+                <Typography.Title level={3}>对比结果表格</Typography.Title>
+                <Typography.Text type="secondary">查看每个变量在环境 A 和环境 B 中的值。</Typography.Text>
+              </div>
+            </div>
+
+            {!diffResult ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="粘贴环境 A 或环境 B 后显示表格" />
+            ) : (
+              <div className="file-diff-result">
+                <div className="file-diff-summary">
+                  <Statistic title="A 变量数" value={diffResult.sourceVariables.length} />
+                  <Statistic title="B 变量数" value={diffResult.targetVariables.length} />
+                  <Statistic title="B 缺少" value={diffResult.missingInTarget.length} valueStyle={{ color: diffResult.missingInTarget.length > 0 ? '#cf1322' : '#389e0d' }} />
+                  <Statistic title="值不同" value={diffResult.differentValues.length} valueStyle={{ color: diffResult.differentValues.length > 0 ? '#d46b08' : '#389e0d' }} />
+                </div>
+
+                {diffResult.sourceIgnoredLineCount > 0 || diffResult.targetIgnoredLineCount > 0 ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message={`已忽略未识别行：A ${diffResult.sourceIgnoredLineCount} 行，B ${diffResult.targetIgnoredLineCount} 行`}
+                  />
+                ) : null}
+
+                <div className="env-diff-result-toolbar">
+                  <Segmented
+                    value={resultFilter}
+                    options={[
+                      { label: `全部 ${diffResult.rows.length}`, value: 'all' },
+                      { label: `B 缺少 ${diffResult.missingInTarget.length}`, value: 'missing' },
+                      { label: `B 多出 ${diffResult.extraInTarget.length}`, value: 'extra' },
+                      { label: `值不同 ${diffResult.differentValues.length}`, value: 'different' }
+                    ]}
+                    onChange={(value) => updateResultFilter(value as EnvFileDiffRowFilter)}
+                  />
+                  <div className="env-diff-result-actions">
+                    {renderMissingVariablesCopyControl()}
+                    {renderEnvironmentCopyControl('source')}
+                    {renderEnvironmentCopyControl('target')}
+                  </div>
+                </div>
+
+                <Table<EnvFileDiffRow>
+                  className="content-table env-diff-table"
+                  rowKey="id"
+                  columns={diffColumns}
+                  dataSource={visibleRows}
+                  scroll={{ x: 1120 }}
+                  pagination={false}
+                  locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选没有结果" /> }}
+                />
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </section>
@@ -14831,6 +15951,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             <ProjectOverview
               onCreateProject={() => setCreatingProject(true)}
               onOpenSettings={() => setActiveKey('settings')}
+              onOpenTerminalRequest={openTerminalRequest}
             />
           )}
           <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('overview')} />

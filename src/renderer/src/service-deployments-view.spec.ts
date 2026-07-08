@@ -7,6 +7,7 @@ import {
   createDeploymentIssueSummary,
   createSystemLogEntry,
   createSystemLogSummary,
+  canRunServiceDeploymentAction,
   deploymentAutoRefreshIntervalMs,
   filterDeploymentRows,
   getDeploymentRateLimitRetryMs,
@@ -50,7 +51,13 @@ function deployment(input: Partial<ServiceDeploymentSummary> & Pick<ServiceDeplo
     readyAt: input.readyAt ?? '',
     creator: input.creator ?? '',
     meta: input.meta ?? {},
-    commitSha: input.commitSha ?? ''
+    commitSha: input.commitSha ?? '',
+    environmentId: input.environmentId,
+    projectId: input.projectId,
+    serviceId: input.serviceId,
+    canRedeploy: input.canRedeploy,
+    canRollback: input.canRollback,
+    deploymentStopped: input.deploymentStopped
   }
 }
 
@@ -137,6 +144,40 @@ describe('service deployments view model', () => {
         }
       ]
     )
+  })
+
+  it('enables Railway deployment actions from deployment capabilities and state', () => {
+    const readyDeployment = deployment({
+      id: 'railway_ready',
+      state: 'SUCCESS',
+      createdAt: '2026-06-29T00:00:00.000Z',
+      canRedeploy: true,
+      canRollback: true,
+      deploymentStopped: false
+    })
+    const stoppedDeployment = deployment({
+      id: 'railway_stopped',
+      state: 'SUCCESS',
+      createdAt: '2026-06-29T00:01:00.000Z',
+      canRollback: false,
+      deploymentStopped: true
+    })
+    const buildingDeployment = deployment({
+      id: 'railway_building',
+      state: 'BUILDING',
+      createdAt: '2026-06-29T00:02:00.000Z'
+    })
+
+    assert.equal(canRunServiceDeploymentAction('railway', readyDeployment, 'redeploy'), true)
+    assert.equal(canRunServiceDeploymentAction('railway', readyDeployment, 'restart'), true)
+    assert.equal(canRunServiceDeploymentAction('railway', readyDeployment, 'stop'), true)
+    assert.equal(canRunServiceDeploymentAction('railway', readyDeployment, 'rollback'), true)
+    assert.equal(canRunServiceDeploymentAction('railway', readyDeployment, 'cancel'), false)
+    assert.equal(canRunServiceDeploymentAction('railway', stoppedDeployment, 'stop'), false)
+    assert.equal(canRunServiceDeploymentAction('railway', stoppedDeployment, 'restart'), false)
+    assert.equal(canRunServiceDeploymentAction('railway', stoppedDeployment, 'rollback'), false)
+    assert.equal(canRunServiceDeploymentAction('railway', buildingDeployment, 'cancel'), true)
+    assert.equal(canRunServiceDeploymentAction('railway', buildingDeployment, 'promote'), false)
   })
 
   it('filters deployment rows by environment, repository, branch, author, status, query and date', () => {

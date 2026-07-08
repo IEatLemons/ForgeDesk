@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { registerDockerIpc, type DockerIpcService } from './docker-ipc.js'
-import type { DockerContainerDetail, DockerSnapshot } from './docker.js'
+import type { DockerContainerDetail, DockerDevEnvironmentResult, DockerDevEnvironmentTaskSnapshot, DockerSnapshot } from './docker.js'
 
 type TestIpcMain = {
   handlers: Map<string, (event: unknown, ...args: any[]) => unknown>
@@ -48,6 +48,38 @@ const containerDetail: DockerContainerDetail = {
   rawJson: '{}'
 }
 
+const devEnvironmentResult: DockerDevEnvironmentResult = {
+  configPath: '/Users/stone/project/.devcontainer/devcontainer.json',
+  hostPath: '/Users/stone/project',
+  name: 'Project Dev',
+  workspaceFolder: '/workspaces/project',
+  system: 'ubuntu-24.04',
+  image: 'mcr.microsoft.com/devcontainers/base:ubuntu-24.04',
+  dockerInDocker: true,
+  containerName: 'forgedesk-dev-project-dev-12345678',
+  content: '{}\n'
+}
+
+const devEnvironmentTask: DockerDevEnvironmentTaskSnapshot = {
+  taskId: 'task-1',
+  status: 'running',
+  runMode: 'devcontainer-cli',
+  progressPercent: 20,
+  stage: '使用 Dev Containers CLI 构建并启动',
+  title: 'Project Dev',
+  hostPath: '/Users/stone/project',
+  configPath: devEnvironmentResult.configPath,
+  containerName: devEnvironmentResult.containerName,
+  command: 'devcontainer up --workspace-folder /Users/stone/project',
+  startedAt: '2026-07-06T07:30:00.000Z',
+  updatedAt: '2026-07-06T07:30:01.000Z',
+  finishedAt: '',
+  exitCode: null,
+  error: '',
+  logs: ['已写入配置'],
+  result: devEnvironmentResult
+}
+
 function createIpcMain(): TestIpcMain {
   const handlers = new Map<string, (event: unknown, ...args: any[]) => unknown>()
 
@@ -70,6 +102,14 @@ describe('docker ipc', () => {
         calls.push(`detail:${containerId}`)
         return containerDetail
       },
+      createDevEnvironment: async (input) => {
+        calls.push(`dev:${input.hostPath}:${input.system}:${input.enableDockerInDocker}`)
+        return devEnvironmentTask
+      },
+      listDevEnvironmentTasks: () => {
+        calls.push('dev-tasks')
+        return [devEnvironmentTask]
+      },
       saveResourceNote: async (input) => {
         calls.push(`save:${input.resourceType}:${input.resourceKey}:${input.displayName}`)
         return snapshot
@@ -87,6 +127,8 @@ describe('docker ipc', () => {
     assert.deepEqual(Array.from(ipcMain.handlers.keys()), [
       'docker:snapshot',
       'docker:container:detail',
+      'docker:dev-environment:create',
+      'docker:dev-environment:tasks',
       'docker:note:save',
       'docker:note:delete',
       'docker:watch:start',
@@ -94,6 +136,15 @@ describe('docker ipc', () => {
     ])
     assert.equal(await ipcMain.handlers.get('docker:snapshot')?.({}), snapshot)
     assert.equal(await ipcMain.handlers.get('docker:container:detail')?.({}, 'abcdef1234567890'), containerDetail)
+    assert.equal(
+      await ipcMain.handlers.get('docker:dev-environment:create')?.({}, {
+        hostPath: '/Users/stone/project',
+        system: 'ubuntu-24.04',
+        enableDockerInDocker: true
+      }),
+      devEnvironmentTask
+    )
+    assert.deepEqual(await ipcMain.handlers.get('docker:dev-environment:tasks')?.({}), [devEnvironmentTask])
     assert.equal(
       await ipcMain.handlers.get('docker:note:save')?.({}, {
         resourceType: 'image',
@@ -109,6 +160,8 @@ describe('docker ipc', () => {
     assert.deepEqual(calls, [
       'snapshot',
       'detail:abcdef1234567890',
+      'dev:/Users/stone/project:ubuntu-24.04:true',
+      'dev-tasks',
       'save:image:image-tag:merchant-api:latest:Merchant API',
       'delete:image:image-tag:merchant-api:latest',
       'start',

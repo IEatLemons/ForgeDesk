@@ -14,7 +14,8 @@ describe('legacy mac package signing helpers', () => {
     const root = await mkdtemp(join(tmpdir(), 'forgedesk-package-mac-'))
 
     try {
-      const framework = join(root, 'ForgeDesk.app', 'Contents', 'Frameworks', 'Squirrel.framework')
+      const appPath = join(root, 'ForgeDesk.app')
+      const framework = join(appPath, 'Contents', 'Frameworks', 'Squirrel.framework')
       const versionA = join(framework, 'Versions', 'A')
       const versionCurrent = join(framework, 'Versions', 'Current')
 
@@ -27,8 +28,9 @@ describe('legacy mac package signing helpers', () => {
       await createFile(join(framework, 'Squirrel'))
       await mkdir(join(framework, 'Resources'), { recursive: true })
 
-      await normalizeMacFrameworks(join(root, 'ForgeDesk.app'))
+      const normalized = normalizeMacFrameworks(appPath)
 
+      assert.deepEqual(normalized, [framework])
       assert.equal(await readlink(versionCurrent), 'A')
       assert.equal(await readlink(join(framework, 'Squirrel')), join('Versions', 'Current', 'Squirrel'))
       assert.equal(await readlink(join(framework, 'Resources')), join('Versions', 'Current', 'Resources'))
@@ -38,13 +40,14 @@ describe('legacy mac package signing helpers', () => {
     }
   })
 
-  it('does nothing when the app has no framework directory', async () => {
+  it('ignores apps without a Frameworks directory', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgedesk-package-mac-'))
 
     try {
-      await mkdir(join(root, 'ForgeDesk.app', 'Contents'), { recursive: true })
+      const appPath = join(root, 'ForgeDesk.app')
+      await mkdir(join(appPath, 'Contents'), { recursive: true })
 
-      await normalizeMacFrameworks(join(root, 'ForgeDesk.app'))
+      assert.deepEqual(normalizeMacFrameworks(appPath), [])
     } finally {
       await rm(root, { recursive: true, force: true })
     }

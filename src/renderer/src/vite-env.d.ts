@@ -131,6 +131,64 @@ type RsaPrivateKeyUpdateInput = {
   notes?: string
 }
 
+type CliEnvironmentIssueStatus = 'ok' | 'warning' | 'error'
+
+type CliEnvironmentRepairAction = 'source-profile-from-zprofile' | 'install-zsh-dev-prompt' | 'install-zsh-ls-colors'
+
+type CliEnvironmentIssue = {
+  id: string
+  status: CliEnvironmentIssueStatus
+  title: string
+  detail: string
+  action?: CliEnvironmentRepairAction
+}
+
+type CliEnvironmentConfigFile = {
+  key: 'profile' | 'zprofile' | 'zshrc' | 'bashProfile' | 'bashrc'
+  label: string
+  path: string
+  exists: boolean
+  managed: boolean
+}
+
+type CliEnvironmentCommandCheck = {
+  name: string
+  available: boolean
+  path: string
+  version: string
+  error: string
+}
+
+type CliEnvironmentPlatform = 'aix' | 'android' | 'darwin' | 'freebsd' | 'haiku' | 'linux' | 'openbsd' | 'sunos' | 'win32' | 'cygwin' | 'netbsd'
+
+type CliEnvironmentSnapshot = {
+  platform: CliEnvironmentPlatform
+  shell: string
+  shellName: string
+  homeDirectory: string
+  checkedAt: string
+  processPath: string
+  loginShellPath: string
+  mergedPath: string
+  pnpmHome: string
+  profileSourcedFromLoginFile: boolean
+  promptConfigured: boolean
+  promptProvider: string
+  listingColorsConfigured: boolean
+  listingColorProvider: string
+  configFiles: CliEnvironmentConfigFile[]
+  commands: CliEnvironmentCommandCheck[]
+  issues: CliEnvironmentIssue[]
+  repairableActions: CliEnvironmentRepairAction[]
+}
+
+type CliEnvironmentRepairResult = {
+  snapshot: CliEnvironmentSnapshot
+  appliedActions: CliEnvironmentRepairAction[]
+  changedFiles: string[]
+  backupFiles: string[]
+}
+
 type TerminalSession = {
   id: string
   title: string
@@ -230,6 +288,7 @@ type CommitMessageSuggestion = {
 }
 
 type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
+type ReleasePublishProvider = 'github' | 'codemagic'
 type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
 
 type ReleasePublishAction = {
@@ -241,6 +300,7 @@ type ReleasePublishAction = {
 
 type RepositoryReleasePlan = {
   repositoryName: string
+  provider: ReleasePublishProvider
   currentVersion: string
   suggestedVersion: string
   suggestedTagName: string
@@ -255,6 +315,7 @@ type RepositoryReleasePlan = {
 
 type RepositoryReleasePrepareInput = {
   targetVersion?: string
+  provider?: ReleasePublishProvider
 }
 
 type RepositoryReleasePreparation = {
@@ -291,6 +352,7 @@ type RepositoryReleaseSuggestion = {
 }
 
 type RepositoryReleasePublishInput = {
+  provider?: ReleasePublishProvider
   version: string
   tagName: string
   releaseTitle: string
@@ -298,16 +360,33 @@ type RepositoryReleasePublishInput = {
   commitMessage: string
   githubTokenId?: string
   githubToken?: string
+  codemagicTokenId?: string
+  codemagicTeamId?: string
+  codemagicAppId?: string
+  codemagicAppName?: string
+  codemagicWorkflowId?: string
+  codemagicWorkflowName?: string
+  codemagicDefaultBranch?: string
+  codemagicLabels?: string[]
+  saveCodemagicBinding?: boolean
   releaseActions?: ReleasePublishActionKey[]
 }
 
 type RepositoryReleasePublishResult = {
   ok: boolean
+  provider: ReleasePublishProvider
   repository: RepositoryRecord
   plan: RepositoryReleasePlan
   stdout: string
   stderr: string
   exitCode: number | null
+  externalBuildId?: string
+  externalBuildUrl?: string
+  externalStatus?: string
+  externalWorkflow?: string
+  externalBranch?: string
+  externalTag?: string
+  artifacts?: ReleasePublishArtifact[]
 }
 
 type RepositoryReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
@@ -316,6 +395,7 @@ type RepositoryReleasePublishTask = {
   id: string
   repositoryId: string
   repositoryName: string
+  provider: ReleasePublishProvider
   version: string
   tagName: string
   releaseTitle: string
@@ -335,8 +415,24 @@ type RepositoryReleasePublishTask = {
   stderr: string
   exitCode: number | null
   error?: string
+  externalBuildId?: string
+  externalBuildUrl?: string
+  externalStatus?: string
+  externalWorkflow?: string
+  externalBranch?: string
+  externalTag?: string
+  artifacts: ReleasePublishArtifact[]
   plan?: RepositoryReleasePlan
   repository?: RepositoryRecord
+}
+
+type ReleasePublishArtifact = {
+  name: string
+  type: string
+  sizeInBytes: number
+  downloadUrl: string
+  versionCode?: string
+  versionName?: string
 }
 
 type GitMergeAnalysisInput = {
@@ -657,6 +753,12 @@ type ServiceDeploymentSummary = {
   creator: string
   meta: Record<string, unknown>
   commitSha: string
+  environmentId?: string
+  projectId?: string
+  serviceId?: string
+  canRedeploy?: boolean
+  canRollback?: boolean
+  deploymentStopped?: boolean
 }
 
 type VercelDeploymentSummary = ServiceDeploymentSummary
@@ -668,11 +770,14 @@ type ServiceDeploymentListOptions = {
 
 type VercelDeploymentListOptions = ServiceDeploymentListOptions
 
-type VercelDeploymentActionInput = {
-  action: 'redeploy' | 'cancel' | 'promote' | 'rollback'
-  deploymentId: string
+type ServiceDeploymentActionInput = {
+  action: 'deploy' | 'redeploy' | 'restart' | 'stop' | 'cancel' | 'promote' | 'rollback'
+  deploymentId?: string
+  environmentId?: string
   description?: string
 }
+
+type VercelDeploymentActionInput = ServiceDeploymentActionInput
 
 type ServiceEnvVarRecord = {
   id: string
@@ -733,6 +838,53 @@ type DockerResourceNoteInput = {
   resourceKey: string
   displayName?: string
   notes?: string
+}
+
+type DockerDevEnvironmentSystem = 'ubuntu-24.04' | 'ubuntu-22.04' | 'debian-12' | 'node-22' | 'python-3.12'
+
+type DockerDevEnvironmentInput = {
+  hostPath: string
+  name?: string
+  workspaceFolder?: string
+  system: DockerDevEnvironmentSystem
+  enableDockerInDocker?: boolean
+  overwrite?: boolean
+}
+
+type DockerDevEnvironmentResult = {
+  configPath: string
+  hostPath: string
+  name: string
+  workspaceFolder: string
+  system: DockerDevEnvironmentSystem
+  image: string
+  dockerInDocker: boolean
+  containerName: string
+  content: string
+}
+
+type DockerDevEnvironmentTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+
+type DockerDevEnvironmentRunMode = 'devcontainer-cli' | 'docker-run'
+
+type DockerDevEnvironmentTaskSnapshot = {
+  taskId: string
+  status: DockerDevEnvironmentTaskStatus
+  runMode: DockerDevEnvironmentRunMode
+  progressPercent: number
+  stage: string
+  title: string
+  hostPath: string
+  configPath: string
+  containerName: string
+  command: string
+  startedAt: string
+  updatedAt: string
+  finishedAt: string
+  exitCode: number | null
+  error: string
+  logs: string[]
+  result: DockerDevEnvironmentResult
 }
 
 type DockerImageSummary = {
@@ -1096,6 +1248,80 @@ type GithubTokenView = {
   lastCheckedAt: string
 }
 
+type CodemagicTokenInput = {
+  id?: string
+  name: string
+  token?: string
+}
+
+type CodemagicTokenView = {
+  id: string
+  name: string
+  tokenLastFour: string
+  userId: string
+  teamCount: number
+  appCount: number
+  permissionSummary: string
+  tokenConfigured: boolean
+  createdAt: string
+  updatedAt: string
+  lastCheckedAt: string
+}
+
+type CodemagicTeam = {
+  id: string
+  name: string
+}
+
+type CodemagicApp = {
+  id: string
+  name: string
+  teamId: string
+  repositoryUrl: string
+  settingsSource: string
+  projectType: string
+  lastBuildId: string
+  archived: boolean
+}
+
+type CodemagicAppListInput = {
+  tokenId: string
+  teamId?: string
+  name?: string
+}
+
+type CodemagicRepositoryBindingInput = {
+  repositoryId: string
+  tokenId: string
+  teamId?: string
+  appId: string
+  appName?: string
+  workflowId: string
+  workflowName?: string
+  defaultBranch?: string
+  labels?: string[]
+}
+
+type CodemagicRepositoryBinding = {
+  repositoryId: string
+  tokenId: string
+  teamId: string
+  appId: string
+  appName: string
+  workflowId: string
+  workflowName: string
+  defaultBranch: string
+  labels: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+type CodemagicArtifactPublicUrlInput = {
+  tokenId: string
+  secureFilename: string
+  expiresAt?: number
+}
+
 type AppUpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
 
 type AppUpdateState = {
@@ -1244,6 +1470,9 @@ interface Window {
     listRepositoryReleasePublishTasks: (repositoryId?: string) => Promise<RepositoryReleasePublishTask[]>
     getRepositoryReleasePublishTask: (taskId: string) => Promise<RepositoryReleasePublishTask | null>
     cancelRepositoryReleasePublishTask: (taskId: string) => Promise<RepositoryReleasePublishTask>
+    getRepositoryCodemagicBinding: (repositoryId: string) => Promise<CodemagicRepositoryBinding | null>
+    saveRepositoryCodemagicBinding: (input: CodemagicRepositoryBindingInput) => Promise<CodemagicRepositoryBinding>
+    deleteRepositoryCodemagicBinding: (repositoryId: string) => Promise<void>
     suggestConflictResolution: (repositoryId: string, filePath: string) => Promise<AiConflictSuggestion>
     applyConflictResolution: (repositoryId: string, filePath: string, content: string) => Promise<GitOperationResult>
     listRepositoryCommitFiles: (repositoryId: string, commitHash: string) => Promise<GitCommitFileChange[]>
@@ -1284,7 +1513,7 @@ interface Window {
     listServiceEnvironmentLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
     listCachedServiceDeployments: (serviceId: string, options?: ServiceDeploymentListOptions) => Promise<ServiceDeploymentSummary[]>
     listServiceDeployments: (serviceId: string, options?: ServiceDeploymentListOptions) => Promise<ServiceDeploymentSummary[]>
-    runServiceDeploymentAction: (serviceId: string, input: VercelDeploymentActionInput) => Promise<ProjectServiceRecord>
+    runServiceDeploymentAction: (serviceId: string, input: ServiceDeploymentActionInput) => Promise<ProjectServiceRecord>
     listServiceEnvVars: (serviceId: string) => Promise<ServiceEnvVarRecord[]>
     revealServiceEnvVar: (serviceId: string, envVarId: string) => Promise<ServiceEnvVarRecord>
     saveServiceEnvVar: (serviceId: string, input: VercelEnvVarInput) => Promise<ServiceEnvVarRecord>
@@ -1296,12 +1525,15 @@ interface Window {
     listServiceRuntimeLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
     getDockerSnapshot: () => Promise<DockerSnapshot>
     getDockerContainerDetail: (containerId: string) => Promise<DockerContainerDetail>
+    createDockerDevEnvironment: (input: DockerDevEnvironmentInput) => Promise<DockerDevEnvironmentTaskSnapshot>
+    listDockerDevEnvironmentTasks: () => Promise<DockerDevEnvironmentTaskSnapshot[]>
     saveDockerResourceNote: (input: DockerResourceNoteInput) => Promise<DockerSnapshot>
     deleteDockerResourceNote: (resourceType: DockerResourceType, resourceKey: string) => Promise<DockerSnapshot>
     startDockerWatch: () => Promise<void>
     stopDockerWatch: () => Promise<void>
     onDockerChanged: (listener: (event: DockerEventSummary) => void) => () => void
     onDockerWatchError: (listener: (event: { message: string }) => void) => () => void
+    onDockerDevEnvironmentProgress: (listener: (event: DockerDevEnvironmentTaskSnapshot) => void) => () => void
     saveProjectPerson: (input: { id?: string; projectId: string; displayName: string; role?: string; identities: Array<{ name: string; email: string }> }) => Promise<ProjectPersonRecord>
     deleteProjectPerson: (projectId: string, personId: string) => Promise<ProjectPersonRecord[]>
     scanRepositories: (paths: string[]) => Promise<ScannedRepository[]>
@@ -1318,10 +1550,19 @@ interface Window {
     saveGithubToken: (input: GithubTokenInput) => Promise<GithubTokenView[]>
     refreshGithubToken: (tokenId: string) => Promise<GithubTokenView[]>
     deleteGithubToken: (tokenId: string) => Promise<GithubTokenView[]>
+    listCodemagicTokens: () => Promise<CodemagicTokenView[]>
+    saveCodemagicToken: (input: CodemagicTokenInput) => Promise<CodemagicTokenView[]>
+    refreshCodemagicToken: (tokenId: string) => Promise<CodemagicTokenView[]>
+    deleteCodemagicToken: (tokenId: string) => Promise<CodemagicTokenView[]>
+    listCodemagicTeams: (tokenId: string) => Promise<CodemagicTeam[]>
+    listCodemagicApps: (input: CodemagicAppListInput) => Promise<CodemagicApp[]>
+    createCodemagicArtifactPublicUrl: (input: CodemagicArtifactPublicUrlInput) => Promise<{ url: string; expiresAt: string }>
     listRsaPrivateKeys: () => Promise<RsaPrivateKeyRecord[]>
     createRsaPrivateKey: (input: RsaPrivateKeyCreateInput) => Promise<RsaPrivateKeyRecord>
     updateRsaPrivateKey: (input: RsaPrivateKeyUpdateInput) => Promise<RsaPrivateKeyRecord>
     deleteRsaPrivateKey: (id: string) => Promise<RsaPrivateKeyRecord[]>
+    inspectCliEnvironment: () => Promise<CliEnvironmentSnapshot>
+    repairCliEnvironment: () => Promise<CliEnvironmentRepairResult>
     previewMonthlyPerformance: (input: MonthlyPerformancePreviewInput) => Promise<MonthlyPerformancePreview>
     exportMonthlyPerformance: (input: MonthlyPerformanceExportInput) => Promise<MonthlyPerformanceExportResult>
     listMonthlyPerformanceSessions: () => Promise<MonthlyPerformanceSession[]>
