@@ -88,6 +88,26 @@ describe('terminal panel state', () => {
     )
   })
 
+  it('restores panel state with the requested reuse key active', () => {
+    const projectSession = { ...firstSession, id: 'project-terminal', reuseKey: 'project:project-a' }
+    const cliSession = { ...secondSession, id: 'cli-terminal', reuseKey: undefined }
+    const state = createTerminalPanelStateFromSessions([cliSession, projectSession], { reuseKey: 'project:project-a' })
+
+    assert.equal(state.activeSessionId, 'project-terminal')
+    assert.deepEqual(
+      state.tabs.map((tab) => tab.id),
+      ['cli-terminal', 'project-terminal']
+    )
+  })
+
+  it('falls back to the requested cwd when a restored session has no reuse key', () => {
+    const projectSession = { ...firstSession, id: 'project-terminal', reuseKey: undefined, exited: true }
+    const cliSession = { ...secondSession, id: 'cli-terminal', reuseKey: undefined, exited: true }
+    const state = createTerminalPanelStateFromSessions([cliSession, projectSession], { cwd: firstSession.cwd })
+
+    assert.equal(state.activeSessionId, 'project-terminal')
+  })
+
   it('restores project terminal sessions by reuse key before falling back to legacy cwd-only sessions', () => {
     const projectSession = { ...firstSession, id: 'project-terminal', reuseKey: 'project:project-a' }
     const repositorySession = { ...firstSession, id: 'repository-terminal', reuseKey: 'repository:repo-a' }

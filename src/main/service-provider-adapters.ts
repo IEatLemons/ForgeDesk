@@ -54,6 +54,12 @@ export type VercelDeploymentSummary = {
   creator: string
   meta: Record<string, unknown>
   commitSha: string
+  environmentId?: string
+  projectId?: string
+  serviceId?: string
+  canRedeploy?: boolean
+  canRollback?: boolean
+  deploymentStopped?: boolean
 }
 
 export type ServiceDeploymentSummary = VercelDeploymentSummary
@@ -164,6 +170,30 @@ function stringArrayField(record: Record<string, unknown>, ...keys: string[]): s
   }
 
   return []
+}
+
+function booleanField(record: Record<string, unknown>, ...keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = record[key]
+
+    if (typeof value === 'boolean') {
+      return value
+    }
+
+    if (typeof value === 'string' && value.trim()) {
+      const normalized = value.trim().toLowerCase()
+
+      if (normalized === 'true') {
+        return true
+      }
+
+      if (normalized === 'false') {
+        return false
+      }
+    }
+  }
+
+  return undefined
 }
 
 function timestampField(record: Record<string, unknown>, ...keys: string[]): string {
@@ -773,6 +803,23 @@ function getRailwayTokenType(connection: ServiceProviderConnection): RailwayToke
   return connection.railwayTokenType ?? 'workspace'
 }
 
+const railwayDeploymentSelection = `
+  id
+  canRedeploy
+  canRollback
+  deploymentStopped
+  environmentId
+  projectId
+  serviceId
+  status
+  url
+  staticUrl
+  createdAt
+  updatedAt
+  statusUpdatedAt
+  meta
+`
+
 async function readRailwayGraphql(
   connection: ServiceProviderConnection,
   context: string,
@@ -829,17 +876,26 @@ function normalizeRailwayDeployment(item: unknown, environmentName = ''): Servic
   const deployment = asRecord(item)
   const meta = asRecord(deployment.meta)
   const creator = asRecord(deployment.creator)
+  const environmentId = stringField(deployment, 'environmentId')
+  const projectId = stringField(deployment, 'projectId')
+  const serviceId = stringField(deployment, 'serviceId')
 
   return {
     id: stringField(deployment, 'id'),
     url: stringField(deployment, 'url', 'staticUrl'),
-    target: environmentName || stringField(deployment, 'environmentName', 'environmentId'),
+    target: environmentName || stringField(deployment, 'environmentName') || environmentId,
     state: stringField(deployment, 'status', 'state'),
     createdAt: timestampField(deployment, 'createdAt', 'created'),
     readyAt: timestampField(deployment, 'statusUpdatedAt', 'updatedAt', 'finishedAt'),
     creator: stringField(creator, 'name', 'username', 'email', 'id'),
     meta,
-    commitSha: stringField(meta, 'commitSha', 'githubCommitSha') || stringField(deployment, 'commitSha', 'commit')
+    commitSha: stringField(meta, 'commitSha', 'githubCommitSha') || stringField(deployment, 'commitSha', 'commit'),
+    environmentId,
+    projectId,
+    serviceId,
+    canRedeploy: booleanField(deployment, 'canRedeploy'),
+    canRollback: booleanField(deployment, 'canRollback'),
+    deploymentStopped: booleanField(deployment, 'deploymentStopped')
   }
 }
 
@@ -1049,7 +1105,8 @@ export async function listRailwayDeployments(
   serviceId: string,
   environmentId = '',
   options: ServiceDeploymentListOptions = {},
-  fetcher: ServiceProviderFetch = fetch
+  fetcher: ServiceProviderFetch = fetch,
+  environmentName = ''
 ): Promise<ServiceDeploymentSummary[]> {
   const deployments: ServiceDeploymentSummary[] = []
   let after = ''
@@ -1064,14 +1121,7 @@ export async function listRailwayDeployments(
           deployments(first: $first, after: $after, input: $input) {
             edges {
               node {
-                id
-                status
-                url
-                staticUrl
-                createdAt
-                updatedAt
-                statusUpdatedAt
-                meta
+                ${railwayDeploymentSelection}
               }
             }
             pageInfo { hasNextPage endCursor }
@@ -1087,13 +1137,150 @@ export async function listRailwayDeployments(
     )
     const deploymentsConnection = asRecord(data.deployments)
 
-    deployments.push(...asArray(deploymentsConnection).map((deployment) => normalizeRailwayDeployment(deployment)))
+    deployments.push(...asArray(deploymentsConnection).map((deployment) => normalizeRailwayDeployment(deployment, environmentName)))
 
     const pageInfo = getRailwayPageInfo(deploymentsConnection)
     after = pageInfo.hasNextPage && deployments.length < limit ? pageInfo.endCursor : ''
   } while (after && deployments.length < limit)
 
   return deployments
+}
+
+export async function readRailwayDeployment(
+  connection: ServiceProviderConnection,
+  deploymentId: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<ServiceDeploymentSummary> {
+  const data = await readRailwayGraphql(
+    connection,
+    '读取 Railway 部署',
+    `
+      query ForgeDeskRailwayDeployment($id: String!) {
+        deployment(id: $id) {
+          ${railwayDeploymentSelection}
+        }
+      }
+    `,
+    { id: deploymentId },
+    fetcher
+  )
+
+  return normalizeRailwayDeployment(data.deployment)
+}
+
+export async function deployRailwayServiceInstance(
+  connection: ServiceProviderConnection,
+  serviceId: string,
+  environmentId: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<string> {
+  const data = await readRailwayGraphql(
+    connection,
+    '部署 Railway 服务',
+    `
+      mutation ForgeDeskRailwayServiceInstanceDeploy($environmentId: String!, $serviceId: String!) {
+        serviceInstanceDeployV2(environmentId: $environmentId, serviceId: $serviceId)
+      }
+    `,
+    { environmentId, serviceId },
+    fetcher
+  )
+
+  return stringField(data, 'serviceInstanceDeployV2')
+}
+
+export async function redeployRailwayDeployment(
+  connection: ServiceProviderConnection,
+  deploymentId: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<ServiceDeploymentSummary> {
+  const data = await readRailwayGraphql(
+    connection,
+    '重新部署 Railway 部署',
+    `
+      mutation ForgeDeskRailwayDeploymentRedeploy($id: String!, $usePreviousImageTag: Boolean) {
+        deploymentRedeploy(id: $id, usePreviousImageTag: $usePreviousImageTag) {
+          ${railwayDeploymentSelection}
+        }
+      }
+    `,
+    { id: deploymentId },
+    fetcher
+  )
+
+  return normalizeRailwayDeployment(data.deploymentRedeploy)
+}
+
+export async function restartRailwayDeployment(
+  connection: ServiceProviderConnection,
+  deploymentId: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<void> {
+  await readRailwayGraphql(
+    connection,
+    '重启 Railway 部署',
+    `
+      mutation ForgeDeskRailwayDeploymentRestart($id: String!) {
+        deploymentRestart(id: $id)
+      }
+    `,
+    { id: deploymentId },
+    fetcher
+  )
+}
+
+export async function rollbackRailwayDeployment(
+  connection: ServiceProviderConnection,
+  deploymentId: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<void> {
+  await readRailwayGraphql(
+    connection,
+    '回滚 Railway 部署',
+    `
+      mutation ForgeDeskRailwayDeploymentRollback($id: String!) {
+        deploymentRollback(id: $id)
+      }
+    `,
+    { id: deploymentId },
+    fetcher
+  )
+}
+
+export async function stopRailwayDeployment(
+  connection: ServiceProviderConnection,
+  deploymentId: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<void> {
+  await readRailwayGraphql(
+    connection,
+    '停止 Railway 部署',
+    `
+      mutation ForgeDeskRailwayDeploymentStop($id: String!) {
+        deploymentStop(id: $id)
+      }
+    `,
+    { id: deploymentId },
+    fetcher
+  )
+}
+
+export async function cancelRailwayDeployment(
+  connection: ServiceProviderConnection,
+  deploymentId: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<void> {
+  await readRailwayGraphql(
+    connection,
+    '取消 Railway 部署',
+    `
+      mutation ForgeDeskRailwayDeploymentCancel($id: String!) {
+        deploymentCancel(id: $id)
+      }
+    `,
+    { id: deploymentId },
+    fetcher
+  )
 }
 
 async function listRailwayServiceDomains(
@@ -1280,7 +1467,7 @@ export async function syncRailwayProviderServices(
         const environmentId = stringField(environment, 'id')
         const environmentName = stringField(environment, 'name') || 'production'
         const [latestDeployment] = environmentId
-          ? await listRailwayDeployments(connection, projectId, serviceId, environmentId, { limit: 1 }, fetcher)
+          ? await listRailwayDeployments(connection, projectId, serviceId, environmentId, { limit: 1 }, fetcher, environmentName)
           : []
 
         environments.push({

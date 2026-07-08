@@ -95,6 +95,24 @@ describe('release publishing planning', () => {
     assert.equal(noScript.canPublish, false)
   })
 
+  it('allows Codemagic release plans without a local publish script', () => {
+    const plan = createReleasePlan({
+      repositoryName: 'Mobile',
+      currentVersion: '2.0.0',
+      provider: 'codemagic',
+      headCommit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      statusFileCount: 0,
+      localTagCommit: '',
+      remoteTagCommit: '',
+      scripts: {}
+    })
+
+    assert.equal(plan.provider, 'codemagic')
+    assert.equal(plan.canPublish, true)
+    assert.equal(plan.selectedScript, '')
+    assert.match(plan.warnings.join('\n'), /Codemagic/)
+  })
+
   it('offers publish-time handling for dirty workspaces and stale local tags', () => {
     const plan = createReleasePlan({
       repositoryName: 'ForgeDesk',

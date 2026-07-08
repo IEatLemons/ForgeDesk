@@ -22,7 +22,8 @@ export const gitGraphColumnMinWidth = 152
 export const workingTreeCommitHash = '__FORGEDESK_WORKING_TREE__'
 export const gitLogRefreshPreferenceStorageKey = 'forgedesk.gitLogRefreshPreferences'
 export const gitLogRefreshPreferenceChangedEvent = 'forgedesk:git-log-refresh-preferences-changed'
-export const currentBranchRefColor = '#d4380d'
+export const currentBranchRefColor = '#722ed1'
+export const graphLaneFallbackColors = ['#1677ff', '#13c2c2', '#722ed1', '#fa8c16', '#52c41a', '#eb2f96', '#2f54eb']
 export const gitLogRefreshIntervalBounds = {
   minSeconds: 10,
   maxSeconds: 600
@@ -32,6 +33,10 @@ const gitGraphColumnPadding = 56
 export type GitLogRefreshPreferences = {
   autoRefreshEnabled: boolean
   intervalSeconds: number
+}
+
+export type BranchColoredGitGraphRow<TCommit extends GraphCommitInput = GraphCommitInput> = GitGraphRow<TCommit> & {
+  graphLaneColors: string[]
 }
 
 export const defaultGitLogRefreshPreferences: GitLogRefreshPreferences = {
@@ -245,6 +250,10 @@ function getGraphLaneCount(row: GitGraphRow): number {
   return Math.max(row.graphLanes.length, ...allLaneIndexes.map((index) => index + 1), 1)
 }
 
+export function getGraphLaneColor(index: number): string {
+  return graphLaneFallbackColors[index % graphLaneFallbackColors.length]
+}
+
 export function getGitGraphColumnWidth(rows: GitGraphRow[]): number {
   const maxLaneCount = rows.reduce((max, row) => Math.max(max, getGraphLaneCount(row)), 1)
   return Math.max(gitGraphColumnMinWidth, maxLaneCount * gitGraphLaneWidth + gitGraphColumnPadding)
@@ -451,4 +460,81 @@ export function getRefColor(ref: string, branchTags: BranchTagColorRule[] = [], 
   }
 
   return currentBranch && shortName === currentBranch ? currentBranchRefColor : getRefTone(ref)
+}
+
+function getGraphRefColor(ref: string, branchTags: BranchTagColorRule[] = [], currentBranch = ''): string | null {
+  const color = getRefColor(ref, branchTags, currentBranch)
+
+  if (color.startsWith('#') || color.startsWith('rgb') || color.startsWith('hsl')) {
+    return color
+  }
+
+  if (color === 'blue') {
+    return '#1677ff'
+  }
+
+  if (color === 'cyan') {
+    return '#13c2c2'
+  }
+
+  if (color === 'gold') {
+    return '#faad14'
+  }
+
+  return null
+}
+
+function getCommitGraphRefColor(commit: GraphCommitInput, branchTags: BranchTagColorRule[] = [], currentBranch = ''): string | null {
+  const branchRefs = getCommitRefs(commit).filter((ref) => !ref.startsWith('tag:'))
+
+  for (const ref of branchRefs) {
+    const color = getGraphRefColor(ref, branchTags, currentBranch)
+
+    if (color) {
+      return color
+    }
+  }
+
+  return null
+}
+
+export function applyBranchColorsToGraphRows<TCommit extends GraphCommitInput>(
+  rows: Array<GitGraphRow<TCommit>>,
+  branchTags: BranchTagColorRule[] = [],
+  currentBranch = ''
+): Array<BranchColoredGitGraphRow<TCommit>> {
+  const refColorByHash = new Map(rows.map((row) => [row.hash, getCommitGraphRefColor(row, branchTags, currentBranch)] as const).filter(([, color]) => Boolean(color)))
+  let carriedLaneColors: Array<string | undefined> = []
+
+  return rows.map((row) => {
+    const laneCount = getGraphLaneCount(row)
+    const laneColors = carriedLaneColors.slice()
+    const commitRefColor = refColorByHash.get(row.hash)
+
+    if (commitRefColor) {
+      laneColors[row.graphLaneIndex] = commitRefColor
+    }
+
+    row.graphLanes.forEach((hash, laneIndex) => {
+      const laneRefColor = refColorByHash.get(hash)
+
+      if (laneRefColor) {
+        laneColors[laneIndex] = laneRefColor
+      }
+    })
+
+    const graphLaneColors = range(laneCount).map((laneIndex) => laneColors[laneIndex] ?? getGraphLaneColor(laneIndex))
+    const nextLaneColors: Array<string | undefined> = []
+
+    for (const laneIndex of row.graphBottomLaneIndexes) {
+      nextLaneColors[laneIndex] = laneColors[laneIndex]
+    }
+
+    carriedLaneColors = nextLaneColors
+
+    return {
+      ...row,
+      graphLaneColors
+    }
+  })
 }

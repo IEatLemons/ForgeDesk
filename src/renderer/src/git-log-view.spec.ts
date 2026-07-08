@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  applyBranchColorsToGraphRows,
   buildBranchGroups,
   createWorkingTreeCommit,
   createGraphRows,
@@ -147,10 +148,26 @@ describe('git log view helpers', () => {
   })
 
   it('uses a prominent default color for the current branch ref', () => {
+    assert.equal(currentBranchRefColor, '#722ed1')
+    assert.notEqual(currentBranchRefColor, '#f5222d')
     assert.equal(getRefColor('main', [], 'main'), currentBranchRefColor)
     assert.equal(getRefColor('HEAD -> main', [], 'main'), currentBranchRefColor)
     assert.equal(getRefColor('origin/main', [], 'main'), currentBranchRefColor)
     assert.equal(getRefColor('origin/feature/card-form', [], 'main'), 'cyan')
+  })
+
+  it('applies branch tag colors to graph lanes and carries them through the branch line', () => {
+    const rows = applyBranchColorsToGraphRows(
+      createGraphRows([
+        { hash: 'feature-tip', parentHashes: ['feature-parent'], refs: ['origin/feature/card-form'] },
+        { hash: 'feature-parent', parentHashes: ['root'], refs: [] },
+        { hash: 'root', parentHashes: [], refs: [] }
+      ]),
+      [{ label: '卡片表单', branchName: 'feature/card-form', color: '#722ed1' }]
+    )
+
+    assert.equal(rows[0].graphLaneColors[rows[0].graphLaneIndex], '#722ed1')
+    assert.equal(rows[1].graphLaneColors[rows[1].graphLaneIndex], '#722ed1')
   })
 
   it('increments visible commit count and clamps to total commits', () => {

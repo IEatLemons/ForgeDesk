@@ -1,5 +1,6 @@
 export type ReleaseVersionBump = 'patch' | 'minor' | 'major'
 export type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
+export type ReleasePublishProvider = 'github' | 'codemagic'
 export type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
 
 export type PackageScripts = Record<string, string>
@@ -33,6 +34,7 @@ export type ReleasePlanInput = {
   repositoryName: string
   currentVersion: string
   targetVersion?: string
+  provider?: ReleasePublishProvider
   headCommit: string
   statusFileCount: number
   localTagCommit: string
@@ -43,6 +45,7 @@ export type ReleasePlanInput = {
 
 export type ReleasePlan = {
   repositoryName: string
+  provider: ReleasePublishProvider
   currentVersion: string
   suggestedVersion: string
   suggestedTagName: string
@@ -155,6 +158,7 @@ export function createReleasePlan(input: ReleasePlanInput): ReleasePlan {
   const issues: string[] = []
   const warnings: string[] = []
   const availableActions: ReleasePublishAction[] = []
+  const provider = input.provider ?? 'github'
   const selectedScript = selectReleaseScript(input.scripts)
   const currentVersion = input.currentVersion.trim()
   let suggestedVersion = input.targetVersion?.trim() || currentVersion
@@ -184,10 +188,12 @@ export function createReleasePlan(input: ReleasePlanInput): ReleasePlan {
     })
   }
 
-  if (!selectedScript) {
+  if (!selectedScript && provider === 'github') {
     issues.push('没有找到可用于发布的脚本，请在 package.json scripts 中配置 publish:mac 或 package:mac')
-  } else if (selectedScript !== 'publish:mac') {
+  } else if (selectedScript && selectedScript !== 'publish:mac' && provider === 'github') {
     warnings.push(`将使用 ${selectedScript} 脚本打包；如果要上传 GitHub Releases，建议配置 publish:mac`)
+  } else if (provider === 'codemagic') {
+    warnings.push('将触发 Codemagic 远程构建，不会执行本地发布脚本')
   }
 
   const normalizedHead = input.headCommit.trim()
@@ -228,6 +234,7 @@ export function createReleasePlan(input: ReleasePlanInput): ReleasePlan {
 
   return {
     repositoryName: input.repositoryName,
+    provider,
     currentVersion,
     suggestedVersion,
     suggestedTagName,

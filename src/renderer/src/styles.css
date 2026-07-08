@@ -237,6 +237,10 @@
   border-color: var(--primary-border);
 }
 
+[data-theme='dark'] .release-platform-card-selected {
+  border-color: var(--primary);
+}
+
 [data-theme='dark'] .release-platform-icon {
   background: var(--card-bg);
   box-shadow: inset 0 0 0 1px var(--primary-border);
@@ -244,6 +248,7 @@
 
 [data-theme='dark'] .release-publish-log,
 [data-theme='dark'] .release-background-task-card,
+[data-theme='dark'] .release-artifact-item,
 [data-theme='dark'] .release-task-item {
   background: var(--card-bg);
   border-color: var(--app-border-soft);
@@ -2108,8 +2113,15 @@ button.app-status-bar-item:hover {
 
 .env-diff-workflow {
   display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+}
+
+.env-diff-main-stack {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
 }
 
 .excel-tool-layout {
@@ -2289,6 +2301,10 @@ button.app-status-bar-item:hover {
 .env-diff-task-panel {
   display: grid;
   gap: 12px;
+  position: sticky;
+  top: 18px;
+  max-height: calc(100vh - 132px);
+  overflow: hidden;
 }
 
 .env-diff-task-heading {
@@ -2301,17 +2317,18 @@ button.app-status-bar-item:hover {
 
 .env-diff-task-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 8px;
+  max-height: calc(100vh - 292px);
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .env-diff-task-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
+  align-items: start;
   min-width: 0;
-  padding: 10px;
+  overflow: hidden;
   border: 1px solid var(--app-border-soft);
   border-radius: 8px;
   background: var(--card-bg);
@@ -2324,15 +2341,19 @@ button.app-status-bar-item:hover {
 
 .env-diff-task-select {
   display: grid;
-  gap: 3px;
+  gap: 5px;
   min-width: 0;
-  padding: 0;
+  padding: 10px 12px;
   color: inherit;
   border: 0;
   background: transparent;
   cursor: pointer;
   font: inherit;
   text-align: left;
+}
+
+.env-diff-task-title {
+  line-height: 20px;
 }
 
 .env-diff-task-select .ant-typography {
@@ -2345,9 +2366,24 @@ button.app-status-bar-item:hover {
   white-space: nowrap;
 }
 
+.env-diff-task-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.env-diff-task-counts .ant-tag {
+  margin-inline-end: 0;
+}
+
+.env-diff-task-delete.ant-btn {
+  margin: 10px 10px 0 0;
+}
+
 .env-diff-input-toolbar {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  align-items: end;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
@@ -2356,6 +2392,29 @@ button.app-status-bar-item:hover {
 .env-diff-input-toolbar .ant-typography {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.env-diff-current-task {
+  display: grid;
+  gap: 6px;
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.env-diff-task-title-input.ant-input {
+  max-width: 520px;
+}
+
+.env-diff-input-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.env-diff-input-actions .ant-tag {
+  margin-inline-end: 0;
 }
 
 .env-diff-text-grid {
@@ -3315,6 +3374,10 @@ button.app-status-bar-item:hover {
   min-width: 0;
 }
 
+.release-platform-heading {
+  justify-content: space-between;
+}
+
 .release-platform-list {
   display: grid;
   gap: 8px;
@@ -3330,11 +3393,17 @@ button.app-status-bar-item:hover {
   border: 1px solid var(--primary-border-soft);
   border-radius: 8px;
   background: var(--primary-surface);
+  cursor: pointer;
 }
 
 .release-platform-card-active {
   border-color: var(--primary-border);
   background: var(--table-row-selected-bg);
+}
+
+.release-platform-card-selected {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
 }
 
 .release-platform-card-disabled {
@@ -3417,6 +3486,24 @@ button.app-status-bar-item:hover {
   display: grid;
   gap: 6px;
   min-width: 0;
+}
+
+.release-artifact-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.release-artifact-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--subtle-bg);
 }
 
 .release-task-dock {
@@ -4626,10 +4713,20 @@ button.app-status-bar-item:hover {
 @media (max-width: 1180px) {
   .password-tool-layout,
   .file-tool-layout,
+  .env-diff-workflow,
   .excel-tool-layout,
   .cli-env-layout,
   .monthly-performance-chat-shell {
     grid-template-columns: 1fr;
+  }
+
+  .env-diff-task-panel {
+    position: static;
+    max-height: none;
+  }
+
+  .env-diff-task-list {
+    max-height: 280px;
   }
 
   .env-diff-result-toolbar {
@@ -4708,6 +4805,10 @@ button.app-status-bar-item:hover {
 
   .env-diff-task-heading > .ant-btn {
     justify-self: start;
+  }
+
+  .env-diff-input-actions {
+    justify-content: flex-start;
   }
 
   .release-task-item-main .ant-typography {

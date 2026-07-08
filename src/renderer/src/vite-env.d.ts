@@ -288,6 +288,7 @@ type CommitMessageSuggestion = {
 }
 
 type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
+type ReleasePublishProvider = 'github' | 'codemagic'
 type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
 
 type ReleasePublishAction = {
@@ -299,6 +300,7 @@ type ReleasePublishAction = {
 
 type RepositoryReleasePlan = {
   repositoryName: string
+  provider: ReleasePublishProvider
   currentVersion: string
   suggestedVersion: string
   suggestedTagName: string
@@ -313,6 +315,7 @@ type RepositoryReleasePlan = {
 
 type RepositoryReleasePrepareInput = {
   targetVersion?: string
+  provider?: ReleasePublishProvider
 }
 
 type RepositoryReleasePreparation = {
@@ -349,6 +352,7 @@ type RepositoryReleaseSuggestion = {
 }
 
 type RepositoryReleasePublishInput = {
+  provider?: ReleasePublishProvider
   version: string
   tagName: string
   releaseTitle: string
@@ -356,16 +360,33 @@ type RepositoryReleasePublishInput = {
   commitMessage: string
   githubTokenId?: string
   githubToken?: string
+  codemagicTokenId?: string
+  codemagicTeamId?: string
+  codemagicAppId?: string
+  codemagicAppName?: string
+  codemagicWorkflowId?: string
+  codemagicWorkflowName?: string
+  codemagicDefaultBranch?: string
+  codemagicLabels?: string[]
+  saveCodemagicBinding?: boolean
   releaseActions?: ReleasePublishActionKey[]
 }
 
 type RepositoryReleasePublishResult = {
   ok: boolean
+  provider: ReleasePublishProvider
   repository: RepositoryRecord
   plan: RepositoryReleasePlan
   stdout: string
   stderr: string
   exitCode: number | null
+  externalBuildId?: string
+  externalBuildUrl?: string
+  externalStatus?: string
+  externalWorkflow?: string
+  externalBranch?: string
+  externalTag?: string
+  artifacts?: ReleasePublishArtifact[]
 }
 
 type RepositoryReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
@@ -374,6 +395,7 @@ type RepositoryReleasePublishTask = {
   id: string
   repositoryId: string
   repositoryName: string
+  provider: ReleasePublishProvider
   version: string
   tagName: string
   releaseTitle: string
@@ -393,8 +415,24 @@ type RepositoryReleasePublishTask = {
   stderr: string
   exitCode: number | null
   error?: string
+  externalBuildId?: string
+  externalBuildUrl?: string
+  externalStatus?: string
+  externalWorkflow?: string
+  externalBranch?: string
+  externalTag?: string
+  artifacts: ReleasePublishArtifact[]
   plan?: RepositoryReleasePlan
   repository?: RepositoryRecord
+}
+
+type ReleasePublishArtifact = {
+  name: string
+  type: string
+  sizeInBytes: number
+  downloadUrl: string
+  versionCode?: string
+  versionName?: string
 }
 
 type GitMergeAnalysisInput = {
@@ -715,6 +753,12 @@ type ServiceDeploymentSummary = {
   creator: string
   meta: Record<string, unknown>
   commitSha: string
+  environmentId?: string
+  projectId?: string
+  serviceId?: string
+  canRedeploy?: boolean
+  canRollback?: boolean
+  deploymentStopped?: boolean
 }
 
 type VercelDeploymentSummary = ServiceDeploymentSummary
@@ -726,11 +770,14 @@ type ServiceDeploymentListOptions = {
 
 type VercelDeploymentListOptions = ServiceDeploymentListOptions
 
-type VercelDeploymentActionInput = {
-  action: 'redeploy' | 'cancel' | 'promote' | 'rollback'
-  deploymentId: string
+type ServiceDeploymentActionInput = {
+  action: 'deploy' | 'redeploy' | 'restart' | 'stop' | 'cancel' | 'promote' | 'rollback'
+  deploymentId?: string
+  environmentId?: string
   description?: string
 }
+
+type VercelDeploymentActionInput = ServiceDeploymentActionInput
 
 type ServiceEnvVarRecord = {
   id: string
@@ -1201,6 +1248,80 @@ type GithubTokenView = {
   lastCheckedAt: string
 }
 
+type CodemagicTokenInput = {
+  id?: string
+  name: string
+  token?: string
+}
+
+type CodemagicTokenView = {
+  id: string
+  name: string
+  tokenLastFour: string
+  userId: string
+  teamCount: number
+  appCount: number
+  permissionSummary: string
+  tokenConfigured: boolean
+  createdAt: string
+  updatedAt: string
+  lastCheckedAt: string
+}
+
+type CodemagicTeam = {
+  id: string
+  name: string
+}
+
+type CodemagicApp = {
+  id: string
+  name: string
+  teamId: string
+  repositoryUrl: string
+  settingsSource: string
+  projectType: string
+  lastBuildId: string
+  archived: boolean
+}
+
+type CodemagicAppListInput = {
+  tokenId: string
+  teamId?: string
+  name?: string
+}
+
+type CodemagicRepositoryBindingInput = {
+  repositoryId: string
+  tokenId: string
+  teamId?: string
+  appId: string
+  appName?: string
+  workflowId: string
+  workflowName?: string
+  defaultBranch?: string
+  labels?: string[]
+}
+
+type CodemagicRepositoryBinding = {
+  repositoryId: string
+  tokenId: string
+  teamId: string
+  appId: string
+  appName: string
+  workflowId: string
+  workflowName: string
+  defaultBranch: string
+  labels: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+type CodemagicArtifactPublicUrlInput = {
+  tokenId: string
+  secureFilename: string
+  expiresAt?: number
+}
+
 type AppUpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
 
 type AppUpdateState = {
@@ -1349,6 +1470,9 @@ interface Window {
     listRepositoryReleasePublishTasks: (repositoryId?: string) => Promise<RepositoryReleasePublishTask[]>
     getRepositoryReleasePublishTask: (taskId: string) => Promise<RepositoryReleasePublishTask | null>
     cancelRepositoryReleasePublishTask: (taskId: string) => Promise<RepositoryReleasePublishTask>
+    getRepositoryCodemagicBinding: (repositoryId: string) => Promise<CodemagicRepositoryBinding | null>
+    saveRepositoryCodemagicBinding: (input: CodemagicRepositoryBindingInput) => Promise<CodemagicRepositoryBinding>
+    deleteRepositoryCodemagicBinding: (repositoryId: string) => Promise<void>
     suggestConflictResolution: (repositoryId: string, filePath: string) => Promise<AiConflictSuggestion>
     applyConflictResolution: (repositoryId: string, filePath: string, content: string) => Promise<GitOperationResult>
     listRepositoryCommitFiles: (repositoryId: string, commitHash: string) => Promise<GitCommitFileChange[]>
@@ -1389,7 +1513,7 @@ interface Window {
     listServiceEnvironmentLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
     listCachedServiceDeployments: (serviceId: string, options?: ServiceDeploymentListOptions) => Promise<ServiceDeploymentSummary[]>
     listServiceDeployments: (serviceId: string, options?: ServiceDeploymentListOptions) => Promise<ServiceDeploymentSummary[]>
-    runServiceDeploymentAction: (serviceId: string, input: VercelDeploymentActionInput) => Promise<ProjectServiceRecord>
+    runServiceDeploymentAction: (serviceId: string, input: ServiceDeploymentActionInput) => Promise<ProjectServiceRecord>
     listServiceEnvVars: (serviceId: string) => Promise<ServiceEnvVarRecord[]>
     revealServiceEnvVar: (serviceId: string, envVarId: string) => Promise<ServiceEnvVarRecord>
     saveServiceEnvVar: (serviceId: string, input: VercelEnvVarInput) => Promise<ServiceEnvVarRecord>
@@ -1426,6 +1550,13 @@ interface Window {
     saveGithubToken: (input: GithubTokenInput) => Promise<GithubTokenView[]>
     refreshGithubToken: (tokenId: string) => Promise<GithubTokenView[]>
     deleteGithubToken: (tokenId: string) => Promise<GithubTokenView[]>
+    listCodemagicTokens: () => Promise<CodemagicTokenView[]>
+    saveCodemagicToken: (input: CodemagicTokenInput) => Promise<CodemagicTokenView[]>
+    refreshCodemagicToken: (tokenId: string) => Promise<CodemagicTokenView[]>
+    deleteCodemagicToken: (tokenId: string) => Promise<CodemagicTokenView[]>
+    listCodemagicTeams: (tokenId: string) => Promise<CodemagicTeam[]>
+    listCodemagicApps: (input: CodemagicAppListInput) => Promise<CodemagicApp[]>
+    createCodemagicArtifactPublicUrl: (input: CodemagicArtifactPublicUrlInput) => Promise<{ url: string; expiresAt: string }>
     listRsaPrivateKeys: () => Promise<RsaPrivateKeyRecord[]>
     createRsaPrivateKey: (input: RsaPrivateKeyCreateInput) => Promise<RsaPrivateKeyRecord>
     updateRsaPrivateKey: (input: RsaPrivateKeyUpdateInput) => Promise<RsaPrivateKeyRecord>

@@ -14,7 +14,7 @@ describe('global settings layout', () => {
     assert.match(source, /type SettingsOverviewCategory/)
     assert.match(source, /title: '个性化'[\s\S]*keys: \['appearance', 'log-refresh'\]/)
     assert.match(source, /title: 'Git 与 SSH'[\s\S]*keys: \['git', 'private', 'public', 'config'\]/)
-    assert.match(source, /title: '集成与服务'[\s\S]*keys: \['github', 'services', 'plane', 'ai'\]/)
+    assert.match(source, /title: '集成与服务'[\s\S]*keys: \['github', 'codemagic', 'services', 'plane', 'ai'\]/)
     assert.match(source, /title: '应用维护'[\s\S]*keys: \['updates'\]/)
     assert.match(source, /settingsModuleByKey\.get\(key\)/)
     assert.match(source, /className="settings-category-list"/)

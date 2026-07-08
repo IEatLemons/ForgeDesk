@@ -1089,8 +1089,9 @@ describe('service monitoring storage', () => {
     assert.equal(history[0].statusCode, 204)
   })
 
-  it('dispatches readonly Railway service operations and rejects Railway writes', async () => {
+  it('dispatches Railway service operations and safe deployment actions', async () => {
     const db = createDatabase()
+    const requests: string[] = []
     const connection = saveServiceConnection(db, {
       provider: 'railway',
       name: 'Railway',
@@ -1107,6 +1108,7 @@ describe('service monitoring storage', () => {
     })
     const fetcher = async (_url: string | URL, init?: RequestInit): Promise<Response> => {
       const body = JSON.parse(String(init?.body ?? '{}')) as { query: string; variables: Record<string, unknown> }
+      requests.push(body.query)
 
       if (body.query.includes('deploymentLogs(')) {
         return {
@@ -1138,6 +1140,138 @@ describe('service monitoring storage', () => {
         } as Response
       }
 
+      if (body.query.includes('serviceInstanceDeployV2')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ data: { serviceInstanceDeployV2: 'dep_new' } }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (body.query.includes('deploymentRedeploy')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({
+            data: {
+              deploymentRedeploy: {
+                id: body.variables.id,
+                status: 'BUILDING',
+                environmentId: 'env_1',
+                projectId: 'railway-project',
+                serviceId: 'svc_1',
+                canRedeploy: true,
+                canRollback: false,
+                deploymentStopped: false
+              }
+            }
+          }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (body.query.includes('deploymentRestart')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ data: { deploymentRestart: true } }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (body.query.includes('deploymentRollback')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ data: { deploymentRollback: true } }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (body.query.includes('deploymentStop(id: $id)')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ data: { deploymentStop: true } }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (body.query.includes('deploymentCancel')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ data: { deploymentCancel: true } }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (body.query.includes('deployment(id: $id)')) {
+        const deploymentId = String(body.variables.id ?? '')
+        const status = deploymentId === 'dep_cancel' ? 'BUILDING' : 'SUCCESS'
+
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({
+            data: {
+              deployment: {
+                id: deploymentId,
+                status,
+                environmentId: 'env_1',
+                projectId: 'railway-project',
+                serviceId: 'svc_1',
+                canRedeploy: true,
+                canRollback: deploymentId === 'dep_rollback',
+                deploymentStopped: false
+              }
+            }
+          }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (body.query.includes('projectToken')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({
+            data: {
+              projectToken: {
+                environmentId: 'env_1',
+                projectId: 'railway-project',
+                project: {
+                  id: 'railway-project',
+                  name: 'Railway Project',
+                  services: { edges: [{ node: { id: 'svc_1', name: 'api' } }] },
+                  environments: { edges: [{ node: { id: 'env_1', name: 'production' } }] }
+                }
+              }
+            }
+          }),
+          text: async () => '{}'
+        } as Response
+      }
+
+      if (body.query.includes('domains(')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ data: { domains: { customDomains: [], serviceDomains: [] } } }),
+          text: async () => '{}'
+        } as Response
+      }
+
       return {
         ok: true,
         status: 200,
@@ -1145,7 +1279,22 @@ describe('service monitoring storage', () => {
         json: async () => ({
           data: {
             deployments: {
-              edges: [{ node: { id: 'dep_1', status: 'SUCCESS', url: 'api.up.railway.app', meta: { commitSha: 'abc123' } } }],
+              edges: [
+                {
+                  node: {
+                    id: 'dep_1',
+                    status: 'SUCCESS',
+                    url: 'api.up.railway.app',
+                    environmentId: 'env_1',
+                    projectId: 'railway-project',
+                    serviceId: 'svc_1',
+                    canRedeploy: true,
+                    canRollback: true,
+                    deploymentStopped: false,
+                    meta: { commitSha: 'abc123' }
+                  }
+                }
+              ],
               pageInfo: { hasNextPage: false, endCursor: null }
             }
           }
@@ -1154,7 +1303,8 @@ describe('service monitoring storage', () => {
       } as Response
     }
 
-    assert.equal((await listServiceDeployments(db, service.id, {}, fetcher))[0].id, 'dep_1')
+    const listedDeployments = await listServiceDeployments(db, service.id, {}, fetcher)
+    assert.deepEqual(listedDeployments.map((deployment) => deployment.id), ['dep_1'], requests.join('\n---\n'))
     const railwayEnvVars = await listServiceEnvVars(db, service.id, fetcher)
     assert.equal(railwayEnvVars[0].key, 'API_URL')
     assert.equal(railwayEnvVars[0].value, 'https://api.example.com')
@@ -1163,7 +1313,18 @@ describe('service monitoring storage', () => {
     await assert.rejects(() => revealServiceEnvVar(db, service.id, 'env_1', fetcher), /Railway 环境变量只支持只读查看/)
     await assert.rejects(() => saveServiceEnvVar(db, service.id, { key: 'API_URL', value: 'next', type: 'plain' }, fetcher), /Railway 环境变量只支持只读查看/)
     await assert.rejects(() => deleteServiceEnvVar(db, service.id, 'env_1', fetcher), /Railway 环境变量只支持只读查看/)
-    await assert.rejects(() => runServiceDeploymentAction(db, service.id, { action: 'redeploy', deploymentId: 'dep_1' }, fetcher), /Railway 部署操作暂不支持/)
+    assert.equal((await runServiceDeploymentAction(db, service.id, { action: 'deploy', environmentId: 'env_1' }, fetcher)).environments[0].latestDeploymentId, 'dep_1')
+    assert.equal((await runServiceDeploymentAction(db, service.id, { action: 'redeploy', deploymentId: 'dep_redeploy' }, fetcher)).environments[0].latestDeploymentId, 'dep_1')
+    assert.equal((await runServiceDeploymentAction(db, service.id, { action: 'restart', deploymentId: 'dep_restart' }, fetcher)).environments[0].latestDeploymentId, 'dep_1')
+    assert.equal((await runServiceDeploymentAction(db, service.id, { action: 'rollback', deploymentId: 'dep_rollback' }, fetcher)).environments[0].latestDeploymentId, 'dep_1')
+    assert.equal((await runServiceDeploymentAction(db, service.id, { action: 'stop', deploymentId: 'dep_stop' }, fetcher)).environments[0].latestDeploymentId, 'dep_1')
+    assert.equal((await runServiceDeploymentAction(db, service.id, { action: 'cancel', deploymentId: 'dep_cancel' }, fetcher)).environments[0].latestDeploymentId, 'dep_1')
+    assert.equal(requests.some((query) => query.includes('serviceInstanceDeployV2')), true)
+    assert.equal(requests.some((query) => query.includes('deploymentRedeploy')), true)
+    assert.equal(requests.some((query) => query.includes('deploymentRestart')), true)
+    assert.equal(requests.some((query) => query.includes('deploymentRollback')), true)
+    assert.equal(requests.some((query) => query.includes('deploymentStop')), true)
+    assert.equal(requests.some((query) => query.includes('deploymentCancel')), true)
   })
 
   it('stores fetched deployments locally for cache-first reads', async () => {

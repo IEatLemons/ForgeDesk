@@ -1,6 +1,8 @@
-import type { ProjectService, ServiceDeploymentSummary } from './data'
+import type { ProjectService, ServiceDeploymentActionInput, ServiceDeploymentSummary } from './data'
 
 type BadgeStatus = 'success' | 'processing' | 'default' | 'error' | 'warning'
+
+export type ServiceDeploymentAction = ServiceDeploymentActionInput['action']
 
 export type DeploymentStatusMeta = {
   label: string
@@ -112,6 +114,48 @@ export const deploymentVisibleBatchSize = 60
 export const railwayDeploymentRefreshBatchSize = 4
 export const deploymentAutoRefreshIntervalMs = 300_000
 export const deploymentRateLimitFallbackMs = 60_000
+
+export function isRailwayCancelableDeploymentState(state: string): boolean {
+  return ['BUILDING', 'DEPLOYING', 'WAITING', 'QUEUED'].includes(state.trim().toUpperCase())
+}
+
+export function isRailwayRunningDeployment(deployment: Pick<ServiceDeploymentSummary, 'state' | 'deploymentStopped'>): boolean {
+  return deployment.state.trim().toUpperCase() === 'SUCCESS' && deployment.deploymentStopped !== true
+}
+
+export function canRunServiceDeploymentAction(
+  provider: ProjectService['provider'],
+  deployment: Pick<ServiceDeploymentSummary, 'state' | 'canRedeploy' | 'canRollback' | 'deploymentStopped'>,
+  action: ServiceDeploymentAction
+): boolean {
+  if (provider === 'vercel') {
+    return action === 'cancel'
+      ? ['BUILDING', 'DEPLOYING', 'INITIALIZING', 'QUEUED', 'PENDING'].includes(deployment.state.trim().toUpperCase())
+      : ['redeploy', 'promote', 'rollback'].includes(action)
+  }
+
+  if (provider !== 'railway') {
+    return false
+  }
+
+  if (action === 'redeploy') {
+    return deployment.canRedeploy !== false
+  }
+
+  if (action === 'restart' || action === 'stop') {
+    return isRailwayRunningDeployment(deployment)
+  }
+
+  if (action === 'rollback') {
+    return deployment.canRollback === true
+  }
+
+  if (action === 'cancel') {
+    return isRailwayCancelableDeploymentState(deployment.state)
+  }
+
+  return false
+}
 
 let systemLogSequence = 0
 

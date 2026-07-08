@@ -1,5 +1,6 @@
 export type ReleasePublishPlanView = {
   repositoryName: string
+  provider?: ReleasePublishProvider
   currentVersion: string
   suggestedVersion: string
   suggestedTagName: string
@@ -13,6 +14,7 @@ export type ReleasePublishPlanView = {
 }
 
 export type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
+export type ReleasePublishProvider = 'github' | 'codemagic'
 
 export type ReleasePublishAction = {
   key: ReleasePublishActionKey
@@ -32,6 +34,7 @@ export type ReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed' | 'can
 
 export type ReleasePublishTaskViewInput = {
   repositoryName: string
+  provider?: ReleasePublishProvider
   tagName: string
   status: ReleasePublishTaskStatus
   log: string
@@ -44,6 +47,18 @@ export type ReleasePublishTaskViewInput = {
   hint?: string
   lastOutputAt?: string
   error?: string
+  externalBuildId?: string
+  externalBuildUrl?: string
+  externalStatus?: string
+  externalWorkflow?: string
+  artifacts?: Array<{
+    name: string
+    type: string
+    sizeInBytes: number
+    downloadUrl: string
+    versionName?: string
+    versionCode?: string
+  }>
 }
 
 export type ReleasePublishTaskViewModel = {
@@ -76,7 +91,7 @@ export type ReleaseMetadataVersionChangeInput = {
 }
 
 export type ReleasePlatformOption = {
-  key: 'github'
+  key: ReleasePublishProvider
   name: string
   description: string
   detail: string
@@ -119,7 +134,7 @@ export function updateDefaultReleaseMetadataForVersionChange(input: ReleaseMetad
   }
 }
 
-export function createReleasePlatformOptions(input: { plan: ReleasePublishPlanView | null }): ReleasePlatformOption[] {
+export function createReleasePlatformOptions(input: { plan: ReleasePublishPlanView | null; codemagicBound?: boolean }): ReleasePlatformOption[] {
   const scriptLabel = input.plan?.selectedScript || '发布脚本'
 
   return [
@@ -130,6 +145,15 @@ export function createReleasePlatformOptions(input: { plan: ReleasePublishPlanVi
       detail: input.plan ? `当前仓库将使用 ${scriptLabel} 流程。` : '读取仓库后确认发布流程。',
       statusLabel: '已对接',
       statusColor: 'green',
+      disabled: false
+    },
+    {
+      key: 'codemagic',
+      name: 'Codemagic',
+      description: '触发远程 workflow，并同步 IPA/APK/AAB 构建包。',
+      detail: input.codemagicBound ? '当前仓库已绑定 Codemagic App 和 Workflow。' : '需要先保存当前仓库的 Codemagic 绑定。',
+      statusLabel: input.codemagicBound ? '已绑定' : '待配置',
+      statusColor: input.codemagicBound ? 'green' : 'orange',
       disabled: false
     }
   ]
@@ -144,11 +168,14 @@ export function getUnresolvedReleaseIssues(plan: ReleasePublishPlanView, selecte
 export function createReleasePublishViewModel(input: {
   plan: ReleasePublishPlanView | null
   githubToken: string
+  provider?: ReleasePublishProvider
+  codemagicReady?: boolean
   selectedActions?: ReleasePublishActionKey[]
 }): ReleasePublishViewModel {
   const issueCount = input.plan?.issues.length ?? 0
   const warningCount = input.plan?.warnings.length ?? 0
   const tokenReady = input.githubToken.trim().length > 0
+  const provider = input.provider ?? input.plan?.provider ?? 'github'
 
   if (!input.plan) {
     return {
@@ -170,7 +197,7 @@ export function createReleasePublishViewModel(input: {
     }
   }
 
-  if (!tokenReady && input.plan.selectedScript === 'publish:mac') {
+  if (provider === 'github' && !tokenReady && input.plan.selectedScript === 'publish:mac') {
     return {
       primaryLabel: '选择 GitHub Token',
       primaryDisabled: true,
@@ -179,8 +206,17 @@ export function createReleasePublishViewModel(input: {
     }
   }
 
+  if (provider === 'codemagic' && !input.codemagicReady) {
+    return {
+      primaryLabel: '配置 Codemagic',
+      primaryDisabled: true,
+      issueCount,
+      warningCount
+    }
+  }
+
   return {
-    primaryLabel: `发布 ${input.plan.suggestedTagName || input.plan.suggestedVersion}`,
+    primaryLabel: `${provider === 'codemagic' ? '构建' : '发布'} ${input.plan.suggestedTagName || input.plan.suggestedVersion}`,
     primaryDisabled: false,
     issueCount,
     warningCount
@@ -218,6 +254,12 @@ export function createReleasePublishTaskView(input: { task: ReleasePublishTaskVi
         : { label: '失败', color: 'red', active: false }
   const fallbackLog = [
     input.task.hint ? `中文提示：${input.task.hint}` : '',
+    input.task.externalBuildId ? `Codemagic Build：${input.task.externalBuildId}` : '',
+    input.task.externalStatus ? `Codemagic 状态：${input.task.externalStatus}` : '',
+    input.task.externalWorkflow ? `Workflow：${input.task.externalWorkflow}` : '',
+    ...(input.task.artifacts ?? []).map((artifact) =>
+      `Artifact：${artifact.name}${artifact.versionName ? ` · ${artifact.versionName}` : ''}${artifact.type ? ` · ${artifact.type}` : ''}`
+    ),
     input.task.log,
     input.task.stdout,
     input.task.stderr,

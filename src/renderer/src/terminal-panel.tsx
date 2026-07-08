@@ -178,6 +178,24 @@ function toTerminalPanelSession(snapshot: TerminalSessionSnapshot): TerminalPane
   return session
 }
 
+function getTerminalFocusRequest(
+  openRequest: TerminalOpenRequest | null,
+  defaultCwd?: string,
+  defaultReuseKey?: string
+): Pick<TerminalOpenRequest, 'cwd' | 'reuseKey'> {
+  if (openRequest && shouldHandleTerminalOpenRequest(openRequest, defaultCwd, defaultReuseKey)) {
+    return {
+      cwd: openRequest.cwd ?? defaultCwd,
+      reuseKey: openRequest.reuseKey ?? defaultReuseKey
+    }
+  }
+
+  return {
+    cwd: defaultCwd,
+    reuseKey: defaultReuseKey
+  }
+}
+
 function shouldHandleTerminalOpenRequest(request: TerminalOpenRequest, defaultCwd?: string, defaultReuseKey?: string): boolean {
   if (defaultReuseKey) {
     if (request.reuseKey) {
@@ -301,12 +319,14 @@ export function TerminalWorkspace({ defaultCwd, defaultReuseKey, defaultTitle, o
         }
 
         if (snapshots.length > 0) {
+          const focusRequest = getTerminalFocusRequest(latestOpenRequestRef.current, defaultCwd, defaultReuseKey)
+
           for (const snapshot of snapshots) {
             if (snapshot.output.length > 0) {
               pendingOutputRef.current.set(snapshot.id, [...snapshot.output])
             }
           }
-          setState(createTerminalPanelStateFromSessions(snapshots.map(toTerminalPanelSession)))
+          setState(createTerminalPanelStateFromSessions(snapshots.map(toTerminalPanelSession), focusRequest))
         } else if (!latestOpenRequestRef.current || !shouldHandleTerminalOpenRequest(latestOpenRequestRef.current, defaultCwd, defaultReuseKey)) {
           await openTerminal()
         } else {

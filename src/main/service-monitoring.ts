@@ -1,22 +1,29 @@
 import {
   addVercelProjectDomain,
+  cancelRailwayDeployment,
   cancelVercelDeployment,
+  deployRailwayServiceInstance,
   inspectVercelDomainConfig,
   listRailwayDeployments,
   listRailwayProjectEnvVars,
   listVercelDeployments,
   listVercelProjectEnvVars,
   promoteVercelDeployment,
+  readRailwayDeployment,
   readRailwayDeploymentLogs,
   readRailwayEnvironmentLogs,
   readVercelDeploymentLogs,
   readVercelEnvVar,
   readVercelRuntimeLogs,
+  redeployRailwayDeployment,
   redeployVercelDeployment,
   removeVercelProjectDomain,
   removeVercelProjectEnvVar,
+  restartRailwayDeployment,
+  rollbackRailwayDeployment,
   rollbackVercelDeployment,
   saveVercelProjectEnvVar,
+  stopRailwayDeployment,
   syncRailwayProviderServices,
   syncVercelProviderServices,
   verifyVercelProjectDomain,
@@ -195,11 +202,14 @@ export type ServiceEnvironmentLogRecord = ProviderDeploymentLogLine
 
 export type CachedServiceDeploymentRecord = ServiceDeploymentSummary
 
-export type VercelDeploymentActionInput = {
-  action: 'redeploy' | 'cancel' | 'promote' | 'rollback'
-  deploymentId: string
+export type ServiceDeploymentActionInput = {
+  action: 'deploy' | 'redeploy' | 'restart' | 'stop' | 'cancel' | 'promote' | 'rollback'
+  deploymentId?: string
+  environmentId?: string
   description?: string
 }
+
+export type VercelDeploymentActionInput = ServiceDeploymentActionInput
 
 export type ServiceExternalProjectAliasInput = {
   provider: ServiceProviderType
@@ -747,8 +757,49 @@ function parseDeploymentMeta(value: unknown): Record<string, unknown> {
   }
 }
 
+function stringMetaField(meta: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = meta[key]
+
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim()
+    }
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(value)
+    }
+  }
+
+  return ''
+}
+
+function booleanMetaField(meta: Record<string, unknown>, ...keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = meta[key]
+
+    if (typeof value === 'boolean') {
+      return value
+    }
+
+    if (typeof value === 'string' && value.trim()) {
+      const normalized = value.trim().toLowerCase()
+
+      if (normalized === 'true') {
+        return true
+      }
+
+      if (normalized === 'false') {
+        return false
+      }
+    }
+  }
+
+  return undefined
+}
+
 function mapDeploymentCacheRow(row: Record<string, unknown>): CachedServiceDeploymentRecord {
-  return {
+  const meta = parseDeploymentMeta(row.meta_json)
+  const deployment: CachedServiceDeploymentRecord = {
     id: String(row.id ?? ''),
     url: String(row.url ?? ''),
     target: String(row.target ?? ''),
@@ -756,9 +807,41 @@ function mapDeploymentCacheRow(row: Record<string, unknown>): CachedServiceDeplo
     createdAt: String(row.created_at ?? ''),
     readyAt: String(row.ready_at ?? ''),
     creator: String(row.creator ?? ''),
-    meta: parseDeploymentMeta(row.meta_json),
+    meta,
     commitSha: String(row.commit_sha ?? '')
   }
+  const environmentId = stringMetaField(meta, 'railwayEnvironmentId', 'environmentId')
+  const projectId = stringMetaField(meta, 'railwayProjectId', 'projectId')
+  const providerServiceId = stringMetaField(meta, 'railwayServiceId', 'serviceId')
+  const canRedeploy = booleanMetaField(meta, 'railwayCanRedeploy', 'canRedeploy')
+  const canRollback = booleanMetaField(meta, 'railwayCanRollback', 'canRollback')
+  const deploymentStopped = booleanMetaField(meta, 'railwayDeploymentStopped', 'deploymentStopped')
+
+  if (environmentId) {
+    deployment.environmentId = environmentId
+  }
+
+  if (projectId) {
+    deployment.projectId = projectId
+  }
+
+  if (providerServiceId) {
+    deployment.serviceId = providerServiceId
+  }
+
+  if (canRedeploy !== undefined) {
+    deployment.canRedeploy = canRedeploy
+  }
+
+  if (canRollback !== undefined) {
+    deployment.canRollback = canRollback
+  }
+
+  if (deploymentStopped !== undefined) {
+    deployment.deploymentStopped = deploymentStopped
+  }
+
+  return deployment
 }
 
 function getDeploymentLimit(options: ServiceDeploymentListOptions = {}): number {
@@ -792,6 +875,15 @@ function cacheServiceDeployments(db: DatabaseLike, serviceId: string, deployment
     if (!deployment.id) {
       continue
     }
+    const deploymentMeta = {
+      ...(deployment.meta ?? {}),
+      ...(deployment.environmentId ? { railwayEnvironmentId: deployment.environmentId } : {}),
+      ...(deployment.projectId ? { railwayProjectId: deployment.projectId } : {}),
+      ...(deployment.serviceId ? { railwayServiceId: deployment.serviceId } : {}),
+      ...(deployment.canRedeploy !== undefined ? { railwayCanRedeploy: deployment.canRedeploy } : {}),
+      ...(deployment.canRollback !== undefined ? { railwayCanRollback: deployment.canRollback } : {}),
+      ...(deployment.deploymentStopped !== undefined ? { railwayDeploymentStopped: deployment.deploymentStopped } : {})
+    }
 
     statement.run(
       deployment.id,
@@ -802,7 +894,7 @@ function cacheServiceDeployments(db: DatabaseLike, serviceId: string, deployment
       deployment.createdAt,
       deployment.readyAt,
       deployment.creator,
-      JSON.stringify(deployment.meta ?? {}),
+      JSON.stringify(deploymentMeta),
       deployment.commitSha,
       cachedAt
     )
@@ -1305,7 +1397,7 @@ function getRailwayServiceContext(db: DatabaseLike, serviceId: string): RailwayS
   return { service, connection, projectId, serviceId: railwayServiceId }
 }
 
-async function syncVercelServiceAndRead(db: DatabaseLike, service: ProjectServiceRecord, fetcher: ServiceProviderFetch): Promise<ProjectServiceRecord> {
+async function syncServiceAndRead(db: DatabaseLike, service: ProjectServiceRecord, fetcher: ServiceProviderFetch): Promise<ProjectServiceRecord> {
   await syncServiceConnection(db, service.connectionId, fetcher)
 
   const refreshed = getProjectService(db, service.id)
@@ -1315,6 +1407,80 @@ async function syncVercelServiceAndRead(db: DatabaseLike, service: ProjectServic
   }
 
   return refreshed
+}
+
+function getRequiredDeploymentId(input: ServiceDeploymentActionInput, providerLabel: string): string {
+  const deploymentId = trimText(input.deploymentId)
+
+  if (!deploymentId) {
+    throw new Error(`缺少 ${providerLabel} 部署 ID`)
+  }
+
+  return deploymentId
+}
+
+function isRailwayCancelableStatus(status: string): boolean {
+  return ['BUILDING', 'DEPLOYING', 'WAITING', 'QUEUED'].includes(status.trim().toUpperCase())
+}
+
+function isRailwayStoppableDeployment(deployment: ServiceDeploymentSummary): boolean {
+  return deployment.state.trim().toUpperCase() === 'SUCCESS' && deployment.deploymentStopped !== true
+}
+
+async function runRailwayDeploymentAction(
+  db: DatabaseLike,
+  serviceId: string,
+  input: ServiceDeploymentActionInput,
+  fetcher: ServiceProviderFetch
+): Promise<ProjectServiceRecord> {
+  const { service, connection, serviceId: railwayServiceId } = getRailwayServiceContext(db, serviceId)
+
+  if (input.action === 'deploy') {
+    const environmentId = trimText(input.environmentId)
+
+    if (!environmentId) {
+      throw new Error('缺少 Railway Environment ID')
+    }
+
+    await deployRailwayServiceInstance(connection, railwayServiceId, environmentId, fetcher)
+    return syncServiceAndRead(db, service, fetcher)
+  }
+
+  const deploymentId = getRequiredDeploymentId(input, 'Railway')
+
+  if (input.action === 'redeploy') {
+    await redeployRailwayDeployment(connection, deploymentId, fetcher)
+  } else if (input.action === 'restart') {
+    await restartRailwayDeployment(connection, deploymentId, fetcher)
+  } else if (input.action === 'rollback') {
+    const deployment = await readRailwayDeployment(connection, deploymentId, fetcher)
+
+    if (deployment.canRollback !== true) {
+      throw new Error('这个 Railway 部署不支持回滚')
+    }
+
+    await rollbackRailwayDeployment(connection, deploymentId, fetcher)
+  } else if (input.action === 'stop') {
+    const deployment = await readRailwayDeployment(connection, deploymentId, fetcher)
+
+    if (!isRailwayStoppableDeployment(deployment)) {
+      throw new Error('只有正在运行且未停止的 Railway 部署可以停止')
+    }
+
+    await stopRailwayDeployment(connection, deploymentId, fetcher)
+  } else if (input.action === 'cancel') {
+    const deployment = await readRailwayDeployment(connection, deploymentId, fetcher)
+
+    if (!isRailwayCancelableStatus(deployment.state)) {
+      throw new Error('只有构建、部署、等待或排队中的 Railway 部署可以取消')
+    }
+
+    await cancelRailwayDeployment(connection, deploymentId, fetcher)
+  } else {
+    throw new Error('不支持的 Railway 部署操作')
+  }
+
+  return syncServiceAndRead(db, service, fetcher)
 }
 
 export async function listServiceDeployments(
@@ -1348,7 +1514,8 @@ export async function listServiceDeployments(
             context.serviceId,
             environment.externalEnvironmentId,
             options,
-            fetcher
+            fetcher,
+            environment.name
           )
         )
       )
@@ -1372,21 +1539,17 @@ export async function listServiceDeployments(
 export async function runServiceDeploymentAction(
   db: DatabaseLike,
   serviceId: string,
-  input: VercelDeploymentActionInput,
+  input: ServiceDeploymentActionInput,
   fetcher: ServiceProviderFetch = fetch
 ): Promise<ProjectServiceRecord> {
   const currentService = getProjectService(db, serviceId)
 
   if (currentService?.provider === 'railway') {
-    throw new Error('Railway 部署操作暂不支持，当前版本只支持只读查看')
+    return runRailwayDeploymentAction(db, serviceId, input, fetcher)
   }
 
   const { service, connection, projectId } = getVercelServiceContext(db, serviceId)
-  const deploymentId = trimText(input.deploymentId)
-
-  if (!deploymentId) {
-    throw new Error('缺少 Vercel 部署 ID')
-  }
+  const deploymentId = getRequiredDeploymentId(input, 'Vercel')
 
   if (input.action === 'redeploy') {
     await redeployVercelDeployment(connection, deploymentId, fetcher)
@@ -1400,7 +1563,7 @@ export async function runServiceDeploymentAction(
     throw new Error('不支持的 Vercel 部署操作')
   }
 
-  return syncVercelServiceAndRead(db, service, fetcher)
+  return syncServiceAndRead(db, service, fetcher)
 }
 
 export async function listServiceEnvVars(
@@ -1495,7 +1658,7 @@ export async function addServiceDomain(
     fetcher
   )
 
-  return syncVercelServiceAndRead(db, service, fetcher)
+  return syncServiceAndRead(db, service, fetcher)
 }
 
 export async function removeServiceDomain(
@@ -1509,7 +1672,7 @@ export async function removeServiceDomain(
 
   await removeVercelProjectDomain(connection, projectId, domain, removeRedirects, fetcher)
 
-  return syncVercelServiceAndRead(db, service, fetcher)
+  return syncServiceAndRead(db, service, fetcher)
 }
 
 export async function verifyServiceDomain(
@@ -1522,7 +1685,7 @@ export async function verifyServiceDomain(
 
   await verifyVercelProjectDomain(connection, projectId, domain, fetcher)
 
-  return syncVercelServiceAndRead(db, service, fetcher)
+  return syncServiceAndRead(db, service, fetcher)
 }
 
 export async function inspectServiceDomainConfig(

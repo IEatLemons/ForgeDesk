@@ -1,9 +1,20 @@
 export type ReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
+export type ReleasePublishProvider = 'github' | 'codemagic'
+
+export type ReleasePublishArtifact = {
+  name: string
+  type: string
+  sizeInBytes: number
+  downloadUrl: string
+  versionCode?: string
+  versionName?: string
+}
 
 export type ReleasePublishTaskSnapshot<TPlan extends object = Record<string, unknown>, TRepository extends object = Record<string, unknown>> = {
   id: string
   repositoryId: string
   repositoryName: string
+  provider: ReleasePublishProvider
   version: string
   tagName: string
   releaseTitle: string
@@ -23,6 +34,13 @@ export type ReleasePublishTaskSnapshot<TPlan extends object = Record<string, unk
   stderr: string
   exitCode: number | null
   error?: string
+  externalBuildId?: string
+  externalBuildUrl?: string
+  externalStatus?: string
+  externalWorkflow?: string
+  externalBranch?: string
+  externalTag?: string
+  artifacts: ReleasePublishArtifact[]
   plan?: TPlan
   repository?: TRepository
 }
@@ -48,6 +66,19 @@ function parseOptionalJsonObject<T extends object>(value: unknown): T | undefine
     return typeof parsed === 'object' && parsed !== null ? parsed as T : undefined
   } catch {
     return undefined
+  }
+}
+
+function parseJsonArray<T>(value: unknown): T[] {
+  if (!value) {
+    return []
+  }
+
+  try {
+    const parsed = JSON.parse(String(value))
+    return Array.isArray(parsed) ? (parsed as T[]) : []
+  } catch {
+    return []
   }
 }
 
@@ -78,11 +109,13 @@ function mapReleasePublishTaskRow<TPlan extends object, TRepository extends obje
   row: Record<string, unknown>
 ): ReleasePublishTaskSnapshot<TPlan, TRepository> {
   const processPid = optionalNumber(row.process_pid)
+  const provider = String(row.provider || 'github') === 'codemagic' ? 'codemagic' : 'github'
 
   return {
     id: String(row.id),
     repositoryId: String(row.repository_id),
     repositoryName: String(row.repository_name ?? ''),
+    provider,
     version: String(row.version ?? ''),
     tagName: String(row.tag_name ?? ''),
     releaseTitle: String(row.release_title ?? ''),
@@ -102,8 +135,23 @@ function mapReleasePublishTaskRow<TPlan extends object, TRepository extends obje
     stderr: String(row.stderr ?? ''),
     exitCode: nullableNumber(row.exit_code),
     error: optionalString(row.error),
+    externalBuildId: optionalString(row.external_build_id),
+    externalBuildUrl: optionalString(row.external_build_url),
+    externalStatus: optionalString(row.external_status),
+    externalWorkflow: optionalString(row.external_workflow),
+    externalBranch: optionalString(row.external_branch),
+    externalTag: optionalString(row.external_tag),
+    artifacts: parseJsonArray<ReleasePublishArtifact>(row.artifacts_json),
     plan: parseOptionalJsonObject<TPlan>(row.plan_json),
     repository: parseOptionalJsonObject<TRepository>(row.repository_json)
+  }
+}
+
+function addColumnIfMissing(db: DatabaseLike, table: string, column: string, definition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+
+  if (!columns.some((item) => item.name === column)) {
+    db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run()
   }
 }
 
@@ -113,6 +161,7 @@ export function migrateReleasePublishTaskTable(db: DatabaseLike): void {
       id TEXT PRIMARY KEY,
       repository_id TEXT NOT NULL,
       repository_name TEXT NOT NULL,
+      provider TEXT NOT NULL DEFAULT 'github',
       version TEXT NOT NULL,
       tag_name TEXT NOT NULL,
       release_title TEXT NOT NULL,
@@ -132,10 +181,25 @@ export function migrateReleasePublishTaskTable(db: DatabaseLike): void {
       stderr TEXT NOT NULL DEFAULT '',
       exit_code INTEGER,
       error TEXT,
+      external_build_id TEXT,
+      external_build_url TEXT,
+      external_status TEXT,
+      external_workflow TEXT,
+      external_branch TEXT,
+      external_tag TEXT,
+      artifacts_json TEXT NOT NULL DEFAULT '[]',
       plan_json TEXT,
       repository_json TEXT
     );
   `)
+  addColumnIfMissing(db, 'release_publish_tasks', 'provider', "TEXT NOT NULL DEFAULT 'github'")
+  addColumnIfMissing(db, 'release_publish_tasks', 'external_build_id', 'TEXT')
+  addColumnIfMissing(db, 'release_publish_tasks', 'external_build_url', 'TEXT')
+  addColumnIfMissing(db, 'release_publish_tasks', 'external_status', 'TEXT')
+  addColumnIfMissing(db, 'release_publish_tasks', 'external_workflow', 'TEXT')
+  addColumnIfMissing(db, 'release_publish_tasks', 'external_branch', 'TEXT')
+  addColumnIfMissing(db, 'release_publish_tasks', 'external_tag', 'TEXT')
+  addColumnIfMissing(db, 'release_publish_tasks', 'artifacts_json', "TEXT NOT NULL DEFAULT '[]'")
 }
 
 export function saveReleasePublishTask<TPlan extends object, TRepository extends object>(
@@ -145,15 +209,17 @@ export function saveReleasePublishTask<TPlan extends object, TRepository extends
   db.prepare(
     `
     INSERT INTO release_publish_tasks (
-      id, repository_id, repository_name, version, tag_name, release_title, selected_script,
+      id, repository_id, repository_name, provider, version, tag_name, release_title, selected_script,
       status, phase, phase_index, phase_total, hint, last_output_at, process_pid,
       started_at, updated_at, finished_at, log, stdout, stderr, exit_code, error,
-      plan_json, repository_json
+      external_build_id, external_build_url, external_status, external_workflow, external_branch,
+      external_tag, artifacts_json, plan_json, repository_json
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       repository_id = excluded.repository_id,
       repository_name = excluded.repository_name,
+      provider = excluded.provider,
       version = excluded.version,
       tag_name = excluded.tag_name,
       release_title = excluded.release_title,
@@ -173,6 +239,13 @@ export function saveReleasePublishTask<TPlan extends object, TRepository extends
       stderr = excluded.stderr,
       exit_code = excluded.exit_code,
       error = excluded.error,
+      external_build_id = excluded.external_build_id,
+      external_build_url = excluded.external_build_url,
+      external_status = excluded.external_status,
+      external_workflow = excluded.external_workflow,
+      external_branch = excluded.external_branch,
+      external_tag = excluded.external_tag,
+      artifacts_json = excluded.artifacts_json,
       plan_json = excluded.plan_json,
       repository_json = excluded.repository_json
   `
@@ -180,6 +253,7 @@ export function saveReleasePublishTask<TPlan extends object, TRepository extends
     task.id,
     task.repositoryId,
     task.repositoryName,
+    task.provider,
     task.version,
     task.tagName,
     task.releaseTitle,
@@ -199,6 +273,13 @@ export function saveReleasePublishTask<TPlan extends object, TRepository extends
     task.stderr,
     task.exitCode,
     task.error ?? null,
+    task.externalBuildId ?? null,
+    task.externalBuildUrl ?? null,
+    task.externalStatus ?? null,
+    task.externalWorkflow ?? null,
+    task.externalBranch ?? null,
+    task.externalTag ?? null,
+    JSON.stringify(task.artifacts ?? []),
     task.plan ? JSON.stringify(task.plan) : null,
     task.repository ? JSON.stringify(task.repository) : null
   )

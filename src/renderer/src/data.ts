@@ -386,6 +386,7 @@ export type CommitMessageSuggestion = {
 }
 
 export type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
+export type ReleasePublishProvider = 'github' | 'codemagic'
 export type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
 
 export type ReleasePublishAction = {
@@ -397,6 +398,7 @@ export type ReleasePublishAction = {
 
 export type RepositoryReleasePlan = {
   repositoryName: string
+  provider: ReleasePublishProvider
   currentVersion: string
   suggestedVersion: string
   suggestedTagName: string
@@ -411,6 +413,7 @@ export type RepositoryReleasePlan = {
 
 export type RepositoryReleasePrepareInput = {
   targetVersion?: string
+  provider?: ReleasePublishProvider
 }
 
 export type RepositoryReleasePreparation = {
@@ -447,6 +450,7 @@ export type RepositoryReleaseSuggestion = {
 }
 
 export type RepositoryReleasePublishInput = {
+  provider?: ReleasePublishProvider
   version: string
   tagName: string
   releaseTitle: string
@@ -454,16 +458,33 @@ export type RepositoryReleasePublishInput = {
   commitMessage: string
   githubTokenId?: string
   githubToken?: string
+  codemagicTokenId?: string
+  codemagicTeamId?: string
+  codemagicAppId?: string
+  codemagicAppName?: string
+  codemagicWorkflowId?: string
+  codemagicWorkflowName?: string
+  codemagicDefaultBranch?: string
+  codemagicLabels?: string[]
+  saveCodemagicBinding?: boolean
   releaseActions?: ReleasePublishActionKey[]
 }
 
 export type RepositoryReleasePublishResult = {
   ok: boolean
+  provider: ReleasePublishProvider
   repository: Repository
   plan: RepositoryReleasePlan
   stdout: string
   stderr: string
   exitCode: number | null
+  externalBuildId?: string
+  externalBuildUrl?: string
+  externalStatus?: string
+  externalWorkflow?: string
+  externalBranch?: string
+  externalTag?: string
+  artifacts?: ReleasePublishArtifact[]
 }
 
 export type RepositoryReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
@@ -472,6 +493,7 @@ export type RepositoryReleasePublishTask = {
   id: string
   repositoryId: string
   repositoryName: string
+  provider: ReleasePublishProvider
   version: string
   tagName: string
   releaseTitle: string
@@ -491,8 +513,24 @@ export type RepositoryReleasePublishTask = {
   stderr: string
   exitCode: number | null
   error?: string
+  externalBuildId?: string
+  externalBuildUrl?: string
+  externalStatus?: string
+  externalWorkflow?: string
+  externalBranch?: string
+  externalTag?: string
+  artifacts: ReleasePublishArtifact[]
   plan?: RepositoryReleasePlan
   repository?: Repository
+}
+
+export type ReleasePublishArtifact = {
+  name: string
+  type: string
+  sizeInBytes: number
+  downloadUrl: string
+  versionCode?: string
+  versionName?: string
 }
 
 export type GitMergeAnalysisInput = {
@@ -821,6 +859,12 @@ export type ServiceDeploymentSummary = {
   creator: string
   meta: Record<string, unknown>
   commitSha: string
+  environmentId?: string
+  projectId?: string
+  serviceId?: string
+  canRedeploy?: boolean
+  canRollback?: boolean
+  deploymentStopped?: boolean
 }
 
 export type VercelDeploymentSummary = ServiceDeploymentSummary
@@ -832,11 +876,14 @@ export type ServiceDeploymentListOptions = {
 
 export type VercelDeploymentListOptions = ServiceDeploymentListOptions
 
-export type VercelDeploymentActionInput = {
-  action: 'redeploy' | 'cancel' | 'promote' | 'rollback'
-  deploymentId: string
+export type ServiceDeploymentActionInput = {
+  action: 'deploy' | 'redeploy' | 'restart' | 'stop' | 'cancel' | 'promote' | 'rollback'
+  deploymentId?: string
+  environmentId?: string
   description?: string
 }
+
+export type VercelDeploymentActionInput = ServiceDeploymentActionInput
 
 export type ServiceEnvVarRecord = {
   id: string
@@ -1240,6 +1287,80 @@ export type GithubTokenView = {
   createdAt: string
   updatedAt: string
   lastCheckedAt: string
+}
+
+export type CodemagicTokenInput = {
+  id?: string
+  name: string
+  token?: string
+}
+
+export type CodemagicTokenView = {
+  id: string
+  name: string
+  tokenLastFour: string
+  userId: string
+  teamCount: number
+  appCount: number
+  permissionSummary: string
+  tokenConfigured: boolean
+  createdAt: string
+  updatedAt: string
+  lastCheckedAt: string
+}
+
+export type CodemagicTeam = {
+  id: string
+  name: string
+}
+
+export type CodemagicApp = {
+  id: string
+  name: string
+  teamId: string
+  repositoryUrl: string
+  settingsSource: string
+  projectType: string
+  lastBuildId: string
+  archived: boolean
+}
+
+export type CodemagicAppListInput = {
+  tokenId: string
+  teamId?: string
+  name?: string
+}
+
+export type CodemagicRepositoryBindingInput = {
+  repositoryId: string
+  tokenId: string
+  teamId?: string
+  appId: string
+  appName?: string
+  workflowId: string
+  workflowName?: string
+  defaultBranch?: string
+  labels?: string[]
+}
+
+export type CodemagicRepositoryBinding = {
+  repositoryId: string
+  tokenId: string
+  teamId: string
+  appId: string
+  appName: string
+  workflowId: string
+  workflowName: string
+  defaultBranch: string
+  labels: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type CodemagicArtifactPublicUrlInput = {
+  tokenId: string
+  secureFilename: string
+  expiresAt?: number
 }
 
 export const projects: Project[] = []
