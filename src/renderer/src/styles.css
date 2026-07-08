@@ -705,6 +705,43 @@ button.app-status-bar-item:hover {
   width: 100%;
 }
 
+.project-list-table {
+  margin-top: 12px;
+}
+
+.project-list-table .ant-table,
+.project-list-table .ant-table-container,
+.project-list-table .ant-table-content {
+  max-width: 100%;
+}
+
+.project-list-table .ant-table-content {
+  overflow-x: hidden !important;
+}
+
+.project-list-table .ant-table-cell {
+  vertical-align: top;
+  white-space: normal;
+}
+
+.project-list-name-cell {
+  max-width: 100%;
+}
+
+.project-list-path {
+  display: block;
+  max-width: 100%;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.project-list-actions {
+  justify-content: flex-start;
+  width: 100%;
+}
+
 .project-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -793,6 +830,59 @@ button.app-status-bar-item:hover {
   justify-self: end;
   align-self: start;
   max-width: 100%;
+}
+
+.project-git-task-drawer {
+  width: 100%;
+}
+
+.project-git-task-entry {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--app-border);
+  border-left: 3px solid var(--primary);
+  border-radius: 8px;
+}
+
+.project-git-task-entry-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.project-git-task-summary {
+  color: var(--app-text);
+}
+
+.project-git-task-repository-list {
+  display: grid;
+  gap: 10px;
+}
+
+.project-git-task-repository {
+  display: grid;
+  gap: 6px;
+  padding: 8px 0 8px 12px;
+  border-left: 2px solid var(--app-border);
+}
+
+.project-git-task-output {
+  max-height: 140px;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  color: var(--app-text);
+  white-space: pre-wrap;
+  background: var(--app-bg);
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+}
+
+.project-git-task-output.is-error {
+  color: #cf1322;
 }
 
 .subsection-title {
@@ -2983,6 +3073,54 @@ button.app-status-bar-item:hover {
   grid-column: 1 / -1;
 }
 
+.oa-settings-form {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.oa-capability-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  grid-column: 1 / -1;
+}
+
+.oa-capability-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--card-bg);
+}
+
+.oa-capability-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.oa-capability-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.oa-capability-copy .ant-typography {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.oa-capability-switch {
+  margin: 0;
+}
+
 .github-token-form {
   grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) auto;
 }
@@ -4858,6 +4996,7 @@ button.app-status-bar-item:hover {
   }
 
   .ai-settings-grid,
+  .oa-capability-grid,
   .password-custom-grid,
   .env-diff-text-grid,
   .file-diff-summary,

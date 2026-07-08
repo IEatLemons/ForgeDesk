@@ -11,6 +11,7 @@ import { requestCommitMessageSuggestion, type CommitMessageSuggestion } from './
 import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion } from './ai-conflict-assistant'
 import { requestReleaseSuggestion, type ReleaseSuggestion } from './ai-release-assistant'
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
+import { getRedactedOaSettings, readOaSettingsFile, writeOaSettingsFile, type OaSettings, type RedactedOaSettings } from './oa-settings'
 import { collectCloseGuardActivities, createCloseGuardPrompt, type CloseGuardAction, type CloseGuardActivity } from './app-close-guard'
 import { registerAppUpdateIpc } from './app-updates'
 import { inspectCliEnvironment, repairCliEnvironment, type CliEnvironmentRepairResult, type CliEnvironmentSnapshot } from './cli-environment'
@@ -4777,6 +4778,24 @@ ipcMain.handle('settings:ai:save', async (_event, input: Partial<AiSettings>): P
   })
 
   return getRedactedAiSettings(nextSettings)
+})
+
+ipcMain.handle('settings:oa:get', async (): Promise<RedactedOaSettings> => getRedactedOaSettings(await readOaSettingsFile(app.getPath('userData'))))
+
+ipcMain.handle('settings:oa:save', async (_event, input: Partial<OaSettings>): Promise<RedactedOaSettings> => {
+  const currentSettings = await readOaSettingsFile(app.getPath('userData'))
+  const nextSettings = await writeOaSettingsFile(app.getPath('userData'), {
+    ...currentSettings,
+    ...input,
+    larkAppSecret: input.larkAppSecret === undefined ? currentSettings.larkAppSecret : input.larkAppSecret
+  })
+
+  return getRedactedOaSettings(nextSettings)
+})
+
+ipcMain.handle('settings:oa:open-docs', async (): Promise<void> => {
+  const settings = await readOaSettingsFile(app.getPath('userData'))
+  await shell.openExternal(settings.docsHomeUrl)
 })
 
 ipcMain.handle('settings:github-tokens:list', async (): Promise<GithubTokenView[]> => listGithubTokens(app.getPath('userData')))

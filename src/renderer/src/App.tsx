@@ -106,6 +106,7 @@ import type {
   MonthlyPerformancePreview,
   MonthlyPerformanceRow,
   MonthlyPerformanceSession,
+  OaSettingsView,
   Project,
   ProjectBranchTag,
   ProjectGitSummary,
@@ -324,7 +325,7 @@ type SshPassphraseForm = {
   confirmPassphrase: string
 }
 
-type SettingsModuleKey = 'overview' | 'appearance' | 'git' | 'github' | 'codemagic' | 'private' | 'public' | 'config' | 'services' | 'plane' | 'ai' | 'updates' | 'log-refresh'
+type SettingsModuleKey = 'overview' | 'appearance' | 'git' | 'github' | 'codemagic' | 'private' | 'public' | 'config' | 'services' | 'plane' | 'oa' | 'ai' | 'updates' | 'log-refresh'
 type SettingsOverviewModuleKey = Exclude<SettingsModuleKey, 'overview'>
 type SettingsOverviewCategory = {
   title: string
@@ -376,6 +377,16 @@ type PlaneSettingsForm = {
   apiBaseUrl: string
   webBaseUrl: string
   apiToken?: string
+}
+
+type OaSettingsForm = {
+  enabled: boolean
+  larkAppId: string
+  larkAppSecret?: string
+  docsHomeUrl: string
+  enableDocumentBrowsing: boolean
+  enableDocumentEditing: boolean
+  enableAiDocumentDrafting: boolean
 }
 
 const AI_PROVIDER_PRESETS: Record<AiSettingsForm['provider'], { label: string; baseUrl: string; model: string; apiKeyPlaceholder: string }> = {
@@ -1850,6 +1861,117 @@ function PlaneSettingsSection({ form, settings, loading, saving, testing, testRe
   )
 }
 
+function isOaSettingsReady(settings: OaSettingsView | null): boolean {
+  return Boolean(settings?.enabled && settings.larkAppId && settings.larkAppSecretConfigured && settings.docsHomeUrl)
+}
+
+function populateOaSettingsForm(form: FormInstance<OaSettingsForm>, settings: OaSettingsView): void {
+  form.setFieldsValue({
+    enabled: settings.enabled,
+    larkAppId: settings.larkAppId,
+    larkAppSecret: '',
+    docsHomeUrl: settings.docsHomeUrl,
+    enableDocumentBrowsing: settings.enableDocumentBrowsing,
+    enableDocumentEditing: settings.enableDocumentEditing,
+    enableAiDocumentDrafting: settings.enableAiDocumentDrafting
+  })
+}
+
+type OaSettingsSectionProps = {
+  form: FormInstance<OaSettingsForm>
+  settings: OaSettingsView | null
+  loading: boolean
+  saving: boolean
+  onRefresh: () => void | Promise<unknown>
+  onSave: () => void | Promise<void>
+  onOpenDocs: () => void | Promise<void>
+  onBack?: () => void
+}
+
+function OaSettingsSection({ form, settings, loading, saving, onRefresh, onSave, onOpenDocs, onBack }: OaSettingsSectionProps): JSX.Element {
+  const oaReady = isOaSettingsReady(settings)
+  const capabilityItems: Array<{ name: keyof OaSettingsForm; title: string; description: string; icon: JSX.Element }> = [
+    {
+      name: 'enableDocumentBrowsing',
+      title: '快速浏览文档',
+      description: '在 ForgeDesk 中保留 Lark 文档入口和浏览能力。',
+      icon: <FileTextOutlined />
+    },
+    {
+      name: 'enableDocumentEditing',
+      title: '编辑文档',
+      description: '允许后续文档工作流使用 Lark 编辑权限。',
+      icon: <EditOutlined />
+    },
+    {
+      name: 'enableAiDocumentDrafting',
+      title: 'AI 协助产出文档',
+      description: '把 AI 草稿、总结和结构化内容产出接入文档流。',
+      icon: <ThunderboltOutlined />
+    }
+  ]
+
+  return (
+    <div className="panel settings-module-panel">
+      <div className="settings-module-header">
+        <Space direction="vertical" size={2}>
+          <Typography.Title level={3}>OA / Lark 文档</Typography.Title>
+          <Typography.Text type="secondary">接入 Lark / 飞书文档，用于快速浏览、编辑和 AI 协助产出文档。</Typography.Text>
+        </Space>
+        <Space wrap>
+          {onBack && <Button onClick={onBack}>返回总览</Button>}
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={onRefresh}>
+            重新读取
+          </Button>
+          <Button icon={<LinkOutlined />} onClick={onOpenDocs}>
+            打开文档
+          </Button>
+        </Space>
+      </div>
+      <Alert
+        className="settings-module-alert"
+        type={oaReady ? 'success' : 'info'}
+        showIcon
+        message={oaReady ? 'Lark 文档已接入' : '保存 Lark App ID 和 App Secret 后启用 OA 文档能力'}
+        description={settings?.larkAppSecretConfigured ? 'App Secret 已保存在本机，界面不会回显明文。' : '需要在 Lark / 飞书开放平台创建应用，并授予文档读取、编辑和创建相关权限。'}
+      />
+      <Form form={form} layout="vertical" className="settings-management-form oa-settings-form">
+        <div className="ai-settings-grid">
+          <Form.Item name="enabled" label="启用 Lark 集成" valuePropName="checked">
+            <Switch checkedChildren="启用" unCheckedChildren="停用" />
+          </Form.Item>
+          <Form.Item name="docsHomeUrl" label="文档首页 URL" rules={[{ required: true, message: '请输入 Lark 文档首页 URL' }]}>
+            <Input placeholder="https://docs.feishu.cn" />
+          </Form.Item>
+          <Form.Item name="larkAppId" label="Lark App ID" rules={[{ required: true, message: '请输入 Lark App ID' }]}>
+            <Input placeholder="cli_aabbcc..." />
+          </Form.Item>
+          <Form.Item name="larkAppSecret" label="Lark App Secret">
+            <Input.Password placeholder={settings?.larkAppSecretConfigured ? '已保存，留空不变' : 'app secret'} />
+          </Form.Item>
+        </div>
+        <div className="oa-capability-grid">
+          {capabilityItems.map((item) => (
+            <div className="oa-capability-row" key={item.name}>
+              <span className="oa-capability-icon">{item.icon}</span>
+              <span className="oa-capability-copy">
+                <Typography.Text strong>{item.title}</Typography.Text>
+                <Typography.Text type="secondary">{item.description}</Typography.Text>
+              </span>
+              <Form.Item name={item.name} valuePropName="checked" className="oa-capability-switch">
+                <Switch />
+              </Form.Item>
+            </div>
+          ))}
+        </div>
+        <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave}>
+          保存 OA 设置
+        </Button>
+      </Form>
+    </div>
+  )
+}
+
 function SettingsPanel({
   onCreateProject,
   themePreference,
@@ -1875,6 +1997,7 @@ function SettingsPanel({
   const [githubTokenForm] = Form.useForm<GithubTokenForm>()
   const [codemagicTokenForm] = Form.useForm<CodemagicTokenForm>()
   const [planeSettingsForm] = Form.useForm<PlaneSettingsForm>()
+  const [oaSettingsForm] = Form.useForm<OaSettingsForm>()
   const [gitLogRefreshPreferences, setGitLogRefreshPreferences] = useGitLogRefreshPreferences()
   const [gitStatus, setGitStatus] = useState<GitSetupStatus | null>(null)
   const [sshConfig, setSshConfig] = useState<SshConfigFile | null>(null)
@@ -1885,6 +2008,7 @@ function SettingsPanel({
   const [editingCodemagicToken, setEditingCodemagicToken] = useState<CodemagicTokenView | null>(null)
   const [planeSettings, setPlaneSettings] = useState<PlaneSettings | null>(null)
   const [planeTestResult, setPlaneTestResult] = useState<PlaneConnectionTestResult | null>(null)
+  const [oaSettings, setOaSettings] = useState<OaSettingsView | null>(null)
   const [sshConfigContent, setSshConfigContent] = useState('')
   const [activeSettingsModule, setActiveSettingsModule] = useState<SettingsModuleKey>('overview')
   const [sshConfigMode, setSshConfigMode] = useState<SshConfigMode>('guided')
@@ -1898,6 +2022,7 @@ function SettingsPanel({
   const [loadingGithubTokens, setLoadingGithubTokens] = useState(false)
   const [loadingCodemagicTokens, setLoadingCodemagicTokens] = useState(false)
   const [loadingPlaneSettings, setLoadingPlaneSettings] = useState(false)
+  const [loadingOaSettings, setLoadingOaSettings] = useState(false)
   const [savingIdentity, setSavingIdentity] = useState(false)
   const [savingSshConfig, setSavingSshConfig] = useState(false)
   const [savingAiSettings, setSavingAiSettings] = useState(false)
@@ -1907,6 +2032,7 @@ function SettingsPanel({
   const [checkingCodemagicTokenId, setCheckingCodemagicTokenId] = useState<string | null>(null)
   const [savingPlaneSettings, setSavingPlaneSettings] = useState(false)
   const [testingPlaneSettings, setTestingPlaneSettings] = useState(false)
+  const [savingOaSettings, setSavingOaSettings] = useState(false)
   const [generatingSsh, setGeneratingSsh] = useState(false)
   const [importingSshKey, setImportingSshKey] = useState(false)
   const [savingSshPassphrase, setSavingSshPassphrase] = useState(false)
@@ -2068,6 +2194,25 @@ function SettingsPanel({
     }
   }
 
+  async function refreshOaSettings(): Promise<void> {
+    if (!window.forgeDesk) {
+      setOaSettings(null)
+      return
+    }
+
+    setLoadingOaSettings(true)
+
+    try {
+      const settings = await window.forgeDesk.getOaSettings()
+      setOaSettings(settings)
+      populateOaSettingsForm(oaSettingsForm, settings)
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingOaSettings(false)
+    }
+  }
+
   useEffect(() => {
     refreshGitStatus()
     refreshSshConfig()
@@ -2075,6 +2220,7 @@ function SettingsPanel({
     refreshGithubTokens()
     refreshCodemagicTokens()
     refreshPlaneSettings()
+    refreshOaSettings()
   }, [])
 
   const sshPrivateKeys = gitStatus?.sshPrivateKeys ?? []
@@ -2084,6 +2230,7 @@ function SettingsPanel({
   const githubTokenReady = githubTokens.length > 0
   const codemagicTokenReady = codemagicTokens.length > 0
   const planeReady = isPlaneSettingsReady(planeSettings)
+  const oaReady = isOaSettingsReady(oaSettings)
   const sshReady = sshPrivateKeys.length + sshPublicKeys.length > 0
   const sshPassphraseCount = sshPrivateKeys.filter((key) => key.hasPassphrase).length
   const sshIssueCount =
@@ -2417,6 +2564,52 @@ function SettingsPanel({
     }
 
     await window.forgeDesk.openPlane()
+  }
+
+  async function saveOaSettings(): Promise<void> {
+    const values = await oaSettingsForm.validateFields()
+
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中保存 OA 设置')
+      return
+    }
+
+    const larkAppSecret = values.larkAppSecret?.trim()
+
+    if (values.enabled && !larkAppSecret && !oaSettings?.larkAppSecretConfigured) {
+      message.warning('请填写 Lark App Secret')
+      return
+    }
+
+    setSavingOaSettings(true)
+
+    try {
+      const settings = await window.forgeDesk.saveOaSettings({
+        enabled: values.enabled,
+        provider: 'lark',
+        larkAppId: values.larkAppId,
+        larkAppSecret: larkAppSecret || undefined,
+        docsHomeUrl: values.docsHomeUrl,
+        enableDocumentBrowsing: values.enableDocumentBrowsing,
+        enableDocumentEditing: values.enableDocumentEditing,
+        enableAiDocumentDrafting: values.enableAiDocumentDrafting
+      })
+      setOaSettings(settings)
+      oaSettingsForm.setFieldValue('larkAppSecret', '')
+      message.success('OA 设置已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingOaSettings(false)
+    }
+  }
+
+  async function openOaDocs(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    await window.forgeDesk.openOaDocs()
   }
 
   async function generateSshKey(): Promise<void> {
@@ -2839,6 +3032,14 @@ function SettingsPanel({
       icon: <LinkOutlined />,
       meta: planeReady ? '已配置' : '需要配置',
       tone: planeReady ? 'ok' : 'warning'
+    },
+    {
+      key: 'oa',
+      title: 'OA / Lark 文档',
+      description: '连接 Lark / 飞书文档，支持浏览、编辑和 AI 产出。',
+      icon: <TeamOutlined />,
+      meta: oaReady ? '已接入' : oaSettings?.larkAppSecretConfigured ? '未启用' : '需要配置',
+      tone: oaReady ? 'ok' : oaSettings?.larkAppSecretConfigured ? 'neutral' : 'warning'
     },
     {
       key: 'updates',
@@ -3588,6 +3789,21 @@ function SettingsPanel({
     )
   }
 
+  function renderOaModule(): JSX.Element {
+    return (
+      <OaSettingsSection
+        form={oaSettingsForm}
+        settings={oaSettings}
+        loading={loadingOaSettings}
+        saving={savingOaSettings}
+        onRefresh={refreshOaSettings}
+        onSave={saveOaSettings}
+        onOpenDocs={openOaDocs}
+        onBack={() => setActiveSettingsModule('overview')}
+      />
+    )
+  }
+
   function renderUpdatesModule(): JSX.Element {
     const view = createAppUpdateViewModel(appUpdateState)
     const isBusy = view.primaryAction === 'busy' || checkingAppUpdate || installingAppUpdate
@@ -3705,6 +3921,8 @@ function SettingsPanel({
         return renderServicesModule()
       case 'plane':
         return renderPlaneModule()
+      case 'oa':
+        return renderOaModule()
       case 'ai':
         return renderAiModule()
       case 'updates':
@@ -3719,7 +3937,7 @@ function SettingsPanel({
       <div className="section-heading">
         <div>
           <Typography.Title level={2}>设置</Typography.Title>
-          <Typography.Text type="secondary">管理本机 Git / SSH 能力。</Typography.Text>
+          <Typography.Text type="secondary">管理本机 Git / SSH、AI、OA 和服务集成。</Typography.Text>
         </div>
         <Space>
           <Button icon={<PlusOutlined />} onClick={onCreateProject}>
@@ -6876,10 +7094,17 @@ function createGitPushInput(remoteNames: string[], branch: string): GitPushInput
   return remoteNames.length > 1 ? { remotes: remoteNames, branch } : { remote: remoteNames[0], branch }
 }
 
-function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionModalProps): JSX.Element {
+function GitCommitModal({
+  open,
+  repositories,
+  initialRepositoryId,
+  onClose,
+  onChanged
+}: GitActionModalProps & { initialRepositoryId?: string }): JSX.Element {
   const { updateRepository } = useForgeDeskStore()
   const [aiSettingsForm] = Form.useForm<AiSettingsForm>()
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
+  const commitModalWasOpenRef = useRef(false)
   const [status, setStatus] = useState<GitWorkspaceStatus | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [commitMessage, setCommitMessage] = useState('')
@@ -6900,6 +7125,9 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
   const commitReady = canCommitSelection(files, selectedPaths, commitMessage)
 
   useEffect(() => {
+    const wasOpen = commitModalWasOpenRef.current
+    commitModalWasOpenRef.current = open
+
     if (!open) {
       return
     }
@@ -6913,10 +7141,20 @@ function GitCommitModal({ open, repositories, onClose, onChanged }: GitActionMod
       return
     }
 
-    if (!repositories.some((repository) => repository.id === repositoryId)) {
-      setRepositoryId(repositories[0].id)
-    }
-  }, [open, repositories, repositoryId])
+    const preferredRepositoryId = initialRepositoryId && repositories.some((repository) => repository.id === initialRepositoryId) ? initialRepositoryId : ''
+
+    setRepositoryId((current) => {
+      if (!wasOpen && preferredRepositoryId) {
+        return preferredRepositoryId
+      }
+
+      if (repositories.some((repository) => repository.id === current)) {
+        return current
+      }
+
+      return preferredRepositoryId || repositories[0].id
+    })
+  }, [initialRepositoryId, open, repositories])
 
   async function refreshWorkspaceStatus(): Promise<void> {
     if (!selectedRepository || !window.forgeDesk) {
@@ -8473,7 +8711,13 @@ function GitPushModal({ open, repositories, onClose, onChanged }: GitActionModal
   )
 }
 
-function GitMergeModal({ open, repositories, onClose, onChanged }: GitActionModalProps): JSX.Element {
+function GitMergeModal({
+  open,
+  repositories,
+  onClose,
+  onChanged,
+  onOperationResult
+}: GitActionModalProps & { onOperationResult?: (repository: Repository, result: GitOperationResult) => void }): JSX.Element {
   const { updateRepository } = useForgeDeskStore()
   const [aiSettingsForm] = Form.useForm<AiSettingsForm>()
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
@@ -8569,6 +8813,7 @@ function GitMergeModal({ open, repositories, onClose, onChanged }: GitActionModa
     try {
       const result = await window.forgeDesk.gitMerge(selectedRepository.id, { source: nextAnalysis.source })
       updateRepository(result.repository)
+      onOperationResult?.(result.repository, result)
       setStatus(result.status)
 
       if (result.ok) {
@@ -10193,6 +10438,97 @@ function ProjectCard({
   )
 }
 
+type ProjectGitListAction = 'fetch' | 'push' | 'merge'
+type ProjectGitTaskStatus = 'running' | 'success' | 'failed' | 'skipped'
+
+type ProjectGitRepositoryTaskResult = {
+  repositoryId: string
+  repositoryName: string
+  ok: boolean
+  message: string
+  stdout?: string
+  stderr?: string
+}
+
+type ProjectGitTaskLog = {
+  id: string
+  projectId: string
+  projectName: string
+  action: ProjectGitListAction
+  status: ProjectGitTaskStatus
+  startedAt: string
+  finishedAt?: string
+  summary: string
+  repositoryResults: ProjectGitRepositoryTaskResult[]
+}
+
+function getProjectGitTaskKey(projectId: string, action: ProjectGitListAction): string {
+  return `${projectId}:${action}`
+}
+
+function getProjectGitActionLabel(action: ProjectGitListAction): string {
+  if (action === 'fetch') {
+    return 'Fetch'
+  }
+
+  if (action === 'push') {
+    return '推送'
+  }
+
+  return '合并'
+}
+
+function getProjectGitTaskStatusMeta(status: ProjectGitTaskStatus): { label: string; color: string; badgeStatus: 'success' | 'processing' | 'default' | 'error' | 'warning' } {
+  if (status === 'running') {
+    return { label: '执行中', color: 'blue', badgeStatus: 'processing' }
+  }
+
+  if (status === 'success') {
+    return { label: '成功', color: 'green', badgeStatus: 'success' }
+  }
+
+  if (status === 'skipped') {
+    return { label: '跳过', color: 'default', badgeStatus: 'default' }
+  }
+
+  return { label: '失败', color: 'red', badgeStatus: 'error' }
+}
+
+function formatGitTaskOutput(value?: string): string {
+  const text = value?.trim() ?? ''
+
+  if (!text) {
+    return ''
+  }
+
+  return text.length > 220 ? `${text.slice(0, 220)}...` : text
+}
+
+function groupPushTargetsByBranch(pushTargets: Repository['pushTargets']): Array<{ branch: string; remotes: string[] }> {
+  const grouped = new Map<string, Set<string>>()
+
+  getPushableTargets(pushTargets).forEach((target) => {
+    const branch = target.branch.trim()
+    const remote = target.remote.trim()
+
+    if (!branch || !remote) {
+      return
+    }
+
+    if (!grouped.has(branch)) {
+      grouped.set(branch, new Set())
+    }
+
+    grouped.get(branch)?.add(remote)
+  })
+
+  return Array.from(grouped.entries()).map(([branch, remotes]) => ({ branch, remotes: Array.from(remotes) }))
+}
+
+function createProjectGitTaskLogId(projectId: string, action: ProjectGitListAction): string {
+  return `${projectId}-${action}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
 function ProjectLogTreePanel({
   repositories,
   repositoryId,
@@ -10822,12 +11158,25 @@ function ProjectOverview({
   const [branchTagRefreshToken, setBranchTagRefreshToken] = useState(0)
   const [projectServiceCounts, setProjectServiceCounts] = useState<Record<string, number>>({})
   const [projectPlaneAvailability, setProjectPlaneAvailability] = useState<Record<string, boolean>>({})
+  const [selectedProjectRowIds, setSelectedProjectRowIds] = useState<string[]>([])
+  const [runningProjectGitTaskKeys, setRunningProjectGitTaskKeys] = useState<string[]>([])
+  const [projectGitTaskLogs, setProjectGitTaskLogs] = useState<ProjectGitTaskLog[]>([])
+  const [projectGitTaskDrawerOpen, setProjectGitTaskDrawerOpen] = useState(false)
+  const [listCommitProjectId, setListCommitProjectId] = useState<string | null>(null)
+  const [listMergeProjectId, setListMergeProjectId] = useState<string | null>(null)
   const [rangePreset, setRangePreset] = useState('30')
   const [range, setRange] = useState(createPresetRange(30))
   const terminalRequestSeqRef = useRef(0)
   const projectWorkspaceStatusRefreshRef = useRef(false)
   const projectRepositoriesRef = useRef<Repository[]>([])
   const selectedProject = projects.find((project) => project.id === detailProjectId) ?? null
+  const selectedProjectRows = projects.filter((project) => selectedProjectRowIds.includes(project.id))
+  const listCommitProject = projects.find((project) => project.id === listCommitProjectId) ?? null
+  const listCommitProjectRepositories = listCommitProject ? repositories.filter((repository) => repository.projectId === listCommitProject.id) : []
+  const listCommitInitialRepository = listCommitProjectRepositories.find((repository) => repository.hasChanges) ?? listCommitProjectRepositories[0] ?? null
+  const listMergeProject = projects.find((project) => project.id === listMergeProjectId) ?? null
+  const listMergeProjectRepositories = listMergeProject ? repositories.filter((repository) => repository.projectId === listMergeProject.id) : []
+  const runningProjectTaskCount = runningProjectGitTaskKeys.length
   const projectRepositories = selectedProject ? repositories.filter((repository) => repository.projectId === selectedProject.id) : []
   const projectRepositoryIds = projectRepositories.map((repository) => repository.id).join('|')
   const hasBoundProjectServices = selectedProject ? (projectServiceCounts[selectedProject.id] ?? 0) > 0 : false
@@ -10870,6 +11219,242 @@ function ProjectOverview({
     setProjectDetailTab('terminal')
     setProjectSettingsDrawerOpen(false)
     queueTerminalOpen(createProjectTerminalOpenRequest(project))
+  }
+
+  function getProjectRepositories(project: Project): Repository[] {
+    return repositories.filter((repository) => repository.projectId === project.id)
+  }
+
+  function isProjectGitTaskRunning(projectId: string, action: ProjectGitListAction): boolean {
+    return runningProjectGitTaskKeys.includes(getProjectGitTaskKey(projectId, action))
+  }
+
+  function setProjectGitTaskRunning(projectId: string, action: ProjectGitListAction, running: boolean): void {
+    const key = getProjectGitTaskKey(projectId, action)
+
+    setRunningProjectGitTaskKeys((current) => {
+      if (running) {
+        return current.includes(key) ? current : [...current, key]
+      }
+
+      return current.filter((item) => item !== key)
+    })
+  }
+
+  function upsertProjectGitTaskLog(log: ProjectGitTaskLog): void {
+    setProjectGitTaskLogs((current) => {
+      const index = current.findIndex((item) => item.id === log.id)
+
+      if (index === -1) {
+        return [log, ...current].slice(0, 200)
+      }
+
+      const nextLogs = [...current]
+      nextLogs[index] = log
+      return nextLogs
+    })
+  }
+
+  async function refreshProjectAfterGitTask(projectId: string): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    try {
+      const nextSummary = await window.forgeDesk.analyzeProjectGit(projectId)
+      setProjectSummary(nextSummary)
+      setProjectGitRefreshToken((current) => current + 1)
+      setAnalysisGitError(null)
+    } catch (error) {
+      setAnalysisGitError(createGitErrorGuidance(error, '刷新 Git 数据'))
+    }
+  }
+
+  async function fetchProjectRepositories(project: Project, projectRepositories: Repository[]): Promise<ProjectGitRepositoryTaskResult[]> {
+    if (!window.forgeDesk) {
+      return []
+    }
+
+    return Promise.all(
+      projectRepositories.map(async (repository) => {
+        try {
+          const syncedRepository = await window.forgeDesk.fetchRepositoryRemote(repository.id)
+          updateRepository(syncedRepository)
+
+          return {
+            repositoryId: repository.id,
+            repositoryName: repository.name,
+            ok: true,
+            message: 'Fetch 完成'
+          }
+        } catch (error) {
+          return {
+            repositoryId: repository.id,
+            repositoryName: repository.name,
+            ok: false,
+            message: getErrorMessage(error, `${project.name} / ${repository.name} Fetch 失败`)
+          }
+        }
+      })
+    )
+  }
+
+  async function pushProjectRepositories(project: Project, projectRepositories: Repository[]): Promise<ProjectGitRepositoryTaskResult[]> {
+    if (!window.forgeDesk) {
+      return []
+    }
+
+    const pushableRepositories = projectRepositories.filter((repository) => groupPushTargetsByBranch(repository.pushTargets).length > 0)
+
+    return Promise.all(
+      pushableRepositories.map(async (repository) => {
+        const branchGroups = groupPushTargetsByBranch(repository.pushTargets)
+        const outputs: string[] = []
+        const errors: string[] = []
+
+        for (const group of branchGroups) {
+          try {
+            const result = await window.forgeDesk.gitPush(repository.id, createGitPushInput(group.remotes, group.branch))
+            updateRepository(mergeRepositoryWorkspaceStatus(result.repository, result.status))
+
+            if (result.stdout) {
+              outputs.push(result.stdout)
+            }
+
+            if (!result.ok) {
+              errors.push(result.stderr || result.stdout || `${group.branch} 推送失败`)
+            }
+          } catch (error) {
+            errors.push(getErrorMessage(error, `${project.name} / ${repository.name} 推送失败`))
+          }
+        }
+
+        const ok = errors.length === 0
+
+        return {
+          repositoryId: repository.id,
+          repositoryName: repository.name,
+          ok,
+          message: ok ? `已推送 ${branchGroups.map((group) => `${group.branch} -> ${group.remotes.join(', ')}`).join('；')}` : errors.join('\n'),
+          stdout: formatGitTaskOutput(outputs.join('\n')),
+          stderr: formatGitTaskOutput(errors.join('\n'))
+        }
+      })
+    )
+  }
+
+  async function runProjectGitTask(project: Project, action: 'fetch' | 'push'): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中执行 Git 操作')
+      return
+    }
+
+    const taskId = createProjectGitTaskLogId(project.id, action)
+    const startedAt = new Date().toISOString()
+    const actionLabel = getProjectGitActionLabel(action)
+    const projectRepositories = getProjectRepositories(project)
+    const runningLog: ProjectGitTaskLog = {
+      id: taskId,
+      projectId: project.id,
+      projectName: project.name,
+      action,
+      status: 'running',
+      startedAt,
+      summary: `${actionLabel} 正在执行`,
+      repositoryResults: []
+    }
+
+    upsertProjectGitTaskLog(runningLog)
+    setProjectGitTaskDrawerOpen(true)
+    setProjectGitTaskRunning(project.id, action, true)
+
+    try {
+      const repositoryResults =
+        projectRepositories.length === 0
+          ? []
+          : action === 'fetch'
+            ? await fetchProjectRepositories(project, projectRepositories)
+            : await pushProjectRepositories(project, projectRepositories)
+      const failedCount = repositoryResults.filter((result) => !result.ok).length
+      const successCount = repositoryResults.length - failedCount
+      const status: ProjectGitTaskStatus = repositoryResults.length === 0 ? 'skipped' : failedCount > 0 ? 'failed' : 'success'
+      const summary =
+        status === 'skipped'
+          ? action === 'push'
+            ? '没有待推送的仓库'
+            : '项目下没有仓库'
+          : failedCount > 0
+            ? `${actionLabel} 完成 ${successCount} 个仓库，失败 ${failedCount} 个`
+            : `${actionLabel} 完成 ${successCount} 个仓库`
+
+      if (successCount > 0) {
+        await refreshProjectAfterGitTask(project.id)
+      }
+
+      upsertProjectGitTaskLog({
+        ...runningLog,
+        status,
+        finishedAt: new Date().toISOString(),
+        summary,
+        repositoryResults
+      })
+
+      if (status === 'success') {
+        message.success(`${project.name} ${actionLabel} 已完成`)
+      } else if (status === 'skipped') {
+        message.info(`${project.name} ${summary}`)
+      } else {
+        message.warning(`${project.name} ${summary}`)
+      }
+    } catch (error) {
+      const errorMessage = getErrorMessage(error, `${project.name} ${actionLabel} 失败`)
+      upsertProjectGitTaskLog({
+        ...runningLog,
+        status: 'failed',
+        finishedAt: new Date().toISOString(),
+        summary: errorMessage,
+        repositoryResults: []
+      })
+      message.error(errorMessage)
+    } finally {
+      setProjectGitTaskRunning(project.id, action, false)
+    }
+  }
+
+  async function runSelectedProjectsGitTask(action: 'fetch' | 'push'): Promise<void> {
+    if (selectedProjectRows.length === 0) {
+      message.warning('请选择要操作的项目')
+      return
+    }
+
+    await Promise.all(selectedProjectRows.map((project) => runProjectGitTask(project, action)))
+  }
+
+  function logProjectMergeResult(project: Project, repository: Repository, result: GitOperationResult): void {
+    const now = new Date().toISOString()
+    const status: ProjectGitTaskStatus = result.ok ? 'success' : 'failed'
+    const summary = result.ok ? `已合并 ${repository.name}` : result.stderr || result.stdout || `${repository.name} 合并未完成`
+
+    upsertProjectGitTaskLog({
+      id: createProjectGitTaskLogId(project.id, 'merge'),
+      projectId: project.id,
+      projectName: project.name,
+      action: 'merge',
+      status,
+      startedAt: now,
+      finishedAt: now,
+      summary,
+      repositoryResults: [
+        {
+          repositoryId: repository.id,
+          repositoryName: repository.name,
+          ok: result.ok,
+          message: summary,
+          stdout: formatGitTaskOutput(result.stdout),
+          stderr: formatGitTaskOutput(result.stderr)
+        }
+      ]
+    })
   }
 
   async function refreshSummary(projectId: string, nextRange = summaryRange): Promise<void> {
@@ -11000,6 +11585,15 @@ function ProjectOverview({
   }, [projectRepositories])
 
   useEffect(() => {
+    setSelectedProjectRowIds((current) => {
+      const existingProjectIds = new Set(projects.map((project) => project.id))
+      const nextProjectIds = current.filter((projectId) => existingProjectIds.has(projectId))
+
+      return nextProjectIds.length === current.length ? current : nextProjectIds
+    })
+  }, [projects])
+
+  useEffect(() => {
     if (!selectedProject || projectRepositories.length === 0 || !window.forgeDesk) {
       return
     }
@@ -11102,6 +11696,13 @@ function ProjectOverview({
     }
   }
 
+  function openProjectDetail(project: Project): void {
+    setSelectedProjectId(project.id)
+    setDetailProjectId(project.id)
+    setProjectDetailTab(DEFAULT_PROJECT_DETAIL_TAB)
+    setProjectSettingsDrawerOpen(false)
+  }
+
   function confirmDeleteProject(project: Project): void {
     Modal.confirm({
       title: `删除项目 ${project.name}？`,
@@ -11129,6 +11730,107 @@ function ProjectOverview({
       }
     })
   }
+
+  const selectedProjectsHaveRepositories = selectedProjectRows.some((project) => getProjectRepositories(project).length > 0)
+  const selectedProjectsCanPush = selectedProjectRows.some((project) => hasProjectPushableTargets(getProjectRepositories(project)))
+  const selectedProjectsFetching = selectedProjectRows.some((project) => isProjectGitTaskRunning(project.id, 'fetch'))
+  const selectedProjectsPushing = selectedProjectRows.some((project) => isProjectGitTaskRunning(project.id, 'push'))
+  const projectListColumns: ColumnsType<Project> = [
+    {
+      title: '项目',
+      key: 'project',
+      width: 320,
+      render: (_, project) => (
+        <Space direction="vertical" size={2} className="project-list-name-cell">
+          <Space size={8} wrap>
+            <Typography.Text strong>{project.name}</Typography.Text>
+            {project.id === selectedProjectId ? <Tag color="blue">当前项目</Tag> : null}
+          </Space>
+          <Typography.Text className="project-list-path" type="secondary" title={project.workspacePath}>
+            {project.workspacePath}
+          </Typography.Text>
+        </Space>
+      )
+    },
+    {
+      title: 'Git 状态',
+      key: 'gitStatus',
+      width: 250,
+      render: (_, project) => {
+        const projectRepositories = getProjectRepositories(project)
+        const changedRepositories = projectRepositories.filter((repository) => repository.hasChanges).length
+        const aheadRepositories = projectRepositories.filter((repository) => repository.ahead > 0).length
+        const pushableRepositories = projectRepositories.filter((repository) => groupPushTargetsByBranch(repository.pushTargets).length > 0).length
+
+        return (
+          <Space size={6} wrap>
+            <Tag color={changedRepositories > 0 ? 'orange' : 'green'}>{changedRepositories > 0 ? `${changedRepositories} 有改动` : '工作区干净'}</Tag>
+            <Tag color={aheadRepositories > 0 ? 'blue' : 'default'}>{aheadRepositories} 未推送</Tag>
+            <Tag color={pushableRepositories > 0 ? 'purple' : 'default'}>{pushableRepositories} 可推送</Tag>
+          </Space>
+        )
+      }
+    },
+    {
+      title: '分支',
+      key: 'branches',
+      width: 200,
+      render: (_, project) => {
+        const branches = Array.from(new Set(getProjectRepositories(project).map((repository) => repository.currentBranch).filter(Boolean)))
+
+        return branches.length > 0 ? (
+          <Space size={6} wrap>
+            {branches.slice(0, 3).map((branch) => (
+              <Tag key={branch} color="geekblue">
+                {branch}
+              </Tag>
+            ))}
+            {branches.length > 3 ? <Tag>+{branches.length - 3}</Tag> : null}
+          </Space>
+        ) : (
+          <Typography.Text type="secondary">未识别</Typography.Text>
+        )
+      }
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 380,
+      render: (_, project) => {
+        const projectRepositories = getProjectRepositories(project)
+        const hasRepositories = projectRepositories.length > 0
+        const canCommitProject = hasProjectCommittableChanges(projectRepositories)
+        const canPushProject = hasProjectPushableTargets(projectRepositories)
+
+        return (
+          <Space size={8} wrap className="project-list-actions">
+            <Button size="small" icon={<ArrowRightOutlined />} onClick={() => openProjectDetail(project)}>
+              详情
+            </Button>
+            <Button size="small" icon={<DownloadOutlined />} loading={isProjectGitTaskRunning(project.id, 'fetch')} disabled={!hasRepositories} onClick={() => runProjectGitTask(project, 'fetch')}>
+              Fetch
+            </Button>
+            <Button size="small" icon={<SaveOutlined />} disabled={!canCommitProject} onClick={() => setListCommitProjectId(project.id)}>
+              提交
+            </Button>
+            <Button size="small" icon={<BranchesOutlined />} disabled={!hasRepositories} onClick={() => setListMergeProjectId(project.id)}>
+              合并
+            </Button>
+            <Button size="small" icon={<UploadOutlined />} loading={isProjectGitTaskRunning(project.id, 'push')} disabled={!canPushProject} onClick={() => runProjectGitTask(project, 'push')}>
+              推送
+            </Button>
+            <Button
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              loading={deletingProjectId === project.id}
+              onClick={() => confirmDeleteProject(project)}
+            />
+          </Space>
+        )
+      }
+    }
+  ]
 
   const commitTrendOption = {
     tooltip: { trigger: 'axis' },
@@ -11175,11 +11877,16 @@ function ProjectOverview({
       <div className="section-heading">
         <div>
           <Typography.Title level={2}>项目</Typography.Title>
-          <Typography.Text type="secondary">从项目进入 Git 数据分析。</Typography.Text>
+          <Typography.Text type="secondary">一行一个项目，直接管理 Fetch、提交、合并和推送任务。</Typography.Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={onCreateProject}>
-          创建项目
-        </Button>
+        <Space wrap>
+          <Button icon={<FileTextOutlined />} onClick={() => setProjectGitTaskDrawerOpen(true)}>
+            任务日志{runningProjectTaskCount > 0 ? `（${runningProjectTaskCount}）` : ''}
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={onCreateProject}>
+            创建项目
+          </Button>
+        </Space>
       </div>
 
       {projects.length === 0 ? (
@@ -11198,27 +11905,55 @@ function ProjectOverview({
         <div className="project-list-page">
           <div className="project-list-panel">
             <div className="project-list-heading">
-              <Typography.Title level={4}>项目列表</Typography.Title>
-              <Button size="small" icon={<PlusOutlined />} onClick={onCreateProject} />
+              <div>
+                <Typography.Title level={4}>项目列表</Typography.Title>
+                <Typography.Text type="secondary">选中多个项目后，可以并发 Fetch 或推送。</Typography.Text>
+              </div>
+              <Space wrap>
+                <Button
+                  icon={<DownloadOutlined />}
+                  loading={selectedProjectsFetching}
+                  disabled={selectedProjectRows.length === 0 || !selectedProjectsHaveRepositories}
+                  onClick={() => runSelectedProjectsGitTask('fetch')}
+                >
+                  Fetch 所选
+                </Button>
+                <Button
+                  icon={<UploadOutlined />}
+                  loading={selectedProjectsPushing}
+                  disabled={selectedProjectRows.length === 0 || !selectedProjectsCanPush}
+                  onClick={() => runSelectedProjectsGitTask('push')}
+                >
+                  推送所选
+                </Button>
+                <Button size="small" icon={<PlusOutlined />} onClick={onCreateProject} />
+              </Space>
             </div>
-            <div className="project-card-grid">
-              {projects.map((project) => (
-                <ProjectCard
-                  key={project.id}
-                  project={project}
-                  selected={project.id === selectedProjectId}
-                  repositories={repositories.filter((repository) => repository.projectId === project.id)}
-                  deleting={deletingProjectId === project.id}
-                  onSelect={() => {
-                    setSelectedProjectId(project.id)
-                    setDetailProjectId(project.id)
-                    setProjectDetailTab(DEFAULT_PROJECT_DETAIL_TAB)
-                    setProjectSettingsDrawerOpen(false)
-                  }}
-                  onDelete={() => confirmDeleteProject(project)}
-                />
-              ))}
-            </div>
+            <Table<Project>
+              className="project-list-table"
+              rowKey="id"
+              size="middle"
+              tableLayout="fixed"
+              columns={projectListColumns}
+              dataSource={projects}
+              pagination={false}
+              rowSelection={{
+                selectedRowKeys: selectedProjectRowIds,
+                onChange: (keys) => setSelectedProjectRowIds(keys.map(String))
+              }}
+              onRow={(project) => ({
+                onDoubleClick: () => openProjectDetail(project)
+              })}
+            />
+            {listCommitProject && (
+              <GitCommitModal
+                open={Boolean(listCommitProject)}
+                repositories={listCommitProjectRepositories}
+                initialRepositoryId={listCommitInitialRepository?.id}
+                onClose={() => setListCommitProjectId(null)}
+                onChanged={() => refreshProjectAfterGitTask(listCommitProject.id)}
+              />
+            )}
           </div>
         </div>
       ) : (
@@ -11482,7 +12217,104 @@ function ProjectOverview({
           </div>
         </div>
       )}
+      <GitMergeModal
+        open={Boolean(listMergeProject)}
+        repositories={listMergeProjectRepositories}
+        onClose={() => setListMergeProjectId(null)}
+        onChanged={(repository) => (repository && listMergeProject ? refreshProjectGitData(listMergeProject.id, repository) : undefined)}
+        onOperationResult={(repository, result) => {
+          if (listMergeProject) {
+            logProjectMergeResult(listMergeProject, repository, result)
+          }
+        }}
+      />
+      <ProjectGitTaskLogDrawer
+        open={projectGitTaskDrawerOpen}
+        logs={projectGitTaskLogs}
+        onClose={() => setProjectGitTaskDrawerOpen(false)}
+        onClear={() => setProjectGitTaskLogs([])}
+      />
     </section>
+  )
+}
+
+function ProjectGitTaskLogDrawer({
+  open,
+  logs,
+  onClose,
+  onClear
+}: {
+  open: boolean
+  logs: ProjectGitTaskLog[]
+  onClose: () => void
+  onClear: () => void
+}): JSX.Element {
+  const runningCount = logs.filter((log) => log.status === 'running').length
+
+  return (
+    <Drawer
+      title="项目 Git 任务"
+      open={open}
+      width={520}
+      onClose={onClose}
+      extra={
+        <Button size="small" icon={<DeleteOutlined />} disabled={logs.length === 0} onClick={onClear}>
+          清空
+        </Button>
+      }
+    >
+      <Space direction="vertical" size={14} className="project-git-task-drawer">
+        {runningCount > 0 ? <Alert type="info" showIcon message={`${runningCount} 个任务正在执行`} /> : null}
+        {logs.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有项目 Git 任务" /> : null}
+        {logs.map((log) => {
+          const actionLabel = getProjectGitActionLabel(log.action)
+          const statusMeta = getProjectGitTaskStatusMeta(log.status)
+          const repositoryCount = log.repositoryResults.length
+
+          return (
+            <div className="project-git-task-entry" key={log.id}>
+              <div className="project-git-task-entry-heading">
+                <Space size={6} wrap>
+                  <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
+                  <Tag>{actionLabel}</Tag>
+                  <Typography.Text strong>{log.projectName}</Typography.Text>
+                </Space>
+                <Typography.Text type="secondary">{formatDateTime(log.finishedAt || log.startedAt)}</Typography.Text>
+              </div>
+              <Typography.Text className="project-git-task-summary">{log.summary}</Typography.Text>
+              <Collapse
+                ghost
+                size="small"
+                items={[
+                  {
+                    key: 'repositories',
+                    label: repositoryCount > 0 ? `仓库结果 ${repositoryCount}` : '仓库结果',
+                    children:
+                      repositoryCount > 0 ? (
+                        <div className="project-git-task-repository-list">
+                          {log.repositoryResults.map((result) => (
+                            <div className="project-git-task-repository" key={`${log.id}:${result.repositoryId}`}>
+                              <Space size={6} wrap>
+                                <Badge status={result.ok ? 'success' : 'error'} />
+                                <Typography.Text strong>{result.repositoryName}</Typography.Text>
+                              </Space>
+                              <Typography.Text type={result.ok ? undefined : 'danger'}>{result.message}</Typography.Text>
+                              {result.stdout ? <pre className="project-git-task-output">{result.stdout}</pre> : null}
+                              {result.stderr ? <pre className="project-git-task-output is-error">{result.stderr}</pre> : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <Typography.Text type="secondary">没有仓库输出</Typography.Text>
+                      )
+                  }
+                ]}
+              />
+            </div>
+          )
+        })}
+      </Space>
+    </Drawer>
   )
 }
 

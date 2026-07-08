@@ -1170,6 +1170,29 @@ export type AiSettingsView = {
   temperature: number
 }
 
+export type OaSettingsInput = {
+  enabled: boolean
+  provider?: 'lark'
+  larkAppId: string
+  larkAppSecret?: string
+  docsHomeUrl: string
+  enableDocumentBrowsing: boolean
+  enableDocumentEditing: boolean
+  enableAiDocumentDrafting: boolean
+}
+
+export type OaSettingsView = {
+  enabled: boolean
+  provider: 'lark'
+  larkAppId: string
+  larkAppSecret: string
+  larkAppSecretConfigured: boolean
+  docsHomeUrl: string
+  enableDocumentBrowsing: boolean
+  enableDocumentEditing: boolean
+  enableAiDocumentDrafting: boolean
+}
+
 export type MonthlyPerformancePreviewInput = {
   projectId: string
   month: string

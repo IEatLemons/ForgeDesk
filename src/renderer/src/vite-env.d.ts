@@ -1129,6 +1129,29 @@ type AiSettingsView = {
   temperature: number
 }
 
+type OaSettingsInput = {
+  enabled: boolean
+  provider?: 'lark'
+  larkAppId: string
+  larkAppSecret?: string
+  docsHomeUrl: string
+  enableDocumentBrowsing: boolean
+  enableDocumentEditing: boolean
+  enableAiDocumentDrafting: boolean
+}
+
+type OaSettingsView = {
+  enabled: boolean
+  provider: 'lark'
+  larkAppId: string
+  larkAppSecret: string
+  larkAppSecretConfigured: boolean
+  docsHomeUrl: string
+  enableDocumentBrowsing: boolean
+  enableDocumentEditing: boolean
+  enableAiDocumentDrafting: boolean
+}
+
 type MonthlyPerformancePreviewInput = {
   projectId: string
   month: string
@@ -1546,6 +1569,9 @@ interface Window {
     configureGitIdentity: (identity: { userName: string; userEmail: string }) => Promise<GitSetupStatus>
     getAiSettings: () => Promise<AiSettingsView>
     saveAiSettings: (input: AiSettingsInput) => Promise<AiSettingsView>
+    getOaSettings: () => Promise<OaSettingsView>
+    saveOaSettings: (input: OaSettingsInput) => Promise<OaSettingsView>
+    openOaDocs: () => Promise<void>
     listGithubTokens: () => Promise<GithubTokenView[]>
     saveGithubToken: (input: GithubTokenInput) => Promise<GithubTokenView[]>
     refreshGithubToken: (tokenId: string) => Promise<GithubTokenView[]>
