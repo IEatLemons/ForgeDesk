@@ -39,6 +39,7 @@ import {
   BranchesOutlined,
   ArrowRightOutlined,
   CheckCircleOutlined,
+  CheckSquareOutlined,
   CloseCircleOutlined,
   CodeOutlined,
   CopyOutlined,
@@ -298,6 +299,7 @@ import { useForgeDeskStore } from './store'
 import { TerminalWorkspace } from './terminal-panel'
 import type { TerminalOpenRequest } from './terminal-panel-events'
 import { TerminalRemoteShortcuts } from './terminal-remote-shortcuts'
+import { TaskListPanel } from './task-list-panel'
 import type { ResolvedTheme, ThemePreference } from './app-theme'
 
 type ImportForm = {
@@ -16579,6 +16581,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
   const navigationIcons: Record<AppNavigationKey, JSX.Element> = {
     overview: <DashboardOutlined />,
+    tasks: <CheckSquareOutlined />,
     services: <ThunderboltOutlined />,
     docker: <DockerOutlined />,
     tools: <ToolOutlined />,
@@ -16778,6 +16781,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             </section>
           )}
           {!loadingWorkspace && activeKey === 'docker' && <DockerPanel onOpenTerminalRequest={openGlobalTerminalRequest} />}
+          {!loadingWorkspace && activeKey === 'tasks' && <TaskListPanel />}
           {!loadingWorkspace && activeKey === 'tools' && <ToolsPanel />}
           {!loadingWorkspace && activeKey === 'overview' && (
             <ProjectOverview

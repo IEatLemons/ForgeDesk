@@ -2057,6 +2057,301 @@ button.app-status-bar-item:hover {
   box-shadow: var(--app-shadow-hover);
 }
 
+.task-workspace {
+  max-width: 1440px;
+}
+
+.task-section-heading {
+  align-items: center;
+}
+
+.task-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.task-metric {
+  min-height: 112px;
+}
+
+.task-metric h3 {
+  margin: 6px 0 0;
+}
+
+.task-progress-metric {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-filter-panel {
+  min-height: 0;
+  margin-bottom: 14px;
+  padding: 14px;
+}
+
+.task-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(6, minmax(132px, 1fr));
+  gap: 10px;
+  align-items: center;
+}
+
+.task-toolbar .ant-select {
+  width: 100%;
+}
+
+.task-overdue-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger-border-soft);
+  border-radius: 8px;
+  background: var(--danger-soft-bg);
+}
+
+.task-list-panel {
+  min-height: 0;
+  overflow-x: auto;
+}
+
+.task-list-panel .ant-table-wrapper,
+.task-list-panel .ant-table,
+.task-list-panel .ant-table-container,
+.task-list-panel .ant-table-content {
+  max-width: 100%;
+}
+
+.task-title-cell {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.task-title-copy,
+.task-card-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.task-tag-row,
+.task-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.task-board-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.task-board-column,
+.task-timeline-section {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--panel-bg);
+  box-shadow: var(--app-shadow);
+}
+
+.task-board-header,
+.task-timeline-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.task-board-header h4,
+.task-timeline-heading h4 {
+  margin: 0;
+}
+
+.task-board-list,
+.task-timeline-list,
+.task-timeline-layout {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.task-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--card-bg);
+}
+
+.task-card.is-done {
+  opacity: 0.72;
+}
+
+.task-card-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.task-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.task-gantt-panel {
+  min-height: 0;
+  overflow-x: auto;
+}
+
+.task-gantt-header {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.32fr) minmax(520px, 1fr) 180px;
+  gap: 12px;
+  align-items: end;
+  min-width: 920px;
+  margin-bottom: 12px;
+}
+
+.task-gantt-title {
+  display: grid;
+  gap: 4px;
+}
+
+.task-gantt-title h4 {
+  margin: 0;
+}
+
+.task-gantt-scale {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.task-gantt-scale span {
+  min-width: 0;
+  padding: 0 6px 6px;
+  border-left: 1px solid var(--app-border-soft);
+  white-space: nowrap;
+}
+
+.task-gantt-body {
+  display: grid;
+  gap: 8px;
+  min-width: 920px;
+}
+
+.task-gantt-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.32fr) minmax(520px, 1fr) 180px;
+  gap: 12px;
+  align-items: center;
+  min-height: 72px;
+  padding: 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--card-bg);
+}
+
+.task-gantt-task {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+}
+
+.task-gantt-task-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.task-gantt-track {
+  position: relative;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+  overflow: hidden;
+}
+
+.task-gantt-bar {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  min-width: 28px;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  color: #ffffff;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-gantt-bar-low {
+  background: #2563eb;
+}
+
+.task-gantt-bar-medium {
+  background: #d97706;
+}
+
+.task-gantt-bar-high {
+  background: #dc2626;
+}
+
+.task-gantt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.task-empty-panel {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+}
+
+.task-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+
+.task-date-picker {
+  width: 100%;
+}
+
 .tool-entry-copy {
   display: grid;
   gap: 4px;
@@ -4902,6 +5197,13 @@ button.app-status-bar-item:hover {
     display: block;
   }
 
+  .app-main.ant-layout {
+    display: block;
+    flex: none !important;
+    width: 100% !important;
+    max-width: 100%;
+  }
+
   .sidebar {
     position: relative;
     width: 100% !important;
@@ -4922,8 +5224,7 @@ button.app-status-bar-item:hover {
 
   .content.ant-layout-content {
     flex: none !important;
-    width: 100%;
-    width: 100vw !important;
+    width: 100% !important;
     max-width: 100%;
   }
 
@@ -4959,6 +5260,30 @@ button.app-status-bar-item:hover {
 
   .section-heading {
     display: block;
+  }
+
+  .task-section-heading > .ant-space {
+    width: 100%;
+    justify-content: space-between;
+    margin-top: 12px;
+  }
+
+  .task-list-panel .ant-table-content {
+    overflow-x: auto !important;
+  }
+
+  .task-gantt-panel {
+    padding: 14px;
+  }
+
+  .task-gantt-header,
+  .task-gantt-body {
+    min-width: 860px;
+  }
+
+  .task-gantt-header,
+  .task-gantt-row {
+    grid-template-columns: 240px minmax(420px, 1fr) 160px;
   }
 
   .project-detail-heading {
@@ -5001,6 +5326,10 @@ button.app-status-bar-item:hover {
   .env-diff-text-grid,
   .file-diff-summary,
   .cli-env-summary-grid,
+  .task-stat-grid,
+  .task-toolbar,
+  .task-board-grid,
+  .task-form-grid,
   .docker-dev-environment-task-meta {
     grid-template-columns: 1fr;
   }
