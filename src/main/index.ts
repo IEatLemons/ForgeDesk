@@ -3,8 +3,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import Database from 'better-sqlite3'
 import simpleGit from 'simple-git'
 import { requestCommitMessageSuggestion, type CommitMessageSuggestion } from './ai-commit-message-assistant'
@@ -12,6 +12,7 @@ import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion 
 import { requestReleaseSuggestion, type ReleaseSuggestion } from './ai-release-assistant'
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
 import { getRedactedOaSettings, readOaSettingsFile, writeOaSettingsFile, type OaSettings, type RedactedOaSettings } from './oa-settings'
+import { listLarkDocuments, type LarkDocumentList } from './lark-documents'
 import { collectCloseGuardActivities, createCloseGuardPrompt, type CloseGuardAction, type CloseGuardActivity } from './app-close-guard'
 import { registerAppUpdateIpc } from './app-updates'
 import { inspectCliEnvironment, repairCliEnvironment, type CliEnvironmentRepairResult, type CliEnvironmentSnapshot } from './cli-environment'
@@ -143,6 +144,15 @@ import {
   saveSshPassphrase,
   withSshPassphraseAskpass
 } from './ssh-passphrases'
+import {
+  createNextjsPm2ArtifactName,
+  createNextjsPm2RemoteDeployScript,
+  createNextjsPm2RemotePrepareScript,
+  isNextjsProject,
+  normalizeNextjsPm2DeployConfig,
+  type NextjsPm2DeployConfig,
+  type NextjsPm2DeployConfigInput
+} from './nextjs-pm2-release'
 import { registerTerminalIpc } from './terminal-ipc'
 import { TerminalService, type TerminalDataEvent, type TerminalExitEvent } from './terminal-service'
 import { parseRemoteAlignment, summarizeRemoteAlignment, type GitRemote, type RemoteAlignmentSummary } from './remote-alignment'
@@ -372,6 +382,13 @@ type RepositoryReleasePublishInput = {
   codemagicDefaultBranch?: string
   codemagicLabels?: string[]
   saveCodemagicBinding?: boolean
+  nextjsPm2SshHost?: string
+  nextjsPm2RemotePath?: string
+  nextjsPm2UploadPath?: string
+  nextjsPm2AppName?: string
+  nextjsPm2Port?: string | number
+  nextjsPm2StartCommand?: string
+  nextjsPm2InstallCommand?: string
   releaseActions?: ReleasePublishActionKey[]
 }
 
@@ -1007,6 +1024,11 @@ function explainReleaseOutput(task: RepositoryReleasePublishTaskSnapshot, line: 
   if (lower.includes('building zip') || lower.includes('.zip')) {
     setReleaseTaskPhase(task, '生成 ZIP 更新包', 8)
     setReleaseTaskHint(task, '正在生成 ZIP 更新包，这是 macOS 自动更新会用到的文件。')
+    return
+  }
+
+  if (task.provider === 'nextjs-pm2' && (lower.includes('scp') || lower.includes('upload') || lower.includes('pm2') || lower.includes('release'))) {
+    setReleaseTaskHint(task, '正在上传发布包或执行远端 PM2 部署。')
     return
   }
 
@@ -3178,6 +3200,10 @@ async function writeRepositoryPackageVersion(localPath: string, version: string)
   await writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`, 'utf8')
 }
 
+function hasNextConfigFile(localPath: string): boolean {
+  return ['next.config.js', 'next.config.mjs', 'next.config.cjs', 'next.config.ts'].some((fileName) => existsSync(join(localPath, fileName)))
+}
+
 function detectPackageManager(localPath: string): RepositoryReleasePreparation['packageManager'] {
   if (existsSync(join(localPath, 'pnpm-lock.yaml'))) {
     return 'pnpm'
@@ -3384,6 +3410,158 @@ async function runReleaseScript(
   })
 }
 
+async function runReleaseProcess(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+  callbacks: ReleasePublishCallbacks = {}
+): Promise<Pick<RepositoryReleasePublishResult, 'ok' | 'stdout' | 'stderr' | 'exitCode'>> {
+  const processEnv = await createScriptExecutionEnv(options.env ?? {})
+  const maxOutputLength = 1024 * 1024
+  let stdout = ''
+  let stderr = ''
+
+  function appendOutput(current: string, chunk: Buffer | string): string {
+    const text = typeof chunk === 'string' ? chunk : chunk.toString()
+    const next = current + text
+    return next.length > maxOutputLength ? next.slice(next.length - maxOutputLength) : next
+  }
+
+  return new Promise((resolveResult) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: processEnv,
+      detached: true
+    })
+    callbacks.onProcess?.(child)
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      callbacks.onOutput?.('stdout', chunk.toString())
+      stdout = appendOutput(stdout, chunk)
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      callbacks.onOutput?.('stderr', chunk.toString())
+      stderr = appendOutput(stderr, chunk)
+    })
+    child.on('error', (error) => {
+      callbacks.onOutput?.('stderr', error.message)
+      stderr = appendOutput(stderr, error.message)
+      resolveResult({ ok: false, stdout: stdout.trimEnd(), stderr: stderr.trimEnd(), exitCode: null })
+    })
+    child.on('exit', (exitCode) => {
+      resolveResult({ ok: exitCode === 0, stdout: stdout.trimEnd(), stderr: stderr.trimEnd(), exitCode })
+    })
+  })
+}
+
+function throwIfReleaseProcessFailed(
+  result: Pick<RepositoryReleasePublishResult, 'ok' | 'stdout' | 'stderr' | 'exitCode'>,
+  fallback: string
+): void {
+  if (!result.ok) {
+    throw new Error(result.stderr || result.stdout || fallback)
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function copyIfExists(source: string, destination: string): Promise<boolean> {
+  if (!(await pathExists(source))) {
+    return false
+  }
+
+  await mkdir(dirname(destination), { recursive: true })
+  await cp(source, destination, { recursive: true, force: true })
+  return true
+}
+
+async function copyDirectoryContents(source: string, destination: string): Promise<void> {
+  await mkdir(destination, { recursive: true })
+  const entries = await readdir(source, { withFileTypes: true })
+
+  for (const entry of entries) {
+    await cp(join(source, entry.name), join(destination, entry.name), { recursive: true, force: true })
+  }
+}
+
+async function copyNextjsConfigFiles(localPath: string, stagingPath: string): Promise<void> {
+  const entries = await readdir(localPath, { withFileTypes: true })
+  const fileNames = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((fileName) =>
+      fileName === 'package.json' ||
+      fileName === 'package-lock.json' ||
+      fileName === 'pnpm-lock.yaml' ||
+      fileName === 'yarn.lock' ||
+      /^next\.config\.(js|mjs|cjs|ts)$/.test(fileName)
+    )
+
+  for (const fileName of fileNames) {
+    await copyIfExists(join(localPath, fileName), join(stagingPath, fileName))
+  }
+}
+
+async function createNextjsReleasePackage(
+  localPath: string,
+  repositoryName: string,
+  version: string,
+  callbacks: ReleasePublishCallbacks = {}
+): Promise<{ artifactName: string; artifactPath: string; releaseName: string; sizeInBytes: number; standalone: boolean }> {
+  const artifactName = createNextjsPm2ArtifactName(repositoryName, version)
+  const releaseName = artifactName.replace(/\.tar\.gz$/, '')
+  const workPath = await mkdtemp(join(tmpdir(), 'forgedesk-nextjs-release-'))
+  const stagingPath = join(workPath, 'package')
+  const artifactPath = join(workPath, artifactName)
+  const standalonePath = join(localPath, '.next', 'standalone')
+  const standalone = await pathExists(standalonePath)
+
+  try {
+    await mkdir(stagingPath, { recursive: true })
+
+    if (standalone) {
+      callbacks.onLog?.('检测到 .next/standalone，将按 standalone 模式打包')
+      await copyDirectoryContents(standalonePath, stagingPath)
+      await copyIfExists(join(localPath, '.next', 'static'), join(stagingPath, '.next', 'static'))
+      await copyIfExists(join(localPath, 'public'), join(stagingPath, 'public'))
+    } else {
+      callbacks.onLog?.('未检测到 .next/standalone，将打包 .next 并在远端安装生产依赖')
+      await copyNextjsConfigFiles(localPath, stagingPath)
+      await copyIfExists(join(localPath, '.next'), join(stagingPath, '.next'))
+      await rm(join(stagingPath, '.next', 'cache'), { recursive: true, force: true })
+      await copyIfExists(join(localPath, 'public'), join(stagingPath, 'public'))
+    }
+
+    if (!(await pathExists(join(stagingPath, '.next'))) && !(await pathExists(join(stagingPath, 'server.js')))) {
+      throw new Error('没有找到可部署的 Next.js 构建产物，请确认 build 已生成 .next 或 .next/standalone')
+    }
+
+    const tarResult = await runReleaseProcess('tar', ['-czf', artifactPath, '-C', stagingPath, '.'], {}, callbacks)
+    throwIfReleaseProcessFailed(tarResult, '创建 Next.js 发布包失败')
+
+    const artifactStats = await stat(artifactPath)
+    callbacks.onLog?.(`发布包已生成：${artifactName}`)
+
+    return {
+      artifactName,
+      artifactPath,
+      releaseName,
+      sizeInBytes: artifactStats.size,
+      standalone
+    }
+  } catch (error) {
+    await rm(workPath, { recursive: true, force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
 function parseGithubRemote(remoteUrl: string): { owner: string; repo: string } | null {
   const trimmed = remoteUrl.trim()
   const sshMatch = trimmed.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/)
@@ -3411,7 +3589,11 @@ async function resolveGithubReleaseToken(input: RepositoryReleasePublishInput): 
 }
 
 function getReleaseProvider(input: RepositoryReleasePublishInput): ReleasePublishProvider {
-  return input.provider === 'codemagic' ? 'codemagic' : 'github'
+  if (input.provider === 'codemagic' || input.provider === 'nextjs-pm2') {
+    return input.provider
+  }
+
+  return 'github'
 }
 
 function normalizeReleaseLabels(labels: string[] | undefined): string[] {
@@ -3559,6 +3741,18 @@ function isCodemagicBuildActive(status: string): boolean {
 
 function isCodemagicBuildSuccessful(status: string): boolean {
   return status.trim().toLowerCase() === 'finished'
+}
+
+function getReleaseProviderLabel(provider: ReleasePublishProvider): string {
+  if (provider === 'codemagic') {
+    return 'Codemagic'
+  }
+
+  if (provider === 'nextjs-pm2') {
+    return 'Next.js PM2'
+  }
+
+  return 'GitHub Releases'
 }
 
 async function publishRepositoryCodemagicRelease(
@@ -3717,6 +3911,193 @@ async function publishRepositoryCodemagicRelease(
   }
 }
 
+function resolveNextjsPm2DeployConfig(repository: RepositoryRecord, input: RepositoryReleasePublishInput): NextjsPm2DeployConfig {
+  const configInput: NextjsPm2DeployConfigInput = {
+    sshHost: input.nextjsPm2SshHost,
+    remotePath: input.nextjsPm2RemotePath,
+    uploadPath: input.nextjsPm2UploadPath,
+    appName: input.nextjsPm2AppName,
+    port: input.nextjsPm2Port,
+    startCommand: input.nextjsPm2StartCommand,
+    installCommand: input.nextjsPm2InstallCommand
+  }
+
+  return normalizeNextjsPm2DeployConfig(configInput, repository.name)
+}
+
+async function runNextjsPm2SshCommand(
+  config: NextjsPm2DeployConfig,
+  script: string,
+  callbacks: ReleasePublishCallbacks = {}
+): Promise<Pick<RepositoryReleasePublishResult, 'ok' | 'stdout' | 'stderr' | 'exitCode'>> {
+  return withSavedSshPassphrases((env) => runReleaseProcess('ssh', [config.sshHost, script], { env }, callbacks))
+}
+
+async function uploadNextjsPm2Artifact(
+  config: NextjsPm2DeployConfig,
+  artifactPath: string,
+  artifactName: string,
+  callbacks: ReleasePublishCallbacks = {}
+): Promise<Pick<RepositoryReleasePublishResult, 'ok' | 'stdout' | 'stderr' | 'exitCode'>> {
+  return withSavedSshPassphrases((env) =>
+    runReleaseProcess('scp', [artifactPath, `${config.sshHost}:${config.uploadPath}/${artifactName}`], { env }, callbacks)
+  )
+}
+
+async function publishRepositoryNextjsPm2Release(
+  repositoryId: string,
+  input: RepositoryReleasePublishInput,
+  callbacks: ReleasePublishCallbacks = {}
+): Promise<RepositoryReleasePublishResult> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const version = input.version.trim()
+  const tagName = input.tagName.trim()
+  const expectedTagName = createReleaseTagName(version)
+  const releaseActions = input.releaseActions ?? []
+  const selectedActionSet = new Set(releaseActions)
+  const phaseTotal = 9
+
+  callbacks.onPhase?.('准备 Next.js PM2 发布参数', 1, phaseTotal)
+  callbacks.onLog?.(`准备部署 ${repository.name} ${tagName}`)
+  throwIfReleaseCancelled(callbacks)
+  const config = resolveNextjsPm2DeployConfig(repository, input)
+  const packageInfo = await readRepositoryPackageJson(repository.localPath)
+
+  if (tagName !== expectedTagName) {
+    throw new Error(`Tag 应为 ${expectedTagName}`)
+  }
+
+  if (!isNextjsProject(packageInfo, hasNextConfigFile(repository.localPath))) {
+    throw new Error('当前仓库未检测到 Next.js 依赖、配置或 next build 脚本')
+  }
+
+  callbacks.onPhase?.('检查发布计划', 2, phaseTotal)
+  callbacks.onLog?.('检查 Next.js PM2 发布计划')
+  throwIfReleaseCancelled(callbacks)
+  const initialPreparation = await prepareRepositoryRelease(repositoryId, { targetVersion: version, provider: 'nextjs-pm2' })
+  const initialIssues = getUnresolvedReleaseIssues(initialPreparation.plan, releaseActions)
+
+  if (!initialPreparation.plan.canPublish && initialIssues.length > 0) {
+    throw new Error(initialIssues.join('\n') || '发布前检查未通过')
+  }
+
+  const shouldCommitWorkspaceChanges = selectedActionSet.has('commit-workspace-changes')
+  const shouldReplaceLocalTag = selectedActionSet.has('replace-local-tag')
+
+  callbacks.onPhase?.('写入版本并暂存改动', 3, phaseTotal)
+  throwIfReleaseCancelled(callbacks)
+  if (initialPreparation.plan.currentVersion !== version) {
+    callbacks.onLog?.(`写入 package.json 版本：${initialPreparation.plan.currentVersion} -> ${version}`)
+    await writeRepositoryPackageVersion(repository.localPath, version)
+  }
+
+  if (shouldCommitWorkspaceChanges) {
+    callbacks.onLog?.('暂存当前工作区全部改动')
+    await runGitInPathStrict(repository.localPath, ['add', '--all'])
+  } else if (initialPreparation.plan.currentVersion !== version) {
+    callbacks.onLog?.('暂存 package.json 版本改动')
+    await runGitInPathStrict(repository.localPath, ['add', 'package.json'])
+  }
+
+  callbacks.onPhase?.('创建版本提交', 4, phaseTotal)
+  throwIfReleaseCancelled(callbacks)
+  if (initialPreparation.plan.currentVersion !== version || shouldCommitWorkspaceChanges) {
+    callbacks.onLog?.(`创建版本提交：${input.commitMessage.trim() || `chore: release ${tagName}`}`)
+    await runGitInPathStrict(repository.localPath, ['commit', '-m', input.commitMessage.trim() || `chore: release ${tagName}`])
+  } else {
+    callbacks.onLog?.('版本提交已是最新，跳过提交')
+  }
+
+  callbacks.onPhase?.('处理本地 Tag', 5, phaseTotal)
+  throwIfReleaseCancelled(callbacks)
+  if (shouldReplaceLocalTag) {
+    callbacks.onLog?.(`删除本地旧 Tag：${tagName}`)
+    await runGitInPathStrict(repository.localPath, ['tag', '-d', tagName])
+  }
+
+  const finalPreparation = await prepareRepositoryRelease(repositoryId, { targetVersion: version, provider: 'nextjs-pm2' })
+  const finalIssues = getUnresolvedReleaseIssues(finalPreparation.plan, releaseActions)
+
+  if (!finalPreparation.plan.canPublish && finalIssues.length > 0) {
+    throw new Error(finalIssues.join('\n') || '版本提交后发布前检查未通过')
+  }
+
+  const localTagCommit = await runGitInPathOptional(repository.localPath, ['rev-parse', '-q', '--verify', `${tagName}^{}`])
+
+  if (!localTagCommit) {
+    callbacks.onLog?.(`创建本地 Tag：${tagName}`)
+    await runGitInPathStrict(repository.localPath, ['tag', tagName])
+  } else {
+    callbacks.onLog?.(`本地 Tag ${tagName} 已存在`)
+  }
+
+  callbacks.onPhase?.('本地构建 Next.js', 6, phaseTotal)
+  callbacks.onLog?.(`执行构建脚本：${getReleaseScriptCommand(finalPreparation.packageManager, finalPreparation.plan.selectedScript)}`)
+  throwIfReleaseCancelled(callbacks)
+  const buildResult = await runReleaseScript(repository.localPath, finalPreparation.packageManager, finalPreparation.plan.selectedScript, process.env, callbacks)
+  throwIfReleaseProcessFailed(buildResult, 'Next.js 构建失败')
+
+  callbacks.onPhase?.('打包版本产物', 7, phaseTotal)
+  throwIfReleaseCancelled(callbacks)
+  const packageResult = await createNextjsReleasePackage(repository.localPath, repository.name, version, callbacks)
+
+  callbacks.onPhase?.('上传到服务器', 8, phaseTotal)
+  callbacks.onLog?.(`准备远端目录：${config.sshHost}:${config.remotePath}`)
+  throwIfReleaseCancelled(callbacks)
+  const prepareRemoteResult = await runNextjsPm2SshCommand(config, createNextjsPm2RemotePrepareScript(config), callbacks)
+  throwIfReleaseProcessFailed(prepareRemoteResult, '准备远端目录失败')
+
+  callbacks.onLog?.(`上传发布包：${packageResult.artifactName}`)
+  const uploadResult = await uploadNextjsPm2Artifact(config, packageResult.artifactPath, packageResult.artifactName, callbacks)
+  throwIfReleaseProcessFailed(uploadResult, '上传 Next.js 发布包失败')
+
+  callbacks.onPhase?.('远端 PM2 启动', 9, phaseTotal)
+  throwIfReleaseCancelled(callbacks)
+  const deployScript = createNextjsPm2RemoteDeployScript({
+    config,
+    packageManager: finalPreparation.packageManager,
+    archiveName: packageResult.artifactName,
+    releaseName: packageResult.releaseName,
+    standalone: packageResult.standalone
+  })
+  const deployResult = await runNextjsPm2SshCommand(config, deployScript, callbacks)
+  throwIfReleaseProcessFailed(deployResult, '远端 PM2 部署失败')
+
+  const branch = await runGitInPath(repository.localPath, ['branch', '--show-current'])
+  const stdout = [
+    buildResult.stdout,
+    `发布包：${packageResult.artifactName}`,
+    `远端目录：${config.remotePath}/current`,
+    `PM2 应用：${config.appName}`,
+    deployResult.stdout
+  ].filter(Boolean).join('\n')
+
+  callbacks.onLog?.(`Next.js PM2 部署完成：${config.appName}`)
+
+  return {
+    ok: true,
+    provider: 'nextjs-pm2',
+    repository: await rescanRepositoryRecord(repository),
+    plan: finalPreparation.plan,
+    stdout,
+    stderr: [buildResult.stderr, deployResult.stderr].filter(Boolean).join('\n'),
+    exitCode: 0,
+    externalStatus: 'deployed',
+    externalWorkflow: config.appName,
+    externalBranch: branch,
+    externalTag: tagName,
+    artifacts: [
+      {
+        name: packageResult.artifactName,
+        type: packageResult.standalone ? 'nextjs-standalone-tar.gz' : 'nextjs-tar.gz',
+        sizeInBytes: packageResult.sizeInBytes,
+        downloadUrl: `file://${packageResult.artifactPath}`,
+        versionName: version
+      }
+    ]
+  }
+}
+
 async function publishRepositoryRelease(
   repositoryId: string,
   input: RepositoryReleasePublishInput,
@@ -3724,6 +4105,10 @@ async function publishRepositoryRelease(
 ): Promise<RepositoryReleasePublishResult> {
   if (getReleaseProvider(input) === 'codemagic') {
     return publishRepositoryCodemagicRelease(repositoryId, input, callbacks)
+  }
+
+  if (getReleaseProvider(input) === 'nextjs-pm2') {
+    return publishRepositoryNextjsPm2Release(repositoryId, input, callbacks)
   }
 
   const repository = getRepositoryOrThrow(repositoryId)
@@ -3916,7 +4301,13 @@ async function runRepositoryReleasePublishTask(task: RepositoryReleasePublishTas
     updateReleaseTask(task, {
       status: result.ok ? 'succeeded' : 'failed',
       finishedAt,
-      phase: result.ok ? (result.provider === 'codemagic' ? 'Codemagic 构建完成' : '发布完成') : '发布失败',
+      phase: result.ok
+        ? result.provider === 'codemagic'
+          ? 'Codemagic 构建完成'
+          : result.provider === 'nextjs-pm2'
+            ? 'Next.js PM2 部署完成'
+            : '发布完成'
+        : '发布失败',
       phaseIndex: task.phaseTotal || releasePublishPhaseTotal,
       phaseTotal: task.phaseTotal || releasePublishPhaseTotal,
       stdout: result.stdout,
@@ -3934,7 +4325,7 @@ async function runRepositoryReleasePublishTask(task: RepositoryReleasePublishTas
       externalTag: result.externalTag,
       artifacts: result.artifacts ?? []
     })
-    appendReleaseTaskLog(task, result.ok ? `${task.tagName} 发布流程已完成` : `${task.tagName} 发布任务未成功完成`)
+    appendReleaseTaskLog(task, result.ok ? `${task.tagName} ${getReleaseProviderLabel(result.provider)} 发布流程已完成` : `${task.tagName} 发布任务未成功完成`)
   } catch (error) {
     const finishedAt = new Date().toISOString()
     const errorMessage = getUnknownErrorMessage(error, '发布失败')
@@ -3943,7 +4334,9 @@ async function runRepositoryReleasePublishTask(task: RepositoryReleasePublishTas
       updateReleaseTask(task, {
         finishedAt,
         phase: '发布已终止',
-        hint: '发布任务已经终止。重试前请检查本地 Tag、远端 Tag 和 GitHub Releases 是否留下半成品。',
+        hint: task.provider === 'nextjs-pm2'
+          ? '发布任务已经终止。重试前请检查本地 Tag、远端发布包和 PM2 进程状态。'
+          : '发布任务已经终止。重试前请检查本地 Tag、远端 Tag 和 GitHub Releases 是否留下半成品。',
         stderr: task.stderr || errorMessage
       })
       appendReleaseTaskLog(task, '发布任务已终止')
@@ -4019,7 +4412,9 @@ async function cancelRepositoryReleasePublishTask(taskId: string): Promise<Repos
     phase: '正在终止发布',
     hint: task.provider === 'codemagic'
       ? '已请求终止 Codemagic 构建。可能已经创建了 Tag 或部分构建产物，重试前请检查 Codemagic。'
-      : '已请求终止发布进程。可能已经创建了 Tag、Release 或部分上传资产，重试前请检查 GitHub Releases。',
+      : task.provider === 'nextjs-pm2'
+        ? '已请求终止部署进程。可能已经创建了 Tag、上传包或远端 release 目录，重试前请检查服务器和 PM2。'
+        : '已请求终止发布进程。可能已经创建了 Tag、Release 或部分上传资产，重试前请检查 GitHub Releases。',
     finishedAt: new Date().toISOString()
   })
   appendReleaseTaskLog(task, task.provider === 'codemagic' ? '已请求终止 Codemagic 构建' : '已请求终止发布进程')
@@ -4797,6 +5192,8 @@ ipcMain.handle('settings:oa:open-docs', async (): Promise<void> => {
   const settings = await readOaSettingsFile(app.getPath('userData'))
   await shell.openExternal(settings.docsHomeUrl)
 })
+
+ipcMain.handle('settings:oa:documents:list', async (): Promise<LarkDocumentList> => listLarkDocuments(await readOaSettingsFile(app.getPath('userData'))))
 
 ipcMain.handle('settings:github-tokens:list', async (): Promise<GithubTokenView[]> => listGithubTokens(app.getPath('userData')))
 

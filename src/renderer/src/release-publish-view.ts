@@ -14,7 +14,7 @@ export type ReleasePublishPlanView = {
 }
 
 export type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
-export type ReleasePublishProvider = 'github' | 'codemagic'
+export type ReleasePublishProvider = 'github' | 'codemagic' | 'nextjs-pm2'
 
 export type ReleasePublishAction = {
   key: ReleasePublishActionKey
@@ -155,6 +155,15 @@ export function createReleasePlatformOptions(input: { plan: ReleasePublishPlanVi
       statusLabel: input.codemagicBound ? '已绑定' : '待配置',
       statusColor: input.codemagicBound ? 'green' : 'orange',
       disabled: false
+    },
+    {
+      key: 'nextjs-pm2',
+      name: 'Next.js PM2',
+      description: '本地构建并打包，上传服务器后用 PM2 管理进程。',
+      detail: input.plan ? `当前仓库将使用 ${input.plan.selectedScript || 'build'} 构建产物。` : '读取仓库后确认 Next.js 构建流程。',
+      statusLabel: 'SSH',
+      statusColor: 'blue',
+      disabled: false
     }
   ]
 }
@@ -170,6 +179,7 @@ export function createReleasePublishViewModel(input: {
   githubToken: string
   provider?: ReleasePublishProvider
   codemagicReady?: boolean
+  nextjsPm2Ready?: boolean
   selectedActions?: ReleasePublishActionKey[]
 }): ReleasePublishViewModel {
   const issueCount = input.plan?.issues.length ?? 0
@@ -215,8 +225,17 @@ export function createReleasePublishViewModel(input: {
     }
   }
 
+  if (provider === 'nextjs-pm2' && !input.nextjsPm2Ready) {
+    return {
+      primaryLabel: '填写远端部署信息',
+      primaryDisabled: true,
+      issueCount,
+      warningCount
+    }
+  }
+
   return {
-    primaryLabel: `${provider === 'codemagic' ? '构建' : '发布'} ${input.plan.suggestedTagName || input.plan.suggestedVersion}`,
+    primaryLabel: `${provider === 'codemagic' ? '构建' : provider === 'nextjs-pm2' ? '部署' : '发布'} ${input.plan.suggestedTagName || input.plan.suggestedVersion}`,
     primaryDisabled: false,
     issueCount,
     warningCount
@@ -252,11 +271,13 @@ export function createReleasePublishTaskView(input: { task: ReleasePublishTaskVi
       : input.task.status === 'cancelled'
         ? { label: '已终止', color: 'orange', active: false }
         : { label: '失败', color: 'red', active: false }
+  const externalStatusLabel = input.task.provider === 'nextjs-pm2' ? '远端状态' : 'Codemagic 状态'
+  const externalWorkflowLabel = input.task.provider === 'nextjs-pm2' ? 'PM2 应用' : 'Workflow'
   const fallbackLog = [
     input.task.hint ? `中文提示：${input.task.hint}` : '',
     input.task.externalBuildId ? `Codemagic Build：${input.task.externalBuildId}` : '',
-    input.task.externalStatus ? `Codemagic 状态：${input.task.externalStatus}` : '',
-    input.task.externalWorkflow ? `Workflow：${input.task.externalWorkflow}` : '',
+    input.task.externalStatus ? `${externalStatusLabel}：${input.task.externalStatus}` : '',
+    input.task.externalWorkflow ? `${externalWorkflowLabel}：${input.task.externalWorkflow}` : '',
     ...(input.task.artifacts ?? []).map((artifact) =>
       `Artifact：${artifact.name}${artifact.versionName ? ` · ${artifact.versionName}` : ''}${artifact.type ? ` · ${artifact.type}` : ''}`
     ),

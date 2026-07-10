@@ -724,6 +724,15 @@ button.app-status-bar-item:hover {
   white-space: normal;
 }
 
+.project-list-table .project-list-clickable-row {
+  cursor: pointer;
+}
+
+.project-list-table .project-list-clickable-row .ant-table-selection-column,
+.project-list-table .project-list-clickable-row .project-list-actions {
+  cursor: default;
+}
+
 .project-list-name-cell {
   max-width: 100%;
 }
@@ -844,6 +853,10 @@ button.app-status-bar-item:hover {
   border: 1px solid var(--app-border);
   border-left: 3px solid var(--primary);
   border-radius: 8px;
+}
+
+.project-git-task-entry-failed {
+  border-left-color: var(--danger-border);
 }
 
 .project-git-task-entry-heading {
@@ -3372,6 +3385,114 @@ button.app-status-bar-item:hover {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.oa-guide-panel {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+}
+
+.oa-guide-header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.oa-guide-header h4.ant-typography {
+  margin: 0;
+}
+
+.oa-guide-steps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.oa-guide-step {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.oa-guide-step-index {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.oa-guide-step-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.oa-guide-step-copy .ant-typography {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.oa-docs-workspace {
+  max-width: 1040px;
+}
+
+.oa-docs-panel {
+  display: grid;
+  gap: 16px;
+  min-height: 0;
+}
+
+.oa-docs-panel .ant-empty {
+  margin: 4px 0 0;
+}
+
+.oa-docs-capability-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.oa-docs-capability-item {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--card-bg);
+}
+
+.oa-docs-capability-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.oa-docs-capability-item.is-disabled .oa-docs-capability-icon {
+  color: var(--app-muted);
+  background: var(--subtle-bg-strong);
+}
+
 .oa-capability-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5321,6 +5442,8 @@ button.app-status-bar-item:hover {
   }
 
   .ai-settings-grid,
+  .oa-guide-steps,
+  .oa-docs-capability-list,
   .oa-capability-grid,
   .password-custom-grid,
   .env-diff-text-grid,

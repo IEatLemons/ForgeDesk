@@ -1,6 +1,6 @@
 export type ReleaseVersionBump = 'patch' | 'minor' | 'major'
 export type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
-export type ReleasePublishProvider = 'github' | 'codemagic'
+export type ReleasePublishProvider = 'github' | 'codemagic' | 'nextjs-pm2'
 export type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
 
 export type PackageScripts = Record<string, string>
@@ -154,12 +154,20 @@ export function selectReleaseScript(scripts: PackageScripts): ReleaseScriptName 
   return ''
 }
 
+function selectReleaseScriptForProvider(provider: ReleasePublishProvider, scripts: PackageScripts): ReleaseScriptName {
+  if (provider === 'nextjs-pm2') {
+    return scripts.build ? 'build' : ''
+  }
+
+  return selectReleaseScript(scripts)
+}
+
 export function createReleasePlan(input: ReleasePlanInput): ReleasePlan {
   const issues: string[] = []
   const warnings: string[] = []
   const availableActions: ReleasePublishAction[] = []
   const provider = input.provider ?? 'github'
-  const selectedScript = selectReleaseScript(input.scripts)
+  const selectedScript = selectReleaseScriptForProvider(provider, input.scripts)
   const currentVersion = input.currentVersion.trim()
   let suggestedVersion = input.targetVersion?.trim() || currentVersion
   let suggestedTagName = ''
@@ -194,6 +202,12 @@ export function createReleasePlan(input: ReleasePlanInput): ReleasePlan {
     warnings.push(`将使用 ${selectedScript} 脚本打包；如果要上传 GitHub Releases，建议配置 publish:mac`)
   } else if (provider === 'codemagic') {
     warnings.push('将触发 Codemagic 远程构建，不会执行本地发布脚本')
+  } else if (provider === 'nextjs-pm2') {
+    if (!selectedScript) {
+      issues.push('Next.js PM2 发布需要在 package.json scripts 中配置 build')
+    } else {
+      warnings.push('将本地执行 build，打包产物后通过 SSH/SCP 上传，并用 PM2 启动远端服务')
+    }
   }
 
   const normalizedHead = input.headCommit.trim()

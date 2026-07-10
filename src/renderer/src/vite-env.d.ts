@@ -288,7 +288,7 @@ type CommitMessageSuggestion = {
 }
 
 type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
-type ReleasePublishProvider = 'github' | 'codemagic'
+type ReleasePublishProvider = 'github' | 'codemagic' | 'nextjs-pm2'
 type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
 
 type ReleasePublishAction = {
@@ -369,6 +369,13 @@ type RepositoryReleasePublishInput = {
   codemagicDefaultBranch?: string
   codemagicLabels?: string[]
   saveCodemagicBinding?: boolean
+  nextjsPm2SshHost?: string
+  nextjsPm2RemotePath?: string
+  nextjsPm2UploadPath?: string
+  nextjsPm2AppName?: string
+  nextjsPm2Port?: string | number
+  nextjsPm2StartCommand?: string
+  nextjsPm2InstallCommand?: string
   releaseActions?: ReleasePublishActionKey[]
 }
 
@@ -1152,6 +1159,25 @@ type OaSettingsView = {
   enableAiDocumentDrafting: boolean
 }
 
+type OaDocumentRecord = {
+  id: string
+  token: string
+  name: string
+  type: string
+  url: string
+  createdAt: string
+  updatedAt: string
+}
+
+type OaDocumentList = {
+  sourceKind: 'home' | 'drive-root' | 'folder' | 'document' | 'unknown'
+  sourceUrl: string
+  documents: OaDocumentRecord[]
+  nextPageToken: string
+  hasMore: boolean
+  unsupportedReason: string
+}
+
 type MonthlyPerformancePreviewInput = {
   projectId: string
   month: string
@@ -1572,6 +1598,7 @@ interface Window {
     getOaSettings: () => Promise<OaSettingsView>
     saveOaSettings: (input: OaSettingsInput) => Promise<OaSettingsView>
     openOaDocs: () => Promise<void>
+    listOaDocuments: () => Promise<OaDocumentList>
     listGithubTokens: () => Promise<GithubTokenView[]>
     saveGithubToken: (input: GithubTokenInput) => Promise<GithubTokenView[]>
     refreshGithubToken: (tokenId: string) => Promise<GithubTokenView[]>

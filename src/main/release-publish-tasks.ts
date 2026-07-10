@@ -1,5 +1,5 @@
 export type ReleasePublishTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
-export type ReleasePublishProvider = 'github' | 'codemagic'
+export type ReleasePublishProvider = 'github' | 'codemagic' | 'nextjs-pm2'
 
 export type ReleasePublishArtifact = {
   name: string
@@ -109,7 +109,8 @@ function mapReleasePublishTaskRow<TPlan extends object, TRepository extends obje
   row: Record<string, unknown>
 ): ReleasePublishTaskSnapshot<TPlan, TRepository> {
   const processPid = optionalNumber(row.process_pid)
-  const provider = String(row.provider || 'github') === 'codemagic' ? 'codemagic' : 'github'
+  const providerText = String(row.provider || 'github')
+  const provider = providerText === 'codemagic' || providerText === 'nextjs-pm2' ? providerText : 'github'
 
   return {
     id: String(row.id),

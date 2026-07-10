@@ -126,6 +126,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   getOaSettings: () => ipcRenderer.invoke('settings:oa:get'),
   saveOaSettings: (input: OaSettingsInput) => ipcRenderer.invoke('settings:oa:save', input),
   openOaDocs: () => ipcRenderer.invoke('settings:oa:open-docs'),
+  listOaDocuments: () => ipcRenderer.invoke('settings:oa:documents:list'),
   listGithubTokens: () => ipcRenderer.invoke('settings:github-tokens:list'),
   saveGithubToken: (input: GithubTokenInput) => ipcRenderer.invoke('settings:github-tokens:save', input),
   refreshGithubToken: (tokenId: string) => ipcRenderer.invoke('settings:github-tokens:refresh', tokenId),

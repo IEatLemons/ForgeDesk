@@ -100,6 +100,8 @@ describe('release publish view model', () => {
     assert.equal(platforms[0]?.disabled, false)
     assert.equal(platforms[1]?.key, 'codemagic')
     assert.equal(platforms[1]?.statusLabel, '待配置')
+    assert.equal(platforms[2]?.key, 'nextjs-pm2')
+    assert.equal(platforms[2]?.name, 'Next.js PM2')
   })
 
   it('requires Codemagic binding before remote builds', () => {
@@ -133,6 +135,40 @@ describe('release publish view model', () => {
     assert.equal(blocked.primaryLabel, '配置 Codemagic')
     assert.equal(blocked.primaryDisabled, true)
     assert.equal(allowed.primaryLabel, '构建 v2.0.1')
+    assert.equal(allowed.primaryDisabled, false)
+  })
+
+  it('requires remote PM2 settings before Next.js deployment', () => {
+    const plan = {
+      repositoryName: 'Portal',
+      provider: 'nextjs-pm2' as const,
+      currentVersion: '1.2.0',
+      suggestedVersion: '1.2.1',
+      suggestedTagName: 'v1.2.1',
+      selectedScript: 'build' as const,
+      needsVersionBump: true,
+      canPublish: true,
+      issues: [],
+      warnings: [],
+      availableActions: [],
+      documentationSources: []
+    }
+    const blocked = createReleasePublishViewModel({
+      plan,
+      provider: 'nextjs-pm2',
+      githubToken: '',
+      nextjsPm2Ready: false
+    })
+    const allowed = createReleasePublishViewModel({
+      plan,
+      provider: 'nextjs-pm2',
+      githubToken: '',
+      nextjsPm2Ready: true
+    })
+
+    assert.equal(blocked.primaryLabel, '填写远端部署信息')
+    assert.equal(blocked.primaryDisabled, true)
+    assert.equal(allowed.primaryLabel, '部署 v1.2.1')
     assert.equal(allowed.primaryDisabled, false)
   })
 
@@ -252,5 +288,28 @@ describe('release publish view model', () => {
     assert.equal(failed.statusLabel, '失败')
     assert.match(failed.log, /HTTP 401/)
     assert.match(failed.log, /GitHub Token 无效/)
+  })
+
+  it('labels Next.js PM2 task external details clearly', () => {
+    const view = createReleasePublishTaskView({
+      task: {
+        repositoryName: 'Portal',
+        provider: 'nextjs-pm2',
+        tagName: 'v1.2.1',
+        status: 'succeeded',
+        phase: 'Next.js PM2 部署完成',
+        phaseIndex: 9,
+        phaseTotal: 9,
+        log: '',
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        externalStatus: 'deployed',
+        externalWorkflow: 'portal'
+      }
+    })
+
+    assert.match(view.log, /远端状态：deployed/)
+    assert.match(view.log, /PM2 应用：portal/)
   })
 })

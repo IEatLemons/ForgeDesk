@@ -8,6 +8,7 @@ import {
   createSystemLogEntry,
   createSystemLogSummary,
   canRunServiceDeploymentAction,
+  defaultDeploymentAutoRefreshEnabled,
   deploymentAutoRefreshIntervalMs,
   filterDeploymentRows,
   getDeploymentRateLimitRetryMs,
@@ -426,6 +427,7 @@ describe('service deployments view model', () => {
   })
 
   it('keeps automatic deployment refreshes conservative for provider rate limits', () => {
+    assert.equal(defaultDeploymentAutoRefreshEnabled, false)
     assert.equal(deploymentAutoRefreshIntervalMs, 300_000)
   })
 })

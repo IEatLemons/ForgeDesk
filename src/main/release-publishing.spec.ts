@@ -113,6 +113,40 @@ describe('release publishing planning', () => {
     assert.match(plan.warnings.join('\n'), /Codemagic/)
   })
 
+  it('uses the build script for Next.js PM2 release plans', () => {
+    const plan = createReleasePlan({
+      repositoryName: 'Portal',
+      currentVersion: '1.4.0',
+      provider: 'nextjs-pm2',
+      headCommit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      statusFileCount: 0,
+      localTagCommit: '',
+      remoteTagCommit: '',
+      scripts: { build: 'next build' }
+    })
+
+    assert.equal(plan.provider, 'nextjs-pm2')
+    assert.equal(plan.selectedScript, 'build')
+    assert.equal(plan.canPublish, true)
+    assert.match(plan.warnings.join('\n'), /PM2/)
+  })
+
+  it('requires a build script for Next.js PM2 release plans', () => {
+    const plan = createReleasePlan({
+      repositoryName: 'Portal',
+      currentVersion: '1.4.0',
+      provider: 'nextjs-pm2',
+      headCommit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      statusFileCount: 0,
+      localTagCommit: '',
+      remoteTagCommit: '',
+      scripts: { start: 'next start' }
+    })
+
+    assert.equal(plan.canPublish, false)
+    assert.match(plan.issues.join('\n'), /配置 build/)
+  })
+
   it('offers publish-time handling for dirty workspaces and stale local tags', () => {
     const plan = createReleasePlan({
       repositoryName: 'ForgeDesk',

@@ -386,7 +386,7 @@ export type CommitMessageSuggestion = {
 }
 
 export type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
-export type ReleasePublishProvider = 'github' | 'codemagic'
+export type ReleasePublishProvider = 'github' | 'codemagic' | 'nextjs-pm2'
 export type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
 
 export type ReleasePublishAction = {
@@ -467,6 +467,13 @@ export type RepositoryReleasePublishInput = {
   codemagicDefaultBranch?: string
   codemagicLabels?: string[]
   saveCodemagicBinding?: boolean
+  nextjsPm2SshHost?: string
+  nextjsPm2RemotePath?: string
+  nextjsPm2UploadPath?: string
+  nextjsPm2AppName?: string
+  nextjsPm2Port?: string | number
+  nextjsPm2StartCommand?: string
+  nextjsPm2InstallCommand?: string
   releaseActions?: ReleasePublishActionKey[]
 }
 
@@ -1191,6 +1198,25 @@ export type OaSettingsView = {
   enableDocumentBrowsing: boolean
   enableDocumentEditing: boolean
   enableAiDocumentDrafting: boolean
+}
+
+export type OaDocumentRecord = {
+  id: string
+  token: string
+  name: string
+  type: string
+  url: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type OaDocumentList = {
+  sourceKind: 'home' | 'drive-root' | 'folder' | 'document' | 'unknown'
+  sourceUrl: string
+  documents: OaDocumentRecord[]
+  nextPageToken: string
+  hasMore: boolean
+  unsupportedReason: string
 }
 
 export type MonthlyPerformancePreviewInput = {

@@ -112,6 +112,7 @@ export type DeploymentRefreshCursor = Partial<Record<ProjectService['provider'],
 export const initialDeploymentVisibleCount = 60
 export const deploymentVisibleBatchSize = 60
 export const railwayDeploymentRefreshBatchSize = 4
+export const defaultDeploymentAutoRefreshEnabled = false
 export const deploymentAutoRefreshIntervalMs = 300_000
 export const deploymentRateLimitFallbackMs = 60_000
 

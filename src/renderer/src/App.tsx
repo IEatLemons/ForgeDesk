@@ -107,6 +107,8 @@ import type {
   MonthlyPerformancePreview,
   MonthlyPerformanceRow,
   MonthlyPerformanceSession,
+  OaDocumentList,
+  OaDocumentRecord,
   OaSettingsView,
   Project,
   ProjectBranchTag,
@@ -235,6 +237,7 @@ import {
   type ProjectDetailTabAvailability,
   type ProjectDetailTabKey
 } from './project-detail-view'
+import { createQuickBuildCompletionPrompt } from './quick-build-view'
 import {
   closeProjectSettingsModule,
   createInitialProjectSettingsView,
@@ -259,6 +262,7 @@ import {
   createDeploymentStatusSummary,
   createSystemLogEntry,
   createSystemLogSummary,
+  defaultDeploymentAutoRefreshEnabled,
   deploymentAutoRefreshIntervalMs,
   deploymentRateLimitFallbackMs,
   filterDeploymentRows,
@@ -788,6 +792,14 @@ function GitErrorNotice({ guidance, onClose }: { guidance: GitErrorGuidance | nu
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat('zh-CN').format(value)
+}
+
+function omitRecordKeys<T>(record: Record<string, T>, keys: Set<string>): Record<string, T> {
+  if (keys.size === 0 || !Object.keys(record).some((key) => keys.has(key))) {
+    return record
+  }
+
+  return Object.fromEntries(Object.entries(record).filter(([key]) => !keys.has(key))) as Record<string, T>
 }
 
 function getFileStatusLabel(status: string): { label: string; color: string } {
@@ -1879,6 +1891,32 @@ function populateOaSettingsForm(form: FormInstance<OaSettingsForm>, settings: Oa
   })
 }
 
+const feishuDeveloperConsoleUrl = 'https://open.feishu.cn/app'
+const feishuDeveloperDocsUrl = 'https://open.feishu.cn/document/home/index'
+
+const oaSetupSteps = [
+  {
+    title: '打开开发者后台',
+    description: '进入 Lark / 飞书开放平台，创建或选择一个企业自建应用。'
+  },
+  {
+    title: '复制应用凭证',
+    description: '在应用的凭证与基础信息里复制 App ID 和 App Secret，稍后填到下方表单。'
+  },
+  {
+    title: '申请文档权限',
+    description: '在权限管理里申请云文档读取、编辑和创建相关权限；只浏览文档时可以先关闭编辑和 AI 开关。'
+  },
+  {
+    title: '发布到企业',
+    description: '在版本管理与发布里创建版本并发布，确保当前企业成员可以使用这个应用。'
+  },
+  {
+    title: '回到 ForgeDesk 保存',
+    description: '粘贴 Lark 云盘、文件夹或文档入口链接、App ID 和 App Secret，打开启用开关后保存 OA 设置。'
+  }
+] as const
+
 type OaSettingsSectionProps = {
   form: FormInstance<OaSettingsForm>
   settings: OaSettingsView | null
@@ -1937,13 +1975,40 @@ function OaSettingsSection({ form, settings, loading, saving, onRefresh, onSave,
         message={oaReady ? 'Lark 文档已接入' : '保存 Lark App ID 和 App Secret 后启用 OA 文档能力'}
         description={settings?.larkAppSecretConfigured ? 'App Secret 已保存在本机，界面不会回显明文。' : '需要在 Lark / 飞书开放平台创建应用，并授予文档读取、编辑和创建相关权限。'}
       />
+      <div className="oa-guide-panel">
+        <div className="oa-guide-header">
+          <Space direction="vertical" size={2}>
+            <Typography.Title level={4}>Lark 接入教程</Typography.Title>
+            <Typography.Text type="secondary">按顺序完成下面几步，再把应用信息保存到这里。</Typography.Text>
+          </Space>
+          <Space wrap>
+            <Button icon={<LinkOutlined />} href={feishuDeveloperConsoleUrl} target="_blank" rel="noreferrer">
+              打开开发者后台
+            </Button>
+            <Button href={feishuDeveloperDocsUrl} target="_blank" rel="noreferrer">
+              开放平台文档
+            </Button>
+          </Space>
+        </div>
+        <ol className="oa-guide-steps">
+          {oaSetupSteps.map((step, index) => (
+            <li className="oa-guide-step" key={step.title}>
+              <span className="oa-guide-step-index">{index + 1}</span>
+              <span className="oa-guide-step-copy">
+                <Typography.Text strong>{step.title}</Typography.Text>
+                <Typography.Text type="secondary">{step.description}</Typography.Text>
+              </span>
+            </li>
+          ))}
+        </ol>
+      </div>
       <Form form={form} layout="vertical" className="settings-management-form oa-settings-form">
         <div className="ai-settings-grid">
           <Form.Item name="enabled" label="启用 Lark 集成" valuePropName="checked">
             <Switch checkedChildren="启用" unCheckedChildren="停用" />
           </Form.Item>
-          <Form.Item name="docsHomeUrl" label="文档首页 URL" rules={[{ required: true, message: '请输入 Lark 文档首页 URL' }]}>
-            <Input placeholder="https://docs.feishu.cn" />
+          <Form.Item name="docsHomeUrl" label="Lark 云盘、文件夹或文档入口链接" rules={[{ required: true, message: '请输入 Lark 云盘、文件夹或文档入口链接' }]}>
+            <Input placeholder="https://docs.feishu.cn/drive/me/、/drive/folder/... 或 /docx/..." />
           </Form.Item>
           <Form.Item name="larkAppId" label="Lark App ID" rules={[{ required: true, message: '请输入 Lark App ID' }]}>
             <Input placeholder="cli_aabbcc..." />
@@ -1974,8 +2039,192 @@ function OaSettingsSection({ form, settings, loading, saving, onRefresh, onSave,
   )
 }
 
+type OaDocsPanelProps = {
+  onOpenSettings: () => void
+}
+
+function OaDocsPanel({ onOpenSettings }: OaDocsPanelProps): JSX.Element {
+  const [settings, setSettings] = useState<OaSettingsView | null>(null)
+  const [documentList, setDocumentList] = useState<OaDocumentList | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [opening, setOpening] = useState(false)
+  const oaReady = isOaSettingsReady(settings)
+  const browsingReady = Boolean(oaReady && settings?.enableDocumentBrowsing)
+  const documents = documentList?.documents ?? []
+  const capabilityItems = [
+    { key: 'enableDocumentBrowsing', title: '快速浏览文档', enabled: Boolean(settings?.enableDocumentBrowsing), icon: <FileTextOutlined /> },
+    { key: 'enableDocumentEditing', title: '编辑文档', enabled: Boolean(settings?.enableDocumentEditing), icon: <EditOutlined /> },
+    { key: 'enableAiDocumentDrafting', title: 'AI 协助产出', enabled: Boolean(settings?.enableAiDocumentDrafting), icon: <ThunderboltOutlined /> }
+  ]
+  const documentColumns: ColumnsType<OaDocumentRecord> = [
+    {
+      title: '名称',
+      dataIndex: 'name',
+      key: 'name',
+      render: (_, document) => (
+        <Space size={8} wrap>
+          <FileTextOutlined />
+          <Typography.Text strong>{document.name}</Typography.Text>
+        </Space>
+      )
+    },
+    {
+      title: '类型',
+      dataIndex: 'type',
+      key: 'type',
+      width: 120,
+      render: (type: string) => <Tag>{type.toUpperCase()}</Tag>
+    },
+    {
+      title: '更新',
+      dataIndex: 'updatedAt',
+      key: 'updatedAt',
+      width: 180,
+      render: (value: string) => formatDateTime(value)
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 120,
+      render: (_, document) => (
+        <Button size="small" icon={<LinkOutlined />} href={document.url} target="_blank" rel="noreferrer">
+          打开
+        </Button>
+      )
+    }
+  ]
+
+  async function refreshSettings(): Promise<void> {
+    if (!window.forgeDesk) {
+      setSettings(null)
+      setDocumentList(null)
+      return
+    }
+
+    setLoading(true)
+
+    try {
+      const nextSettings = await window.forgeDesk.getOaSettings()
+
+      setSettings(nextSettings)
+
+      if (isOaSettingsReady(nextSettings) && nextSettings.enableDocumentBrowsing) {
+        setDocumentList(await window.forgeDesk.listOaDocuments())
+      } else {
+        setDocumentList(null)
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function openDocs(): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中打开文档')
+      return
+    }
+
+    if (!browsingReady) {
+      message.warning('请先在 OA 设置里启用 Lark 文档浏览')
+      return
+    }
+
+    setOpening(true)
+
+    try {
+      await window.forgeDesk.openOaDocs()
+    } catch (error) {
+      message.error(getErrorMessage(error, '打开 Lark 文档失败'))
+    } finally {
+      setOpening(false)
+    }
+  }
+
+  useEffect(() => {
+    refreshSettings()
+  }, [])
+
+  return (
+    <section className="workspace-section oa-docs-workspace">
+      <div className="section-heading">
+        <div>
+          <Typography.Title level={2}>文档</Typography.Title>
+          <Typography.Text type="secondary">Lark / 飞书云盘文件夹和文档的日常入口。</Typography.Text>
+        </div>
+        <Space wrap>
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={refreshSettings}>
+            重新读取
+          </Button>
+          <Button icon={<SettingOutlined />} onClick={onOpenSettings}>
+            设置集成
+          </Button>
+          <Button type="primary" icon={<LinkOutlined />} loading={opening} disabled={!browsingReady} onClick={openDocs}>
+            打开文档
+          </Button>
+        </Space>
+      </div>
+      <div className="panel oa-docs-panel">
+        <Alert
+          className="settings-module-alert"
+          type={browsingReady ? 'success' : oaReady ? 'info' : 'warning'}
+          showIcon
+          message={browsingReady ? 'Lark 文档入口已可用' : oaReady ? 'Lark 已接入，浏览入口未启用' : '还没有可用的 Lark 文档入口'}
+          description={documentList?.unsupportedReason || (browsingReady ? '已读取当前入口下可展示的文件夹和文档。' : '打开 OA / Lark 文档设置，保存云盘根目录、文件夹或单篇文档链接、App ID 和 App Secret 后启用浏览。')}
+        />
+        {settings?.docsHomeUrl && (
+          <Descriptions column={1} size="small" className="setup-description">
+            <Descriptions.Item label="入口链接">
+              <Typography.Text copyable>{settings.docsHomeUrl}</Typography.Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="App ID">{settings.larkAppId || '未填写'}</Descriptions.Item>
+          </Descriptions>
+        )}
+        <div className="oa-docs-capability-list">
+          {capabilityItems.map((item) => (
+            <div className={`oa-docs-capability-item ${item.enabled ? 'is-enabled' : 'is-disabled'}`} key={item.key}>
+              <span className="oa-docs-capability-icon">{item.icon}</span>
+              <Typography.Text strong>{item.title}</Typography.Text>
+              <Tag color={item.enabled ? 'green' : 'default'}>{item.enabled ? '已启用' : '未启用'}</Tag>
+            </div>
+          ))}
+        </div>
+        {documents.length > 0 && (
+          <Table
+            className="oa-docs-table"
+            columns={documentColumns}
+            dataSource={documents}
+            pagination={false}
+            rowKey="id"
+            size="middle"
+          />
+        )}
+        {browsingReady && documents.length === 0 && !loading && (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={documentList?.unsupportedReason || '当前入口下没有读取到文件夹或文档'}
+          >
+            <Button icon={<SettingOutlined />} onClick={onOpenSettings}>
+              更换入口链接
+            </Button>
+          </Empty>
+        )}
+        {!oaReady && !loading && (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="需要先完成 OA / Lark 文档设置">
+            <Button type="primary" icon={<SettingOutlined />} onClick={onOpenSettings}>
+              去设置
+            </Button>
+          </Empty>
+        )}
+      </div>
+    </section>
+  )
+}
+
 function SettingsPanel({
   onCreateProject,
+  initialModule = 'overview',
   themePreference,
   resolvedTheme,
   onThemePreferenceChange,
@@ -1984,6 +2233,7 @@ function SettingsPanel({
   onOpenSystemLog
 }: {
   onCreateProject: () => void
+  initialModule?: SettingsModuleKey
   themePreference: ThemePreference
   resolvedTheme: ResolvedTheme
   onThemePreferenceChange: (preference: ThemePreference) => void
@@ -2012,7 +2262,7 @@ function SettingsPanel({
   const [planeTestResult, setPlaneTestResult] = useState<PlaneConnectionTestResult | null>(null)
   const [oaSettings, setOaSettings] = useState<OaSettingsView | null>(null)
   const [sshConfigContent, setSshConfigContent] = useState('')
-  const [activeSettingsModule, setActiveSettingsModule] = useState<SettingsModuleKey>('overview')
+  const [activeSettingsModule, setActiveSettingsModule] = useState<SettingsModuleKey>(initialModule)
   const [sshConfigMode, setSshConfigMode] = useState<SshConfigMode>('guided')
   const [sshConfigEntries, setSshConfigEntries] = useState<SshConfigEntry[]>([])
   const [sshImportKind, setSshImportKind] = useState<SshKeyKind>('private')
@@ -2046,6 +2296,10 @@ function SettingsPanel({
   })
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false)
   const [installingAppUpdate, setInstallingAppUpdate] = useState(false)
+
+  useEffect(() => {
+    setActiveSettingsModule(initialModule)
+  }, [initialModule])
 
   useEffect(() => {
     if (!window.forgeDesk) {
@@ -3075,7 +3329,7 @@ function SettingsPanel({
     {
       title: '集成与服务',
       description: '配置外部账号、服务平台、Plane 和 AI 能力。',
-      keys: ['github', 'codemagic', 'services', 'plane', 'ai']
+      keys: ['github', 'codemagic', 'services', 'plane', 'oa', 'ai']
     },
     {
       title: '应用维护',
@@ -6411,7 +6665,7 @@ function GlobalServiceCenterPanel({
   const [deploymentsLoading, setDeploymentsLoading] = useState(false)
   const [deploymentIssueSummary, setDeploymentIssueSummary] = useState<DeploymentIssueSummary | null>(null)
   const [lastDeploymentRefreshAt, setLastDeploymentRefreshAt] = useState('')
-  const [autoRefreshDeployments, setAutoRefreshDeployments] = useState(true)
+  const [autoRefreshDeployments, setAutoRefreshDeployments] = useState(defaultDeploymentAutoRefreshEnabled)
   const [deploymentDatePickerKey, setDeploymentDatePickerKey] = useState(0)
   const [visibleDeploymentCount, setVisibleDeploymentCount] = useState(initialDeploymentVisibleCount)
   const deploymentRefreshInFlightRef = useRef(false)
@@ -7563,6 +7817,10 @@ function createTagNameFromVersion(version: string): string {
   return /^\d+\.\d+\.\d+$/.test(trimmed) ? `v${trimmed}` : ''
 }
 
+function createDefaultNextjsPm2AppName(repositoryName: string): string {
+  return repositoryName.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'nextjs-app'
+}
+
 function getReleaseScriptLabel(scriptName: string): string {
   if (scriptName === 'publish:mac') {
     return '发布到 GitHub Releases'
@@ -7606,6 +7864,12 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const [codemagicDefaultBranch, setCodemagicDefaultBranch] = useState('')
   const [codemagicLabelsText, setCodemagicLabelsText] = useState('forgedesk')
   const [saveCodemagicBinding, setSaveCodemagicBinding] = useState(true)
+  const [nextjsPm2SshHost, setNextjsPm2SshHost] = useState('')
+  const [nextjsPm2RemotePath, setNextjsPm2RemotePath] = useState('')
+  const [nextjsPm2UploadPath, setNextjsPm2UploadPath] = useState('/tmp/forgedesk-releases')
+  const [nextjsPm2AppName, setNextjsPm2AppName] = useState('')
+  const [nextjsPm2Port, setNextjsPm2Port] = useState('3000')
+  const [nextjsPm2StartCommand, setNextjsPm2StartCommand] = useState('')
   const [selectedReleaseActions, setSelectedReleaseActions] = useState<ReleasePublishActionKey[]>([])
   const [activePublishTaskId, setActivePublishTaskId] = useState('')
   const [activePublishTask, setActivePublishTask] = useState<RepositoryReleasePublishTask | null>(null)
@@ -7627,15 +7891,17 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const selectedGithubToken = githubTokens.find((token) => token.id === selectedGithubTokenId) ?? null
   const selectedCodemagicToken = codemagicTokens.find((token) => token.id === selectedCodemagicTokenId) ?? null
   const codemagicReady = Boolean(selectedCodemagicTokenId && codemagicAppId.trim() && codemagicWorkflowId.trim())
+  const nextjsPm2Ready = Boolean(nextjsPm2SshHost.trim() && nextjsPm2RemotePath.trim() && nextjsPm2AppName.trim())
   const releaseView = useMemo(
     () => createReleasePublishViewModel({
       plan: preparation?.plan ?? null,
       githubToken: selectedGithubTokenId || githubToken,
       provider: releaseProvider,
       codemagicReady,
+      nextjsPm2Ready,
       selectedActions: selectedReleaseActions
     }),
-    [codemagicReady, githubToken, preparation, releaseProvider, selectedGithubTokenId, selectedReleaseActions]
+    [codemagicReady, githubToken, nextjsPm2Ready, preparation, releaseProvider, selectedGithubTokenId, selectedReleaseActions]
   )
   const releasePlatformOptions = useMemo(
     () => createReleasePlatformOptions({ plan: preparation?.plan ?? null, codemagicBound: Boolean(codemagicBinding) }),
@@ -7898,6 +8164,13 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     setCodemagicDefaultBranch(selectedRepository.currentBranch || selectedRepository.defaultBranch || '')
     setCodemagicLabelsText('forgedesk')
     setSaveCodemagicBinding(true)
+    const nextjsAppName = createDefaultNextjsPm2AppName(selectedRepository.name)
+    setNextjsPm2SshHost('')
+    setNextjsPm2RemotePath(`/var/www/${nextjsAppName}`)
+    setNextjsPm2UploadPath('/tmp/forgedesk-releases')
+    setNextjsPm2AppName(nextjsAppName)
+    setNextjsPm2Port('3000')
+    setNextjsPm2StartCommand('')
     setSelectedReleaseActions([])
     setActivePublishTaskId('')
     setActivePublishTask(null)
@@ -8115,6 +8388,11 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
       return
     }
 
+    if (releaseProvider === 'nextjs-pm2' && !nextjsPm2Ready) {
+      message.warning('请填写 SSH 目标、部署目录和 PM2 应用名')
+      return
+    }
+
     setPublishing(true)
 
     try {
@@ -8138,6 +8416,12 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
           ? codemagicLabelsText.split(',').map((label) => label.trim()).filter(Boolean)
           : undefined,
         saveCodemagicBinding: releaseProvider === 'codemagic' ? saveCodemagicBinding : undefined,
+        nextjsPm2SshHost: releaseProvider === 'nextjs-pm2' ? nextjsPm2SshHost.trim() : undefined,
+        nextjsPm2RemotePath: releaseProvider === 'nextjs-pm2' ? nextjsPm2RemotePath.trim() : undefined,
+        nextjsPm2UploadPath: releaseProvider === 'nextjs-pm2' ? nextjsPm2UploadPath.trim() : undefined,
+        nextjsPm2AppName: releaseProvider === 'nextjs-pm2' ? nextjsPm2AppName.trim() : undefined,
+        nextjsPm2Port: releaseProvider === 'nextjs-pm2' ? nextjsPm2Port.trim() || undefined : undefined,
+        nextjsPm2StartCommand: releaseProvider === 'nextjs-pm2' ? nextjsPm2StartCommand.trim() || undefined : undefined,
         releaseActions: selectedReleaseActions
       })
 
@@ -8178,7 +8462,9 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
           <Typography.Text>
             {releaseProvider === 'codemagic'
               ? `将触发 Codemagic workflow：${codemagicWorkflowName || codemagicWorkflowId || '未命名 workflow'}。`
-              : `将按当前仓库 package.json 中的 ${preparation?.plan.selectedScript || '发布'} 脚本执行。`}
+              : releaseProvider === 'nextjs-pm2'
+                ? `将本地构建并打包 Next.js，然后部署到 ${nextjsPm2SshHost || '未填写 SSH 目标'}:${nextjsPm2RemotePath || '未填写部署目录'}，PM2 应用：${nextjsPm2AppName || '未命名'}。`
+                : `将按当前仓库 package.json 中的 ${preparation?.plan.selectedScript || '发布'} 脚本执行。`}
           </Typography.Text>
           {targetVersion !== preparation?.plan.currentVersion ? (
             <Typography.Text type="warning">
@@ -8200,7 +8486,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
           <Typography.Text type="secondary">执行过程会进入后台任务，可以关闭窗口继续操作，并随时查看发布日志和构建包。</Typography.Text>
         </Space>
       ),
-      okText: releaseProvider === 'codemagic' ? '开始构建' : '开始发布',
+      okText: releaseProvider === 'codemagic' ? '开始构建' : releaseProvider === 'nextjs-pm2' ? '开始部署' : '开始发布',
       cancelText: '取消',
       onOk: () => {
         void publishReleaseAfterConfirm()
@@ -8255,7 +8541,8 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
               value={releaseProvider}
               options={[
                 { label: 'GitHub Releases', value: 'github' },
-                { label: 'Codemagic', value: 'codemagic' }
+                { label: 'Codemagic', value: 'codemagic' },
+                { label: 'Next.js PM2', value: 'nextjs-pm2' }
               ]}
               onChange={(value) => setReleaseProvider(value as ReleasePublishProvider)}
             />
@@ -8279,7 +8566,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
                 }}
               >
                 <span className="release-platform-icon">
-                  {platform.key === 'github' ? <GithubOutlined /> : <UploadOutlined />}
+                  {platform.key === 'github' ? <GithubOutlined /> : platform.key === 'nextjs-pm2' ? <CodeOutlined /> : <UploadOutlined />}
                 </span>
                 <span className="release-platform-body">
                   <span className="release-platform-title-row">
@@ -8480,6 +8767,40 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
               </Space>
             </Col>
           ) : null}
+          {releaseProvider === 'nextjs-pm2' ? (
+            <Col xs={24}>
+              <Space direction="vertical" size={10} className="release-github-token-picker">
+                <Alert
+                  type={nextjsPm2Ready ? 'success' : 'warning'}
+                  showIcon
+                  message={nextjsPm2Ready ? 'Next.js PM2 目标已填写' : '请填写远端部署目标'}
+                  description={nextjsPm2Ready
+                    ? `将部署到 ${nextjsPm2SshHost}:${nextjsPm2RemotePath}，PM2 应用 ${nextjsPm2AppName}。`
+                    : 'SSH 目标可以使用 ~/.ssh/config 里的 Host 别名。'}
+                />
+                <Row gutter={[12, 8]}>
+                  <Col xs={24} md={12}>
+                    <Input value={nextjsPm2SshHost} addonBefore="SSH 目标" placeholder="deploy@example.com" onChange={(event) => setNextjsPm2SshHost(event.target.value)} />
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Input value={nextjsPm2AppName} addonBefore="PM2 应用" placeholder={selectedRepository?.name || 'nextjs-app'} onChange={(event) => setNextjsPm2AppName(event.target.value)} />
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Input value={nextjsPm2RemotePath} addonBefore="部署目录" placeholder="/var/www/app" onChange={(event) => setNextjsPm2RemotePath(event.target.value)} />
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Input value={nextjsPm2UploadPath} addonBefore="上传目录" placeholder="/tmp/forgedesk-releases" onChange={(event) => setNextjsPm2UploadPath(event.target.value)} />
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Input value={nextjsPm2Port} addonBefore="端口" placeholder="3000" onChange={(event) => setNextjsPm2Port(event.target.value)} />
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Input value={nextjsPm2StartCommand} addonBefore="启动命令" placeholder="可选，例如 pnpm start" onChange={(event) => setNextjsPm2StartCommand(event.target.value)} />
+                  </Col>
+                </Row>
+              </Space>
+            </Col>
+          ) : null}
         </Row>
 
         {activePublishTask ? (
@@ -8495,7 +8816,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
                 {activePublishTaskView.canCancel ? (
                   <Popconfirm
                     title="终止这个发布任务？"
-                    description={activePublishTask.provider === 'codemagic' ? '可能已经创建 Tag 或远程构建产物，重试前需要检查 Codemagic。' : '可能已经创建 Tag、Release 或上传了部分文件，重试前需要检查 GitHub Releases。'}
+                    description={getReleaseTaskCancelDescription(activePublishTask)}
                     okText="终止"
                     cancelText="取消"
                     onConfirm={cancelActivePublishTask}
@@ -9631,6 +9952,50 @@ function formatReleaseTaskToastError(task: RepositoryReleasePublishTask): string
   return message.length > 160 ? `${message.slice(0, 160)}...` : message
 }
 
+function getReleaseTaskPlatformLabel(provider: ReleasePublishProvider): string {
+  if (provider === 'codemagic') {
+    return 'Codemagic'
+  }
+
+  if (provider === 'nextjs-pm2') {
+    return 'Next.js PM2'
+  }
+
+  return 'GitHub Releases'
+}
+
+function getReleaseTaskDetailLabel(provider: ReleasePublishProvider): string {
+  if (provider === 'codemagic') {
+    return 'Workflow'
+  }
+
+  if (provider === 'nextjs-pm2') {
+    return 'PM2 应用'
+  }
+
+  return '脚本'
+}
+
+function getReleaseTaskDetailValue(task: RepositoryReleasePublishTask): string {
+  if (task.provider === 'codemagic' || task.provider === 'nextjs-pm2') {
+    return task.externalWorkflow || '-'
+  }
+
+  return task.selectedScript || task.plan?.selectedScript || '-'
+}
+
+function getReleaseTaskCancelDescription(task: RepositoryReleasePublishTask): string {
+  if (task.provider === 'codemagic') {
+    return '可能已经创建 Tag 或远程构建产物，重试前需要检查 Codemagic。'
+  }
+
+  if (task.provider === 'nextjs-pm2') {
+    return '可能已经创建 Tag、上传包或远端 release 目录，重试前需要检查服务器和 PM2。'
+  }
+
+  return '可能已经创建 Tag、Release 或上传了部分文件，重试前需要检查 GitHub Releases。'
+}
+
 function ReleasePublishTaskDock(): JSX.Element | null {
   const { updateRepository } = useForgeDeskStore()
   const [tasks, setTasks] = useState<RepositoryReleasePublishTask[]>([])
@@ -9779,7 +10144,7 @@ function ReleasePublishTaskDock(): JSX.Element | null {
                     {activeTaskView.canCancel ? (
                       <Popconfirm
                         title="终止这个发布任务？"
-                        description={activeTask.provider === 'codemagic' ? '可能已经创建 Tag 或远程构建产物，重试前需要检查 Codemagic。' : '可能已经创建 Tag、Release 或上传了部分文件，重试前需要检查 GitHub Releases。'}
+                        description={getReleaseTaskCancelDescription(activeTask)}
                         okText="终止"
                         cancelText="取消"
                         onConfirm={() => cancelReleaseTask(activeTask)}
@@ -9796,11 +10161,9 @@ function ReleasePublishTaskDock(): JSX.Element | null {
                   <Descriptions.Item label="仓库">{activeTask.repositoryName}</Descriptions.Item>
                   <Descriptions.Item label="Tag">{activeTask.tagName}</Descriptions.Item>
                   <Descriptions.Item label="版本">{activeTask.version}</Descriptions.Item>
-                  <Descriptions.Item label="平台">{activeTask.provider === 'codemagic' ? 'Codemagic' : 'GitHub Releases'}</Descriptions.Item>
+                  <Descriptions.Item label="平台">{getReleaseTaskPlatformLabel(activeTask.provider)}</Descriptions.Item>
                   <Descriptions.Item label="当前步骤">{activeTaskView.phase}</Descriptions.Item>
-                  <Descriptions.Item label={activeTask.provider === 'codemagic' ? 'Workflow' : '脚本'}>
-                    {activeTask.provider === 'codemagic' ? activeTask.externalWorkflow || '-' : activeTask.selectedScript || activeTask.plan?.selectedScript || '-'}
-                  </Descriptions.Item>
+                  <Descriptions.Item label={getReleaseTaskDetailLabel(activeTask.provider)}>{getReleaseTaskDetailValue(activeTask)}</Descriptions.Item>
                   {activeTask.externalBuildId ? <Descriptions.Item label="Build ID">{activeTask.externalBuildId}</Descriptions.Item> : null}
                   {activeTask.externalStatus ? <Descriptions.Item label="远程状态">{activeTask.externalStatus}</Descriptions.Item> : null}
                   <Descriptions.Item label="开始时间">{formatReleaseTaskTime(activeTask.startedAt)}</Descriptions.Item>
@@ -11705,6 +12068,35 @@ function ProjectOverview({
     setProjectSettingsDrawerOpen(false)
   }
 
+  function isProjectListInteractiveTarget(target: EventTarget | null): boolean {
+    return target instanceof HTMLElement && Boolean(target.closest('button, a, input, textarea, select, [role="button"], .ant-checkbox-wrapper, .ant-table-selection-column'))
+  }
+
+  function removeDeletedProjectFromLocalLists(projectId: string): void {
+    const deletedRepositoryIds = new Set(repositories.filter((repository) => repository.projectId === projectId).map((repository) => repository.id))
+
+    setSelectedProjectRowIds((current) => current.filter((item) => item !== projectId))
+    setRunningProjectGitTaskKeys((current) => current.filter((item) => !item.startsWith(`${projectId}:`)))
+    setProjectGitTaskLogs((current) => current.filter((log) => log.projectId !== projectId))
+    setProjectRepositoryCommitCounts((current) => omitRecordKeys(current, deletedRepositoryIds))
+    setProjectServiceCounts((current) => omitRecordKeys(current, new Set([projectId])))
+    setProjectPlaneAvailability((current) => omitRecordKeys(current, new Set([projectId])))
+
+    if (detailProjectId === projectId) {
+      setDetailProjectId(null)
+      setProjectGitRepositoryId('')
+      setAnalysisGitError(null)
+    }
+
+    if (listCommitProjectId === projectId) {
+      setListCommitProjectId(null)
+    }
+
+    if (listMergeProjectId === projectId) {
+      setListMergeProjectId(null)
+    }
+  }
+
   function confirmDeleteProject(project: Project): void {
     Modal.confirm({
       title: `删除项目 ${project.name}？`,
@@ -11717,11 +12109,7 @@ function ProjectOverview({
 
         try {
           await deleteProject(project.id)
-
-          if (detailProjectId === project.id) {
-            setDetailProjectId(null)
-          }
-
+          removeDeletedProjectFromLocalLists(project.id)
           setProjectSettingsDrawerOpen(false)
           message.success('项目已删除')
         } catch (error) {
@@ -11797,7 +12185,7 @@ function ProjectOverview({
     {
       title: '操作',
       key: 'actions',
-      width: 380,
+      width: 320,
       render: (_, project) => {
         const projectRepositories = getProjectRepositories(project)
         const hasRepositories = projectRepositories.length > 0
@@ -11805,10 +12193,7 @@ function ProjectOverview({
         const canPushProject = hasProjectPushableTargets(projectRepositories)
 
         return (
-          <Space size={8} wrap className="project-list-actions">
-            <Button size="small" icon={<ArrowRightOutlined />} onClick={() => openProjectDetail(project)}>
-              详情
-            </Button>
+          <Space size={8} wrap className="project-list-actions" onClick={(event) => event.stopPropagation()}>
             <Button size="small" icon={<DownloadOutlined />} loading={isProjectGitTaskRunning(project.id, 'fetch')} disabled={!hasRepositories} onClick={() => runProjectGitTask(project, 'fetch')}>
               Fetch
             </Button>
@@ -11944,7 +12329,14 @@ function ProjectOverview({
                 onChange: (keys) => setSelectedProjectRowIds(keys.map(String))
               }}
               onRow={(project) => ({
-                onDoubleClick: () => openProjectDetail(project)
+                className: 'project-list-clickable-row',
+                onClick: (event) => {
+                  if (isProjectListInteractiveTarget(event.target)) {
+                    return
+                  }
+
+                  openProjectDetail(project)
+                }
               })}
             />
             {listCommitProject && (
@@ -12274,7 +12666,7 @@ function ProjectGitTaskLogDrawer({
           const repositoryCount = log.repositoryResults.length
 
           return (
-            <div className="project-git-task-entry" key={log.id}>
+            <div className={`project-git-task-entry project-git-task-entry-${log.status}`} key={log.id}>
               <div className="project-git-task-entry-heading">
                 <Space size={6} wrap>
                   <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
@@ -16425,6 +16817,7 @@ function PasswordGeneratorTool({ onBack }: { onBack: () => void }): JSX.Element 
 function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppProps): JSX.Element {
   const { loadingWorkspace, loadWorkspace } = useForgeDeskStore()
   const [activeKey, setActiveKey] = useState<AppNavigationKey>('overview')
+  const [settingsInitialModule, setSettingsInitialModule] = useState<SettingsModuleKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
   const [terminalOpenRequest, setTerminalOpenRequest] = useState<TerminalOpenRequest | null>(null)
   const [systemLogs, setSystemLogs] = useState<SystemLogEntry[]>([])
@@ -16565,7 +16958,24 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       })
 
       if (success) {
-        message.success('快速构建完成')
+        const prompt = createQuickBuildCompletionPrompt(task)
+
+        if (prompt) {
+          Modal.success({
+            title: prompt.title,
+            content: (
+              <Space direction="vertical" size={8}>
+                <Typography.Text>{prompt.description}</Typography.Text>
+                <Typography.Text type="secondary" style={{ whiteSpace: 'pre-wrap' }}>
+                  {prompt.detail}
+                </Typography.Text>
+              </Space>
+            ),
+            okText: prompt.okText
+          })
+        } else {
+          message.success('快速构建完成')
+        }
       } else if (task.status === 'cancelled') {
         message.warning('快速构建已终止')
       } else {
@@ -16582,6 +16992,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const navigationIcons: Record<AppNavigationKey, JSX.Element> = {
     overview: <DashboardOutlined />,
     tasks: <CheckSquareOutlined />,
+    docs: <FileTextOutlined />,
     services: <ThunderboltOutlined />,
     docker: <DockerOutlined />,
     tools: <ToolOutlined />,
@@ -16618,6 +17029,19 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   function openTerminalRequest(request: Omit<TerminalOpenRequest, 'requestId'>): void {
     terminalOpenRequestIdRef.current += 1
     setTerminalOpenRequest({ ...request, requestId: terminalOpenRequestIdRef.current })
+  }
+
+  function openNavigationKey(key: AppNavigationKey): void {
+    if (key === 'settings') {
+      setSettingsInitialModule('overview')
+    }
+
+    setActiveKey(key)
+  }
+
+  function openSettingsModule(module: SettingsModuleKey): void {
+    setSettingsInitialModule(module)
+    setActiveKey('settings')
   }
 
   function openGlobalTerminalRequest(request: Omit<TerminalOpenRequest, 'requestId'>): void {
@@ -16738,14 +17162,14 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
               </div>
             </div>
           </div>
-          <Menu className="sidebar-nav" mode="inline" selectedKeys={activeKey === 'settings' ? [] : [activeKey]} items={menuItems} onClick={({ key }) => setActiveKey(key as AppNavigationKey)} />
+          <Menu className="sidebar-nav" mode="inline" selectedKeys={activeKey === 'settings' ? [] : [activeKey]} items={menuItems} onClick={({ key }) => openNavigationKey(key as AppNavigationKey)} />
           <div className="sidebar-footer">
             <Menu
               className="sidebar-footer-menu"
               mode="inline"
               selectedKeys={activeKey === 'settings' ? ['settings'] : []}
               items={footerMenuItems}
-              onClick={({ key }) => setActiveKey(key as AppNavigationKey)}
+              onClick={({ key }) => openNavigationKey(key as AppNavigationKey)}
             />
           </div>
         </div>
@@ -16759,6 +17183,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           )}
           {!loadingWorkspace && activeKey === 'settings' && (
             <SettingsPanel
+              initialModule={settingsInitialModule}
               themePreference={themePreference}
               resolvedTheme={resolvedTheme}
               onThemePreferenceChange={onThemePreferenceChange}
@@ -16781,12 +17206,13 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             </section>
           )}
           {!loadingWorkspace && activeKey === 'docker' && <DockerPanel onOpenTerminalRequest={openGlobalTerminalRequest} />}
+          {!loadingWorkspace && activeKey === 'docs' && <OaDocsPanel onOpenSettings={() => openSettingsModule('oa')} />}
           {!loadingWorkspace && activeKey === 'tasks' && <TaskListPanel />}
           {!loadingWorkspace && activeKey === 'tools' && <ToolsPanel />}
           {!loadingWorkspace && activeKey === 'overview' && (
             <ProjectOverview
               onCreateProject={() => setCreatingProject(true)}
-              onOpenSettings={() => setActiveKey('settings')}
+              onOpenSettings={() => openSettingsModule('overview')}
               onOpenTerminalRequest={openTerminalRequest}
             />
           )}
