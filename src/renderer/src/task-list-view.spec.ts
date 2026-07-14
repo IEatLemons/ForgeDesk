@@ -39,6 +39,7 @@ function createFixtureTask(input: Partial<TaskItem>): TaskItem {
       projectId: input.projectId,
       startDate: input.startDate,
       dueDate: input.dueDate,
+      subtasks: input.subtasks,
       tags: input.tags,
       notes: input.notes,
       createdAt: input.createdAt ?? '2026-07-08T01:00:00.000Z',
@@ -60,6 +61,10 @@ describe('task list view model', () => {
         projectId: 'project-alpha',
         startDate: '2026-07-08',
         dueDate: '2026-07-09',
+        subtasks: [
+          { id: 'subtask-1', title: ' 打包产物 ', done: true, createdAt: '2026-07-07T01:00:00.000Z', completedAt: '2026-07-07T02:00:00.000Z' },
+          { id: 'subtask-empty', title: '   ', done: false }
+        ],
         tags: ['Release', 'release', ' QA '],
         createdAt: '2026-07-07T00:00:00.000Z',
         updatedAt: '2026-07-08T00:00:00.000Z'
@@ -75,6 +80,15 @@ describe('task list view model', () => {
     assert.equal(tasks[0].priority, 'high')
     assert.equal(tasks[0].projectId, 'project-alpha')
     assert.equal(tasks[0].startDate, '2026-07-08')
+    assert.deepEqual(tasks[0].subtasks, [
+      {
+        id: 'subtask-1',
+        title: '打包产物',
+        done: true,
+        createdAt: '2026-07-07T01:00:00.000Z',
+        completedAt: '2026-07-07T02:00:00.000Z'
+      }
+    ])
   })
 
   it('persists tasks through local storage safely', () => {
@@ -91,7 +105,16 @@ describe('task list view model', () => {
     const today = new Date('2026-07-08T12:00:00')
     const tasks = [
       createFixtureTask({ id: 'task-overdue', title: 'Fix deploy', status: 'todo', priority: 'high', projectId: 'project-alpha', dueDate: '2026-07-07', tags: ['ops'] }),
-      createFixtureTask({ id: 'task-today', title: 'Review copy', status: 'doing', priority: 'medium', projectId: 'project-beta', dueDate: '2026-07-08', tags: ['docs'] }),
+      createFixtureTask({
+        id: 'task-today',
+        title: 'Review copy',
+        status: 'doing',
+        priority: 'medium',
+        projectId: 'project-beta',
+        dueDate: '2026-07-08',
+        tags: ['docs'],
+        subtasks: [{ id: 'subtask-copy', title: '发布校对清单', done: false, createdAt: '2026-07-08T01:00:00.000Z', completedAt: null }]
+      }),
       createFixtureTask({ id: 'task-done', title: 'Archive branch', status: 'done', priority: 'low', dueDate: '2026-07-06', tags: ['ops'] })
     ]
 
@@ -104,12 +127,58 @@ describe('task list view model', () => {
       ['task-today']
     )
     assert.deepEqual(
+      filterTaskItems(tasks, { ...defaultTaskFilterState, query: '校对清单' }, today).map((task) => task.id),
+      ['task-today']
+    )
+    assert.deepEqual(
       filterTaskItems(tasks, { ...defaultTaskFilterState, projectId: 'project-alpha' }, today).map((task) => task.id),
       ['task-overdue']
     )
     assert.deepEqual(
       filterTaskItems(tasks, { ...defaultTaskFilterState, projectId: 'unassigned' }, today).map((task) => task.id),
       ['task-done']
+    )
+  })
+
+  it('keeps active tasks ahead of completed tasks when sorting', () => {
+    const tasks = [
+      createFixtureTask({
+        id: 'task-done',
+        title: 'Archived release plan',
+        status: 'done',
+        priority: 'high',
+        dueDate: '2026-07-07',
+        updatedAt: '2026-07-10T10:00:00.000Z'
+      }),
+      createFixtureTask({
+        id: 'task-doing',
+        title: 'Publish production',
+        status: 'doing',
+        priority: 'low',
+        dueDate: '2026-07-12',
+        updatedAt: '2026-07-09T10:00:00.000Z'
+      }),
+      createFixtureTask({
+        id: 'task-todo',
+        title: 'Prepare handoff',
+        status: 'todo',
+        priority: 'high',
+        dueDate: '2026-07-09',
+        updatedAt: '2026-07-08T10:00:00.000Z'
+      })
+    ]
+
+    assert.deepEqual(
+      filterTaskItems(tasks, { ...defaultTaskFilterState, sort: 'updated' }).map((task) => task.id),
+      ['task-doing', 'task-todo', 'task-done']
+    )
+    assert.deepEqual(
+      filterTaskItems(tasks, { ...defaultTaskFilterState, sort: 'due' }).map((task) => task.id),
+      ['task-todo', 'task-doing', 'task-done']
+    )
+    assert.deepEqual(
+      filterTaskItems(tasks, { ...defaultTaskFilterState, sort: 'priority' }).map((task) => task.id),
+      ['task-todo', 'task-doing', 'task-done']
     )
   })
 

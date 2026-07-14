@@ -51,9 +51,14 @@ module.exports = async function afterSign(context) {
   const appPath = join(context.appOutDir, appName)
   const identity = process.env.FORGEDESK_CODESIGN_IDENTITY || getExistingSigningIdentity(appPath) || '-'
   const unpackedNodeModules = join(appPath, 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules')
+  const menuBarHelperPath = join(appPath, 'Contents', 'Resources', 'MenuBarHelper', 'ForgeDeskMenuBarHelper.app')
 
   for (const file of collectSignableFiles(unpackedNodeModules)) {
     run('codesign', ['--force', '--sign', identity, file])
+  }
+
+  if (existsSync(menuBarHelperPath)) {
+    run('codesign', ['--force', '--deep', '--sign', identity, menuBarHelperPath])
   }
 
   run('codesign', ['--force', '--deep', '--sign', identity, appPath])

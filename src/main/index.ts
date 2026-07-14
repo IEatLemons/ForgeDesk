@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, shell, type MenuItemConstructorOptions } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -11,8 +11,17 @@ import { requestCommitMessageSuggestion, type CommitMessageSuggestion } from './
 import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion } from './ai-conflict-assistant'
 import { requestReleaseSuggestion, type ReleaseSuggestion } from './ai-release-assistant'
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
+import {
+  readOverviewSnapshot,
+  refreshOverviewNews,
+  summarizeOverviewProjects,
+  type OverviewNewsReport,
+  type OverviewProjectReport,
+  type OverviewSnapshot
+} from './overview-assistant'
 import { getRedactedOaSettings, readOaSettingsFile, writeOaSettingsFile, type OaSettings, type RedactedOaSettings } from './oa-settings'
 import { listLarkDocuments, type LarkDocumentList } from './lark-documents'
+import { MenuBarManagerService } from './menu-bar-manager'
 import { collectCloseGuardActivities, createCloseGuardPrompt, type CloseGuardAction, type CloseGuardActivity } from './app-close-guard'
 import { registerAppUpdateIpc } from './app-updates'
 import { inspectCliEnvironment, repairCliEnvironment, type CliEnvironmentRepairResult, type CliEnvironmentSnapshot } from './cli-environment'
@@ -42,6 +51,21 @@ import {
   type CodemagicRepositoryBinding,
   type CodemagicRepositoryBindingInput
 } from './codemagic-bindings'
+import {
+  deleteProjectCloudflareDnsRecord,
+  deleteProjectCloudflareSettings,
+  getProjectCloudflareSettings,
+  listProjectCloudflareDnsRecords,
+  migrateProjectCloudflareTables,
+  saveProjectCloudflareDnsRecord,
+  saveProjectCloudflareSettings,
+  testProjectCloudflareConnection,
+  type CloudflareConnectionTestResult,
+  type CloudflareDnsRecord,
+  type CloudflareDnsRecordInput,
+  type ProjectCloudflareSettings,
+  type ProjectCloudflareSettingsInput
+} from './cloudflare'
 import { buildGitAuthorLookup, resolveGitAuthorDisplay, type GitAuthorLookup } from './git-author-mapping'
 import { parseControlledGitCommand, validateRepositoryRemoteName } from './git-controls'
 import {
@@ -635,6 +659,7 @@ let quickBuildProcess: ChildProcessWithoutNullStreams | null = null
 let closeGuardPrompt: Promise<boolean> | null = null
 let forceQuitRequested = false
 const confirmedWindowCloseIds = new Set<number>()
+let menuBarManagerService: MenuBarManagerService | null = null
 
 function getPrimaryWindow(): BrowserWindow | null {
   return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ?? null
@@ -686,6 +711,8 @@ async function confirmCloseGuardAction(action: CloseGuardAction, ownerWindow: Br
 }
 
 function stopRunningCloseGuardActivities(): void {
+  void menuBarManagerService?.shutdown().catch((error) => console.warn('Failed to stop menu bar helper while quitting', error))
+
   if (quickBuildTask?.status === 'running') {
     try {
       cancelQuickBuildTask()
@@ -1641,6 +1668,7 @@ function migrateDatabase(db: Database.Database): void {
   migrateDockerTables(db)
   migrateTerminalRemoteShortcutTables(db)
   migratePlaneIntegrationTables(db)
+  migrateProjectCloudflareTables(db)
   migrateCodemagicRepositoryBindingTable(db)
   migrateReleasePublishTaskTable(db)
   migrateMonthlyPerformanceTables(db)
@@ -4952,6 +4980,38 @@ ipcMain.handle('plane:open', async (_event, projectId?: string): Promise<void> =
   await shell.openExternal(projectId ? getPlaneProjectWebUrl(getDatabase(), projectId) : getPlaneSettings(getDatabase()).webBaseUrl)
 })
 
+ipcMain.handle('project:cloudflare:settings:get', async (_event, projectId: string): Promise<ProjectCloudflareSettings | null> =>
+  getProjectCloudflareSettings(getDatabase(), projectId)
+)
+
+ipcMain.handle('project:cloudflare:settings:save', async (_event, input: ProjectCloudflareSettingsInput): Promise<ProjectCloudflareSettings> =>
+  saveProjectCloudflareSettings(getDatabase(), input)
+)
+
+ipcMain.handle('project:cloudflare:settings:delete', async (_event, projectId: string): Promise<void> =>
+  deleteProjectCloudflareSettings(getDatabase(), projectId)
+)
+
+ipcMain.handle(
+  'project:cloudflare:settings:test',
+  async (_event, projectId: string, input?: ProjectCloudflareSettingsInput): Promise<CloudflareConnectionTestResult> =>
+    testProjectCloudflareConnection(getDatabase(), projectId, input)
+)
+
+ipcMain.handle('project:cloudflare:dns-records:list', async (_event, projectId: string): Promise<CloudflareDnsRecord[]> =>
+  listProjectCloudflareDnsRecords(getDatabase(), projectId)
+)
+
+ipcMain.handle(
+  'project:cloudflare:dns-record:save',
+  async (_event, projectId: string, input: CloudflareDnsRecordInput): Promise<CloudflareDnsRecord[]> =>
+    saveProjectCloudflareDnsRecord(getDatabase(), projectId, input)
+)
+
+ipcMain.handle('project:cloudflare:dns-record:delete', async (_event, projectId: string, recordId: string): Promise<CloudflareDnsRecord[]> =>
+  deleteProjectCloudflareDnsRecord(getDatabase(), projectId, recordId)
+)
+
 ipcMain.handle('service:connections:list', async (): Promise<ServiceConnectionRecord[]> => listServiceConnectionRecords(getDatabase()))
 
 ipcMain.handle('service:connection:save', async (_event, input: ServiceConnectionInput): Promise<ServiceConnectionRecord> => saveServiceConnectionRecord(getDatabase(), input))
@@ -5173,6 +5233,52 @@ ipcMain.handle('settings:ai:save', async (_event, input: Partial<AiSettings>): P
   })
 
   return getRedactedAiSettings(nextSettings)
+})
+
+ipcMain.handle('overview:snapshot:get', async (): Promise<OverviewSnapshot> => readOverviewSnapshot(app.getPath('userData')))
+
+ipcMain.handle('overview:news:refresh', async (): Promise<OverviewNewsReport> => {
+  const settings = await readAiSettingsFile(app.getPath('userData'))
+  return refreshOverviewNews(app.getPath('userData'), settings)
+})
+
+ipcMain.handle('overview:projects:refresh', async (): Promise<OverviewProjectReport> => {
+  const projects = listProjects()
+  const contexts = await Promise.all(
+    projects.map(async (project) => {
+      const projectRepositories = listRepositories(project.id)
+      const fetchFailures: string[] = []
+      const refreshedRepositories = await Promise.all(
+        projectRepositories.map(async (repository) => {
+          if (repository.remotes.length === 0) return repository
+          try {
+            return await fetchRepositoryRemote(repository.id)
+          } catch (error) {
+            fetchFailures.push(`${repository.name}: ${error instanceof Error ? error.message : String(error)}`)
+            return getRepositoryOrThrow(repository.id)
+          }
+        })
+      )
+
+      return {
+        projectId: project.id,
+        projectName: project.name,
+        repositoryCount: refreshedRepositories.length,
+        changedRepositories: refreshedRepositories.filter((repository) => repository.hasChanges).length,
+        aheadRepositories: refreshedRepositories.filter((repository) => repository.ahead > 0).length,
+        fetchFailures,
+        repositories: refreshedRepositories.map((repository) => ({
+          name: repository.name,
+          branch: repository.currentBranch,
+          latestCommit: repository.latestCommit,
+          hasChanges: repository.hasChanges,
+          ahead: repository.ahead
+        }))
+      }
+    })
+  )
+  const settings = await readAiSettingsFile(app.getPath('userData'))
+  return summarizeOverviewProjects(app.getPath('userData'), settings, contexts)
 })
 
 ipcMain.handle('settings:oa:get', async (): Promise<RedactedOaSettings> => getRedactedOaSettings(await readOaSettingsFile(app.getPath('userData'))))
@@ -5438,10 +5544,26 @@ ipcMain.handle('external:open-app-releases', async (): Promise<void> => {
   await shell.openExternal('https://github.com/IEatLemons/ForgeDesk/releases')
 })
 
-app.whenReady().then(() => {
+ipcMain.handle('external:open-url', async (_event, url: string): Promise<void> => {
+  const parsed = new URL(url)
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new Error('只允许打开 HTTP 或 HTTPS 链接')
+  await shell.openExternal(parsed.toString())
+})
+
+app.whenReady().then(async () => {
   if (process.platform === 'darwin' && existsSync(appIconPath)) {
     app.dock?.setIcon(appIconPath)
   }
+
+  menuBarManagerService = new MenuBarManagerService({
+    app,
+    getWindows: () => BrowserWindow.getAllWindows(),
+    globalShortcut,
+    ipcMain,
+    resourcesPath: process.resourcesPath,
+    shell
+  })
+  await menuBarManagerService.initialize().catch((error) => console.warn('Failed to initialize menu bar manager', error))
 
   installApplicationMenu()
   createWindow()
@@ -5459,6 +5581,10 @@ app.on('before-quit', (event) => {
 
   event.preventDefault()
   void requestAppQuit()
+})
+
+app.on('will-quit', () => {
+  void menuBarManagerService?.shutdown().catch((error) => console.warn('Failed to stop menu bar helper', error))
 })
 
 app.on('window-all-closed', () => {

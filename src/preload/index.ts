@@ -59,6 +59,13 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   deleteProjectPlaneBinding: (projectId: string) => ipcRenderer.invoke('plane:binding:delete', projectId),
   getPlaneProjectContent: (projectId: string) => ipcRenderer.invoke('plane:project-content:get', projectId),
   openPlane: (projectId?: string) => ipcRenderer.invoke('plane:open', projectId),
+  getProjectCloudflareSettings: (projectId: string) => ipcRenderer.invoke('project:cloudflare:settings:get', projectId),
+  saveProjectCloudflareSettings: (input: ProjectCloudflareSettingsInput) => ipcRenderer.invoke('project:cloudflare:settings:save', input),
+  deleteProjectCloudflareSettings: (projectId: string) => ipcRenderer.invoke('project:cloudflare:settings:delete', projectId),
+  testProjectCloudflareSettings: (projectId: string, input?: ProjectCloudflareSettingsInput) => ipcRenderer.invoke('project:cloudflare:settings:test', projectId, input),
+  listProjectCloudflareDnsRecords: (projectId: string) => ipcRenderer.invoke('project:cloudflare:dns-records:list', projectId),
+  saveProjectCloudflareDnsRecord: (projectId: string, input: CloudflareDnsRecordInput) => ipcRenderer.invoke('project:cloudflare:dns-record:save', projectId, input),
+  deleteProjectCloudflareDnsRecord: (projectId: string, recordId: string) => ipcRenderer.invoke('project:cloudflare:dns-record:delete', projectId, recordId),
   listServiceConnections: () => ipcRenderer.invoke('service:connections:list'),
   saveServiceConnection: (input: ServiceConnectionInput) => ipcRenderer.invoke('service:connection:save', input),
   deleteServiceConnection: (connectionId: string) => ipcRenderer.invoke('service:connection:delete', connectionId),
@@ -123,10 +130,25 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   configureGitIdentity: (identity: { userName: string; userEmail: string }) => ipcRenderer.invoke('git:configure-identity', identity),
   getAiSettings: () => ipcRenderer.invoke('settings:ai:get'),
   saveAiSettings: (input: AiSettingsInput) => ipcRenderer.invoke('settings:ai:save', input),
+  getOverviewSnapshot: () => ipcRenderer.invoke('overview:snapshot:get'),
+  refreshOverviewNews: () => ipcRenderer.invoke('overview:news:refresh'),
+  refreshOverviewProjects: () => ipcRenderer.invoke('overview:projects:refresh'),
   getOaSettings: () => ipcRenderer.invoke('settings:oa:get'),
   saveOaSettings: (input: OaSettingsInput) => ipcRenderer.invoke('settings:oa:save', input),
   openOaDocs: () => ipcRenderer.invoke('settings:oa:open-docs'),
   listOaDocuments: () => ipcRenderer.invoke('settings:oa:documents:list'),
+  getMenuBarManagerStatus: () => ipcRenderer.invoke('menu-bar-manager:status'),
+  saveMenuBarManagerSettings: (input: Partial<MenuBarManagerSettings>) => ipcRenderer.invoke('menu-bar-manager:settings:save', input),
+  requestMenuBarManagerPermission: () => ipcRenderer.invoke('menu-bar-manager:permission:request'),
+  refreshMenuBarItems: () => ipcRenderer.invoke('menu-bar-manager:items:refresh'),
+  showMenuBarHiddenItems: () => ipcRenderer.invoke('menu-bar-manager:section:show'),
+  hideMenuBarHiddenItems: () => ipcRenderer.invoke('menu-bar-manager:section:hide'),
+  toggleMenuBarHiddenItems: () => ipcRenderer.invoke('menu-bar-manager:section:toggle'),
+  onMenuBarManagerChanged: (listener: (status: MenuBarManagerStatus) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, status: MenuBarManagerStatus): void => listener(status)
+    ipcRenderer.on('menu-bar-manager:changed', wrapped)
+    return () => ipcRenderer.removeListener('menu-bar-manager:changed', wrapped)
+  },
   listGithubTokens: () => ipcRenderer.invoke('settings:github-tokens:list'),
   saveGithubToken: (input: GithubTokenInput) => ipcRenderer.invoke('settings:github-tokens:save', input),
   refreshGithubToken: (tokenId: string) => ipcRenderer.invoke('settings:github-tokens:refresh', tokenId),
@@ -203,5 +225,6 @@ contextBridge.exposeInMainWorld('forgeDesk', {
     return () => ipcRenderer.removeListener('app:update:state', wrapped)
   },
   openAppReleases: () => ipcRenderer.invoke('external:open-app-releases'),
-  openGitDownload: () => ipcRenderer.invoke('external:open-git-download')
+  openGitDownload: () => ipcRenderer.invoke('external:open-git-download'),
+  openExternalUrl: (url: string) => ipcRenderer.invoke('external:open-url', url)
 })

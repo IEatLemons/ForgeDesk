@@ -41,6 +41,7 @@ import {
   CheckCircleOutlined,
   CheckSquareOutlined,
   CloseCircleOutlined,
+  CloudOutlined,
   CodeOutlined,
   CopyOutlined,
   DashboardOutlined,
@@ -90,6 +91,8 @@ import type {
   CodemagicTeam,
   CodemagicTokenView,
   ContributorSummary,
+  CloudflareConnectionTestResult,
+  CloudflareDnsRecord,
   GitCommandResult,
   GitBranchSwitchInput,
   GitConflictFile,
@@ -107,11 +110,16 @@ import type {
   MonthlyPerformancePreview,
   MonthlyPerformanceRow,
   MonthlyPerformanceSession,
+  MenuBarItemSection,
+  MenuBarManagerItem,
+  MenuBarManagerSettings,
+  MenuBarManagerStatus,
   OaDocumentList,
   OaDocumentRecord,
   OaSettingsView,
   Project,
   ProjectBranchTag,
+  ProjectCloudflareSettings,
   ProjectGitSummary,
   ProjectPerson,
   ProjectService,
@@ -146,7 +154,7 @@ import type {
   ServiceDeploymentSummary,
   ServiceEnvVarRecord,
   VercelDomainConfig,
-  VercelEnvVarInput,
+  VercelEnvVarInput
 } from './data'
 import { APP_NAVIGATION_ITEMS, type AppNavigationKey } from './app-navigation'
 import { DockerPanel } from './docker-panel'
@@ -173,6 +181,15 @@ import {
   type EnvFileVariables
 } from './env-file-diff'
 import { getErrorMessage, isAiCredentialErrorMessage } from './error-messages'
+import {
+  cloudflareDnsRecordTypeOptions,
+  cloudflareRecordTypeSupportsProxy,
+  createCloudflareDnsRecordFormValues,
+  formatCloudflareRecordNameForForm,
+  formatCloudflareTtl,
+  normalizeCloudflareDnsRecordName,
+  type CloudflareDnsRecordFormValues
+} from './cloudflare-view'
 import {
   PUSH_ALL_REMOTES_VALUE,
   canCommitSelection,
@@ -304,6 +321,7 @@ import { TerminalWorkspace } from './terminal-panel'
 import type { TerminalOpenRequest } from './terminal-panel-events'
 import { TerminalRemoteShortcuts } from './terminal-remote-shortcuts'
 import { TaskListPanel } from './task-list-panel'
+import { OverviewDashboard } from './overview-dashboard'
 import type { ResolvedTheme, ThemePreference } from './app-theme'
 
 type ImportForm = {
@@ -331,7 +349,22 @@ type SshPassphraseForm = {
   confirmPassphrase: string
 }
 
-type SettingsModuleKey = 'overview' | 'appearance' | 'git' | 'github' | 'codemagic' | 'private' | 'public' | 'config' | 'services' | 'plane' | 'oa' | 'ai' | 'updates' | 'log-refresh'
+type SettingsModuleKey =
+  | 'overview'
+  | 'appearance'
+  | 'git'
+  | 'github'
+  | 'codemagic'
+  | 'private'
+  | 'public'
+  | 'config'
+  | 'services'
+  | 'plane'
+  | 'oa'
+  | 'ai'
+  | 'updates'
+  | 'log-refresh'
+  | 'menu-bar'
 type SettingsOverviewModuleKey = Exclude<SettingsModuleKey, 'overview'>
 type SettingsOverviewCategory = {
   title: string
@@ -456,6 +489,12 @@ type ProjectSettingsForm = {
 type PlaneBindingForm = {
   workspaceSlug: string
   planeProjectId: string
+}
+
+type CloudflareSettingsForm = {
+  domain: string
+  zoneId: string
+  apiToken?: string
 }
 
 type BranchTagForm = {
@@ -2296,6 +2335,10 @@ function SettingsPanel({
   })
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false)
   const [installingAppUpdate, setInstallingAppUpdate] = useState(false)
+  const [menuBarStatus, setMenuBarStatus] = useState<MenuBarManagerStatus | null>(null)
+  const [loadingMenuBarStatus, setLoadingMenuBarStatus] = useState(false)
+  const [savingMenuBarSettings, setSavingMenuBarSettings] = useState(false)
+  const [workingMenuBarAction, setWorkingMenuBarAction] = useState<string | null>(null)
 
   useEffect(() => {
     setActiveSettingsModule(initialModule)
@@ -2321,6 +2364,18 @@ function SettingsPanel({
 
     return () => {
       mounted = false
+      unsubscribe()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!window.forgeDesk) {
+      return undefined
+    }
+
+    const unsubscribe = window.forgeDesk.onMenuBarManagerChanged((status) => setMenuBarStatus(status))
+
+    return () => {
       unsubscribe()
     }
   }, [])
@@ -2469,6 +2524,23 @@ function SettingsPanel({
     }
   }
 
+  async function refreshMenuBarStatus(): Promise<void> {
+    if (!window.forgeDesk) {
+      setMenuBarStatus(null)
+      return
+    }
+
+    setLoadingMenuBarStatus(true)
+
+    try {
+      setMenuBarStatus(await window.forgeDesk.getMenuBarManagerStatus())
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingMenuBarStatus(false)
+    }
+  }
+
   useEffect(() => {
     refreshGitStatus()
     refreshSshConfig()
@@ -2477,6 +2549,7 @@ function SettingsPanel({
     refreshCodemagicTokens()
     refreshPlaneSettings()
     refreshOaSettings()
+    refreshMenuBarStatus()
   }, [])
 
   const sshPrivateKeys = gitStatus?.sshPrivateKeys ?? []
@@ -2487,6 +2560,7 @@ function SettingsPanel({
   const codemagicTokenReady = codemagicTokens.length > 0
   const planeReady = isPlaneSettingsReady(planeSettings)
   const oaReady = isOaSettingsReady(oaSettings)
+  const menuBarReady = Boolean(menuBarStatus?.settings.enabled && menuBarStatus.available && menuBarStatus.accessibilityTrusted)
   const sshReady = sshPrivateKeys.length + sshPublicKeys.length > 0
   const sshPassphraseCount = sshPrivateKeys.filter((key) => key.hasPassphrase).length
   const sshIssueCount =
@@ -2500,6 +2574,138 @@ function SettingsPanel({
     setGitLogRefreshPreferences({
       ...gitLogRefreshPreferences,
       ...patch
+    })
+  }
+
+  async function saveMenuBarSettingsPatch(patch: Partial<MenuBarManagerSettings>, successMessage?: string): Promise<void> {
+    if (!window.forgeDesk || !menuBarStatus) {
+      message.warning('请在 ForgeDesk 桌面应用中配置菜单栏整理')
+      return
+    }
+
+    setSavingMenuBarSettings(true)
+
+    try {
+      const status = await window.forgeDesk.saveMenuBarManagerSettings(patch)
+      setMenuBarStatus(status)
+
+      if (successMessage) {
+        message.success(successMessage)
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingMenuBarSettings(false)
+    }
+  }
+
+  async function requestMenuBarPermission(): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中请求系统权限')
+      return
+    }
+
+    setWorkingMenuBarAction('permission')
+
+    try {
+      setMenuBarStatus(await window.forgeDesk.requestMenuBarManagerPermission())
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setWorkingMenuBarAction(null)
+    }
+  }
+
+  async function refreshMenuBarItems(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setWorkingMenuBarAction('refresh')
+
+    try {
+      setMenuBarStatus(await window.forgeDesk.refreshMenuBarItems())
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setWorkingMenuBarAction(null)
+    }
+  }
+
+  async function runMenuBarSectionAction(action: 'show' | 'hide' | 'toggle'): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setWorkingMenuBarAction(action)
+
+    try {
+      const status =
+        action === 'show'
+          ? await window.forgeDesk.showMenuBarHiddenItems()
+          : action === 'hide'
+            ? await window.forgeDesk.hideMenuBarHiddenItems()
+            : await window.forgeDesk.toggleMenuBarHiddenItems()
+      setMenuBarStatus(status)
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setWorkingMenuBarAction(null)
+    }
+  }
+
+  function updateMenuBarItemSection(itemKey: string, section: MenuBarItemSection): void {
+    if (!menuBarStatus) {
+      return
+    }
+
+    const hiddenItemKeys = menuBarStatus.settings.hiddenItemKeys.filter((key) => key !== itemKey)
+    const alwaysHiddenItemKeys = menuBarStatus.settings.alwaysHiddenItemKeys.filter((key) => key !== itemKey)
+
+    if (section === 'hidden') {
+      hiddenItemKeys.push(itemKey)
+    } else if (section === 'always-hidden') {
+      alwaysHiddenItemKeys.push(itemKey)
+    }
+
+    void saveMenuBarSettingsPatch({ hiddenItemKeys, alwaysHiddenItemKeys }, '菜单栏项目分区已保存')
+  }
+
+  function moveMenuBarItem(itemKey: string, direction: -1 | 1): void {
+    if (!menuBarStatus) {
+      return
+    }
+
+    const visibleItemKeys = menuBarStatus.items.map((item) => item.key)
+    const orderedItemKeys = [
+      ...menuBarStatus.settings.orderedItemKeys.filter((key) => visibleItemKeys.includes(key)),
+      ...visibleItemKeys.filter((key) => !menuBarStatus.settings.orderedItemKeys.includes(key))
+    ]
+    const index = orderedItemKeys.indexOf(itemKey)
+    const nextIndex = index + direction
+
+    if (index === -1 || nextIndex < 0 || nextIndex >= orderedItemKeys.length) {
+      return
+    }
+
+    const nextOrder = [...orderedItemKeys]
+    const [item] = nextOrder.splice(index, 1)
+    nextOrder.splice(nextIndex, 0, item)
+    void saveMenuBarSettingsPatch({ orderedItemKeys: nextOrder }, '菜单栏排序已保存')
+  }
+
+  function updateMenuBarToggleHotkey(patch: Partial<MenuBarManagerSettings['hotkeys']['toggleHidden']>): void {
+    if (!menuBarStatus) {
+      return
+    }
+
+    void saveMenuBarSettingsPatch({
+      hotkeys: {
+        toggleHidden: {
+          ...menuBarStatus.settings.hotkeys.toggleHidden,
+          ...patch
+        }
+      }
     })
   }
 
@@ -3232,6 +3438,14 @@ function SettingsPanel({
       tone: gitLogRefreshPreferences.autoRefreshEnabled ? 'ok' : 'neutral'
     },
     {
+      key: 'menu-bar',
+      title: '菜单栏整理',
+      description: '隐藏、显示和整理 macOS 菜单栏项目。',
+      icon: <DesktopOutlined />,
+      meta: menuBarReady ? '已启用' : menuBarStatus?.settings.enabled ? '需授权' : '关闭',
+      tone: menuBarReady ? 'ok' : menuBarStatus?.settings.enabled ? 'warning' : 'neutral'
+    },
+    {
       key: 'github',
       title: 'GitHub Token',
       description: '保存发布用 Token，并读取 GitHub 返回的权限范围。',
@@ -3319,7 +3533,7 @@ function SettingsPanel({
     {
       title: '个性化',
       description: '控制界面外观和日常视图刷新。',
-      keys: ['appearance', 'log-refresh']
+      keys: ['appearance', 'log-refresh', 'menu-bar']
     },
     {
       title: 'Git 与 SSH',
@@ -3485,6 +3699,165 @@ function SettingsPanel({
             恢复默认
           </Button>
         </div>
+      </div>
+    )
+  }
+
+  function renderMenuBarModule(): JSX.Element {
+    const status = menuBarStatus
+    const settings = status?.settings
+    const ready = Boolean(status?.available && status.accessibilityTrusted && settings?.enabled)
+    const itemColumns: ColumnsType<MenuBarManagerItem> = [
+      {
+        title: '项目',
+        key: 'item',
+        render: (_, item) => (
+          <Space direction="vertical" size={2}>
+            <Space wrap size={[6, 4]}>
+              <Typography.Text strong>{item.displayName}</Typography.Text>
+              {!item.canMove ? <Tag>系统项目</Tag> : null}
+            </Space>
+            <Typography.Text type="secondary" className="menu-bar-item-meta" ellipsis={{ tooltip: item.bundleIdentifier || item.ownerName || item.title }}>
+              {item.bundleIdentifier || item.ownerName || item.title || item.key}
+            </Typography.Text>
+          </Space>
+        )
+      },
+      {
+        title: '分区',
+        key: 'section',
+        width: 260,
+        render: (_, item) => (
+          <Segmented
+            size="small"
+            value={item.section}
+            disabled={!settings?.enabled || !item.canMove}
+            options={[
+              { label: '显示', value: 'visible' },
+              { label: '隐藏', value: 'hidden' },
+              { label: '总是隐藏', value: 'always-hidden' }
+            ]}
+            onChange={(value) => updateMenuBarItemSection(item.key, value as MenuBarItemSection)}
+          />
+        )
+      },
+      {
+        title: '排序',
+        key: 'order',
+        width: 180,
+        render: (_, item, index) => (
+          <Space>
+            <Button size="small" disabled={index === 0 || !settings?.enabled} onClick={() => moveMenuBarItem(item.key, -1)}>
+              上移
+            </Button>
+            <Button size="small" disabled={index >= (status?.items.length ?? 0) - 1 || !settings?.enabled} onClick={() => moveMenuBarItem(item.key, 1)}>
+              下移
+            </Button>
+          </Space>
+        )
+      }
+    ]
+
+    if (!status || !settings) {
+      return (
+        <div className="panel settings-module-panel">
+          {renderModuleHeader('菜单栏整理', '隐藏、显示和整理 macOS 菜单栏项目。')}
+          <div className="loading-panel">
+            <Spin />
+          </div>
+        </div>
+      )
+    }
+
+    return (
+      <div className="panel settings-module-panel">
+        {renderModuleHeader(
+          '菜单栏整理',
+          '隐藏、显示和整理 macOS 菜单栏项目。',
+          <Button icon={<ReloadOutlined />} loading={loadingMenuBarStatus || workingMenuBarAction === 'refresh'} onClick={refreshMenuBarItems}>
+            刷新项目
+          </Button>
+        )}
+        <Alert
+          className="settings-module-alert"
+          type={!status.supported || !status.helperAvailable ? 'warning' : ready ? 'success' : settings.enabled ? 'warning' : 'info'}
+          showIcon
+          message={status.message}
+          description={
+            status.supported
+              ? status.helperAvailable
+                ? status.accessibilityTrusted
+                  ? `已发现 ${status.items.length} 个菜单栏项目。`
+                  : '首次启用需要在系统设置的辅助功能里允许 ForgeDesk 控制菜单栏。'
+                : `helper 路径：${status.helperPath}`
+              : `当前平台：${status.platform}${status.macosMajorVersion ? ` · macOS ${status.macosMajorVersion}` : ''}`
+          }
+        />
+        {status.hotkeyError && <Alert className="settings-module-alert" type="warning" showIcon message={status.hotkeyError} />}
+        <div className="settings-management-form menu-bar-settings-form">
+          <label className="log-refresh-setting-field">
+            <span>启用菜单栏整理</span>
+            <Switch checked={settings.enabled} disabled={!status.supported || !status.helperAvailable} loading={savingMenuBarSettings} onChange={(enabled) => void saveMenuBarSettingsPatch({ enabled })} />
+          </label>
+          <label className="log-refresh-setting-field">
+            <span>Hover 显示隐藏区</span>
+            <Switch checked={settings.showOnHover} disabled={!settings.enabled} loading={savingMenuBarSettings} onChange={(showOnHover) => void saveMenuBarSettingsPatch({ showOnHover })} />
+          </label>
+          <label className="log-refresh-setting-field">
+            <span>自动收起（毫秒）</span>
+            <InputNumber
+              min={1000}
+              max={60000}
+              step={500}
+              value={settings.autoRehideMs}
+              disabled={!settings.enabled}
+              className="full-width-control"
+              onChange={(value) => void saveMenuBarSettingsPatch({ autoRehideMs: Number(value ?? settings.autoRehideMs) })}
+            />
+          </label>
+          <label className="log-refresh-setting-field">
+            <span>切换快捷键</span>
+            <Switch
+              checked={settings.hotkeys.toggleHidden.enabled}
+              disabled={!settings.enabled}
+              loading={savingMenuBarSettings}
+              onChange={(enabled) => updateMenuBarToggleHotkey({ enabled })}
+            />
+          </label>
+          <label className="log-refresh-setting-field menu-bar-hotkey-field">
+            <span>快捷键</span>
+            <Input
+              value={settings.hotkeys.toggleHidden.accelerator}
+              disabled={!settings.enabled || !settings.hotkeys.toggleHidden.enabled}
+              onChange={(event) => updateMenuBarToggleHotkey({ accelerator: event.target.value })}
+            />
+          </label>
+          <Space wrap className="menu-bar-action-row">
+            <Button icon={<UnlockOutlined />} disabled={!status.supported || !status.helperAvailable} loading={workingMenuBarAction === 'permission'} onClick={requestMenuBarPermission}>
+              打开辅助功能授权
+            </Button>
+            <Button icon={<UnlockOutlined />} disabled={!ready} loading={workingMenuBarAction === 'show'} onClick={() => runMenuBarSectionAction('show')}>
+              显示隐藏区
+            </Button>
+            <Button icon={<LockOutlined />} disabled={!ready} loading={workingMenuBarAction === 'hide'} onClick={() => runMenuBarSectionAction('hide')}>
+              收起隐藏区
+            </Button>
+            <Button type="primary" icon={<SettingOutlined />} disabled={!ready} loading={workingMenuBarAction === 'toggle'} onClick={() => runMenuBarSectionAction('toggle')}>
+              切换
+            </Button>
+          </Space>
+        </div>
+        <Table
+          rowKey="key"
+          size="small"
+          className="menu-bar-item-table"
+          loading={loadingMenuBarStatus}
+          columns={itemColumns}
+          dataSource={status.items}
+          pagination={false}
+          scroll={{ x: 780 }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={settings.enabled ? '暂无菜单栏项目' : '启用后刷新菜单栏项目'} /> }}
+        />
       </div>
     )
   }
@@ -4163,6 +4536,8 @@ function SettingsPanel({
         return renderGitModule()
       case 'log-refresh':
         return renderLogRefreshModule()
+      case 'menu-bar':
+        return renderMenuBarModule()
       case 'github':
         return renderGithubTokensModule()
       case 'codemagic':
@@ -10392,6 +10767,7 @@ function ProjectSettingsPanel({
     repositories: <GithubOutlined />,
     remotes: <BranchesOutlined />,
     services: <ThunderboltOutlined />,
+    cloudflare: <CloudOutlined />,
     plane: <LinkOutlined />,
     commands: <FileTextOutlined />
   }
@@ -10452,6 +10828,8 @@ function ProjectSettingsPanel({
         return <RepositoryRemoteManager repositories={repositories} />
       case 'services':
         return <ProjectServiceSettings project={project} repositories={repositories} />
+      case 'cloudflare':
+        return <ProjectCloudflareSettings project={project} />
       case 'plane':
         return <ProjectPlaneSettings project={project} />
       case 'commands':
@@ -10490,6 +10868,408 @@ function ProjectSettingsPanel({
       </div>
       <div className="project-settings-section">{renderSettingsModuleContent(activeModule.key)}</div>
     </Space>
+  )
+}
+
+function ProjectCloudflareSettings({ project }: { project: Project }): JSX.Element {
+  const [settingsForm] = Form.useForm<CloudflareSettingsForm>()
+  const [dnsRecordForm] = Form.useForm<CloudflareDnsRecordFormValues>()
+  const [settings, setSettings] = useState<ProjectCloudflareSettings | null>(null)
+  const [testResult, setTestResult] = useState<CloudflareConnectionTestResult | null>(null)
+  const [dnsRecords, setDnsRecords] = useState<CloudflareDnsRecord[]>([])
+  const [loadingSettings, setLoadingSettings] = useState(false)
+  const [loadingDnsRecords, setLoadingDnsRecords] = useState(false)
+  const [savingSettings, setSavingSettings] = useState(false)
+  const [testingSettings, setTestingSettings] = useState(false)
+  const [deletingSettings, setDeletingSettings] = useState(false)
+  const [dnsModalOpen, setDnsModalOpen] = useState(false)
+  const [editingDnsRecord, setEditingDnsRecord] = useState<CloudflareDnsRecord | null>(null)
+  const [savingDnsRecord, setSavingDnsRecord] = useState(false)
+  const [deletingDnsRecordId, setDeletingDnsRecordId] = useState<string | null>(null)
+  const selectedDnsRecordType = Form.useWatch('type', dnsRecordForm) ?? editingDnsRecord?.type ?? 'A'
+  const canProxySelectedType = cloudflareRecordTypeSupportsProxy(selectedDnsRecordType)
+
+  async function loadDnsRecords(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLoadingDnsRecords(true)
+
+    try {
+      setDnsRecords(await window.forgeDesk.listProjectCloudflareDnsRecords(project.id))
+    } catch (error) {
+      setDnsRecords([])
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingDnsRecords(false)
+    }
+  }
+
+  async function refreshCloudflareSettings(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLoadingSettings(true)
+
+    try {
+      const nextSettings = await window.forgeDesk.getProjectCloudflareSettings(project.id)
+      setSettings(nextSettings)
+      setTestResult(null)
+      settingsForm.setFieldsValue({
+        domain: nextSettings?.domain ?? '',
+        zoneId: nextSettings?.zoneId ?? '',
+        apiToken: ''
+      })
+
+      if (nextSettings?.tokenConfigured) {
+        await loadDnsRecords()
+      } else {
+        setDnsRecords([])
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingSettings(false)
+    }
+  }
+
+  async function saveCloudflareSettings(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const values = await settingsForm.validateFields()
+    setSavingSettings(true)
+
+    try {
+      const nextSettings = await window.forgeDesk.saveProjectCloudflareSettings({
+        projectId: project.id,
+        domain: values.domain,
+        zoneId: values.zoneId,
+        apiToken: values.apiToken
+      })
+      setSettings(nextSettings)
+      setTestResult(null)
+      settingsForm.setFieldValue('apiToken', '')
+      await loadDnsRecords()
+      message.success('Cloudflare 配置已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingSettings(false)
+    }
+  }
+
+  async function testCloudflareSettings(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const values = await settingsForm.validateFields()
+    setTestingSettings(true)
+
+    try {
+      const result = await window.forgeDesk.testProjectCloudflareSettings(project.id, {
+        projectId: project.id,
+        domain: values.domain,
+        zoneId: values.zoneId,
+        apiToken: values.apiToken
+      })
+      setTestResult(result)
+
+      if (result.ok) {
+        message.success(result.message)
+        await loadDnsRecords()
+      } else {
+        message.warning(result.message)
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setTestingSettings(false)
+    }
+  }
+
+  function confirmDeleteCloudflareSettings(): void {
+    Modal.confirm({
+      title: '删除 Cloudflare 配置？',
+      content: '只会删除 ForgeDesk 中保存的项目级 Zone 和 Token，不会修改 Cloudflare 上的 DNS 记录。',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      async onOk() {
+        if (!window.forgeDesk) {
+          return
+        }
+
+        setDeletingSettings(true)
+
+        try {
+          await window.forgeDesk.deleteProjectCloudflareSettings(project.id)
+          setSettings(null)
+          setTestResult(null)
+          setDnsRecords([])
+          settingsForm.resetFields()
+          dnsRecordForm.resetFields()
+          message.success('Cloudflare 配置已删除')
+        } catch (error) {
+          message.error(getErrorMessage(error))
+        } finally {
+          setDeletingSettings(false)
+        }
+      }
+    })
+  }
+
+  function openDnsRecordModal(record?: CloudflareDnsRecord): void {
+    setEditingDnsRecord(record ?? null)
+    dnsRecordForm.setFieldsValue(createCloudflareDnsRecordFormValues(record, settings?.domain ?? ''))
+    setDnsModalOpen(true)
+  }
+
+  async function saveDnsRecord(): Promise<void> {
+    if (!window.forgeDesk || !settings) {
+      return
+    }
+
+    const values = await dnsRecordForm.validateFields()
+    const type = values.type
+    setSavingDnsRecord(true)
+
+    try {
+      setDnsRecords(
+        await window.forgeDesk.saveProjectCloudflareDnsRecord(project.id, {
+          id: editingDnsRecord?.id,
+          type,
+          name: normalizeCloudflareDnsRecordName(values.name, settings.domain),
+          content: values.content,
+          ttl: values.ttl,
+          proxied: cloudflareRecordTypeSupportsProxy(type) ? values.proxied : false,
+          priority: type === 'MX' ? values.priority : undefined,
+          comment: values.comment
+        })
+      )
+      setDnsModalOpen(false)
+      setEditingDnsRecord(null)
+      dnsRecordForm.resetFields()
+      message.success('DNS 记录已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingDnsRecord(false)
+    }
+  }
+
+  function confirmDeleteDnsRecord(record: CloudflareDnsRecord): void {
+    Modal.confirm({
+      title: `删除 DNS 记录 ${record.name}？`,
+      content: '这个操作会提交到 Cloudflare。',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      async onOk() {
+        if (!window.forgeDesk) {
+          return
+        }
+
+        setDeletingDnsRecordId(record.id)
+
+        try {
+          setDnsRecords(await window.forgeDesk.deleteProjectCloudflareDnsRecord(project.id, record.id))
+          message.success('DNS 记录已删除')
+        } catch (error) {
+          message.error(getErrorMessage(error))
+        } finally {
+          setDeletingDnsRecordId(null)
+        }
+      }
+    })
+  }
+
+  useEffect(() => {
+    refreshCloudflareSettings()
+  }, [project.id])
+
+  const settingsReady = Boolean(settings?.tokenConfigured)
+  const dnsColumns: ColumnsType<CloudflareDnsRecord> = [
+    { title: '类型', dataIndex: 'type', key: 'type', width: 90, render: (type) => <Tag>{type}</Tag> },
+    {
+      title: '名称',
+      key: 'name',
+      render: (_, record) => (
+        <Space direction="vertical" size={2}>
+          <TableText value={record.name} />
+          {settings?.domain ? <Typography.Text type="secondary">{formatCloudflareRecordNameForForm(record.name, settings.domain)}</Typography.Text> : null}
+        </Space>
+      )
+    },
+    { title: '内容', key: 'content', render: (_, record) => <TableText value={record.content} /> },
+    { title: 'TTL', key: 'ttl', width: 90, render: (_, record) => formatCloudflareTtl(record.ttl) },
+    {
+      title: '代理',
+      key: 'proxied',
+      width: 100,
+      render: (_, record) =>
+        cloudflareRecordTypeSupportsProxy(record.type) ? <Tag color={record.proxied ? 'orange' : 'default'}>{record.proxied ? 'Proxied' : 'DNS only'}</Tag> : '-'
+    },
+    { title: '优先级', key: 'priority', width: 90, render: (_, record) => (record.type === 'MX' ? record.priority : '-') },
+    { title: '备注', key: 'comment', width: 180, render: (_, record) => record.comment || '-' },
+    { title: '更新时间', key: 'modifiedAt', width: 170, render: (_, record) => formatDateTime(record.modifiedAt) },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 160,
+      render: (_, record) => (
+        <Space>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openDnsRecordModal(record)}>
+            编辑
+          </Button>
+          <Button
+            size="small"
+            danger
+            icon={<DeleteOutlined />}
+            loading={deletingDnsRecordId === record.id}
+            onClick={() => confirmDeleteDnsRecord(record)}
+          >
+            删除
+          </Button>
+        </Space>
+      )
+    }
+  ]
+
+  return (
+    <div className="panel project-cloudflare-settings">
+      <div className="panel-title">
+        <Space direction="vertical" size={2}>
+          <Typography.Title level={4}>Cloudflare</Typography.Title>
+          <Typography.Text type="secondary">为当前项目单独维护 Cloudflare Zone、Token 和 DNS 记录。</Typography.Text>
+        </Space>
+        <Space wrap>
+          <Button icon={<ReloadOutlined />} loading={loadingSettings || loadingDnsRecords} onClick={refreshCloudflareSettings}>
+            重新读取
+          </Button>
+          <Button icon={<CheckCircleOutlined />} loading={testingSettings} onClick={testCloudflareSettings}>
+            测试连接
+          </Button>
+          <Button type="primary" icon={<SaveOutlined />} loading={savingSettings} onClick={saveCloudflareSettings}>
+            保存配置
+          </Button>
+        </Space>
+      </div>
+
+      <Alert
+        type={testResult ? (testResult.ok ? 'success' : 'warning') : settingsReady ? 'info' : 'warning'}
+        showIcon
+        message={testResult?.message ?? (settingsReady ? `Cloudflare 已配置：${settings?.domain}` : '请先保存当前项目的 Cloudflare 配置')}
+        description={settingsReady ? 'API Token 已保存在本机，界面不会回显明文。' : '每个项目使用自己的 Zone ID 和 API Token。'}
+      />
+
+      <Form form={settingsForm} layout="vertical" className="project-settings-form">
+        <Row gutter={[16, 0]}>
+          <Col xs={24} md={8}>
+            <Form.Item name="domain" label="域名" rules={[{ required: true, message: '请输入域名' }]}>
+              <Input placeholder="example.com" />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={8}>
+            <Form.Item name="zoneId" label="Zone ID" rules={[{ required: true, message: '请输入 Zone ID' }]}>
+              <Input placeholder="Cloudflare Zone ID" />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={8}>
+            <Form.Item name="apiToken" label={settingsReady ? 'API Token（留空不修改）' : 'API Token'}>
+              <Input.Password placeholder={settingsReady ? '已保存，留空不变' : 'Cloudflare API Token'} />
+            </Form.Item>
+          </Col>
+        </Row>
+      </Form>
+
+      <div className="service-detail-toolbar">
+        <Typography.Title level={5}>DNS 记录</Typography.Title>
+        <Space wrap>
+          <Button icon={<ReloadOutlined />} disabled={!settingsReady} loading={loadingDnsRecords} onClick={loadDnsRecords}>
+            刷新
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} disabled={!settingsReady} onClick={() => openDnsRecordModal()}>
+            新增记录
+          </Button>
+          <Button danger icon={<DeleteOutlined />} disabled={!settings} loading={deletingSettings} onClick={confirmDeleteCloudflareSettings}>
+            删除配置
+          </Button>
+        </Space>
+      </div>
+
+      <Table
+        rowKey="id"
+        size="small"
+        columns={dnsColumns}
+        dataSource={dnsRecords}
+        loading={loadingDnsRecords}
+        pagination={{ pageSize: 20 }}
+        scroll={{ x: 1180 }}
+        locale={{
+          emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={settingsReady ? '暂无 DNS 记录' : 'Cloudflare 尚未配置'} />
+        }}
+      />
+
+      <Modal
+        title={editingDnsRecord ? `编辑 DNS 记录：${editingDnsRecord.name}` : '新增 DNS 记录'}
+        open={dnsModalOpen}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={savingDnsRecord}
+        onOk={saveDnsRecord}
+        onCancel={() => {
+          setDnsModalOpen(false)
+          setEditingDnsRecord(null)
+          dnsRecordForm.resetFields()
+        }}
+      >
+        <Form form={dnsRecordForm} layout="vertical">
+          <Row gutter={[12, 0]}>
+            <Col span={8}>
+              <Form.Item name="type" label="类型" rules={[{ required: true, message: '请选择类型' }]}>
+                <Select options={cloudflareDnsRecordTypeOptions} />
+              </Form.Item>
+            </Col>
+            <Col span={16}>
+              <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入记录名称' }]}>
+                <Input placeholder="@ 或 app" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="content" label="内容" rules={[{ required: true, message: '请输入记录内容' }]}>
+            <Input placeholder={selectedDnsRecordType === 'MX' ? 'mail.example.com' : '记录值'} />
+          </Form.Item>
+          <Row gutter={[12, 0]}>
+            <Col span={12}>
+              <Form.Item name="ttl" label="TTL" rules={[{ required: true, message: '请输入 TTL' }]} extra="1 表示 Auto">
+                <InputNumber min={1} max={86400} className="full-width-control" />
+              </Form.Item>
+            </Col>
+            {selectedDnsRecordType === 'MX' ? (
+              <Col span={12}>
+                <Form.Item name="priority" label="优先级" rules={[{ required: true, message: '请输入 MX 优先级' }]}>
+                  <InputNumber min={0} max={65535} className="full-width-control" />
+                </Form.Item>
+              </Col>
+            ) : (
+              <Col span={12}>
+                <Form.Item name="proxied" valuePropName="checked" label="代理">
+                  <Checkbox disabled={!canProxySelectedType}>启用 Cloudflare 代理</Checkbox>
+                </Form.Item>
+              </Col>
+            )}
+          </Row>
+          <Form.Item name="comment" label="备注">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </div>
   )
 }
 
@@ -16991,6 +17771,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
   const navigationIcons: Record<AppNavigationKey, JSX.Element> = {
     overview: <DashboardOutlined />,
+    projects: <FolderOpenOutlined />,
     tasks: <CheckSquareOutlined />,
     docs: <FileTextOutlined />,
     services: <ThunderboltOutlined />,
@@ -17191,7 +17972,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
               onDeploymentRefreshActiveChange={setDeploymentRefreshActive}
               onOpenSystemLog={() => setSystemLogDrawerOpen(true)}
               onCreateProject={() => {
-                setActiveKey('overview')
+                setActiveKey('projects')
                 setCreatingProject(true)
               }}
             />
@@ -17210,13 +17991,20 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           {!loadingWorkspace && activeKey === 'tasks' && <TaskListPanel />}
           {!loadingWorkspace && activeKey === 'tools' && <ToolsPanel />}
           {!loadingWorkspace && activeKey === 'overview' && (
+            <OverviewDashboard
+              onOpenProjects={() => setActiveKey('projects')}
+              onOpenTasks={() => setActiveKey('tasks')}
+              onOpenAiSettings={() => openSettingsModule('ai')}
+            />
+          )}
+          {!loadingWorkspace && activeKey === 'projects' && (
             <ProjectOverview
               onCreateProject={() => setCreatingProject(true)}
               onOpenSettings={() => openSettingsModule('overview')}
               onOpenTerminalRequest={openTerminalRequest}
             />
           )}
-          <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('overview')} />
+          <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('projects')} />
         </Layout.Content>
       </Layout>
       <SystemLogDrawer

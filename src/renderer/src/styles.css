@@ -666,6 +666,183 @@ button.app-status-bar-item:hover {
   margin-bottom: 18px;
 }
 
+.overview-dashboard {
+  max-width: 1540px;
+}
+
+.overview-hero h2 {
+  margin: 4px 0 2px;
+}
+
+.overview-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.overview-metric,
+.overview-card {
+  background: var(--panel-bg);
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  box-shadow: var(--app-shadow);
+}
+
+.overview-metric {
+  display: flex;
+  min-height: 112px;
+  padding: 18px;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(360px, 0.85fr);
+  gap: 16px;
+  margin-top: 16px;
+  align-items: start;
+}
+
+.overview-side-column {
+  display: grid;
+  gap: 16px;
+}
+
+.overview-card {
+  min-width: 0;
+  padding: 20px;
+}
+
+.overview-card-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.overview-card-heading h4,
+.overview-digest h5 {
+  margin: 0 0 3px;
+}
+
+.overview-digest {
+  padding: 16px;
+  margin-bottom: 8px;
+  background: color-mix(in srgb, var(--app-accent) 7%, transparent);
+  border-radius: 8px;
+}
+
+.overview-digest p {
+  margin-bottom: 0;
+}
+
+.overview-news-list,
+.overview-project-list,
+.overview-task-list {
+  display: grid;
+}
+
+.overview-news-item {
+  display: flex;
+  width: 100%;
+  padding: 15px 4px;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-bottom: 1px solid var(--app-border);
+  cursor: pointer;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.overview-news-item:hover {
+  background: color-mix(in srgb, var(--app-accent) 5%, transparent);
+}
+
+.overview-news-meta,
+.overview-project-meta,
+.overview-relevance {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.overview-relevance {
+  color: var(--app-accent);
+}
+
+.overview-project-summary {
+  padding: 12px;
+  background: color-mix(in srgb, var(--app-accent) 6%, transparent);
+  border-radius: 7px;
+}
+
+.overview-project-item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.overview-project-item > span:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.overview-status-healthy { color: #52c41a; }
+.overview-status-attention { color: #faad14; }
+.overview-status-error { color: #ff4d4f; }
+.overview-status-empty { color: var(--app-muted); }
+
+.overview-task-item {
+  display: grid;
+  grid-template-columns: 5px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 0;
+}
+
+.overview-task-item > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.overview-task-item > span:last-child > span:last-child {
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.overview-task-priority { border-radius: 999px; background: #1677ff; }
+.overview-task-priority.priority-medium { background: #faad14; }
+.overview-task-priority.priority-high { background: #ff4d4f; }
+
+.overview-empty {
+  display: flex;
+  min-height: 140px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+}
+
+@media (max-width: 1180px) {
+  .overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .overview-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 700px) {
+  .overview-metrics { grid-template-columns: 1fr; }
+  .overview-card-heading { flex-direction: column; }
+}
+
 .project-workspace {
   max-width: 1480px;
 }
@@ -2204,16 +2381,32 @@ button.app-status-bar-item:hover {
 
 .task-card {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
-  padding: 12px;
+  padding: 14px;
   border: 1px solid var(--app-border-soft);
   border-radius: 8px;
   background: var(--card-bg);
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.task-card:hover {
+  border-color: var(--primary-border);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
 }
 
 .task-card.is-done {
   opacity: 0.72;
+}
+
+.task-card-top {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: flex-start;
+  min-width: 0;
 }
 
 .task-card-heading {
@@ -2224,11 +2417,75 @@ button.app-status-bar-item:hover {
   min-width: 0;
 }
 
+.task-card-icon-actions {
+  justify-content: flex-end;
+}
+
 .task-card-actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
+}
+
+.task-subtask-block {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+}
+
+.task-subtask-progress {
+  display: grid;
+  grid-template-columns: auto minmax(72px, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.task-subtask-list {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.task-subtask-list .ant-checkbox-wrapper {
+  align-items: flex-start;
+  margin-inline-start: 0;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.task-subtask-list .ant-checkbox + span {
+  min-width: 0;
+}
+
+.task-subtask-list .ant-typography {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.task-subtask-editor,
+.task-subtask-editor-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-subtask-add {
+  width: 100%;
+}
+
+.task-subtask-editor-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
 }
 
 .task-gantt-panel {
@@ -3543,6 +3800,28 @@ button.app-status-bar-item:hover {
 
 .log-refresh-settings-form {
   grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto;
+}
+
+.menu-bar-settings-form {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  align-items: end;
+}
+
+.menu-bar-hotkey-field {
+  grid-column: span 2;
+}
+
+.menu-bar-action-row {
+  grid-column: 1 / -1;
+}
+
+.menu-bar-item-meta {
+  display: block;
+  max-width: 520px;
+}
+
+.menu-bar-item-table .ant-segmented {
+  max-width: 100%;
 }
 
 .log-refresh-setting-field {

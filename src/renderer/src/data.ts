@@ -201,6 +201,56 @@ export type PlaneProjectContent = {
   fetchedAt: string
 }
 
+export type CloudflareDnsRecordType = 'A' | 'AAAA' | 'CNAME' | 'TXT' | 'MX'
+
+export type ProjectCloudflareSettingsInput = {
+  projectId: string
+  domain?: string
+  zoneId?: string
+  apiToken?: string
+}
+
+export type ProjectCloudflareSettings = {
+  projectId: string
+  domain: string
+  zoneId: string
+  apiToken: string
+  tokenConfigured: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type CloudflareConnectionTestResult = {
+  ok: boolean
+  message: string
+  recordCount: number
+}
+
+export type CloudflareDnsRecordInput = {
+  id?: string
+  type: CloudflareDnsRecordType
+  name: string
+  content: string
+  ttl?: number
+  proxied?: boolean
+  priority?: number
+  comment?: string
+}
+
+export type CloudflareDnsRecord = {
+  id: string
+  type: CloudflareDnsRecordType
+  name: string
+  content: string
+  ttl: number
+  proxied: boolean
+  proxiable: boolean
+  priority: number
+  comment: string
+  createdAt: string
+  modifiedAt: string
+}
+
 export type Repository = {
   id: string
   projectId: string
@@ -1410,6 +1460,56 @@ export type CodemagicArtifactPublicUrlInput = {
   tokenId: string
   secureFilename: string
   expiresAt?: number
+}
+
+export type MenuBarItemSection = 'visible' | 'hidden' | 'always-hidden'
+
+export type MenuBarManagerSettings = {
+  enabled: boolean
+  showOnHover: boolean
+  autoRehideMs: number
+  hiddenItemKeys: string[]
+  alwaysHiddenItemKeys: string[]
+  orderedItemKeys: string[]
+  hotkeys: {
+    toggleHidden: {
+      enabled: boolean
+      accelerator: string
+    }
+  }
+}
+
+export type MenuBarManagerItem = {
+  key: string
+  displayName: string
+  bundleIdentifier: string
+  ownerName: string
+  title: string
+  section: MenuBarItemSection
+  canMove: boolean
+  frame?: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+}
+
+export type MenuBarManagerStatus = {
+  available: boolean
+  running: boolean
+  supported: boolean
+  platform: NodeJS.Platform
+  macosMajorVersion: number | null
+  helperPath: string
+  helperAvailable: boolean
+  accessibilityTrusted: boolean
+  sectionVisible: boolean
+  hotkeyRegistered: boolean
+  hotkeyError: string
+  message: string
+  settings: MenuBarManagerSettings
+  items: MenuBarManagerItem[]
 }
 
 export const projects: Project[] = []

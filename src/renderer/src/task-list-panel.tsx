@@ -37,6 +37,7 @@ import { useForgeDeskStore } from './store'
 import {
   createTaskGanttRange,
   createTask,
+  createTaskSubtask,
   defaultTaskFilterState,
   filterTaskItems,
   formatTaskLocalDate,
@@ -51,7 +52,9 @@ import {
   type TaskGanttRange,
   type TaskItem,
   type TaskPriority,
+  type TaskSortKey,
   type TaskStatus,
+  type TaskSubtask,
   type TaskViewMode
 } from './task-list-view'
 
@@ -91,6 +94,18 @@ const taskPriorityColors: Record<TaskPriority, string> = {
   medium: 'gold',
   high: 'red'
 }
+
+const taskSortDisplay: Record<TaskSortKey, string> = {
+  updated: '最近更新',
+  due: '截止日期',
+  priority: '优先级',
+  created: '创建时间'
+}
+
+const taskSortOptions = (Object.keys(taskSortDisplay) as TaskSortKey[]).map((value) => ({
+  label: taskSortDisplay[value],
+  value
+}))
 
 const taskViewOptions: Array<{ label: JSX.Element; value: TaskViewMode }> = [
   {
@@ -185,13 +200,78 @@ function TaskPriorityTag({ priority }: { priority: TaskPriority }): JSX.Element 
   return <Tag color={taskPriorityColors[priority]}>{taskPriorityLabels[priority]}优先级</Tag>
 }
 
+function getTaskSubtaskProgress(task: TaskItem): { done: number; total: number; percent: number } {
+  const total = task.subtasks.length
+  const done = task.subtasks.filter((subtask) => subtask.done).length
+  return {
+    done,
+    total,
+    percent: total > 0 ? Math.round((done / total) * 100) : 0
+  }
+}
+
+function reconcileTaskStatusWithSubtasks(status: TaskStatus, subtasks: TaskSubtask[]): TaskStatus {
+  if (subtasks.length === 0) {
+    return status
+  }
+
+  const doneCount = subtasks.filter((subtask) => subtask.done).length
+
+  if (doneCount === subtasks.length) {
+    return 'done'
+  }
+
+  if (status === 'done') {
+    return doneCount > 0 ? 'doing' : 'todo'
+  }
+
+  if (status === 'todo' && doneCount > 0) {
+    return 'doing'
+  }
+
+  return status
+}
+
+function TaskSubtaskChecklist({
+  task,
+  onToggleSubtask
+}: {
+  task: TaskItem
+  onToggleSubtask: (taskId: string, subtaskId: string) => void
+}): JSX.Element | null {
+  const progress = getTaskSubtaskProgress(task)
+
+  if (progress.total === 0) {
+    return null
+  }
+
+  return (
+    <div className="task-subtask-block">
+      <div className="task-subtask-progress">
+        <Typography.Text type="secondary">
+          子任务 {progress.done}/{progress.total}
+        </Typography.Text>
+        <Progress percent={progress.percent} size="small" showInfo={false} />
+      </div>
+      <div className="task-subtask-list">
+        {task.subtasks.map((subtask) => (
+          <Checkbox key={subtask.id} checked={subtask.done} onChange={() => onToggleSubtask(task.id, subtask.id)}>
+            <Typography.Text delete={subtask.done}>{subtask.title}</Typography.Text>
+          </Checkbox>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function TaskCard({
   task,
   projects,
   onEdit,
   onDelete,
   onStatusChange,
-  onToggleDone
+  onToggleDone,
+  onToggleSubtask
 }: {
   task: TaskItem
   projects: Project[]
@@ -199,12 +279,13 @@ function TaskCard({
   onDelete: (taskId: string) => void
   onStatusChange: (taskId: string, status: TaskStatus) => void
   onToggleDone: (taskId: string) => void
+  onToggleSubtask: (taskId: string, subtaskId: string) => void
 }): JSX.Element {
   const nextStatus = createNextTaskStatus(task.status)
 
   return (
     <article className={`task-card ${task.status === 'done' ? 'is-done' : ''}`}>
-      <div className="task-card-heading">
+      <div className="task-card-top">
         <Checkbox checked={task.status === 'done'} onChange={() => onToggleDone(task.id)} />
         <div className="task-card-title">
           <Typography.Text strong delete={task.status === 'done'}>
@@ -212,6 +293,19 @@ function TaskCard({
           </Typography.Text>
           {task.notes ? <Typography.Text type="secondary">{task.notes}</Typography.Text> : null}
         </div>
+        <Space size={2} className="task-card-icon-actions">
+          <Tooltip title={`移到${taskStatusLabels[nextStatus]}`}>
+            <Button type="text" size="small" icon={<ClockCircleOutlined />} onClick={() => onStatusChange(task.id, nextStatus)} />
+          </Tooltip>
+          <Tooltip title="编辑">
+            <Button type="text" size="small" icon={<EditOutlined />} onClick={() => onEdit(task)} />
+          </Tooltip>
+          <Popconfirm title="删除这个任务？" okText="删除" cancelText="取消" onConfirm={() => onDelete(task.id)}>
+            <Tooltip title="删除">
+              <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+            </Tooltip>
+          </Popconfirm>
+        </Space>
       </div>
       <div className="task-meta-row">
         <ProjectTag projectId={task.projectId} projects={projects} />
@@ -225,15 +319,7 @@ function TaskCard({
           ))}
         </div>
       ) : null}
-      <div className="task-card-actions">
-        <Button size="small" icon={<ClockCircleOutlined />} onClick={() => onStatusChange(task.id, nextStatus)}>
-          {taskStatusLabels[nextStatus]}
-        </Button>
-        <Button size="small" icon={<EditOutlined />} onClick={() => onEdit(task)} />
-        <Popconfirm title="删除这个任务？" okText="删除" cancelText="取消" onConfirm={() => onDelete(task.id)}>
-          <Button size="small" danger icon={<DeleteOutlined />} />
-        </Popconfirm>
-      </div>
+      <TaskSubtaskChecklist task={task} onToggleSubtask={onToggleSubtask} />
     </article>
   )
 }
@@ -244,7 +330,8 @@ function TaskGanttView({
   onEdit,
   onDelete,
   onStatusChange,
-  onToggleDone
+  onToggleDone,
+  onToggleSubtask
 }: {
   range: TaskGanttRange
   projects: Project[]
@@ -252,6 +339,7 @@ function TaskGanttView({
   onDelete: (taskId: string) => void
   onStatusChange: (taskId: string, status: TaskStatus) => void
   onToggleDone: (taskId: string) => void
+  onToggleSubtask: (taskId: string, subtaskId: string) => void
 }): JSX.Element {
   if (range.rows.length === 0) {
     return (
@@ -295,6 +383,7 @@ function TaskGanttView({
                     <TaskStatusTag status={row.task.status} />
                     <TaskPriorityTag priority={row.task.priority} />
                   </div>
+                  <TaskSubtaskChecklist task={row.task} onToggleSubtask={onToggleSubtask} />
                 </div>
               </div>
               <div className="task-gantt-track">
@@ -327,6 +416,8 @@ export function TaskListPanel(): JSX.Element {
   const [viewMode, setViewMode] = useState<TaskViewMode>('list')
   const [modalOpen, setModalOpen] = useState(false)
   const [editingTask, setEditingTask] = useState<TaskItem | null>(null)
+  const [draftSubtasks, setDraftSubtasks] = useState<TaskSubtask[]>([])
+  const [draftSubtaskTitle, setDraftSubtaskTitle] = useState('')
   const stats = useMemo(() => getTaskStats(tasks), [tasks])
   const visibleTasks = useMemo(() => filterTaskItems(tasks, filters), [filters, tasks])
   const taskTags = useMemo(() => getTaskTags(tasks), [tasks])
@@ -356,6 +447,8 @@ export function TaskListPanel(): JSX.Element {
 
   function openTaskModal(task?: TaskItem): void {
     setEditingTask(task ?? null)
+    setDraftSubtasks(task ? task.subtasks : [])
+    setDraftSubtaskTitle('')
     form.setFieldsValue(
       task
         ? {
@@ -385,7 +478,53 @@ export function TaskListPanel(): JSX.Element {
   function closeTaskModal(): void {
     setModalOpen(false)
     setEditingTask(null)
+    setDraftSubtasks([])
+    setDraftSubtaskTitle('')
     form.resetFields()
+  }
+
+  function getDraftSubtasksForSave(): TaskSubtask[] {
+    return draftSubtasks
+      .map((subtask) => ({
+        ...subtask,
+        title: subtask.title.trim()
+      }))
+      .filter((subtask) => subtask.title)
+  }
+
+  function addDraftSubtask(): void {
+    const title = draftSubtaskTitle.trim()
+
+    if (!title) {
+      return
+    }
+
+    setDraftSubtasks((current) => [...current, createTaskSubtask({ title }, new Date())])
+    setDraftSubtaskTitle('')
+  }
+
+  function updateDraftSubtaskTitle(subtaskId: string, title: string): void {
+    setDraftSubtasks((current) => current.map((subtask) => (subtask.id === subtaskId ? { ...subtask, title } : subtask)))
+  }
+
+  function toggleDraftSubtaskDone(subtaskId: string): void {
+    const now = new Date().toISOString()
+
+    setDraftSubtasks((current) =>
+      current.map((subtask) =>
+        subtask.id === subtaskId
+          ? {
+              ...subtask,
+              done: !subtask.done,
+              completedAt: subtask.done ? null : now
+            }
+          : subtask
+      )
+    )
+  }
+
+  function deleteDraftSubtask(subtaskId: string): void {
+    setDraftSubtasks((current) => current.filter((subtask) => subtask.id !== subtaskId))
   }
 
   async function saveTask(): Promise<void> {
@@ -394,6 +533,8 @@ export function TaskListPanel(): JSX.Element {
     const projectId = values.projectId && values.projectId !== unassignedTaskProjectValue ? values.projectId : null
     const startDate = values.startDate || null
     const dueDate = values.dueDate || null
+    const subtasks = getDraftSubtasksForSave()
+    const status = reconcileTaskStatusWithSubtasks(values.status, subtasks)
 
     commitTasks((currentTasks) => {
       if (editingTask) {
@@ -403,14 +544,15 @@ export function TaskListPanel(): JSX.Element {
                 ...task,
                 title: values.title.trim(),
                 notes: values.notes?.trim() ?? '',
-                status: values.status,
+                status,
                 priority: values.priority,
                 projectId,
                 startDate,
                 dueDate,
+                subtasks,
                 tags: values.tags ?? [],
                 updatedAt: now.toISOString(),
-                completedAt: values.status === 'done' ? task.completedAt ?? now.toISOString() : null
+                completedAt: status === 'done' ? task.completedAt ?? now.toISOString() : null
               }
             : task
         )
@@ -421,11 +563,12 @@ export function TaskListPanel(): JSX.Element {
           {
             title: values.title,
             notes: values.notes,
-            status: values.status,
+            status,
             priority: values.priority,
             projectId,
             startDate,
             dueDate,
+            subtasks,
             tags: values.tags
           },
           now
@@ -444,12 +587,30 @@ export function TaskListPanel(): JSX.Element {
     commitTasks((currentTasks) =>
       currentTasks.map((task) =>
         task.id === taskId
-          ? {
-              ...task,
-              status,
-              updatedAt: now,
-              completedAt: status === 'done' ? task.completedAt ?? now : null
-            }
+          ? (() => {
+              const subtasks =
+                status === 'done'
+                  ? task.subtasks.map((subtask) => ({
+                      ...subtask,
+                      done: true,
+                      completedAt: subtask.completedAt ?? now
+                    }))
+                  : status === 'todo' && task.status === 'done'
+                    ? task.subtasks.map((subtask) => ({
+                        ...subtask,
+                        done: false,
+                        completedAt: null
+                      }))
+                  : task.subtasks
+
+              return {
+                ...task,
+                status,
+                subtasks,
+                updatedAt: now,
+                completedAt: status === 'done' ? task.completedAt ?? now : null
+              }
+            })()
           : task
       )
     )
@@ -468,6 +629,37 @@ export function TaskListPanel(): JSX.Element {
   function deleteTask(taskId: string): void {
     commitTasks((currentTasks) => currentTasks.filter((task) => task.id !== taskId))
     message.success('任务已删除')
+  }
+
+  function toggleSubtaskDone(taskId: string, subtaskId: string): void {
+    const now = new Date().toISOString()
+
+    commitTasks((currentTasks) =>
+      currentTasks.map((task) => {
+        if (task.id !== taskId) {
+          return task
+        }
+
+        const subtasks = task.subtasks.map((subtask) =>
+          subtask.id === subtaskId
+            ? {
+                ...subtask,
+                done: !subtask.done,
+                completedAt: subtask.done ? null : now
+              }
+            : subtask
+        )
+        const status = reconcileTaskStatusWithSubtasks(task.status, subtasks)
+
+        return {
+          ...task,
+          status,
+          subtasks,
+          updatedAt: now,
+          completedAt: status === 'done' ? task.completedAt ?? now : null
+        }
+      })
+    )
   }
 
   const columns: ColumnsType<TaskItem> = [
@@ -493,6 +685,7 @@ export function TaskListPanel(): JSX.Element {
                 ))}
               </div>
             ) : null}
+            <TaskSubtaskChecklist task={task} onToggleSubtask={toggleSubtaskDone} />
           </div>
         </div>
       )
@@ -629,14 +822,10 @@ export function TaskListPanel(): JSX.Element {
             options={[{ label: '全部标签', value: 'all' }, ...taskTags.map((tag) => ({ label: tag, value: tag }))]}
           />
           <Select
+            className="task-sort-select"
             value={filters.sort}
             onChange={(sort) => setFilters((current) => ({ ...current, sort }))}
-            options={[
-              { label: '按更新排序', value: 'updated' },
-              { label: '按截止排序', value: 'due' },
-              { label: '按优先级排序', value: 'priority' },
-              { label: '按创建排序', value: 'created' }
-            ]}
+            options={taskSortOptions}
           />
         </div>
       </div>
@@ -682,6 +871,7 @@ export function TaskListPanel(): JSX.Element {
                       onDelete={deleteTask}
                       onStatusChange={updateTaskStatus}
                       onToggleDone={toggleTaskDone}
+                      onToggleSubtask={toggleSubtaskDone}
                     />
                   ))
                 ) : (
@@ -701,12 +891,14 @@ export function TaskListPanel(): JSX.Element {
           onDelete={deleteTask}
           onStatusChange={updateTaskStatus}
           onToggleDone={toggleTaskDone}
+          onToggleSubtask={toggleSubtaskDone}
         />
       ) : null}
 
       <Modal
         title={editingTask ? '编辑任务' : '新建任务'}
         open={modalOpen}
+        width={680}
         okText="保存"
         cancelText="取消"
         onOk={() => saveTask().catch((error) => message.error(error instanceof Error ? error.message : '保存失败'))}
@@ -748,6 +940,35 @@ export function TaskListPanel(): JSX.Element {
               <Select mode="tags" placeholder="输入后回车" tokenSeparators={[',', '，']} options={taskTags.map((tag) => ({ label: tag, value: tag }))} />
             </Form.Item>
           </div>
+          <Form.Item label="子任务">
+            <div className="task-subtask-editor">
+              <Space.Compact className="task-subtask-add">
+                <Input
+                  placeholder="添加一个可逐项完成的步骤"
+                  value={draftSubtaskTitle}
+                  onChange={(event) => setDraftSubtaskTitle(event.target.value)}
+                  onPressEnter={(event) => {
+                    event.preventDefault()
+                    addDraftSubtask()
+                  }}
+                />
+                <Button icon={<PlusOutlined />} onClick={addDraftSubtask} />
+              </Space.Compact>
+              {draftSubtasks.length > 0 ? (
+                <div className="task-subtask-editor-list">
+                  {draftSubtasks.map((subtask) => (
+                    <div className="task-subtask-editor-row" key={subtask.id}>
+                      <Checkbox checked={subtask.done} onChange={() => toggleDraftSubtaskDone(subtask.id)} />
+                      <Input value={subtask.title} onChange={(event) => updateDraftSubtaskTitle(subtask.id, event.target.value)} />
+                      <Tooltip title="删除子任务">
+                        <Button danger icon={<DeleteOutlined />} onClick={() => deleteDraftSubtask(subtask.id)} />
+                      </Tooltip>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </Form.Item>
           <Form.Item name="notes" label="备注">
             <Input.TextArea rows={4} placeholder="补充上下文、验收点或链接" />
           </Form.Item>

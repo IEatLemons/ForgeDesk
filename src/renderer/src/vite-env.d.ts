@@ -1488,6 +1488,112 @@ type PlaneProjectContent = {
   fetchedAt: string
 }
 
+type CloudflareDnsRecordType = 'A' | 'AAAA' | 'CNAME' | 'TXT' | 'MX'
+
+type ProjectCloudflareSettingsInput = {
+  projectId: string
+  domain?: string
+  zoneId?: string
+  apiToken?: string
+}
+
+type ProjectCloudflareSettings = {
+  projectId: string
+  domain: string
+  zoneId: string
+  apiToken: string
+  tokenConfigured: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+type CloudflareConnectionTestResult = {
+  ok: boolean
+  message: string
+  recordCount: number
+}
+
+type CloudflareDnsRecordInput = {
+  id?: string
+  type: CloudflareDnsRecordType
+  name: string
+  content: string
+  ttl?: number
+  proxied?: boolean
+  priority?: number
+  comment?: string
+}
+
+type CloudflareDnsRecord = {
+  id: string
+  type: CloudflareDnsRecordType
+  name: string
+  content: string
+  ttl: number
+  proxied: boolean
+  proxiable: boolean
+  priority: number
+  comment: string
+  createdAt: string
+  modifiedAt: string
+}
+
+type MenuBarItemSection = 'visible' | 'hidden' | 'always-hidden'
+
+type MenuBarManagerSettings = {
+  enabled: boolean
+  showOnHover: boolean
+  autoRehideMs: number
+  hiddenItemKeys: string[]
+  alwaysHiddenItemKeys: string[]
+  orderedItemKeys: string[]
+  hotkeys: {
+    toggleHidden: {
+      enabled: boolean
+      accelerator: string
+    }
+  }
+}
+
+type MenuBarManagerItem = {
+  key: string
+  displayName: string
+  bundleIdentifier: string
+  ownerName: string
+  title: string
+  section: MenuBarItemSection
+  canMove: boolean
+  frame?: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+}
+
+type MenuBarManagerStatus = {
+  available: boolean
+  running: boolean
+  supported: boolean
+  platform: NodeJS.Platform
+  macosMajorVersion: number | null
+  helperPath: string
+  helperAvailable: boolean
+  accessibilityTrusted: boolean
+  sectionVisible: boolean
+  hotkeyRegistered: boolean
+  hotkeyError: string
+  message: string
+  settings: MenuBarManagerSettings
+  items: MenuBarManagerItem[]
+}
+
+type OverviewNewsItem = { title: string; summary: string; category: string; source: string; url: string; publishedAt: string; relevance: string }
+type OverviewNewsReport = { date: string; headline: string; digest: string; items: OverviewNewsItem[]; generatedAt: string }
+type OverviewProjectItem = { projectId: string; projectName: string; status: 'healthy' | 'attention' | 'error' | 'empty'; summary: string; highlights: string[]; repositoryCount: number; changedRepositories: number; aheadRepositories: number; fetchFailures: string[] }
+type OverviewProjectReport = { summary: string; projects: OverviewProjectItem[]; generatedAt: string }
+type OverviewSnapshot = { newsHistory: OverviewNewsReport[]; projectReport: OverviewProjectReport | null }
+
 interface Window {
   forgeDesk: {
     listProjects: () => Promise<WorkspaceSnapshot>
@@ -1545,6 +1651,13 @@ interface Window {
     deleteProjectPlaneBinding: (projectId: string) => Promise<void>
     getPlaneProjectContent: (projectId: string) => Promise<PlaneProjectContent>
     openPlane: (projectId?: string) => Promise<void>
+    getProjectCloudflareSettings: (projectId: string) => Promise<ProjectCloudflareSettings | null>
+    saveProjectCloudflareSettings: (input: ProjectCloudflareSettingsInput) => Promise<ProjectCloudflareSettings>
+    deleteProjectCloudflareSettings: (projectId: string) => Promise<void>
+    testProjectCloudflareSettings: (projectId: string, input?: ProjectCloudflareSettingsInput) => Promise<CloudflareConnectionTestResult>
+    listProjectCloudflareDnsRecords: (projectId: string) => Promise<CloudflareDnsRecord[]>
+    saveProjectCloudflareDnsRecord: (projectId: string, input: CloudflareDnsRecordInput) => Promise<CloudflareDnsRecord[]>
+    deleteProjectCloudflareDnsRecord: (projectId: string, recordId: string) => Promise<CloudflareDnsRecord[]>
     listServiceConnections: () => Promise<ServiceConnectionRecord[]>
     saveServiceConnection: (input: ServiceConnectionInput) => Promise<ServiceConnectionRecord>
     deleteServiceConnection: (connectionId: string) => Promise<ServiceConnectionRecord[]>
@@ -1595,10 +1708,21 @@ interface Window {
     configureGitIdentity: (identity: { userName: string; userEmail: string }) => Promise<GitSetupStatus>
     getAiSettings: () => Promise<AiSettingsView>
     saveAiSettings: (input: AiSettingsInput) => Promise<AiSettingsView>
+    getOverviewSnapshot: () => Promise<OverviewSnapshot>
+    refreshOverviewNews: () => Promise<OverviewNewsReport>
+    refreshOverviewProjects: () => Promise<OverviewProjectReport>
     getOaSettings: () => Promise<OaSettingsView>
     saveOaSettings: (input: OaSettingsInput) => Promise<OaSettingsView>
     openOaDocs: () => Promise<void>
     listOaDocuments: () => Promise<OaDocumentList>
+    getMenuBarManagerStatus: () => Promise<MenuBarManagerStatus>
+    saveMenuBarManagerSettings: (input: Partial<MenuBarManagerSettings>) => Promise<MenuBarManagerStatus>
+    requestMenuBarManagerPermission: () => Promise<MenuBarManagerStatus>
+    refreshMenuBarItems: () => Promise<MenuBarManagerStatus>
+    showMenuBarHiddenItems: () => Promise<MenuBarManagerStatus>
+    hideMenuBarHiddenItems: () => Promise<MenuBarManagerStatus>
+    toggleMenuBarHiddenItems: () => Promise<MenuBarManagerStatus>
+    onMenuBarManagerChanged: (listener: (status: MenuBarManagerStatus) => void) => () => void
     listGithubTokens: () => Promise<GithubTokenView[]>
     saveGithubToken: (input: GithubTokenInput) => Promise<GithubTokenView[]>
     refreshGithubToken: (tokenId: string) => Promise<GithubTokenView[]>
@@ -1660,5 +1784,6 @@ interface Window {
     onAppUpdateState: (listener: (state: AppUpdateState) => void) => () => void
     openAppReleases: () => Promise<void>
     openGitDownload: () => Promise<void>
+    openExternalUrl: (url: string) => Promise<void>
   }
 }

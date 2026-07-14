@@ -6,7 +6,7 @@ describe('app navigation', () => {
   it('places document access in the main area while keeping terminal in the footer area', () => {
     assert.deepEqual(
       APP_NAVIGATION_ITEMS.map((item) => item.key),
-      ['overview', 'tasks', 'docs', 'services', 'docker', 'tools', 'terminal', 'settings']
+      ['overview', 'projects', 'tasks', 'docs', 'services', 'docker', 'tools', 'terminal', 'settings']
     )
   })
 })

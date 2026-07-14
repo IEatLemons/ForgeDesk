@@ -4,6 +4,14 @@ export type TaskViewMode = 'list' | 'board' | 'gantt'
 export type TaskDueFilter = 'all' | 'overdue' | 'today' | 'week' | 'none'
 export type TaskSortKey = 'updated' | 'due' | 'priority' | 'created'
 
+export type TaskSubtask = {
+  id: string
+  title: string
+  done: boolean
+  createdAt: string
+  completedAt: string | null
+}
+
 export type TaskItem = {
   id: string
   title: string
@@ -13,10 +21,15 @@ export type TaskItem = {
   projectId: string | null
   startDate: string | null
   dueDate: string | null
+  subtasks: TaskSubtask[]
   tags: string[]
   createdAt: string
   updatedAt: string
   completedAt: string | null
+}
+
+export type TaskCreateInput = Partial<Omit<TaskItem, 'subtasks'>> & {
+  subtasks?: unknown
 }
 
 export type TaskFilterState = {
@@ -87,9 +100,20 @@ const priorityRank: Record<TaskPriority, number> = {
   low: 1
 }
 
+const doneTaskRank: Record<TaskStatus, number> = {
+  doing: 0,
+  todo: 0,
+  done: 1
+}
+
 function createTaskId(now: Date): string {
   const randomPart = Math.random().toString(36).slice(2, 8)
   return `task-${now.getTime().toString(36)}-${randomPart}`
+}
+
+function createTaskSubtaskId(now: Date): string {
+  const randomPart = Math.random().toString(36).slice(2, 8)
+  return `subtask-${now.getTime().toString(36)}-${randomPart}`
 }
 
 function isTaskStatus(value: unknown): value is TaskStatus {
@@ -175,6 +199,38 @@ function normalizeTags(input: unknown): string[] {
   return tags
 }
 
+function normalizeSubtasks(input: unknown, now: Date): TaskSubtask[] {
+  if (!Array.isArray(input)) {
+    return []
+  }
+
+  return input.flatMap((item) => {
+    if (!item || typeof item !== 'object') {
+      return []
+    }
+
+    const rawSubtask = item as Record<string, unknown>
+    const title = normalizeTextValue(rawSubtask.title)
+
+    if (!title) {
+      return []
+    }
+
+    const timestamp = now.toISOString()
+    const done = rawSubtask.done === true
+
+    return [
+      {
+        id: normalizeTextValue(rawSubtask.id) || createTaskSubtaskId(now),
+        title,
+        done,
+        createdAt: normalizeIsoDate(rawSubtask.createdAt, timestamp),
+        completedAt: done ? normalizeIsoDate(rawSubtask.completedAt, timestamp) : null
+      }
+    ]
+  })
+}
+
 function getTaskListStorage(): TaskListStorage | null {
   if (typeof window === 'undefined') {
     return null
@@ -230,7 +286,7 @@ export function getTaskScheduleRange(task: TaskItem): { startDate: string; endDa
   return endDate < startDate ? { startDate: endDate, endDate: startDate } : { startDate, endDate }
 }
 
-export function createTask(input: Partial<TaskItem> = {}, now = new Date()): TaskItem {
+export function createTask(input: TaskCreateInput = {}, now = new Date()): TaskItem {
   const timestamp = now.toISOString()
   const status = isTaskStatus(input.status) ? input.status : 'todo'
   const completedAt = status === 'done' ? normalizeIsoDate(input.completedAt, timestamp) : null
@@ -244,10 +300,25 @@ export function createTask(input: Partial<TaskItem> = {}, now = new Date()): Tas
     projectId: normalizeOptionalTextValue(input.projectId),
     startDate: normalizeDueDate(input.startDate),
     dueDate: normalizeDueDate(input.dueDate),
+    subtasks: normalizeSubtasks(input.subtasks, now),
     tags: normalizeTags(input.tags),
     createdAt: normalizeIsoDate(input.createdAt, timestamp),
     updatedAt: normalizeIsoDate(input.updatedAt, timestamp),
     completedAt
+  }
+}
+
+export function createTaskSubtask(input: Partial<TaskSubtask> = {}, now = new Date()): TaskSubtask {
+  const timestamp = now.toISOString()
+  const title = normalizeTextValue(input.title)
+  const done = input.done === true
+
+  return {
+    id: normalizeTextValue(input.id) || createTaskSubtaskId(now),
+    title,
+    done,
+    createdAt: normalizeIsoDate(input.createdAt, timestamp),
+    completedAt: done ? normalizeIsoDate(input.completedAt, timestamp) : null
   }
 }
 
@@ -279,6 +350,7 @@ export function normalizeTaskList(input: unknown): TaskItem[] {
           projectId: normalizeOptionalTextValue(rawTask.projectId),
           startDate: normalizeDueDate(rawTask.startDate),
           dueDate: normalizeDueDate(rawTask.dueDate),
+          subtasks: rawTask.subtasks,
           tags: normalizeTags(rawTask.tags),
           createdAt: normalizeTextValue(rawTask.createdAt),
           updatedAt: normalizeTextValue(rawTask.updatedAt),
@@ -341,6 +413,12 @@ export function getTaskStats(tasks: TaskItem[], today = new Date()): TaskStats {
 
 export function sortTaskItems(tasks: TaskItem[], sort: TaskSortKey): TaskItem[] {
   return [...tasks].sort((left, right) => {
+    const doneRankDiff = doneTaskRank[left.status] - doneTaskRank[right.status]
+
+    if (doneRankDiff !== 0) {
+      return doneRankDiff
+    }
+
     if (sort === 'due') {
       if (left.dueDate && right.dueDate && left.dueDate !== right.dueDate) {
         return left.dueDate.localeCompare(right.dueDate)
@@ -349,10 +427,22 @@ export function sortTaskItems(tasks: TaskItem[], sort: TaskSortKey): TaskItem[] 
       if (left.dueDate !== right.dueDate) {
         return left.dueDate ? -1 : 1
       }
+
+      if (left.priority !== right.priority) {
+        return priorityRank[right.priority] - priorityRank[left.priority]
+      }
     }
 
     if (sort === 'priority' && left.priority !== right.priority) {
       return priorityRank[right.priority] - priorityRank[left.priority]
+    }
+
+    if (sort === 'priority' && left.dueDate !== right.dueDate) {
+      if (left.dueDate && right.dueDate) {
+        return left.dueDate.localeCompare(right.dueDate)
+      }
+
+      return left.dueDate ? -1 : 1
     }
 
     if (sort === 'created') {
@@ -409,7 +499,7 @@ export function filterTaskItems(tasks: TaskItem[], filters: TaskFilterState, tod
         return true
       }
 
-      const searchableText = [task.title, task.notes, ...task.tags].join(' ').toLocaleLowerCase()
+      const searchableText = [task.title, task.notes, ...task.tags, ...task.subtasks.map((subtask) => subtask.title)].join(' ').toLocaleLowerCase()
       return searchableText.includes(query)
     }),
     filters.sort

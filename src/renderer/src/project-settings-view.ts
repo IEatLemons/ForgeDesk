@@ -1,4 +1,4 @@
-export type ProjectSettingsModuleKey = 'basic' | 'people' | 'branches' | 'repositories' | 'remotes' | 'services' | 'plane' | 'commands'
+export type ProjectSettingsModuleKey = 'basic' | 'people' | 'branches' | 'repositories' | 'remotes' | 'services' | 'cloudflare' | 'plane' | 'commands'
 
 export type ProjectSettingsModule = {
   key: ProjectSettingsModuleKey
@@ -41,6 +41,11 @@ export const PROJECT_SETTINGS_MODULES: ProjectSettingsModule[] = [
     key: 'services',
     title: '服务配置',
     description: '从服务中心绑定当前项目需要查看和监控的服务。'
+  },
+  {
+    key: 'cloudflare',
+    title: 'Cloudflare',
+    description: '为当前项目单独配置 Cloudflare Zone、Token 和 DNS 记录。'
   },
   {
     key: 'plane',
