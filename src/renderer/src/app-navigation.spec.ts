@@ -1,12 +1,23 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { APP_NAVIGATION_ITEMS } from './app-navigation.js'
+import { APP_NAVIGATION_ITEMS, APP_NAVIGATION_SECTIONS } from './app-navigation.js'
 
 describe('app navigation', () => {
-  it('places document access in the main area while keeping terminal in the footer area', () => {
+  it('organizes the workspace around life, study, work, and computer areas', () => {
     assert.deepEqual(
       APP_NAVIGATION_ITEMS.map((item) => item.key),
-      ['overview', 'projects', 'tasks', 'docs', 'services', 'docker', 'tools', 'terminal', 'settings']
+      ['overview', 'tasks', 'docs', 'projects', 'services', 'docker', 'tools', 'system-monitor', 'terminal', 'settings']
+    )
+    assert.deepEqual(
+      APP_NAVIGATION_SECTIONS.filter((section) => section.placement === 'main').map((section) => section.key),
+      ['home', 'life', 'study', 'work', 'computer']
+    )
+  })
+
+  it('keeps settings in the footer system area', () => {
+    assert.deepEqual(
+      APP_NAVIGATION_ITEMS.filter((item) => item.section === 'system').map((item) => item.key),
+      ['settings']
     )
   })
 })

@@ -37,6 +37,8 @@ describe('brand assets', () => {
     assert.doesNotMatch(source, /quick-build-button/)
     assert.match(source, /function AppStatusBar\(\{[\s\S]*quickBuildState/)
     assert.match(source, /app-status-bar-quick-build/)
+    assert.match(source, /showQuickBuildButton = appRuntimeInfo\?\.canQuickBuild === true/)
+    assert.doesNotMatch(source, /showQuickBuildButton = appRuntimeInfo\?\.isDevelopmentBuild === true/)
     assert.match(source, /startQuickBuild\(\)/)
     assert.doesNotMatch(styles, /\.quick-build-button/)
     assert.match(styles, /\.app-status-bar-quick-build\s*{/)

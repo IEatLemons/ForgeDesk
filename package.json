@@ -22,33 +22,33 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@ant-design/icons": "^5.6.1",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
-    "antd": "^5.22.5",
     "better-sqlite3": "^11.7.0",
     "chokidar": "^4.0.3",
-    "echarts": "^5.5.1",
-    "echarts-for-react": "^3.0.2",
     "electron-updater": "^6.8.9",
     "exceljs": "^4.4.0",
     "node-pty": "^1.0.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "simple-git": "^3.27.0",
-    "zustand": "^5.0.2"
+    "simple-git": "^3.27.0"
   },
   "devDependencies": {
+    "@ant-design/icons": "^5.6.1",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "antd": "^5.22.5",
+    "echarts": "^5.5.1",
+    "echarts-for-react": "^3.0.2",
     "electron": "^33.2.1",
     "electron-builder": "^26.15.3",
     "electron-vite": "^2.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "typescript": "^5.7.2",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "zustand": "^5.0.2"
   },
   "build": {
     "appId": "app.forgedesk.desktop",
@@ -61,8 +61,16 @@
     "afterPack": "scripts/after-pack.cjs",
     "files": [
       "out/**/*",
-      "node_modules/**/*",
-      "package.json"
+      "package.json",
+      "!**/node_modules/.cache{,/**/*}",
+      "!**/node_modules/.ignored_*{,/**/*}",
+      "!**/node_modules/.pnpm/electron@*/**/*",
+      "!**/node_modules/.vite{,/**/*}",
+      "!**/node_modules/electron{,/**/*}",
+      "!**/node_modules/electron-builder{,/**/*}",
+      "!**/node_modules/electron-vite{,/**/*}",
+      "!**/node_modules/typescript{,/**/*}",
+      "!**/node_modules/vite{,/**/*}"
     ],
     "extraResources": [
       {

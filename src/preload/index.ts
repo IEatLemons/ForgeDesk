@@ -133,6 +133,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   getOverviewSnapshot: () => ipcRenderer.invoke('overview:snapshot:get'),
   refreshOverviewNews: () => ipcRenderer.invoke('overview:news:refresh'),
   refreshOverviewProjects: () => ipcRenderer.invoke('overview:projects:refresh'),
+  getSystemMonitorSnapshot: () => ipcRenderer.invoke('system-monitor:snapshot'),
   getOaSettings: () => ipcRenderer.invoke('settings:oa:get'),
   saveOaSettings: (input: OaSettingsInput) => ipcRenderer.invoke('settings:oa:save', input),
   openOaDocs: () => ipcRenderer.invoke('settings:oa:open-docs'),
@@ -214,6 +215,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   startQuickBuild: (input?: QuickBuildStartInput) => ipcRenderer.invoke('quick-build:start', input),
   getQuickBuildTask: () => ipcRenderer.invoke('quick-build:get'),
   cancelQuickBuild: () => ipcRenderer.invoke('quick-build:cancel'),
+  restartQuickBuildApp: (input?: QuickBuildRestartInput) => ipcRenderer.invoke('quick-build:restart-app', input),
   onQuickBuildTaskUpdated: (listener: (task: QuickBuildTask | null) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, task: QuickBuildTask | null): void => listener(task)
     ipcRenderer.on('quick-build:task-updated', wrapped)

@@ -4,7 +4,8 @@ export type QuickBuildCompletionPrompt = {
   title: string
   description: string
   detail: string
-  okText: string
+  restartText: string
+  cancelText: string
 }
 
 export function createQuickBuildCompletionPrompt(task: Pick<QuickBuildTask, 'command' | 'cwd' | 'status'>): QuickBuildCompletionPrompt | null {
@@ -13,9 +14,10 @@ export function createQuickBuildCompletionPrompt(task: Pick<QuickBuildTask, 'com
   }
 
   return {
-    title: '快速构建完成，请重新打开 app',
-    description: '新的 macOS app 已编译完成。退出当前 ForgeDesk 后重新打开 app，才能使用刚刚生成的新版本。',
+    title: '快速构建完成，可以直接重启',
+    description: '新的 macOS app 已编译完成。点击“直接重启”会打开刚刚生成的新版本，并关闭当前 ForgeDesk。',
     detail: `构建命令：${task.command}\n构建目录：${task.cwd}`,
-    okText: '知道了'
+    restartText: '直接重启',
+    cancelText: '稍后手动打开'
   }
 }

@@ -1,20 +1,15 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { normalizeMacFrameworks } from './package-mac-signing.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const nodeBin = process.execPath
 const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const appName = 'ForgeDesk'
-const appId = 'app.forgedesk.desktop'
-const version = packageJson.version
 const artifactVersion = parseArtifactVersion(process.argv.slice(2))
 const distDir = join(root, 'dist')
-const electronApp = join(root, 'node_modules', 'electron', 'dist', 'Electron.app')
-const iconFile = join(root, 'resources', 'forgedesk.icns')
-const iconPngFile = join(root, 'resources', 'forgedesk.png')
+const builderApp = join(distDir, 'mac-arm64', `${appName}.app`)
 const tempApp = join(distDir, `${appName}.packaging.app`)
 const finalAppName = artifactVersion ? `${appName}-${artifactVersion}-arm64.app` : `${appName}.app`
 const finalApp = join(distDir, finalAppName)
@@ -54,131 +49,20 @@ function run(command, args) {
   }
 }
 
-function plistEscape(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;')
-}
-
-function removeBinDirectories(path) {
-  for (const entry of readdirSync(path, { withFileTypes: true })) {
-    const entryPath = join(path, entry.name)
-
-    if (entry.isDirectory() && entry.name === '.bin') {
-      rmSync(entryPath, { recursive: true, force: true })
-      continue
-    }
-
-    if (entry.isDirectory()) {
-      removeBinDirectories(entryPath)
-    }
-  }
-}
-
-if (!existsSync(electronApp)) {
-  throw new Error('Electron app shell was not found. Run dependency installation first.')
-}
-
-if (!existsSync(iconFile)) {
-  throw new Error('ForgeDesk macOS icon was not found. Expected resources/forgedesk.icns.')
-}
-
-if (!existsSync(iconPngFile)) {
-  throw new Error('ForgeDesk runtime icon was not found. Expected resources/forgedesk.png.')
-}
-
+run(nodeBin, [join(root, 'scripts', 'build-menu-bar-helper.mjs')])
 run(nodeBin, [join(root, 'scripts', 'rebuild-native.mjs')])
 run(nodeBin, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit'])
 run(nodeBin, [join(root, 'node_modules', 'electron-vite', 'bin', 'electron-vite.js'), 'build'])
+run(nodeBin, [join(root, 'node_modules', 'electron-builder', 'cli.js'), '--mac', '--dir', '--publish', 'never'])
+
+if (!existsSync(builderApp)) {
+  throw new Error(`electron-builder did not create ${builderApp}`)
+}
 
 mkdirSync(distDir, { recursive: true })
 rmSync(tempApp, { recursive: true, force: true })
-run('ditto', [electronApp, tempApp])
-
-const resourcesDir = join(tempApp, 'Contents', 'Resources')
-const appResourceDir = join(resourcesDir, 'app')
-rmSync(appResourceDir, { recursive: true, force: true })
-mkdirSync(appResourceDir, { recursive: true })
-cpSync(iconFile, join(resourcesDir, 'forgedesk.icns'))
-cpSync(iconFile, join(resourcesDir, 'electron.icns'))
-cpSync(iconPngFile, join(resourcesDir, 'forgedesk.png'))
-
-for (const entry of ['out', 'node_modules', 'package.json', 'package-lock.json']) {
-  cpSync(join(root, entry), join(appResourceDir, entry), { recursive: true })
-}
-
-rmSync(join(appResourceDir, 'node_modules', 'electron'), { recursive: true, force: true })
-removeBinDirectories(join(appResourceDir, 'node_modules'))
-
-writeFileSync(
-  join(appResourceDir, 'package.json'),
-  `${JSON.stringify(
-    {
-      name: packageJson.name,
-      version,
-      description: packageJson.description,
-      main: packageJson.main,
-      bin: packageJson.bin,
-      type: packageJson.type,
-      dependencies: packageJson.dependencies
-    },
-    null,
-    2
-  )}\n`
-)
-
-writeFileSync(
-  join(tempApp, 'Contents', 'Info.plist'),
-  `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDisplayName</key>
-  <string>${plistEscape(appName)}</string>
-  <key>CFBundleExecutable</key>
-  <string>Electron</string>
-  <key>CFBundleIconFile</key>
-  <string>forgedesk</string>
-  <key>CFBundleIdentifier</key>
-  <string>${plistEscape(appId)}</string>
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-  <key>CFBundleName</key>
-  <string>${plistEscape(appName)}</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleShortVersionString</key>
-  <string>${plistEscape(version)}</string>
-  <key>CFBundleVersion</key>
-  <string>${plistEscape(version)}</string>
-  <key>LSApplicationCategoryType</key>
-  <string>public.app-category.developer-tools</string>
-  <key>LSMinimumSystemVersion</key>
-  <string>11.0</string>
-  <key>NSAppTransportSecurity</key>
-  <dict>
-    <key>NSAllowsArbitraryLoads</key>
-    <true/>
-  </dict>
-  <key>NSHighResolutionCapable</key>
-  <true/>
-  <key>NSMainNibFile</key>
-  <string>MainMenu</string>
-  <key>NSPrincipalClass</key>
-  <string>AtomApplication</string>
-  <key>NSSupportsAutomaticGraphicsSwitching</key>
-  <true/>
-</dict>
-</plist>
-`
-)
-
 rmSync(finalApp, { recursive: true, force: true })
+run('ditto', [builderApp, tempApp])
 renameSync(tempApp, finalApp)
-normalizeMacFrameworks(finalApp)
-run('codesign', ['--force', '--deep', '--sign', '-', finalApp])
 
-console.log(`Packaged ${finalApp}`)
+console.log(`Packaged ${finalApp} using electron-builder ${packageJson.version}`)
