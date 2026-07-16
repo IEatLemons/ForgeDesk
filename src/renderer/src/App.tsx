@@ -93,6 +93,9 @@ import type {
   ContributorSummary,
   CloudflareConnectionTestResult,
   CloudflareDnsRecord,
+  DeploymentApprovalAnalysis,
+  DeploymentApprovalConfig,
+  DeploymentApprovalHistory,
   GitCommandResult,
   GitBranchSwitchInput,
   GitConflictFile,
@@ -116,6 +119,8 @@ import type {
   MenuBarManagerStatus,
   OaDocumentList,
   OaDocumentRecord,
+  OaBitableRecord,
+  OaBitableSnapshot,
   OaSettingsView,
   Project,
   ProjectBranchTag,
@@ -395,7 +400,7 @@ function getResolvedThemeLabel(theme: ResolvedTheme): string {
 
 type AiSettingsForm = {
   enabled: boolean
-  provider: 'openai-compatible' | 'openrouter'
+  provider: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli'
   baseUrl: string
   apiKey?: string
   model: string
@@ -440,6 +445,18 @@ const AI_PROVIDER_PRESETS: Record<AiSettingsForm['provider'], { label: string; b
     baseUrl: 'https://openrouter.ai/api/v1',
     model: '~openai/gpt-latest',
     apiKeyPlaceholder: 'sk-or-v1-...'
+  },
+  'codex-cli': {
+    label: 'Codex CLI（本机登录）',
+    baseUrl: '',
+    model: '',
+    apiKeyPlaceholder: ''
+  },
+  'cursor-cli': {
+    label: 'Cursor CLI（本机登录）',
+    baseUrl: '',
+    model: '',
+    apiKeyPlaceholder: ''
   }
 }
 
@@ -467,7 +484,9 @@ const AI_MODEL_OPTIONS: Record<AiSettingsForm['provider'], string[]> = {
     'deepseek/deepseek-r1',
     'meta-llama/llama-4-maverick',
     'qwen/qwen3-235b-a22b'
-  ]
+  ],
+  'codex-cli': [],
+  'cursor-cli': []
 }
 
 const projectWorkspaceStatusRefreshIntervalMs = 5000
@@ -1682,7 +1701,7 @@ function RepositoryIdentityModal({
 }
 
 function isAiSettingsReady(settings: AiSettingsView | null): boolean {
-  return Boolean(settings?.enabled && settings.apiKeyConfigured && settings.model)
+  return Boolean(settings?.enabled && ((settings.provider === 'codex-cli' || settings.provider === 'cursor-cli') || (settings.apiKeyConfigured && settings.model)))
 }
 
 function populateAiSettingsForm(form: FormInstance<AiSettingsForm>, settings: AiSettingsView): void {
@@ -1737,37 +1756,103 @@ type AiSettingsSectionProps = {
   settings: AiSettingsView | null
   loading: boolean
   saving: boolean
+  status?: AiRuntimeStatus | null
+  checking?: boolean
+  onCheck?: () => void | Promise<void>
   onRefresh: () => void | Promise<unknown>
   onSave: () => void | Promise<void>
   onBack?: () => void
 }
 
-function AiSettingsSection({ form, settings, loading, saving, onRefresh, onSave, onBack }: AiSettingsSectionProps): JSX.Element {
+function AiSettingsSection({ form, settings, loading, saving, status, checking, onCheck, onRefresh, onSave, onBack }: AiSettingsSectionProps): JSX.Element {
   const aiReady = isAiSettingsReady(settings)
   const provider = Form.useWatch('provider', form) ?? settings?.provider ?? 'openai-compatible'
   const providerPreset = AI_PROVIDER_PRESETS[provider]
-  const modelOptions = AI_MODEL_OPTIONS[provider].map((model) => ({ label: model, value: model }))
+  const selectedModel = Form.useWatch('model', form)
+  const [openRouterModels, setOpenRouterModels] = useState<OpenRouterModel[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [modelLoadError, setModelLoadError] = useState('')
+  const localProvider = provider === 'codex-cli' || provider === 'cursor-cli'
+  const verified = status?.provider === provider && status.usable === true
+  const statusFailed = status?.provider === provider && (status.available === false || status.usable === false)
+
+  async function refreshOpenRouterModels(showErrorMessage = true): Promise<void> {
+    if (!window.forgeDesk) {
+      setModelLoadError('仅桌面应用支持刷新 OpenRouter 模型')
+      return
+    }
+
+    setLoadingModels(true)
+    setModelLoadError('')
+
+    try {
+      setOpenRouterModels(await window.forgeDesk.listOpenRouterModels())
+    } catch (error) {
+      const errorMessage = getErrorMessage(error)
+      setModelLoadError(errorMessage)
+      if (showErrorMessage) {
+        message.warning(`模型刷新失败：${errorMessage}`)
+      }
+    } finally {
+      setLoadingModels(false)
+    }
+  }
+
+  useEffect(() => {
+    if (provider === 'openrouter' && openRouterModels.length === 0 && !loadingModels) {
+      void refreshOpenRouterModels(false)
+    }
+  }, [provider])
+
+  const modelOptions = useMemo(() => {
+    if (provider !== 'openrouter') {
+      return AI_MODEL_OPTIONS[provider].map((model) => ({ label: model, value: model }))
+    }
+
+    const dynamicOptions = openRouterModels.map((model) => ({
+      label: model.name === model.id ? model.id : `${model.name} — ${model.id}`,
+      value: model.id
+    }))
+    const pinnedModels = [AI_PROVIDER_PRESETS.openrouter.model, ...(selectedModel ? [selectedModel] : [])]
+    const seen = new Set<string>()
+    const pinnedOptions = pinnedModels
+      .filter((model) => !seen.has(model) && seen.add(model))
+      .map((model) => ({ label: model, value: model }))
+    const currentOptions = dynamicOptions.filter((option) => !seen.has(option.value) && seen.add(option.value))
+    const fallbackOptions = AI_MODEL_OPTIONS.openrouter
+      .filter((model) => !seen.has(model) && seen.add(model))
+      .map((model) => ({ label: model, value: model }))
+
+    return [...pinnedOptions, ...currentOptions, ...fallbackOptions]
+  }, [openRouterModels, provider, selectedModel])
 
   return (
     <div className="panel settings-module-panel">
       <div className="settings-module-header">
         <Space direction="vertical" size={2}>
           <Typography.Title level={3}>AI 助手</Typography.Title>
-          <Typography.Text type="secondary">配置 OpenAI-compatible 模型，用于生成合并冲突建议和提交信息。</Typography.Text>
+          <Typography.Text type="secondary">配置在线模型或复用本机已登录的 Codex / Cursor CLI。</Typography.Text>
         </Space>
         <Space wrap>
           {onBack && <Button onClick={onBack}>返回总览</Button>}
           <Button icon={<ReloadOutlined />} loading={loading} onClick={onRefresh}>
             重新读取
           </Button>
+          {onCheck && <Button loading={checking} onClick={onCheck}>检测可用性</Button>}
         </Space>
       </div>
       <Alert
         className="settings-module-alert"
-        type={aiReady ? 'success' : 'info'}
+        type={verified ? 'success' : statusFailed ? 'error' : aiReady ? 'warning' : 'info'}
         showIcon
-        message={aiReady ? 'AI 助手已启用' : '保存 API Key 后，可以请求合并建议和提交信息'}
-        description={settings?.apiKeyConfigured ? 'API Key 已保存，可以在下方输入框通过显示按钮查看。' : 'API Key 只保存在本机应用数据目录，用于请求你配置的模型服务。'}
+        message={verified ? 'AI 已验证可用' : statusFailed ? 'AI 当前不可用' : aiReady ? 'AI 已配置，等待检测' : '请完成 AI 配置'}
+        description={status?.provider === provider
+          ? `${status.message}${status.version ? `（${status.version}）` : ''}`
+          : localProvider
+            ? 'ForgeDesk 会检测本机 CLI 并复用其登录状态，不读取或复制登录凭据。'
+            : settings?.apiKeyConfigured
+              ? 'API Key 已保存；点击“检测可用性”验证权限、额度和模型。'
+              : 'API Key 只保存在本机应用数据目录。'}
       />
       <Form form={form} layout="vertical" className="settings-management-form">
         <div className="ai-settings-grid">
@@ -1775,7 +1860,9 @@ function AiSettingsSection({ form, settings, loading, saving, onRefresh, onSave,
             <Select
               options={[
                 { label: AI_PROVIDER_PRESETS['openai-compatible'].label, value: 'openai-compatible' },
-                { label: AI_PROVIDER_PRESETS.openrouter.label, value: 'openrouter' }
+                { label: AI_PROVIDER_PRESETS.openrouter.label, value: 'openrouter' },
+                { label: AI_PROVIDER_PRESETS['codex-cli'].label, value: 'codex-cli' },
+                { label: AI_PROVIDER_PRESETS['cursor-cli'].label, value: 'cursor-cli' }
               ]}
               onChange={(value: AiSettingsForm['provider']) => {
                 const preset = AI_PROVIDER_PRESETS[value]
@@ -1794,10 +1881,33 @@ function AiSettingsSection({ form, settings, loading, saving, onRefresh, onSave,
               ]}
             />
           </Form.Item>
-          <Form.Item name="model" label="模型" rules={[{ required: true, message: '请输入模型名称' }]}>
+          {!localProvider && <Form.Item
+            name="model"
+            label={
+              <Space size="small">
+                <span>模型</span>
+                {provider === 'openrouter' && (
+                  <Button type="link" size="small" loading={loadingModels} onClick={() => void refreshOpenRouterModels()}>
+                    刷新模型
+                  </Button>
+                )}
+              </Space>
+            }
+            extra={
+              provider === 'openrouter'
+                ? modelLoadError
+                  ? `在线列表获取失败，当前使用内置列表；仍可手动输入模型 ID。${modelLoadError}`
+                  : openRouterModels.length > 0
+                    ? `已从 OpenRouter 获取 ${openRouterModels.length} 个模型，按发布时间从新到旧排列。`
+                    : '正在读取 OpenRouter 最新模型；也可以手动输入模型 ID。'
+                : undefined
+            }
+            rules={[{ required: true, message: '请输入模型名称' }]}
+          >
             <Select
               showSearch
               allowClear
+              loading={provider === 'openrouter' && loadingModels}
               options={modelOptions}
               placeholder={providerPreset.model}
               optionFilterProp="label"
@@ -1817,17 +1927,17 @@ function AiSettingsSection({ form, settings, loading, saving, onRefresh, onSave,
                 }
               }}
             />
-          </Form.Item>
-          <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, message: '请输入 Base URL' }]}>
+          </Form.Item>}
+          {!localProvider && <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, message: '请输入 Base URL' }]}>
             <Input placeholder={providerPreset.baseUrl} />
-          </Form.Item>
-          <Form.Item name="temperature" label="Temperature" rules={[{ required: true, message: '请输入 Temperature' }]}>
+          </Form.Item>}
+          {!localProvider && <Form.Item name="temperature" label="Temperature" rules={[{ required: true, message: '请输入 Temperature' }]}>
             <InputNumber min={0} max={1} step={0.1} className="full-width-control" />
-          </Form.Item>
+          </Form.Item>}
         </div>
-        <Form.Item name="apiKey" label="API Key">
+        {!localProvider && <Form.Item name="apiKey" label="API Key">
           <Input.Password placeholder={settings?.apiKeyConfigured ? '已保存，留空不变' : providerPreset.apiKeyPlaceholder} />
-        </Form.Item>
+        </Form.Item>}
         <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave}>
           保存 AI 设置
         </Button>
@@ -1944,7 +2054,7 @@ const oaSetupSteps = [
   },
   {
     title: '申请文档权限',
-    description: '在权限管理里申请云文档读取、编辑和创建相关权限；只浏览文档时可以先关闭编辑和 AI 开关。'
+    description: '在权限管理里申请云文档权限；需要管理 Base 时，还要开通“查看、评论、编辑和管理多维表格”。'
   },
   {
     title: '发布到企业',
@@ -1952,7 +2062,7 @@ const oaSetupSteps = [
   },
   {
     title: '回到 ForgeDesk 保存',
-    description: '粘贴 Lark 云盘、文件夹或文档入口链接、App ID 和 App Secret，打开启用开关后保存 OA 设置。'
+    description: '粘贴 Lark 云盘、文档或 /base/... 多维表格链接、App ID 和 App Secret，打开启用开关后保存 OA 设置。'
   }
 ] as const
 
@@ -2046,8 +2156,8 @@ function OaSettingsSection({ form, settings, loading, saving, onRefresh, onSave,
           <Form.Item name="enabled" label="启用 Lark 集成" valuePropName="checked">
             <Switch checkedChildren="启用" unCheckedChildren="停用" />
           </Form.Item>
-          <Form.Item name="docsHomeUrl" label="Lark 云盘、文件夹或文档入口链接" rules={[{ required: true, message: '请输入 Lark 云盘、文件夹或文档入口链接' }]}>
-            <Input placeholder="https://docs.feishu.cn/drive/me/、/drive/folder/... 或 /docx/..." />
+          <Form.Item name="docsHomeUrl" label="Lark 云盘、文件夹或文档入口链接（支持多维表格）" rules={[{ required: true, message: '请输入 Lark 入口链接' }]}>
+            <Input placeholder="https://your-team.feishu.cn/base/... 或 /drive/folder/..." />
           </Form.Item>
           <Form.Item name="larkAppId" label="Lark App ID" rules={[{ required: true, message: '请输入 Lark App ID' }]}>
             <Input placeholder="cli_aabbcc..." />
@@ -2082,6 +2192,184 @@ type OaDocsPanelProps = {
   onOpenSettings: () => void
 }
 
+function formatBitableCell(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '-'
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) {
+    return value.map((item) => formatBitableCell(item)).filter((item) => item !== '-').join('、') || '-'
+  }
+  if (typeof value === 'object') {
+    const item = value as Record<string, unknown>
+    if (Array.isArray(item.users)) return formatBitableCell(item.users)
+    return String(item.name ?? item.text ?? item.link ?? item.id ?? JSON.stringify(value))
+  }
+  return String(value)
+}
+
+function OaBitableManager({ editingEnabled }: { editingEnabled: boolean }): JSX.Element {
+  const [snapshot, setSnapshot] = useState<OaBitableSnapshot | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [editingRecord, setEditingRecord] = useState<OaBitableRecord | null | undefined>(undefined)
+  const [fieldsJson, setFieldsJson] = useState('')
+
+  async function refresh(tableId?: string): Promise<void> {
+    setLoading(true)
+    try {
+      setSnapshot(await window.forgeDesk.getOaBitable(tableId))
+    } catch (error) {
+      message.error(getErrorMessage(error, '读取多维表格失败'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function openEditor(record: OaBitableRecord | null): void {
+    const primaryField = snapshot?.fields.find((field) => field.isPrimary)?.name || snapshot?.fields[0]?.name || '标题'
+    setEditingRecord(record)
+    setFieldsJson(JSON.stringify(record?.fields ?? { [primaryField]: '' }, null, 2))
+  }
+
+  async function saveRecord(): Promise<void> {
+    if (!snapshot?.selectedTableId) return
+    let fields: Record<string, unknown>
+    try {
+      const parsed = JSON.parse(fieldsJson) as unknown
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('字段必须是 JSON 对象')
+      fields = parsed as Record<string, unknown>
+    } catch (error) {
+      message.error(getErrorMessage(error, '字段 JSON 格式不正确'))
+      return
+    }
+
+    const readonlyFieldTypes = new Set([20, 1001, 1002, 1003, 1004, 1005])
+    const readonlyFieldNames = new Set(
+      (snapshot.fields ?? []).filter((field) => readonlyFieldTypes.has(field.type)).map((field) => field.name)
+    )
+    const writableFields = Object.fromEntries(
+      Object.entries(fields).filter(([name, value]) => {
+        if (readonlyFieldNames.has(name)) return false
+        if (!editingRecord) return true
+        return JSON.stringify(value) !== JSON.stringify(editingRecord.fields[name])
+      })
+    )
+
+    if (Object.keys(writableFields).length === 0) {
+      message.info(editingRecord ? '没有可保存的字段改动' : '请至少填写一个可写字段')
+      return
+    }
+
+    setSaving(true)
+    try {
+      await window.forgeDesk.saveOaBitableRecord({
+        tableId: snapshot.selectedTableId,
+        recordId: editingRecord?.id,
+        fields: writableFields
+      })
+      message.success(editingRecord ? '记录已更新并同步到飞书' : '记录已新增并同步到飞书')
+      setEditingRecord(undefined)
+      await refresh(snapshot.selectedTableId)
+    } catch (error) {
+      message.error(getErrorMessage(error, '保存多维表格记录失败'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deleteRecord(recordId: string): Promise<void> {
+    if (!snapshot?.selectedTableId) return
+    try {
+      await window.forgeDesk.deleteOaBitableRecord({ tableId: snapshot.selectedTableId, recordId })
+      message.success('记录已从飞书多维表格删除')
+      await refresh(snapshot.selectedTableId)
+    } catch (error) {
+      message.error(getErrorMessage(error, '删除多维表格记录失败'))
+    }
+  }
+
+  useEffect(() => {
+    refresh()
+  }, [])
+
+  const columns: ColumnsType<OaBitableRecord> = [
+    ...(snapshot?.fields ?? []).map((field) => ({
+      title: field.name,
+      key: field.id,
+      width: field.isPrimary ? 240 : 180,
+      render: (_: unknown, record: OaBitableRecord) => (
+        <Typography.Text ellipsis={{ tooltip: formatBitableCell(record.fields[field.name]) }}>
+          {formatBitableCell(record.fields[field.name])}
+        </Typography.Text>
+      )
+    })),
+    {
+      title: '操作',
+      key: 'actions',
+      width: 132,
+      fixed: 'right',
+      render: (_: unknown, record: OaBitableRecord) => (
+        <Space size={4}>
+          <Button size="small" disabled={!editingEnabled} icon={<EditOutlined />} onClick={() => openEditor(record)} />
+          <Popconfirm disabled={!editingEnabled} title="确认删除这条记录？" okText="删除" cancelText="取消" onConfirm={() => deleteRecord(record.id)}>
+            <Button size="small" disabled={!editingEnabled} danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
+      )
+    }
+  ]
+
+  return (
+    <div className="oa-bitable-manager">
+      <Alert
+        showIcon
+        type={snapshot?.supported ? 'success' : 'warning'}
+        message={snapshot?.supported ? '多维表格已连接，可直接双向管理记录' : '还不能读取多维表格'}
+        description={snapshot?.unsupportedReason || (editingEnabled ? '新增、编辑或删除会直接写回飞书。复杂字段可按飞书 API 的原始 JSON 结构编辑。' : '当前为只读模式；在 OA 设置中启用“编辑文档”后才能写回飞书。')}
+      />
+      <div className="oa-bitable-toolbar">
+        <Space wrap>
+          <Select
+            style={{ minWidth: 220 }}
+            value={snapshot?.selectedTableId || undefined}
+            placeholder="选择数据表"
+            options={(snapshot?.tables ?? []).map((table) => ({ value: table.id, label: table.name }))}
+            onChange={(tableId) => refresh(tableId)}
+          />
+          <Typography.Text type="secondary">{snapshot?.records.length ?? 0} 条记录</Typography.Text>
+        </Space>
+        <Space wrap>
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={() => refresh(snapshot?.selectedTableId)}>同步</Button>
+          <Button type="primary" icon={<PlusOutlined />} disabled={!snapshot?.selectedTableId || !editingEnabled} onClick={() => openEditor(null)}>新增记录</Button>
+        </Space>
+      </div>
+      <Table
+        rowKey="id"
+        size="small"
+        loading={loading}
+        columns={columns}
+        dataSource={snapshot?.records ?? []}
+        scroll={{ x: 'max-content' }}
+        pagination={{ pageSize: 20, showSizeChanger: true }}
+      />
+      <Modal
+        title={editingRecord ? '编辑记录' : '新增记录'}
+        open={editingRecord !== undefined}
+        okText="保存到飞书"
+        cancelText="取消"
+        confirmLoading={saving}
+        width={720}
+        onOk={saveRecord}
+        onCancel={() => setEditingRecord(undefined)}
+      >
+        <Typography.Paragraph type="secondary">
+          字段名必须与飞书列名一致。文本、数字、单选可直接填写；人员、关联、附件等字段请保留其 JSON 结构。
+        </Typography.Paragraph>
+        <Input.TextArea value={fieldsJson} autoSize={{ minRows: 12, maxRows: 24 }} onChange={(event) => setFieldsJson(event.target.value)} />
+      </Modal>
+    </div>
+  )
+}
+
 function OaDocsPanel({ onOpenSettings }: OaDocsPanelProps): JSX.Element {
   const [settings, setSettings] = useState<OaSettingsView | null>(null)
   const [documentList, setDocumentList] = useState<OaDocumentList | null>(null)
@@ -2090,6 +2378,7 @@ function OaDocsPanel({ onOpenSettings }: OaDocsPanelProps): JSX.Element {
   const oaReady = isOaSettingsReady(settings)
   const browsingReady = Boolean(oaReady && settings?.enableDocumentBrowsing)
   const documents = documentList?.documents ?? []
+  const isBitableEntry = /\/(?:base|bitable)\//i.test(settings?.docsHomeUrl || '')
   const capabilityItems = [
     { key: 'enableDocumentBrowsing', title: '快速浏览文档', enabled: Boolean(settings?.enableDocumentBrowsing), icon: <FileTextOutlined /> },
     { key: 'enableDocumentEditing', title: '编辑文档', enabled: Boolean(settings?.enableDocumentEditing), icon: <EditOutlined /> },
@@ -2229,7 +2518,8 @@ function OaDocsPanel({ onOpenSettings }: OaDocsPanelProps): JSX.Element {
             </div>
           ))}
         </div>
-        {documents.length > 0 && (
+        {isBitableEntry && browsingReady && <OaBitableManager editingEnabled={Boolean(settings?.enableDocumentEditing)} />}
+        {!isBitableEntry && documents.length > 0 && (
           <Table
             className="oa-docs-table"
             columns={documentColumns}
@@ -2239,7 +2529,7 @@ function OaDocsPanel({ onOpenSettings }: OaDocsPanelProps): JSX.Element {
             size="middle"
           />
         )}
-        {browsingReady && documents.length === 0 && !loading && (
+        {!isBitableEntry && browsingReady && documents.length === 0 && !loading && (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description={documentList?.unsupportedReason || '当前入口下没有读取到文件夹或文档'}
@@ -2293,6 +2583,7 @@ function SettingsPanel({
   const [gitStatus, setGitStatus] = useState<GitSetupStatus | null>(null)
   const [sshConfig, setSshConfig] = useState<SshConfigFile | null>(null)
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
+  const [aiRuntimeStatus, setAiRuntimeStatus] = useState<AiRuntimeStatus | null>(null)
   const [githubTokens, setGithubTokens] = useState<GithubTokenView[]>([])
   const [editingGithubToken, setEditingGithubToken] = useState<GithubTokenView | null>(null)
   const [codemagicTokens, setCodemagicTokens] = useState<CodemagicTokenView[]>([])
@@ -2317,6 +2608,7 @@ function SettingsPanel({
   const [savingIdentity, setSavingIdentity] = useState(false)
   const [savingSshConfig, setSavingSshConfig] = useState(false)
   const [savingAiSettings, setSavingAiSettings] = useState(false)
+  const [checkingAiRuntime, setCheckingAiRuntime] = useState(false)
   const [savingGithubToken, setSavingGithubToken] = useState(false)
   const [checkingGithubTokenId, setCheckingGithubTokenId] = useState<string | null>(null)
   const [savingCodemagicToken, setSavingCodemagicToken] = useState(false)
@@ -2444,6 +2736,7 @@ function SettingsPanel({
       const settings = await window.forgeDesk.getAiSettings()
       setAiSettings(settings)
       populateAiSettingsForm(aiSettingsForm, settings)
+      setAiRuntimeStatus(await window.forgeDesk.getAiRuntimeStatus(false))
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
@@ -2556,6 +2849,7 @@ function SettingsPanel({
   const sshPublicKeys = gitStatus?.sshPublicKeys ?? []
   const gitReady = Boolean(gitStatus?.gitAvailable && gitStatus.userName && gitStatus.userEmail)
   const aiReady = isAiSettingsReady(aiSettings)
+  const aiVerified = aiRuntimeStatus?.usable === true
   const githubTokenReady = githubTokens.length > 0
   const codemagicTokenReady = codemagicTokens.length > 0
   const planeReady = isPlaneSettingsReady(planeSettings)
@@ -2783,11 +3077,27 @@ function SettingsPanel({
       })
       setAiSettings(settings)
       aiSettingsForm.setFieldValue('apiKey', '')
-      message.success('AI 设置已保存')
+      setAiRuntimeStatus(null)
+      message.success('AI 设置已保存，请检测可用性')
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
       setSavingAiSettings(false)
+    }
+  }
+
+  async function checkAiRuntime(): Promise<void> {
+    if (!window.forgeDesk) return
+    setCheckingAiRuntime(true)
+    try {
+      const status = await window.forgeDesk.getAiRuntimeStatus(true)
+      setAiRuntimeStatus(status)
+      if (status.usable) message.success(`${status.label} 可用`)
+      else message.error(status.message)
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setCheckingAiRuntime(false)
     }
   }
 
@@ -3524,8 +3834,8 @@ function SettingsPanel({
       title: 'AI 助手',
       description: '配置合并冲突建议使用的模型。',
       icon: <SettingOutlined />,
-      meta: aiReady ? '已启用' : aiSettings?.apiKeyConfigured ? '未启用' : '需要配置',
-      tone: aiReady ? 'ok' : aiSettings?.apiKeyConfigured ? 'neutral' : 'warning'
+      meta: aiVerified ? '已验证可用' : aiReady ? '待检测' : aiSettings?.apiKeyConfigured ? '未启用' : '需要配置',
+      tone: aiVerified ? 'ok' : 'warning'
     }
   ]
   const settingsModuleByKey = new Map(settingsModules.map((module) => [module.key, module]))
@@ -4382,6 +4692,9 @@ function SettingsPanel({
         settings={aiSettings}
         loading={loadingAiSettings}
         saving={savingAiSettings}
+        status={aiRuntimeStatus}
+        checking={checkingAiRuntime}
+        onCheck={checkAiRuntime}
         onRefresh={refreshAiSettings}
         onSave={saveAiSettings}
         onBack={() => setActiveSettingsModule('overview')}
@@ -5989,6 +6302,285 @@ function getDeploymentActionConfirmContent(provider: ServiceProviderType, action
   return action === 'promote' || action === 'rollback' ? '这个操作会改变生产流量指向。' : '操作会提交到 Vercel。'
 }
 
+function DeploymentApprovalModal({
+  open,
+  repositories,
+  initialRepositoryId,
+  onClose,
+  onChanged
+}: {
+  open: boolean
+  repositories: Repository[]
+  initialRepositoryId?: string
+  onClose: () => void
+  onChanged?: (repository: Repository) => void | Promise<void>
+}): JSX.Element {
+  const { updateRepository } = useForgeDeskStore()
+  const [repositoryId, setRepositoryId] = useState(initialRepositoryId || repositories[0]?.id || '')
+  const [config, setConfig] = useState<DeploymentApprovalConfig | null>(null)
+  const [history, setHistory] = useState<DeploymentApprovalHistory[]>([])
+  const [commits, setCommits] = useState<GitCommit[]>([])
+  const [analysis, setAnalysis] = useState<DeploymentApprovalAnalysis | null>(null)
+  const [manualBaselineSha, setManualBaselineSha] = useState<string>()
+  const [activeTab, setActiveTab] = useState('config')
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [executing, setExecuting] = useState(false)
+  const [riskAcknowledged, setRiskAcknowledged] = useState(false)
+  const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
+
+  function buildDefaultConfig(repository: Repository): DeploymentApprovalConfig {
+    return {
+      repositoryId: repository.id,
+      remote: repository.remotes.find((remote) => remote.name === 'origin')?.name ?? repository.remotes[0]?.name ?? 'origin',
+      branch: repository.defaultBranch || 'main',
+      authorName: repository.effectiveUserName || repository.localUserName,
+      authorEmail: repository.effectiveUserEmail || repository.localUserEmail,
+      targets: [{
+        targetId: 'repository-root',
+        targetName: '仓库根目录',
+        rootDirectory: '',
+        triggerPath: '.forgedesk/deploy-trigger.json',
+        enabled: true
+      }],
+      updatedAt: ''
+    }
+  }
+
+  async function loadApprovalState(repository: Repository): Promise<void> {
+    if (!window.forgeDesk) return
+    setLoading(true)
+    setAnalysis(null)
+    setRiskAcknowledged(false)
+    try {
+      const [savedConfig, approvalHistory, repositoryCommits] = await Promise.all([
+        window.forgeDesk.getRepositoryDeploymentApprovalConfig(repository.id),
+        window.forgeDesk.listRepositoryDeploymentApprovals(repository.id),
+        window.forgeDesk.listRepositoryCommits(repository.id, { branchName: repository.defaultBranch || 'main' })
+      ])
+      setHistory(approvalHistory)
+      setCommits(repositoryCommits)
+      setConfig(savedConfig ?? buildDefaultConfig(repository))
+      setActiveTab(savedConfig ? 'review' : 'config')
+    } catch (error) {
+      message.error(getErrorMessage(error, '读取快速审核配置失败'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!open || repositories.length === 0) return
+    const nextRepositoryId = initialRepositoryId && repositories.some((repository) => repository.id === initialRepositoryId)
+      ? initialRepositoryId
+      : repositoryId && repositories.some((repository) => repository.id === repositoryId)
+        ? repositoryId
+        : repositories[0].id
+    if (nextRepositoryId !== repositoryId) {
+      setRepositoryId(nextRepositoryId)
+      return
+    }
+    const repository = repositories.find((item) => item.id === nextRepositoryId)
+    if (repository) void loadApprovalState(repository)
+  }, [open, repositoryId, initialRepositoryId])
+
+  function updateConfig(patch: Partial<DeploymentApprovalConfig>): void {
+    setConfig((current) => current ? { ...current, ...patch } : current)
+    setAnalysis(null)
+  }
+
+  function updateTarget(targetId: string, patch: Partial<DeploymentApprovalConfig['targets'][number]>): void {
+    if (!config) return
+    updateConfig({ targets: config.targets.map((target) => target.targetId === targetId ? { ...target, ...patch } : target) })
+  }
+
+  function addTarget(): void {
+    if (!config) return
+    const targetId = `target-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    updateConfig({ targets: [...config.targets, { targetId, targetName: '新审核目录', rootDirectory: '', triggerPath: '.forgedesk/deploy-trigger.json', enabled: true }] })
+  }
+
+  function removeTarget(targetId: string): void {
+    if (!config) return
+    updateConfig({ targets: config.targets.filter((target) => target.targetId !== targetId) })
+  }
+
+  async function saveConfig(): Promise<DeploymentApprovalConfig | null> {
+    if (!config || !window.forgeDesk) return null
+    setSaving(true)
+    try {
+      const saved = await window.forgeDesk.saveRepositoryDeploymentApprovalConfig(config)
+      setConfig(saved)
+      message.success('快速审核配置已保存')
+      return saved
+    } catch (error) {
+      message.error(getErrorMessage(error, '保存快速审核配置失败'))
+      return null
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function analyze(): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) return
+    const saved = await saveConfig()
+    if (!saved) return
+    setAnalyzing(true)
+    setAnalysis(null)
+    try {
+      const nextAnalysis = await window.forgeDesk.analyzeRepositoryDeploymentApproval(selectedRepository.id, { manualBaselineSha })
+      setAnalysis(nextAnalysis)
+      setRiskAcknowledged(nextAnalysis.warnings.length === 0)
+      setActiveTab('review')
+      message.success(`已锁定 origin/${nextAnalysis.branch}：${nextAnalysis.reviewedHeadSha.slice(0, 7)}`)
+    } catch (error) {
+      const text = getErrorMessage(error, '审核分析失败')
+      message.error(text)
+      if (text.includes('选择一个目标分支历史提交')) setActiveTab('config')
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
+  async function executeApproval(): Promise<void> {
+    if (!selectedRepository || !analysis || !window.forgeDesk) return
+    setExecuting(true)
+    try {
+      const result = await window.forgeDesk.executeRepositoryDeploymentApproval(selectedRepository.id, {
+        reviewedHeadSha: analysis.reviewedHeadSha,
+        baselineSha: analysis.baselineSha
+      })
+      updateRepository(result.repository)
+      await onChanged?.(result.repository)
+      setHistory(await window.forgeDesk.listRepositoryDeploymentApprovals(selectedRepository.id))
+      setAnalysis(null)
+      setActiveTab('history')
+      message.success(`审核提交 ${result.approval.approvalCommitSha.slice(0, 7)} 已推送到 ${config?.remote}/${config?.branch}`)
+    } catch (error) {
+      message.error(getErrorMessage(error, '快速审核推送失败'))
+      setHistory(await window.forgeDesk.listRepositoryDeploymentApprovals(selectedRepository.id).catch(() => history))
+    } finally {
+      setExecuting(false)
+    }
+  }
+
+  const targetColumns: ColumnsType<DeploymentApprovalConfig['targets'][number]> = [
+    { title: '启用', key: 'enabled', width: 70, render: (_, target) => <Switch size="small" checked={target.enabled} onChange={(enabled) => updateTarget(target.targetId, { enabled })} /> },
+    {
+      title: '目标名称', key: 'targetName', width: 180,
+      render: (_, target) => <Input value={target.targetName} onChange={(event) => updateTarget(target.targetId, { targetName: event.target.value })} />
+    },
+    {
+      title: '项目根目录', key: 'rootDirectory', width: 220,
+      render: (_, target) => <Input value={target.rootDirectory} placeholder="仓库根目录留空" onChange={(event) => updateTarget(target.targetId, { rootDirectory: event.target.value })} />
+    },
+    {
+      title: '触发文件', key: 'triggerPath',
+      render: (_, target) => <Input value={target.triggerPath} placeholder=".forgedesk/deploy-trigger.json" onChange={(event) => updateTarget(target.targetId, { triggerPath: event.target.value })} />
+    },
+    { title: '操作', key: 'actions', width: 70, render: (_, target) => <Button type="text" danger icon={<DeleteOutlined />} onClick={() => removeTarget(target.targetId)} /> }
+  ]
+
+  const fileColumns: ColumnsType<DeploymentApprovalAnalysis['files'][number]> = [
+    { title: '状态', dataIndex: 'status', key: 'status', width: 70, render: (status) => <Tag>{status}</Tag> },
+    { title: '文件', dataIndex: 'path', key: 'path', render: (path) => <Typography.Text code>{path}</Typography.Text> },
+    { title: '变化', key: 'change', width: 120, render: (_, file) => file.binary ? '二进制' : <><Typography.Text type="success">+{file.additions}</Typography.Text> / <Typography.Text type="danger">-{file.deletions}</Typography.Text></> },
+    {
+      title: '影响目标', key: 'targets', width: 180,
+      render: (_, file) => file.targetIds.length
+        ? <Space wrap size={4}>{file.targetIds.map((targetId) => <Tag key={targetId}>{config?.targets.find((target) => target.targetId === targetId)?.targetName || targetId}</Tag>)}</Space>
+        : <Typography.Text type="secondary">共享文件</Typography.Text>
+    },
+    { title: '风险', key: 'risk', width: 210, render: (_, file) => file.riskReasons.length ? <Space wrap size={4}>{file.riskReasons.map((risk) => <Tag color="orange" key={risk}>{risk}</Tag>)}</Space> : <Tag color="green">常规</Tag> }
+  ]
+
+  const historyColumns: ColumnsType<DeploymentApprovalHistory> = [
+    { title: '状态', key: 'status', width: 100, render: (_, item) => <Tag color={item.status === 'succeeded' ? 'green' : item.status === 'failed' ? 'red' : 'blue'}>{item.status}</Tag> },
+    { title: '审核源', key: 'source', width: 110, render: (_, item) => <Typography.Text code>{item.sourceSha.slice(0, 7)}</Typography.Text> },
+    { title: '审核提交', key: 'approval', width: 110, render: (_, item) => item.approvalCommitSha ? <Typography.Text code>{item.approvalCommitSha.slice(0, 7)}</Typography.Text> : '-' },
+    { title: '身份', key: 'author', width: 230, render: (_, item) => `${item.authorName} <${item.authorEmail}>` },
+    { title: '时间', dataIndex: 'createdAt', key: 'createdAt', width: 180, render: formatDateTime },
+    { title: '结果', key: 'result', render: (_, item) => item.errorMessage || item.triggerPaths.join(', ') }
+  ]
+
+  const configContent = config ? (
+    <Space direction="vertical" size={14} className="deployment-approval-content">
+      <Alert type="info" showIcon message="审核提交不会改写开发者历史，也不会触碰当前工作区。目标目录和触发文件完全由当前仓库配置决定。" />
+      <Row gutter={12}>
+        <Col span={6}><Typography.Text type="secondary">远端</Typography.Text><Input value={config.remote} onChange={(event) => updateConfig({ remote: event.target.value })} /></Col>
+        <Col span={6}><Typography.Text type="secondary">目标分支</Typography.Text><Input value={config.branch} onChange={(event) => updateConfig({ branch: event.target.value })} /></Col>
+        <Col span={6}><Typography.Text type="secondary">审核用户名</Typography.Text><Input value={config.authorName} onChange={(event) => updateConfig({ authorName: event.target.value })} /></Col>
+        <Col span={6}><Typography.Text type="secondary">审核邮箱</Typography.Text><Input value={config.authorEmail} onChange={(event) => updateConfig({ authorEmail: event.target.value })} /></Col>
+      </Row>
+      <div className="service-detail-toolbar">
+        <Typography.Text strong>审核触发目录</Typography.Text>
+        <Button size="small" icon={<PlusOutlined />} onClick={addTarget}>添加目录</Button>
+      </div>
+      {config.targets.length
+        ? <Table rowKey="targetId" size="small" pagination={false} columns={targetColumns} dataSource={config.targets} />
+        : <Alert type="warning" showIcon message="请至少添加一个审核触发目录。" />}
+      <div>
+        <Typography.Text type="secondary">首次审核或需要覆盖自动基线时，可手工选择审核起点</Typography.Text>
+        <Select
+          allowClear showSearch className="deployment-approval-baseline" value={manualBaselineSha} placeholder="自动使用上次成功审核提交"
+          options={commits.slice(0, 100).map((commit) => ({ value: commit.hash, label: `${commit.shortHash} ${commit.message}` }))}
+          onChange={setManualBaselineSha}
+        />
+      </div>
+      <Button icon={<SaveOutlined />} loading={saving} onClick={saveConfig}>保存配置</Button>
+    </Space>
+  ) : <Empty description="暂无配置" />
+
+  const reviewContent = analysis ? (
+    <Space direction="vertical" size={14} className="deployment-approval-content">
+      <Descriptions size="small" bordered column={3}>
+        <Descriptions.Item label="审核范围">{analysis.baselineSha.slice(0, 7)} → {analysis.reviewedHeadSha.slice(0, 7)}</Descriptions.Item>
+        <Descriptions.Item label="基线来源">{analysis.baselineSource}</Descriptions.Item>
+        <Descriptions.Item label="提交身份">{analysis.authorName} &lt;{analysis.authorEmail}&gt;</Descriptions.Item>
+        <Descriptions.Item label="待审提交">{analysis.commits.length}</Descriptions.Item>
+        <Descriptions.Item label="变更文件">{analysis.files.length}</Descriptions.Item>
+        <Descriptions.Item label="触发文件">{analysis.triggerPaths.length}</Descriptions.Item>
+      </Descriptions>
+      <Collapse items={[{
+        key: 'commits', label: `提交列表（${analysis.commits.length}）`,
+        children: <Space direction="vertical">{analysis.commits.map((commit) => <Typography.Text key={commit.hash}><Typography.Text code>{commit.hash.slice(0, 7)}</Typography.Text> {commit.message} — {commit.authorName}</Typography.Text>)}</Space>
+      }]} />
+      {analysis.warnings.length > 0 && <Alert type="warning" showIcon message={`检测到 ${analysis.warnings.length} 项风险提示`} description={analysis.warnings.join('；')} />}
+      <Table
+        rowKey="path" size="small" pagination={false} columns={fileColumns} dataSource={analysis.files}
+        expandable={{ expandedRowRender: (file) => file.patch ? <pre className="deployment-approval-patch">{file.patch}</pre> : <Typography.Text type="secondary">没有可显示的文本 diff</Typography.Text> }}
+      />
+      <Alert type="info" showIcon message="本次提交只会修改以下审核标记文件" description={analysis.triggerPaths.join('；')} />
+      {analysis.warnings.length > 0 && <Checkbox checked={riskAcknowledged} onChange={(event) => setRiskAcknowledged(event.target.checked)}>我已检查上述风险文件及 diff</Checkbox>}
+    </Space>
+  ) : <Empty description="保存配置后点击“分析目标分支”查看累计改动" />
+
+  return (
+    <Modal
+      title="快速审核上线" open={open} width="min(1180px, calc(100vw - 48px))" onCancel={onClose}
+      footer={[
+        <Button key="close" onClick={onClose}>关闭</Button>,
+        <Button key="analyze" icon={<DiffOutlined />} loading={analyzing} disabled={!config?.targets.some((target) => target.enabled)} onClick={analyze}>分析目标分支</Button>,
+        <Button key="approve" type="primary" icon={<CheckCircleOutlined />} loading={executing} disabled={!analysis || !riskAcknowledged} onClick={executeApproval}>确认审核并推送</Button>
+      ]}
+    >
+      <Spin spinning={loading}>
+        <Space wrap className="git-action-modal-toolbar">
+          <Select value={selectedRepository?.id} options={repositories.map((repository) => ({ value: repository.id, label: repository.name }))} onChange={setRepositoryId} />
+          {analysis && <Tag color="blue">已锁定 {analysis.reviewedHeadSha.slice(0, 7)}</Tag>}
+          <Tag>当前工作区不会被切换</Tag>
+        </Space>
+        <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
+          { key: 'config', label: '配置', children: configContent },
+          { key: 'review', label: '改动审核', children: reviewContent },
+          { key: 'history', label: `审核历史（${history.length}）`, children: <Table rowKey="id" size="small" pagination={false} columns={historyColumns} dataSource={history} /> }
+        ]} />
+      </Spin>
+    </Modal>
+  )
+}
+
 function ServiceDetailDrawer({
   service,
   open,
@@ -7416,7 +8008,6 @@ function GlobalServiceCenterPanel({
     branches: deploymentFilterOptions.branches.map((value) => ({ label: value, value })),
     statuses: deploymentFilterOptions.statuses.map((value) => ({ label: value, value }))
   }
-
   return (
     <div className="panel settings-module-panel">
       <div className="settings-module-header">
@@ -12292,6 +12883,7 @@ function ProjectOverview({
   const [commitModalOpen, setCommitModalOpen] = useState(false)
   const [pushModalOpen, setPushModalOpen] = useState(false)
   const [mergeModalOpen, setMergeModalOpen] = useState(false)
+  const [approvalModalOpen, setApprovalModalOpen] = useState(false)
   const [releaseModalOpen, setReleaseModalOpen] = useState(false)
   const [projectSettingsDrawerOpen, setProjectSettingsDrawerOpen] = useState(false)
   const [projectGitRepositoryId, setProjectGitRepositoryId] = useState('')
@@ -13165,6 +13757,9 @@ function ProjectOverview({
                 <Button icon={<BranchesOutlined />} disabled={projectRepositories.length === 0} onClick={() => setMergeModalOpen(true)}>
                   合并
                 </Button>
+                <Button icon={<CheckCircleOutlined />} disabled={projectRepositories.length === 0} onClick={() => setApprovalModalOpen(true)}>
+                  快速审核
+                </Button>
                 <Button
                   type="primary"
                   icon={<DownloadOutlined />}
@@ -13193,6 +13788,13 @@ function ProjectOverview({
               open={mergeModalOpen}
               repositories={projectRepositories}
               onClose={() => setMergeModalOpen(false)}
+              onChanged={(repository) => selectedProject && refreshProjectGitData(selectedProject.id, repository)}
+            />
+            <DeploymentApprovalModal
+              open={approvalModalOpen}
+              repositories={projectRepositories}
+              initialRepositoryId={selectedProjectGitRepository?.id}
+              onClose={() => setApprovalModalOpen(false)}
               onChanged={(repository) => selectedProject && refreshProjectGitData(selectedProject.id, repository)}
             />
             <RepositoryReleaseModal

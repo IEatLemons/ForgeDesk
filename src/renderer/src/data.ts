@@ -289,6 +289,55 @@ export type GitPushTarget = {
   hasRemoteBranch: boolean
 }
 
+export type DeploymentApprovalTarget = {
+  targetId: string
+  targetName: string
+  rootDirectory: string
+  triggerPath: string
+  enabled: boolean
+}
+
+export type DeploymentApprovalConfig = {
+  repositoryId: string
+  remote: string
+  branch: string
+  authorName: string
+  authorEmail: string
+  targets: DeploymentApprovalTarget[]
+  updatedAt: string
+}
+
+export type DeploymentApprovalAnalysis = {
+  repositoryId: string
+  remote: string
+  branch: string
+  reviewedHeadSha: string
+  baselineSha: string
+  baselineSource: 'approval' | 'manual'
+  commits: Array<{ hash: string; authorName: string; authorEmail: string; committedAt: string; message: string }>
+  files: Array<{ path: string; status: string; additions: number; deletions: number; binary: boolean; riskReasons: string[]; targetIds: string[]; patch: string }>
+  triggerPaths: string[]
+  authorName: string
+  authorEmail: string
+  warnings: string[]
+}
+
+export type DeploymentApprovalHistory = {
+  id: string
+  repositoryId: string
+  baselineSha: string
+  sourceSha: string
+  approvalCommitSha: string
+  authorName: string
+  authorEmail: string
+  targetIds: string[]
+  triggerPaths: string[]
+  status: 'running' | 'succeeded' | 'failed'
+  errorMessage: string
+  createdAt: string
+  finishedAt: string
+}
+
 export type RepositoryRemoteInput = {
   repositoryId: string
   currentName?: string
@@ -1210,7 +1259,7 @@ export type ProjectGitSummary = {
 
 export type AiSettingsInput = {
   enabled: boolean
-  provider?: 'openai-compatible' | 'openrouter'
+  provider?: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli'
   baseUrl: string
   apiKey?: string
   model: string
@@ -1219,7 +1268,7 @@ export type AiSettingsInput = {
 
 export type AiSettingsView = {
   enabled: boolean
-  provider: 'openai-compatible' | 'openrouter'
+  provider: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli'
   baseUrl: string
   apiKey: string
   apiKeyConfigured: boolean
@@ -1266,6 +1315,20 @@ export type OaDocumentList = {
   documents: OaDocumentRecord[]
   nextPageToken: string
   hasMore: boolean
+  unsupportedReason: string
+}
+
+export type OaBitableTable = { id: string; name: string; revision: number }
+export type OaBitableField = { id: string; name: string; type: number; uiType: string; isPrimary: boolean; property: Record<string, unknown> }
+export type OaBitableRecord = { id: string; fields: Record<string, unknown>; createdAt: string; updatedAt: string }
+export type OaBitableSnapshot = {
+  supported: boolean
+  sourceUrl: string
+  appToken: string
+  selectedTableId: string
+  tables: OaBitableTable[]
+  fields: OaBitableField[]
+  records: OaBitableRecord[]
   unsupportedReason: string
 }
 

@@ -1,5 +1,5 @@
-import { createAiNetworkError, createAiRequestError } from './ai-errors.js'
-import { buildAiRequestHeaders, type AiSettings } from './ai-settings.js'
+import { requestAiText } from './ai-runtime.js'
+import type { AiSettings } from './ai-settings.js'
 
 export type ReleaseSuggestion = {
   version: string
@@ -40,21 +40,10 @@ export async function requestReleaseSuggestion(input: {
   documentationContext: string
   fetchImpl?: typeof fetch
 }): Promise<ReleaseSuggestion> {
-  if (!input.settings.enabled || !input.settings.apiKey) {
-    throw new Error('请先在公共设置里启用 AI 并填写 API Key')
-  }
-
-  const fetchImpl = input.fetchImpl ?? fetch
-  let response: Response
-
-  try {
-    response = await fetchImpl(`${input.settings.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: buildAiRequestHeaders(input.settings),
-      body: JSON.stringify({
-        model: input.settings.model,
-        temperature: input.settings.temperature,
-        messages: [
+  const content = await requestAiText({
+    settings: input.settings,
+    fetchImpl: input.fetchImpl,
+    messages: [
           {
             role: 'system',
             content: [
@@ -81,19 +70,9 @@ export async function requestReleaseSuggestion(input: {
               'Prepare release metadata for this version.'
             ].join('\n')
           }
-        ]
-      })
-    })
-  } catch (error) {
-    throw createAiNetworkError(error)
-  }
-
-  if (!response.ok) {
-    throw await createAiRequestError(response)
-  }
-
-  const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> }
-  const parsed = parseReleaseSuggestion(payload.choices?.[0]?.message?.content ?? '')
+    ]
+  })
+  const parsed = parseReleaseSuggestion(content)
   const version = normalizeField(parsed.version) || input.suggestedVersion
   const tagName = normalizeField(parsed.tagName) || input.suggestedTagName
   const releaseTitle = normalizeField(parsed.releaseTitle) || `${input.repositoryName} ${version}`

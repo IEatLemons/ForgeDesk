@@ -37,6 +37,81 @@ type GitPushTarget = {
   hasRemoteBranch: boolean
 }
 
+type DeploymentApprovalTarget = {
+  targetId: string
+  targetName: string
+  rootDirectory: string
+  triggerPath: string
+  enabled: boolean
+}
+
+type DeploymentApprovalConfig = {
+  repositoryId: string
+  remote: string
+  branch: string
+  authorName: string
+  authorEmail: string
+  targets: DeploymentApprovalTarget[]
+  updatedAt: string
+}
+
+type DeploymentApprovalCommit = {
+  hash: string
+  authorName: string
+  authorEmail: string
+  committedAt: string
+  message: string
+}
+
+type DeploymentApprovalFile = {
+  path: string
+  status: string
+  additions: number
+  deletions: number
+  binary: boolean
+  riskReasons: string[]
+  targetIds: string[]
+  patch: string
+}
+
+type DeploymentApprovalAnalysis = {
+  repositoryId: string
+  remote: string
+  branch: string
+  reviewedHeadSha: string
+  baselineSha: string
+  baselineSource: 'approval' | 'manual'
+  commits: DeploymentApprovalCommit[]
+  files: DeploymentApprovalFile[]
+  triggerPaths: string[]
+  authorName: string
+  authorEmail: string
+  warnings: string[]
+}
+
+type DeploymentApprovalHistory = {
+  id: string
+  repositoryId: string
+  baselineSha: string
+  sourceSha: string
+  approvalCommitSha: string
+  authorName: string
+  authorEmail: string
+  targetIds: string[]
+  triggerPaths: string[]
+  status: 'running' | 'succeeded' | 'failed'
+  errorMessage: string
+  createdAt: string
+  finishedAt: string
+}
+
+type DeploymentApprovalExecutionResult = {
+  ok: boolean
+  approval: DeploymentApprovalHistory
+  stdout: string
+  repository: RepositoryRecord
+}
+
 type RepositoryRemoteInput = {
   repositoryId: string
   currentName?: string
@@ -1119,7 +1194,7 @@ type SshConfigFile = {
 
 type AiSettingsInput = {
   enabled: boolean
-  provider?: 'openai-compatible' | 'openrouter'
+  provider?: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli'
   baseUrl: string
   apiKey?: string
   model: string
@@ -1128,12 +1203,30 @@ type AiSettingsInput = {
 
 type AiSettingsView = {
   enabled: boolean
-  provider: 'openai-compatible' | 'openrouter'
+  provider: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli'
   baseUrl: string
   apiKey: string
   apiKeyConfigured: boolean
   model: string
   temperature: number
+}
+
+type AiRuntimeStatus = {
+  provider: AiSettingsView['provider']
+  configured: boolean
+  available: boolean
+  usable: boolean | null
+  label: string
+  command: string
+  version: string
+  message: string
+  checkedAt: string
+}
+
+type OpenRouterModel = {
+  id: string
+  name: string
+  created: number
 }
 
 type OaSettingsInput = {
@@ -1175,6 +1268,20 @@ type OaDocumentList = {
   documents: OaDocumentRecord[]
   nextPageToken: string
   hasMore: boolean
+  unsupportedReason: string
+}
+
+type OaBitableTable = { id: string; name: string; revision: number }
+type OaBitableField = { id: string; name: string; type: number; uiType: string; isPrimary: boolean; property: Record<string, unknown> }
+type OaBitableRecord = { id: string; fields: Record<string, unknown>; createdAt: string; updatedAt: string }
+type OaBitableSnapshot = {
+  supported: boolean
+  sourceUrl: string
+  appToken: string
+  selectedTableId: string
+  tables: OaBitableTable[]
+  fields: OaBitableField[]
+  records: OaBitableRecord[]
   unsupportedReason: string
 }
 
@@ -1614,6 +1721,11 @@ interface Window {
     gitAdd: (repositoryId: string, input: GitAddInput) => Promise<GitOperationResult>
     gitCommit: (repositoryId: string, input: GitCommitInput) => Promise<GitOperationResult>
     gitPush: (repositoryId: string, input: GitPushInput) => Promise<GitOperationResult>
+    getRepositoryDeploymentApprovalConfig: (repositoryId: string) => Promise<DeploymentApprovalConfig | null>
+    saveRepositoryDeploymentApprovalConfig: (input: DeploymentApprovalConfig) => Promise<DeploymentApprovalConfig>
+    analyzeRepositoryDeploymentApproval: (repositoryId: string, input?: { manualBaselineSha?: string }) => Promise<DeploymentApprovalAnalysis>
+    executeRepositoryDeploymentApproval: (repositoryId: string, input: { reviewedHeadSha: string; baselineSha: string }) => Promise<DeploymentApprovalExecutionResult>
+    listRepositoryDeploymentApprovals: (repositoryId: string) => Promise<DeploymentApprovalHistory[]>
     analyzeRepositoryMerge: (repositoryId: string, input: GitMergeAnalysisInput) => Promise<GitMergeAnalysis>
     gitMerge: (repositoryId: string, input: GitMergeInput) => Promise<GitOperationResult>
     suggestCommitMessage: (repositoryId: string, input: GitCommitMessageInput) => Promise<CommitMessageSuggestion>
@@ -1707,6 +1819,8 @@ interface Window {
     getGitSetupStatus: () => Promise<GitSetupStatus>
     configureGitIdentity: (identity: { userName: string; userEmail: string }) => Promise<GitSetupStatus>
     getAiSettings: () => Promise<AiSettingsView>
+    getAiRuntimeStatus: (verify?: boolean) => Promise<AiRuntimeStatus>
+    listOpenRouterModels: () => Promise<OpenRouterModel[]>
     saveAiSettings: (input: AiSettingsInput) => Promise<AiSettingsView>
     getOverviewSnapshot: () => Promise<OverviewSnapshot>
     refreshOverviewNews: () => Promise<OverviewNewsReport>
@@ -1715,6 +1829,9 @@ interface Window {
     saveOaSettings: (input: OaSettingsInput) => Promise<OaSettingsView>
     openOaDocs: () => Promise<void>
     listOaDocuments: () => Promise<OaDocumentList>
+    getOaBitable: (tableId?: string) => Promise<OaBitableSnapshot>
+    saveOaBitableRecord: (input: { tableId: string; recordId?: string; fields: Record<string, unknown> }) => Promise<OaBitableRecord>
+    deleteOaBitableRecord: (input: { tableId: string; recordId: string }) => Promise<void>
     getMenuBarManagerStatus: () => Promise<MenuBarManagerStatus>
     saveMenuBarManagerSettings: (input: Partial<MenuBarManagerSettings>) => Promise<MenuBarManagerStatus>
     requestMenuBarManagerPermission: () => Promise<MenuBarManagerStatus>

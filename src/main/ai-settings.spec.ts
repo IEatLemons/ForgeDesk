@@ -65,6 +65,15 @@ describe('ai settings', () => {
     assert.equal(settings.apiKey, 'openrouter-key')
   })
 
+  it('supports local CLI providers without an API key or endpoint', () => {
+    const settings = normalizeAiSettings({ enabled: true, provider: 'codex-cli' })
+
+    assert.equal(settings.provider, 'codex-cli')
+    assert.equal(settings.baseUrl, '')
+    assert.equal(settings.model, '')
+    assert.equal(settings.apiKey, '')
+  })
+
   it('adds OpenRouter attribution headers for chat requests', () => {
     const headers = buildAiRequestHeaders({
       enabled: true,

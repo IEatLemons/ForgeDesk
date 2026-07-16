@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { buildAiRequestHeaders, type AiSettings } from './ai-settings.js'
-import { createAiNetworkError, createAiRequestError } from './ai-errors.js'
+import { requestAiText } from './ai-runtime.js'
+import { isAiSettingsConfigured, type AiSettings } from './ai-settings.js'
 
 export type OverviewNewsItem = {
   title: string
@@ -83,41 +83,13 @@ function stripFence(content: string): string {
   return match?.[1] ?? trimmed
 }
 
-function getResponseText(payload: unknown): string {
-  if (!payload || typeof payload !== 'object') return ''
-  const record = payload as Record<string, unknown>
-  if (typeof record.output_text === 'string') return record.output_text
-  const choices = record.choices as Array<{ message?: { content?: string } }> | undefined
-  if (choices?.[0]?.message?.content) return choices[0].message.content
-  const output = record.output as Array<{ content?: Array<{ type?: string; text?: string }> }> | undefined
-  return output?.flatMap((item) => item.content ?? []).find((item) => item.type === 'output_text')?.text ?? ''
-}
-
 async function requestJson(settings: AiSettings, system: string, user: string, webSearch = false, fetchImpl: typeof fetch = fetch): Promise<Record<string, unknown>> {
-  if (!settings.enabled || !settings.apiKey) throw new Error('请先在设置中启用 AI 并填写 API Key')
-  const officialOpenAi = /^https:\/\/api\.openai\.com\/v1$/i.test(settings.baseUrl)
-  const url = officialOpenAi && webSearch ? `${settings.baseUrl}/responses` : `${settings.baseUrl}/chat/completions`
-  const body = officialOpenAi && webSearch
-    ? {
-        model: settings.model,
-        tools: [{ type: 'web_search_preview' }],
-        input: [{ role: 'system', content: system }, { role: 'user', content: user }]
-      }
-    : {
-        model: settings.model,
-        temperature: settings.temperature,
-        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-        ...(webSearch && settings.provider === 'openrouter' ? { plugins: [{ id: 'web', max_results: 12 }] } : {}),
-        ...(webSearch && settings.provider !== 'openrouter' ? { web_search_options: { search_context_size: 'medium' } } : {})
-      }
-  let response: Response
-  try {
-    response = await fetchImpl(url, { method: 'POST', headers: buildAiRequestHeaders(settings), body: JSON.stringify(body) })
-  } catch (error) {
-    throw createAiNetworkError(error)
-  }
-  if (!response.ok) throw await createAiRequestError(response)
-  const text = getResponseText(await response.json())
+  const text = await requestAiText({
+    settings,
+    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+    webSearch,
+    fetchImpl
+  })
   try {
     const parsed = JSON.parse(stripFence(text)) as Record<string, unknown>
     if (!parsed || typeof parsed !== 'object') throw new Error('invalid payload')
@@ -173,7 +145,7 @@ export async function summarizeOverviewProjects(userDataPath: string, settings: 
     await writeOverviewSnapshot(userDataPath, snapshot)
     return report
   }
-  const payload = settings.enabled && settings.apiKey
+  const payload = isAiSettingsConfigured(settings)
     ? await requestJson(
         settings,
         '你是项目组合管理助手。只依据输入的 Git 状态生成简洁中文总结，不得编造。返回严格 JSON，不要 Markdown。',

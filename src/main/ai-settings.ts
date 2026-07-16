@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-export type AiProvider = 'openai-compatible' | 'openrouter'
+export type AiProvider = 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli'
 
 type AiProviderDefaults = {
   baseUrl: string
@@ -29,6 +29,14 @@ const providerDefaults: Record<AiProvider, AiProviderDefaults> = {
   openrouter: {
     baseUrl: 'https://openrouter.ai/api/v1',
     model: '~openai/gpt-latest'
+  },
+  'codex-cli': {
+    baseUrl: '',
+    model: ''
+  },
+  'cursor-cli': {
+    baseUrl: '',
+    model: ''
   }
 }
 
@@ -46,7 +54,10 @@ function getAiSettingsPath(userDataPath: string): string {
 }
 
 export function normalizeAiSettings(input: Partial<AiSettings>): AiSettings {
-  const provider: AiProvider = input.provider === 'openrouter' ? 'openrouter' : 'openai-compatible'
+  const provider: AiProvider =
+    input.provider === 'openrouter' || input.provider === 'codex-cli' || input.provider === 'cursor-cli'
+      ? input.provider
+      : 'openai-compatible'
   const defaults = providerDefaults[provider]
 
   return {
@@ -94,4 +105,12 @@ export async function writeAiSettingsFile(userDataPath: string, input: Partial<A
 
 export function getRedactedAiSettings(settings: AiSettings): RedactedAiSettings {
   return { ...settings, apiKeyConfigured: Boolean(settings.apiKey) }
+}
+
+export function isLocalAiProvider(provider: AiProvider): boolean {
+  return provider === 'codex-cli' || provider === 'cursor-cli'
+}
+
+export function isAiSettingsConfigured(settings: AiSettings): boolean {
+  return Boolean(settings.enabled && (isLocalAiProvider(settings.provider) || (settings.apiKey && settings.baseUrl && settings.model)))
 }

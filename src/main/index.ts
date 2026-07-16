@@ -11,6 +11,8 @@ import { requestCommitMessageSuggestion, type CommitMessageSuggestion } from './
 import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion } from './ai-conflict-assistant'
 import { requestReleaseSuggestion, type ReleaseSuggestion } from './ai-release-assistant'
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
+import { inspectAiRuntime, type AiRuntimeStatus } from './ai-runtime'
+import { listOpenRouterModels, type OpenRouterModel } from './openrouter-models'
 import {
   readOverviewSnapshot,
   refreshOverviewNews,
@@ -21,6 +23,12 @@ import {
 } from './overview-assistant'
 import { getRedactedOaSettings, readOaSettingsFile, writeOaSettingsFile, type OaSettings, type RedactedOaSettings } from './oa-settings'
 import { listLarkDocuments, type LarkDocumentList } from './lark-documents'
+import {
+  deleteLarkBitableRecord,
+  getLarkBitableSnapshot,
+  saveLarkBitableRecord,
+  type LarkBitableSnapshot
+} from './lark-bitable'
 import { MenuBarManagerService } from './menu-bar-manager'
 import { collectCloseGuardActivities, createCloseGuardPrompt, type CloseGuardAction, type CloseGuardActivity } from './app-close-guard'
 import { registerAppUpdateIpc } from './app-updates'
@@ -67,6 +75,18 @@ import {
   type ProjectCloudflareSettingsInput
 } from './cloudflare'
 import { buildGitAuthorLookup, resolveGitAuthorDisplay, type GitAuthorLookup } from './git-author-mapping'
+import {
+  analyzeDeploymentApproval,
+  executeDeploymentApproval,
+  getDeploymentApprovalConfig,
+  listDeploymentApprovals,
+  migrateDeploymentApprovalTables,
+  saveDeploymentApprovalConfig,
+  type DeploymentApprovalAnalysis,
+  type DeploymentApprovalConfig,
+  type DeploymentApprovalExecutionResult,
+  type DeploymentApprovalHistory
+} from './deployment-approvals'
 import { parseControlledGitCommand, validateRepositoryRemoteName } from './git-controls'
 import {
   deleteGithubToken,
@@ -1664,6 +1684,7 @@ function migrateDatabase(db: Database.Database): void {
   migrateProjectBranchTagTable(db)
   migrateProjectTerminalCommandTable(db)
   migrateServiceMonitoringTables(db)
+  migrateDeploymentApprovalTables(db)
   migrateRsaPrivateKeyTables(db)
   migrateDockerTables(db)
   migrateTerminalRemoteShortcutTables(db)
@@ -3155,6 +3176,56 @@ async function pushRepositoryChanges(repositoryId: string, input: GitPushInput):
       stderr: failedResult ? failedResult.stderr || failedResult.stdout || '部分远端推送失败' : results.map((result) => result.stderr).filter(Boolean).join('\n')
     }
   })
+}
+
+function getRepositoryDeploymentApprovalConfig(repositoryId: string): DeploymentApprovalConfig | null {
+  getRepositoryOrThrow(repositoryId)
+  return getDeploymentApprovalConfig(getDatabase(), repositoryId)
+}
+
+function saveRepositoryDeploymentApprovalConfig(input: DeploymentApprovalConfig): DeploymentApprovalConfig {
+  getRepositoryOrThrow(input.repositoryId)
+  return saveDeploymentApprovalConfig(getDatabase(), input)
+}
+
+async function analyzeRepositoryDeploymentApproval(
+  repositoryId: string,
+  input: { manualBaselineSha?: string } = {}
+): Promise<DeploymentApprovalAnalysis> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  return withSavedSshPassphrases((env) =>
+    analyzeDeploymentApproval({
+      db: getDatabase(),
+      repositoryId,
+      localPath: repository.localPath,
+      manualBaselineSha: input.manualBaselineSha,
+      env
+    })
+  )
+}
+
+async function executeRepositoryDeploymentApproval(
+  repositoryId: string,
+  input: { reviewedHeadSha: string; baselineSha: string }
+): Promise<DeploymentApprovalExecutionResult & { repository: RepositoryRecord }> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const result = await withSavedSshPassphrases((env) =>
+    executeDeploymentApproval({
+      db: getDatabase(),
+      repositoryId,
+      localPath: repository.localPath,
+      reviewedHeadSha: input.reviewedHeadSha,
+      baselineSha: input.baselineSha,
+      tempRoot: tmpdir(),
+      env
+    })
+  )
+  return { ...result, repository: await rescanRepositoryRecord(repository) }
+}
+
+function listRepositoryDeploymentApprovals(repositoryId: string): DeploymentApprovalHistory[] {
+  getRepositoryOrThrow(repositoryId)
+  return listDeploymentApprovals(getDatabase(), repositoryId)
 }
 
 async function suggestRepositoryConflictResolution(repositoryId: string, filePath: string): Promise<ConflictResolutionSuggestion> {
@@ -4858,6 +4929,30 @@ ipcMain.handle('repository:git-push', async (_event, repositoryId: string, input
   pushRepositoryChanges(repositoryId, input)
 )
 
+ipcMain.handle('repository:deployment-approval:config:get', async (_event, repositoryId: string): Promise<DeploymentApprovalConfig | null> =>
+  getRepositoryDeploymentApprovalConfig(repositoryId)
+)
+
+ipcMain.handle('repository:deployment-approval:config:save', async (_event, input: DeploymentApprovalConfig): Promise<DeploymentApprovalConfig> =>
+  saveRepositoryDeploymentApprovalConfig(input)
+)
+
+ipcMain.handle(
+  'repository:deployment-approval:analyze',
+  async (_event, repositoryId: string, input?: { manualBaselineSha?: string }): Promise<DeploymentApprovalAnalysis> =>
+    analyzeRepositoryDeploymentApproval(repositoryId, input)
+)
+
+ipcMain.handle(
+  'repository:deployment-approval:execute',
+  async (_event, repositoryId: string, input: { reviewedHeadSha: string; baselineSha: string }): Promise<DeploymentApprovalExecutionResult & { repository: RepositoryRecord }> =>
+    executeRepositoryDeploymentApproval(repositoryId, input)
+)
+
+ipcMain.handle('repository:deployment-approvals:list', async (_event, repositoryId: string): Promise<DeploymentApprovalHistory[]> =>
+  listRepositoryDeploymentApprovals(repositoryId)
+)
+
 ipcMain.handle('repository:merge-analysis', async (_event, repositoryId: string, input: GitMergeAnalysisInput): Promise<GitMergeAnalysis> =>
   analyzeRepositoryMerge(repositoryId, input)
 )
@@ -5224,6 +5319,11 @@ ipcMain.handle('git:configure-identity', async (_event, identity: { userName: st
 
 ipcMain.handle('settings:ai:get', async (): Promise<RedactedAiSettings> => getRedactedAiSettings(await readAiSettingsFile(app.getPath('userData'))))
 
+ipcMain.handle('settings:ai:status', async (_event, verify = false): Promise<AiRuntimeStatus> =>
+  inspectAiRuntime(await readAiSettingsFile(app.getPath('userData')), Boolean(verify)))
+
+ipcMain.handle('settings:ai:models:openrouter', async (): Promise<OpenRouterModel[]> => listOpenRouterModels())
+
 ipcMain.handle('settings:ai:save', async (_event, input: Partial<AiSettings>): Promise<RedactedAiSettings> => {
   const currentSettings = await readAiSettingsFile(app.getPath('userData'))
   const nextSettings = await writeAiSettingsFile(app.getPath('userData'), {
@@ -5300,6 +5400,18 @@ ipcMain.handle('settings:oa:open-docs', async (): Promise<void> => {
 })
 
 ipcMain.handle('settings:oa:documents:list', async (): Promise<LarkDocumentList> => listLarkDocuments(await readOaSettingsFile(app.getPath('userData'))))
+
+ipcMain.handle('settings:oa:bitable:get', async (_event, tableId?: string): Promise<LarkBitableSnapshot> =>
+  getLarkBitableSnapshot(await readOaSettingsFile(app.getPath('userData')), tableId)
+)
+
+ipcMain.handle('settings:oa:bitable:record:save', async (_event, input: { tableId: string; recordId?: string; fields: Record<string, unknown> }) =>
+  saveLarkBitableRecord(await readOaSettingsFile(app.getPath('userData')), input)
+)
+
+ipcMain.handle('settings:oa:bitable:record:delete', async (_event, input: { tableId: string; recordId: string }): Promise<void> =>
+  deleteLarkBitableRecord(await readOaSettingsFile(app.getPath('userData')), input)
+)
 
 ipcMain.handle('settings:github-tokens:list', async (): Promise<GithubTokenView[]> => listGithubTokens(app.getPath('userData')))
 

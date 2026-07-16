@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs'
-import { createAiNetworkError, createAiRequestError } from './ai-errors.js'
-import { buildAiRequestHeaders, type AiSettings } from './ai-settings.js'
+import { requestAiText } from './ai-runtime.js'
+import type { AiSettings } from './ai-settings.js'
 
 export type MonthlyPerformancePreviewInput = {
   projectId: string
@@ -788,21 +788,10 @@ export function normalizeMonthlyPerformancePreview(input: {
 }
 
 export async function requestMonthlyPerformancePreview(input: MonthlyPerformancePreviewRequest): Promise<MonthlyPerformancePreview> {
-  if (!input.settings.enabled || !input.settings.apiKey) {
-    throw new Error('请先在公共设置里启用 AI 并填写 API Key')
-  }
-
-  const fetchImpl = input.fetchImpl ?? fetch
-  let response: Response
-
-  try {
-    response = await fetchImpl(`${input.settings.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: buildAiRequestHeaders(input.settings),
-      body: JSON.stringify({
-        model: input.settings.model,
-        temperature: input.settings.temperature,
-        messages: [
+  const aiContent = await requestAiText({
+    settings: input.settings,
+    fetchImpl: input.fetchImpl,
+    messages: [
           {
             role: 'system',
             content: [
@@ -832,19 +821,8 @@ export async function requestMonthlyPerformancePreview(input: MonthlyPerformance
               sourceWarnings: input.sourceWarnings ?? []
             })
           }
-        ]
-      })
-    })
-  } catch (error) {
-    throw createAiNetworkError(error)
-  }
-
-  if (!response.ok) {
-    throw await createAiRequestError(response)
-  }
-
-  const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> }
-  const aiContent = payload.choices?.[0]?.message?.content ?? ''
+    ]
+  })
 
   if (!aiContent.trim()) {
     throw new Error('AI 没有返回可用的月度绩效内容')
@@ -868,21 +846,10 @@ export async function requestMonthlyPerformancePreview(input: MonthlyPerformance
 }
 
 export async function requestMonthlyPerformanceChat(input: MonthlyPerformanceChatRequest): Promise<string> {
-  if (!input.settings.enabled || !input.settings.apiKey) {
-    throw new Error('请先在公共设置里启用 AI 并填写 API Key')
-  }
-
-  const fetchImpl = input.fetchImpl ?? fetch
-  let response: Response
-
-  try {
-    response = await fetchImpl(`${input.settings.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: buildAiRequestHeaders(input.settings),
-      body: JSON.stringify({
-        model: input.settings.model,
-        temperature: input.settings.temperature,
-        messages: [
+  const content = (await requestAiText({
+    settings: input.settings,
+    fetchImpl: input.fetchImpl,
+    messages: [
           {
             role: 'system',
             content: [
@@ -901,19 +868,8 @@ export async function requestMonthlyPerformanceChat(input: MonthlyPerformanceCha
             role: message.role,
             content: message.content
           }))
-        ]
-      })
-    })
-  } catch (error) {
-    throw createAiNetworkError(error)
-  }
-
-  if (!response.ok) {
-    throw await createAiRequestError(response)
-  }
-
-  const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> }
-  const content = payload.choices?.[0]?.message?.content?.trim() ?? ''
+    ]
+  })).trim()
 
   if (!content) {
     throw new Error('AI 没有返回可用的对话内容')

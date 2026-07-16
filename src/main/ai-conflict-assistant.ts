@@ -1,5 +1,5 @@
-import { createAiNetworkError, createAiRequestError } from './ai-errors.js'
-import { buildAiRequestHeaders, type AiSettings } from './ai-settings.js'
+import { requestAiText } from './ai-runtime.js'
+import type { AiSettings } from './ai-settings.js'
 import { hasConflictMarkers } from './merge-conflicts.js'
 
 export type ConflictResolutionSuggestion = {
@@ -20,25 +20,14 @@ export async function requestConflictResolutionSuggestion(input: {
   conflictedContent: string
   fetchImpl?: typeof fetch
 }): Promise<ConflictResolutionSuggestion> {
-  if (!input.settings.enabled || !input.settings.apiKey) {
-    throw new Error('请先在公共设置里启用 AI 并填写 API Key')
-  }
-
   if (!input.conflictedContent.includes('<<<<<<<')) {
     throw new Error('当前文件没有检测到冲突标记')
   }
 
-  const fetchImpl = input.fetchImpl ?? fetch
-  let response: Response
-
-  try {
-    response = await fetchImpl(`${input.settings.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: buildAiRequestHeaders(input.settings),
-      body: JSON.stringify({
-        model: input.settings.model,
-        temperature: input.settings.temperature,
-        messages: [
+  const content = await requestAiText({
+    settings: input.settings,
+    fetchImpl: input.fetchImpl,
+    messages: [
           {
             role: 'system',
             content: 'You resolve Git merge conflicts. Return only the full resolved file content, with no markdown fences and no explanation.'
@@ -47,19 +36,9 @@ export async function requestConflictResolutionSuggestion(input: {
             role: 'user',
             content: `Repository: ${input.repositoryName}\nFile: ${input.filePath}\n\nResolve this conflicted file:\n${input.conflictedContent}`
           }
-        ]
-      })
-    })
-  } catch (error) {
-    throw createAiNetworkError(error)
-  }
-
-  if (!response.ok) {
-    throw await createAiRequestError(response)
-  }
-
-  const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> }
-  const suggestedContent = stripMarkdownFence(payload.choices?.[0]?.message?.content ?? '')
+    ]
+  })
+  const suggestedContent = stripMarkdownFence(content)
 
   if (!suggestedContent.trim()) {
     throw new Error('AI 没有返回可用的合并内容')
