@@ -21,6 +21,7 @@ import {
   type OverviewProjectReport,
   type OverviewSnapshot
 } from './overview-assistant'
+import { collectSystemMonitorSnapshot, type SystemMonitorSnapshot } from './system-monitoring'
 import { getRedactedOaSettings, readOaSettingsFile, writeOaSettingsFile, type OaSettings, type RedactedOaSettings } from './oa-settings'
 import { listLarkDocuments, type LarkDocumentList } from './lark-documents'
 import {
@@ -620,6 +621,7 @@ type GitSetupStatus = {
 
 type AppRuntimeInfo = {
   version: string
+  canQuickBuild: boolean
   isPackaged: boolean
   isDevelopmentBuild: boolean
   isDevServer: boolean
@@ -631,6 +633,15 @@ type QuickBuildTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 type QuickBuildStartInput = {
   cwd?: string
+}
+
+type QuickBuildRestartInput = {
+  cwd?: string
+}
+
+type QuickBuildRestartResult = {
+  appPath: string
+  restarted: boolean
 }
 
 type QuickBuildTaskSnapshot = {
@@ -933,6 +944,10 @@ function installApplicationMenu(): void {
 }
 
 function hasForgeDeskPackage(candidatePath: string): boolean {
+  if (resolve(candidatePath).split(/[\\/]/).some((part) => part.endsWith('.asar'))) {
+    return false
+  }
+
   const packageJsonPath = join(candidatePath, 'package.json')
 
   if (!existsSync(packageJsonPath)) {
@@ -991,6 +1006,20 @@ function resolveForgeDeskProjectRoot(): string {
   }
 
   return resolve(process.cwd())
+}
+
+function createAppRuntimeInfo(): AppRuntimeInfo {
+  const projectRoot = resolveForgeDeskProjectRoot()
+
+  return {
+    appPath: app.getAppPath(),
+    canQuickBuild: hasForgeDeskPackage(projectRoot),
+    isDevelopmentBuild: !app.isPackaged,
+    isDevServer: isDev,
+    isPackaged: app.isPackaged,
+    projectRoot,
+    version: app.getVersion()
+  }
 }
 
 function getErrorText(error: unknown): string {
@@ -1301,6 +1330,64 @@ function startQuickBuildTask(input: QuickBuildStartInput = {}): QuickBuildTaskSn
   void runQuickBuildTask(task)
 
   return getQuickBuildTaskSnapshot(task) as QuickBuildTaskSnapshot
+}
+
+function resolveQuickBuildRestartCwd(input: QuickBuildRestartInput = {}): string {
+  const requestedCwd = input.cwd?.trim() || quickBuildTask?.cwd
+
+  if (requestedCwd && hasForgeDeskPackage(requestedCwd)) {
+    return resolve(requestedCwd)
+  }
+
+  return resolveQuickBuildCwd()
+}
+
+function openMacAppInstance(appPath: string): Promise<void> {
+  return new Promise((resolveOpen, rejectOpen) => {
+    execFile('open', ['-n', appPath], { timeout: 10000 }, (error, _stdout, stderr) => {
+      if (error) {
+        rejectOpen(new Error(stderr?.trim() || error.message))
+        return
+      }
+
+      resolveOpen()
+    })
+  })
+}
+
+async function restartQuickBuildApp(input: QuickBuildRestartInput = {}, ownerWindow: BrowserWindow | null = getPrimaryWindow()): Promise<QuickBuildRestartResult> {
+  if (process.platform !== 'darwin') {
+    throw new Error('快速重启只支持 macOS app')
+  }
+
+  const cwd = resolveQuickBuildRestartCwd(input)
+  const appPath = join(cwd, 'dist', 'ForgeDesk.app')
+
+  let appStats
+
+  try {
+    appStats = await stat(appPath)
+  } catch {
+    throw new Error(`未找到构建好的 app：${appPath}`)
+  }
+
+  if (!appStats.isDirectory()) {
+    throw new Error(`构建产物不是 macOS app：${appPath}`)
+  }
+
+  const confirmed = await confirmCloseGuardAction('quit-app', ownerWindow)
+
+  if (!confirmed) {
+    return { appPath, restarted: false }
+  }
+
+  await openMacAppInstance(appPath)
+
+  forceQuitRequested = true
+  stopRunningCloseGuardActivities()
+  setTimeout(() => app.quit(), 100)
+
+  return { appPath, restarted: true }
 }
 
 function stopQuickBuildProcess(task: QuickBuildTaskSnapshot): void {
@@ -2152,6 +2239,12 @@ function createWindow(): void {
     minWidth: 1080,
     minHeight: 720,
     title: 'ForgeDesk',
+    ...(process.platform === 'darwin'
+      ? {
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 14, y: 13 }
+        }
+      : {}),
     backgroundColor: '#f6f7f9',
     icon: appIconPath,
     webPreferences: {
@@ -5381,6 +5474,17 @@ ipcMain.handle('overview:projects:refresh', async (): Promise<OverviewProjectRep
   return summarizeOverviewProjects(app.getPath('userData'), settings, contexts)
 })
 
+ipcMain.handle('system-monitor:snapshot', async (): Promise<SystemMonitorSnapshot> =>
+  collectSystemMonitorSnapshot({
+    appPath: app.getAppPath(),
+    isDevelopmentBuild: !app.isPackaged,
+    isDevServer: isDev,
+    isPackaged: app.isPackaged,
+    projectRoot: resolveForgeDeskProjectRoot(),
+    version: app.getVersion()
+  })
+)
+
 ipcMain.handle('settings:oa:get', async (): Promise<RedactedOaSettings> => getRedactedOaSettings(await readOaSettingsFile(app.getPath('userData'))))
 
 ipcMain.handle('settings:oa:save', async (_event, input: Partial<OaSettings>): Promise<RedactedOaSettings> => {
@@ -5554,20 +5658,15 @@ ipcMain.handle('ssh:open-directory', async (): Promise<void> => {
 
 registerAppUpdateIpc()
 
-ipcMain.handle('app:runtime-info', (): AppRuntimeInfo => ({
-  appPath: app.getAppPath(),
-  isDevelopmentBuild: !app.isPackaged,
-  isDevServer: isDev,
-  isPackaged: app.isPackaged,
-  projectRoot: resolveForgeDeskProjectRoot(),
-  version: app.getVersion()
-}))
+ipcMain.handle('app:runtime-info', (): AppRuntimeInfo => createAppRuntimeInfo())
 
 ipcMain.handle('quick-build:start', async (_event, input?: QuickBuildStartInput): Promise<QuickBuildTaskSnapshot> => startQuickBuildTask(input))
 
 ipcMain.handle('quick-build:get', async (): Promise<QuickBuildTaskSnapshot | null> => getQuickBuildTaskSnapshot())
 
 ipcMain.handle('quick-build:cancel', async (): Promise<QuickBuildTaskSnapshot> => cancelQuickBuildTask())
+
+ipcMain.handle('quick-build:restart-app', async (_event, input?: QuickBuildRestartInput): Promise<QuickBuildRestartResult> => restartQuickBuildApp(input))
 
 ipcMain.handle('tools:rsa-private-keys:list', async (): Promise<RsaPrivateKeyRecord[]> => listRsaPrivateKeyRecords(getDatabase()))
 

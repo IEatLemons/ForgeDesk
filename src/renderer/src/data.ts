@@ -398,6 +398,7 @@ export type TerminalExitEvent = {
 
 export type AppRuntimeInfo = {
   version: string
+  canQuickBuild: boolean
   isPackaged: boolean
   isDevelopmentBuild: boolean
   isDevServer: boolean
@@ -405,10 +406,156 @@ export type AppRuntimeInfo = {
   projectRoot: string
 }
 
+export type SystemMonitorStatus = 'healthy' | 'warning' | 'critical'
+
+export type SystemMonitorDiskVolume = {
+  filesystem: string
+  mount: string
+  totalBytes: number
+  usedBytes: number
+  availableBytes: number
+  usagePercent: number
+}
+
+export type SystemMonitorMemoryInfo = {
+  totalBytes: number
+  usedBytes: number
+  freeBytes: number
+  usagePercent: number
+}
+
+export type SystemMonitorCpuInfo = {
+  model: string
+  coreCount: number
+  speedMhz: number
+  loadAverage: number[]
+  loadPercent: number
+}
+
+export type SystemMonitorAppInfo = {
+  version: string
+  isPackaged: boolean
+  isDevelopmentBuild: boolean
+  isDevServer: boolean
+  appPath: string
+  projectRoot: string
+  processId: number
+  uptimeSeconds: number
+  nodeVersion: string
+  electronVersion: string
+  chromeVersion: string
+  v8Version: string
+}
+
+export type SystemMonitorNetworkInterface = {
+  name: string
+  address: string
+  family: string
+  mac: string
+  cidr: string
+  internal: boolean
+}
+
+export type SystemMonitorProxyEndpoint = {
+  enabled: boolean
+  host: string
+  port: number
+}
+
+export type SystemMonitorProxyInfo = {
+  available: boolean
+  enabled: boolean
+  source: 'macos' | 'environment' | 'none'
+  http: SystemMonitorProxyEndpoint
+  https: SystemMonitorProxyEndpoint
+  socks: SystemMonitorProxyEndpoint
+  pac: {
+    enabled: boolean
+    url: string
+  }
+  bypass: string[]
+  error: string
+}
+
+export type SystemMonitorDefaultRoute = {
+  gateway: string
+  interface: string
+  error: string
+}
+
+export type SystemMonitorClashProxyGroup = {
+  name: string
+  type: string
+  now: string
+}
+
+export type SystemMonitorClashInfo = {
+  detected: boolean
+  running: boolean
+  apiAvailable: boolean
+  status: 'connected' | 'auth-required' | 'not-running' | 'unknown'
+  name: string
+  controllerUrl: string
+  configPath: string
+  secretConfigured: boolean
+  version: string
+  mode: string
+  allowLan: boolean
+  mixedPort: number
+  httpPort: number
+  socksPort: number
+  redirPort: number
+  tproxyPort: number
+  activeProxyGroups: SystemMonitorClashProxyGroup[]
+  connectionCount: number
+  downloadTotalBytes: number
+  uploadTotalBytes: number
+  downloadSpeedBytes: number
+  uploadSpeedBytes: number
+  message: string
+  error: string
+}
+
+export type SystemMonitorNetworkInfo = {
+  interfaces: SystemMonitorNetworkInterface[]
+  dnsServers: string[]
+  proxy: SystemMonitorProxyInfo
+  route: SystemMonitorDefaultRoute
+  clash: SystemMonitorClashInfo
+}
+
+export type SystemMonitorSnapshot = {
+  checkedAt: string
+  status: SystemMonitorStatus
+  statusMessage: string
+  system: {
+    platform: NodeJS.Platform
+    release: string
+    arch: string
+    hostname: string
+    uptimeSeconds: number
+  }
+  cpu: SystemMonitorCpuInfo
+  memory: SystemMonitorMemoryInfo
+  disks: SystemMonitorDiskVolume[]
+  diskError: string
+  network: SystemMonitorNetworkInfo
+  app: SystemMonitorAppInfo
+}
+
 export type QuickBuildTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 export type QuickBuildStartInput = {
   cwd?: string
+}
+
+export type QuickBuildRestartInput = {
+  cwd?: string
+}
+
+export type QuickBuildRestartResult = {
+  appPath: string
+  restarted: boolean
 }
 
 export type QuickBuildTask = {

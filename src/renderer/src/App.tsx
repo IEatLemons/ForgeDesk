@@ -161,7 +161,7 @@ import type {
   VercelDomainConfig,
   VercelEnvVarInput
 } from './data'
-import { APP_NAVIGATION_ITEMS, type AppNavigationKey } from './app-navigation'
+import { APP_NAVIGATION_ITEMS, APP_NAVIGATION_SECTIONS, type AppNavigationItem, type AppNavigationKey } from './app-navigation'
 import { DockerPanel } from './docker-panel'
 import { createAppUpdateViewModel } from './app-update-view'
 import { createDiffResultLines, createSourceDiffLines, type DiffDisplayLine } from './diff-view'
@@ -327,6 +327,8 @@ import type { TerminalOpenRequest } from './terminal-panel-events'
 import { TerminalRemoteShortcuts } from './terminal-remote-shortcuts'
 import { TaskListPanel } from './task-list-panel'
 import { OverviewDashboard } from './overview-dashboard'
+import { SystemMonitorPanel } from './system-monitor-panel'
+import { AppTitleBar } from './app-titlebar'
 import type { ResolvedTheme, ThemePreference } from './app-theme'
 
 type ImportForm = {
@@ -382,6 +384,8 @@ type AppProps = {
   resolvedTheme: ResolvedTheme
   onThemePreferenceChange: (preference: ThemePreference) => void
 }
+
+type AppActiveKey = AppNavigationKey
 
 function getThemePreferenceLabel(preference: ThemePreference): string {
   switch (preference) {
@@ -18198,7 +18202,8 @@ function PasswordGeneratorTool({ onBack }: { onBack: () => void }): JSX.Element 
 
 function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppProps): JSX.Element {
   const { loadingWorkspace, loadWorkspace } = useForgeDeskStore()
-  const [activeKey, setActiveKey] = useState<AppNavigationKey>('overview')
+  const [activeKey, setActiveKey] = useState<AppActiveKey>('overview')
+  const usesCustomTitleBar = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
   const [settingsInitialModule, setSettingsInitialModule] = useState<SettingsModuleKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
   const [terminalOpenRequest, setTerminalOpenRequest] = useState<TerminalOpenRequest | null>(null)
@@ -18343,8 +18348,9 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
         const prompt = createQuickBuildCompletionPrompt(task)
 
         if (prompt) {
-          Modal.success({
+          Modal.confirm({
             title: prompt.title,
+            icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
             content: (
               <Space direction="vertical" size={8}>
                 <Typography.Text>{prompt.description}</Typography.Text>
@@ -18353,7 +18359,9 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
                 </Typography.Text>
               </Space>
             ),
-            okText: prompt.okText
+            okText: prompt.restartText,
+            cancelText: prompt.cancelText,
+            onOk: () => restartQuickBuildApp(task.cwd)
           })
         } else {
           message.success('快速构建完成')
@@ -18373,25 +18381,36 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
   const navigationIcons: Record<AppNavigationKey, JSX.Element> = {
     overview: <DashboardOutlined />,
-    projects: <FolderOpenOutlined />,
     tasks: <CheckSquareOutlined />,
     docs: <FileTextOutlined />,
+    projects: <FolderOpenOutlined />,
     services: <ThunderboltOutlined />,
     docker: <DockerOutlined />,
     tools: <ToolOutlined />,
+    'system-monitor': <DesktopOutlined />,
     terminal: <CodeOutlined />,
     settings: <SettingOutlined />
   }
-  const menuItems = APP_NAVIGATION_ITEMS.filter((item) => item.key !== 'terminal' && item.key !== 'settings').map((item) => ({
-    ...item,
+
+  const createNavigationMenuItem = (item: AppNavigationItem): NonNullable<MenuProps['items']>[number] => ({
+    key: item.key,
+    label: item.label,
     icon: navigationIcons[item.key]
+  })
+  const menuItems: MenuProps['items'] = APP_NAVIGATION_SECTIONS.filter((section) => section.placement === 'main').map((section) => ({
+    key: `section-${section.key}`,
+    label: section.label,
+    type: 'group',
+    children: APP_NAVIGATION_ITEMS.filter((item) => item.section === section.key).map(createNavigationMenuItem)
   }))
-  const footerMenuItems = APP_NAVIGATION_ITEMS.filter((item) => item.key === 'terminal' || item.key === 'settings').map((item) => ({
-    ...item,
-    icon: navigationIcons[item.key]
+  const footerMenuItems: MenuProps['items'] = APP_NAVIGATION_SECTIONS.filter((section) => section.placement === 'footer').map((section) => ({
+    key: `section-${section.key}`,
+    label: section.label,
+    type: 'group',
+    children: APP_NAVIGATION_ITEMS.filter((item) => item.section === section.key).map(createNavigationMenuItem)
   }))
   const appVersionLabel = appUpdateState.currentVersion ? `v${appUpdateState.currentVersion}` : ''
-  const showQuickBuildButton = appRuntimeInfo?.isDevelopmentBuild === true
+  const showQuickBuildButton = appRuntimeInfo?.canQuickBuild === true
   const quickBuildTooltip = (
     <div className="quick-build-tooltip">
       <Typography.Text strong>快速构建</Typography.Text>
@@ -18405,7 +18424,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       {quickBuildState.signal ? <span>信号：{quickBuildState.signal}</span> : null}
       {quickBuildState.message ? <span>信息：{quickBuildState.message}</span> : null}
       <span>最近输出：{formatQuickBuildLastOutput(quickBuildState.log)}</span>
-      {appRuntimeInfo ? <span>环境：{appRuntimeInfo.isDevServer ? '开发服务' : '开发构建'}</span> : null}
+      {appRuntimeInfo ? <span>环境：{appRuntimeInfo.isPackaged ? '本地打包版' : appRuntimeInfo.isDevServer ? '开发服务' : '开发构建'}</span> : null}
     </div>
   )
 
@@ -18435,7 +18454,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   async function startQuickBuild(): Promise<void> {
     const cwd = appRuntimeInfo?.projectRoot || quickBuildState.cwd
 
-    if (!window.forgeDesk || !cwd) {
+    if (!window.forgeDesk || !cwd || appRuntimeInfo?.canQuickBuild === false) {
       message.error('当前环境无法启动快速构建')
       return
     }
@@ -18499,6 +18518,29 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     }
   }
 
+  async function restartQuickBuildApp(cwd: string): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中重启')
+      return
+    }
+
+    let result
+
+    try {
+      result = await window.forgeDesk.restartQuickBuildApp({ cwd })
+    } catch (error) {
+      message.error(getErrorMessage(error, '快速重启失败'))
+      throw error
+    }
+
+    if (!result.restarted) {
+      message.info('已取消重启')
+      return
+    }
+
+    message.success('正在打开新版本 ForgeDesk')
+  }
+
   function appendSystemLog(entry: SystemLogInput): void {
     setSystemLogs((current) => [createSystemLogEntry(entry), ...current].slice(0, 300))
   }
@@ -18510,125 +18552,133 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
   if (activeKey === 'terminal') {
     return (
-      <Layout className="terminal-mode-shell">
-        <div className="terminal-mode-header">
-          <Space direction="vertical" size={0}>
-            <Typography.Text strong>ForgeDesk</Typography.Text>
-            <Typography.Text type="secondary">命令行工具</Typography.Text>
-          </Space>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => setActiveKey('overview')}>
-            返回控制台
-          </Button>
-        </div>
-        <div className="terminal-mode-body terminal-mode-body-with-remotes">
-          <TerminalRemoteShortcuts onOpenTerminalRequest={openTerminalRequest} />
-          <div className="terminal-mode-terminal">
-            <TerminalWorkspace defaultTitle="ForgeDesk CLI" openRequest={terminalOpenRequest} />
+      <>
+        <AppTitleBar onOpenSystemMonitor={() => setActiveKey('system-monitor')} />
+        <Layout className={`terminal-mode-shell${usesCustomTitleBar ? ' terminal-mode-shell-with-titlebar' : ''}`}>
+          <div className="terminal-mode-header">
+            <Space direction="vertical" size={0}>
+              <Typography.Text strong>ForgeDesk</Typography.Text>
+              <Typography.Text type="secondary">命令行工具</Typography.Text>
+            </Space>
+            <Button icon={<ArrowLeftOutlined />} onClick={() => setActiveKey('overview')}>
+              返回控制台
+            </Button>
           </div>
-        </div>
-        <ReleasePublishTaskDock />
-      </Layout>
+          <div className="terminal-mode-body terminal-mode-body-with-remotes">
+            <TerminalRemoteShortcuts onOpenTerminalRequest={openTerminalRequest} />
+            <div className="terminal-mode-terminal">
+              <TerminalWorkspace defaultTitle="ForgeDesk CLI" openRequest={terminalOpenRequest} />
+            </div>
+          </div>
+          <ReleasePublishTaskDock />
+        </Layout>
+      </>
     )
   }
 
   return (
-    <Layout className="app-shell">
-      <Layout.Sider width={236} theme={resolvedTheme} className="sidebar">
-        <div className="sidebar-inner">
-          <div className="brand">
-            <div className="brand-mark">
-              <img src={forgedeskLogoUrl} alt="ForgeDesk" />
-            </div>
-            <div className="brand-copy">
-              <div className="brand-heading">
-                <Typography.Title level={4}>ForgeDesk</Typography.Title>
+    <>
+      <AppTitleBar onOpenSystemMonitor={() => setActiveKey('system-monitor')} />
+      <Layout className={`app-shell${usesCustomTitleBar ? ' app-shell-with-titlebar' : ''}`}>
+        <Layout.Sider width={236} theme={resolvedTheme} className="sidebar">
+          <div className="sidebar-inner">
+            <div className="brand">
+              <div className="brand-mark">
+                <img src={forgedeskLogoUrl} alt="ForgeDesk" />
+              </div>
+              <div className="brand-copy">
+                <div className="brand-heading">
+                  <Typography.Title level={4}>ForgeDesk</Typography.Title>
+                </div>
               </div>
             </div>
-          </div>
-          <Menu className="sidebar-nav" mode="inline" selectedKeys={activeKey === 'settings' ? [] : [activeKey]} items={menuItems} onClick={({ key }) => openNavigationKey(key as AppNavigationKey)} />
-          <div className="sidebar-footer">
-            <Menu
-              className="sidebar-footer-menu"
-              mode="inline"
-              selectedKeys={activeKey === 'settings' ? ['settings'] : []}
-              items={footerMenuItems}
-              onClick={({ key }) => openNavigationKey(key as AppNavigationKey)}
-            />
-          </div>
-        </div>
-      </Layout.Sider>
-      <Layout className="app-main">
-        <Layout.Content className="content">
-          {loadingWorkspace && (
-            <div className="loading-panel">
-              <Spin />
+            <Menu className="sidebar-nav" mode="inline" selectedKeys={activeKey === 'settings' ? [] : [activeKey]} items={menuItems} onClick={({ key }) => openNavigationKey(key as AppNavigationKey)} />
+            <div className="sidebar-footer">
+              <Menu
+                className="sidebar-footer-menu"
+                mode="inline"
+                selectedKeys={activeKey === 'settings' ? ['settings'] : []}
+                items={footerMenuItems}
+                onClick={({ key }) => openNavigationKey(key as AppNavigationKey)}
+              />
             </div>
-          )}
-          {!loadingWorkspace && activeKey === 'settings' && (
-            <SettingsPanel
-              initialModule={settingsInitialModule}
-              themePreference={themePreference}
-              resolvedTheme={resolvedTheme}
-              onThemePreferenceChange={onThemePreferenceChange}
-              onSystemLog={appendSystemLog}
-              onDeploymentRefreshActiveChange={setDeploymentRefreshActive}
-              onOpenSystemLog={() => setSystemLogDrawerOpen(true)}
-              onCreateProject={() => {
-                setActiveKey('projects')
-                setCreatingProject(true)
-              }}
-            />
-          )}
-          {!loadingWorkspace && activeKey === 'services' && (
-            <section className="workspace-section">
-              <GlobalServiceCenterPanel
+          </div>
+        </Layout.Sider>
+        <Layout className="app-main">
+          <Layout.Content className="content">
+            {loadingWorkspace && (
+              <div className="loading-panel">
+                <Spin />
+              </div>
+            )}
+            {!loadingWorkspace && activeKey === 'settings' && (
+              <SettingsPanel
+                initialModule={settingsInitialModule}
+                themePreference={themePreference}
+                resolvedTheme={resolvedTheme}
+                onThemePreferenceChange={onThemePreferenceChange}
                 onSystemLog={appendSystemLog}
                 onDeploymentRefreshActiveChange={setDeploymentRefreshActive}
                 onOpenSystemLog={() => setSystemLogDrawerOpen(true)}
+                onCreateProject={() => {
+                  setActiveKey('projects')
+                  setCreatingProject(true)
+                }}
               />
-            </section>
-          )}
-          {!loadingWorkspace && activeKey === 'docker' && <DockerPanel onOpenTerminalRequest={openGlobalTerminalRequest} />}
-          {!loadingWorkspace && activeKey === 'docs' && <OaDocsPanel onOpenSettings={() => openSettingsModule('oa')} />}
-          {!loadingWorkspace && activeKey === 'tasks' && <TaskListPanel />}
-          {!loadingWorkspace && activeKey === 'tools' && <ToolsPanel />}
-          {!loadingWorkspace && activeKey === 'overview' && (
-            <OverviewDashboard
-              onOpenProjects={() => setActiveKey('projects')}
-              onOpenTasks={() => setActiveKey('tasks')}
-              onOpenAiSettings={() => openSettingsModule('ai')}
-            />
-          )}
-          {!loadingWorkspace && activeKey === 'projects' && (
-            <ProjectOverview
-              onCreateProject={() => setCreatingProject(true)}
-              onOpenSettings={() => openSettingsModule('overview')}
-              onOpenTerminalRequest={openTerminalRequest}
-            />
-          )}
-          <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('projects')} />
-        </Layout.Content>
+            )}
+            {!loadingWorkspace && activeKey === 'services' && (
+              <section className="workspace-section">
+                <GlobalServiceCenterPanel
+                  onSystemLog={appendSystemLog}
+                  onDeploymentRefreshActiveChange={setDeploymentRefreshActive}
+                  onOpenSystemLog={() => setSystemLogDrawerOpen(true)}
+                />
+              </section>
+            )}
+            {!loadingWorkspace && activeKey === 'docker' && <DockerPanel onOpenTerminalRequest={openGlobalTerminalRequest} />}
+            {!loadingWorkspace && activeKey === 'docs' && <OaDocsPanel onOpenSettings={() => openSettingsModule('oa')} />}
+            {!loadingWorkspace && activeKey === 'tasks' && <TaskListPanel />}
+            {!loadingWorkspace && activeKey === 'tools' && <ToolsPanel />}
+            {!loadingWorkspace && activeKey === 'system-monitor' && <SystemMonitorPanel onBack={() => setActiveKey('overview')} />}
+            {!loadingWorkspace && activeKey === 'overview' && (
+              <OverviewDashboard
+                onOpenProjects={() => setActiveKey('projects')}
+                onOpenTasks={() => setActiveKey('tasks')}
+                onOpenSystemMonitor={() => setActiveKey('system-monitor')}
+                onOpenAiSettings={() => openSettingsModule('ai')}
+              />
+            )}
+            {!loadingWorkspace && activeKey === 'projects' && (
+              <ProjectOverview
+                onCreateProject={() => setCreatingProject(true)}
+                onOpenSettings={() => openSettingsModule('overview')}
+                onOpenTerminalRequest={openTerminalRequest}
+              />
+            )}
+            <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('projects')} />
+          </Layout.Content>
+        </Layout>
+        <SystemLogDrawer
+          open={systemLogDrawerOpen}
+          logs={systemLogs}
+          filter={systemLogFilter}
+          onFilterChange={setSystemLogFilter}
+          onClose={() => setSystemLogDrawerOpen(false)}
+          onClear={clearSystemLogs}
+        />
+        <AppStatusBar
+          summary={systemLogSummary}
+          refreshing={deploymentRefreshActive}
+          showQuickBuildButton={showQuickBuildButton}
+          quickBuildState={quickBuildState}
+          quickBuildTooltip={quickBuildTooltip}
+          versionLabel={appVersionLabel}
+          onQuickBuild={() => startQuickBuild().catch((error) => message.error(getErrorMessage(error, '快速构建启动失败')))}
+          onOpenLogs={() => setSystemLogDrawerOpen(true)}
+        />
+        <ReleasePublishTaskDock />
       </Layout>
-      <SystemLogDrawer
-        open={systemLogDrawerOpen}
-        logs={systemLogs}
-        filter={systemLogFilter}
-        onFilterChange={setSystemLogFilter}
-        onClose={() => setSystemLogDrawerOpen(false)}
-        onClear={clearSystemLogs}
-      />
-      <AppStatusBar
-        summary={systemLogSummary}
-        refreshing={deploymentRefreshActive}
-        showQuickBuildButton={showQuickBuildButton}
-        quickBuildState={quickBuildState}
-        quickBuildTooltip={quickBuildTooltip}
-        versionLabel={appVersionLabel}
-        onQuickBuild={() => startQuickBuild().catch((error) => message.error(getErrorMessage(error, '快速构建启动失败')))}
-        onOpenLogs={() => setSystemLogDrawerOpen(true)}
-      />
-      <ReleasePublishTaskDock />
-    </Layout>
+    </>
   )
 }
 

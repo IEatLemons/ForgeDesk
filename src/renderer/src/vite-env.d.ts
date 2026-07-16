@@ -293,6 +293,7 @@ type TerminalExitEvent = {
 
 type AppRuntimeInfo = {
   version: string
+  canQuickBuild: boolean
   isPackaged: boolean
   isDevelopmentBuild: boolean
   isDevServer: boolean
@@ -300,10 +301,156 @@ type AppRuntimeInfo = {
   projectRoot: string
 }
 
+type SystemMonitorStatus = 'healthy' | 'warning' | 'critical'
+
+type SystemMonitorDiskVolume = {
+  filesystem: string
+  mount: string
+  totalBytes: number
+  usedBytes: number
+  availableBytes: number
+  usagePercent: number
+}
+
+type SystemMonitorMemoryInfo = {
+  totalBytes: number
+  usedBytes: number
+  freeBytes: number
+  usagePercent: number
+}
+
+type SystemMonitorCpuInfo = {
+  model: string
+  coreCount: number
+  speedMhz: number
+  loadAverage: number[]
+  loadPercent: number
+}
+
+type SystemMonitorAppInfo = {
+  version: string
+  isPackaged: boolean
+  isDevelopmentBuild: boolean
+  isDevServer: boolean
+  appPath: string
+  projectRoot: string
+  processId: number
+  uptimeSeconds: number
+  nodeVersion: string
+  electronVersion: string
+  chromeVersion: string
+  v8Version: string
+}
+
+type SystemMonitorNetworkInterface = {
+  name: string
+  address: string
+  family: string
+  mac: string
+  cidr: string
+  internal: boolean
+}
+
+type SystemMonitorProxyEndpoint = {
+  enabled: boolean
+  host: string
+  port: number
+}
+
+type SystemMonitorProxyInfo = {
+  available: boolean
+  enabled: boolean
+  source: 'macos' | 'environment' | 'none'
+  http: SystemMonitorProxyEndpoint
+  https: SystemMonitorProxyEndpoint
+  socks: SystemMonitorProxyEndpoint
+  pac: {
+    enabled: boolean
+    url: string
+  }
+  bypass: string[]
+  error: string
+}
+
+type SystemMonitorDefaultRoute = {
+  gateway: string
+  interface: string
+  error: string
+}
+
+type SystemMonitorClashProxyGroup = {
+  name: string
+  type: string
+  now: string
+}
+
+type SystemMonitorClashInfo = {
+  detected: boolean
+  running: boolean
+  apiAvailable: boolean
+  status: 'connected' | 'auth-required' | 'not-running' | 'unknown'
+  name: string
+  controllerUrl: string
+  configPath: string
+  secretConfigured: boolean
+  version: string
+  mode: string
+  allowLan: boolean
+  mixedPort: number
+  httpPort: number
+  socksPort: number
+  redirPort: number
+  tproxyPort: number
+  activeProxyGroups: SystemMonitorClashProxyGroup[]
+  connectionCount: number
+  downloadTotalBytes: number
+  uploadTotalBytes: number
+  downloadSpeedBytes: number
+  uploadSpeedBytes: number
+  message: string
+  error: string
+}
+
+type SystemMonitorNetworkInfo = {
+  interfaces: SystemMonitorNetworkInterface[]
+  dnsServers: string[]
+  proxy: SystemMonitorProxyInfo
+  route: SystemMonitorDefaultRoute
+  clash: SystemMonitorClashInfo
+}
+
+type SystemMonitorSnapshot = {
+  checkedAt: string
+  status: SystemMonitorStatus
+  statusMessage: string
+  system: {
+    platform: NodeJS.Platform
+    release: string
+    arch: string
+    hostname: string
+    uptimeSeconds: number
+  }
+  cpu: SystemMonitorCpuInfo
+  memory: SystemMonitorMemoryInfo
+  disks: SystemMonitorDiskVolume[]
+  diskError: string
+  network: SystemMonitorNetworkInfo
+  app: SystemMonitorAppInfo
+}
+
 type QuickBuildTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 type QuickBuildStartInput = {
   cwd?: string
+}
+
+type QuickBuildRestartInput = {
+  cwd?: string
+}
+
+type QuickBuildRestartResult = {
+  appPath: string
+  restarted: boolean
 }
 
 type QuickBuildTask = {
@@ -1825,6 +1972,7 @@ interface Window {
     getOverviewSnapshot: () => Promise<OverviewSnapshot>
     refreshOverviewNews: () => Promise<OverviewNewsReport>
     refreshOverviewProjects: () => Promise<OverviewProjectReport>
+    getSystemMonitorSnapshot: () => Promise<SystemMonitorSnapshot>
     getOaSettings: () => Promise<OaSettingsView>
     saveOaSettings: (input: OaSettingsInput) => Promise<OaSettingsView>
     openOaDocs: () => Promise<void>
@@ -1897,6 +2045,7 @@ interface Window {
     startQuickBuild: (input?: QuickBuildStartInput) => Promise<QuickBuildTask>
     getQuickBuildTask: () => Promise<QuickBuildTask | null>
     cancelQuickBuild: () => Promise<QuickBuildTask>
+    restartQuickBuildApp: (input?: QuickBuildRestartInput) => Promise<QuickBuildRestartResult>
     onQuickBuildTaskUpdated: (listener: (task: QuickBuildTask | null) => void) => () => void
     onAppUpdateState: (listener: (state: AppUpdateState) => void) => () => void
     openAppReleases: () => Promise<void>

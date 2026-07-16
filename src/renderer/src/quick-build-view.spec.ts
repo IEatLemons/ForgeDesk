@@ -3,16 +3,18 @@ import { describe, it } from 'node:test'
 import { createQuickBuildCompletionPrompt } from './quick-build-view.js'
 
 describe('quick build view model', () => {
-  it('asks the user to reopen the app after a successful quick build', () => {
+  it('offers to restart into the new app after a successful quick build', () => {
     const prompt = createQuickBuildCompletionPrompt({
       command: 'pnpm package:mac:legacy',
       cwd: '/Users/stone/develop/stone/ForgeDesk',
       status: 'succeeded'
     })
 
-    assert.equal(prompt?.title, '快速构建完成，请重新打开 app')
-    assert.match(prompt?.description ?? '', /重新打开 app/)
+    assert.equal(prompt?.title, '快速构建完成，可以直接重启')
+    assert.match(prompt?.description ?? '', /直接重启/)
     assert.match(prompt?.detail ?? '', /pnpm package:mac:legacy/)
+    assert.equal(prompt?.restartText, '直接重启')
+    assert.equal(prompt?.cancelText, '稍后手动打开')
   })
 
   it('does not show a reopen prompt for unfinished or unsuccessful quick builds', () => {
