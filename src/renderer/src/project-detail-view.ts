@@ -68,6 +68,11 @@ export type RepositorySummarySource = {
   latestCommit: string
   localPath: string
   name: string
+  repositoryKind?: 'root' | 'submodule'
+  expectedCommit?: string
+  checkedOutCommit?: string
+  submoduleState?: string
+  isDetached?: boolean
 }
 
 export type RepositorySummaryField = {
@@ -94,10 +99,10 @@ export function shouldShowRepositorySummary(_tab: ProjectDetailTabKey, hasReposi
 }
 
 export function createRepositorySummaryFields(repository: RepositorySummarySource, commitCount: number): RepositorySummaryField[] {
-  return [
+  const fields: RepositorySummaryField[] = [
     {
       label: '当前分支',
-      value: repository.currentBranch,
+      value: repository.isDetached ? 'Detached HEAD' : repository.currentBranch,
       strong: true
     },
     {
@@ -110,6 +115,42 @@ export function createRepositorySummaryFields(repository: RepositorySummarySourc
       strong: true
     }
   ]
+
+  if (repository.repositoryKind === 'submodule') {
+    fields.splice(1, 0, {
+      label: '当前 HEAD',
+      value: repository.checkedOutCommit ? repository.checkedOutCommit.slice(0, 12) : '-'
+    })
+    fields.splice(2, 0, {
+      label: '父仓库锁定',
+      value: repository.expectedCommit ? repository.expectedCommit.slice(0, 12) : '-'
+    })
+    fields.splice(3, 0, {
+      label: '子模块状态',
+      value: formatSubmoduleState(repository.submoduleState)
+    })
+  }
+
+  return fields
+}
+
+function formatSubmoduleState(state?: string): string {
+  switch (state) {
+    case 'aligned':
+      return '已对齐'
+    case 'changed':
+      return '提交不一致'
+    case 'dirty':
+      return '有本地改动'
+    case 'uninitialized':
+      return '未初始化'
+    case 'missing':
+      return '目录缺失'
+    case 'conflicted':
+      return '冲突'
+    default:
+      return '未知'
+  }
 }
 
 export function createProjectTerminalOpenRequest(project: ProjectTerminalSource): TerminalOpenRequest {

@@ -11,6 +11,8 @@ export type SystemMonitorStatusMeta = {
 export type SystemMonitorSummary = {
   maxDiskUsagePercent: number
   primaryDisk: SystemMonitorDiskVolume | null
+  primaryDiskUsagePercent: number
+  highestUsageDisk: SystemMonitorDiskVolume | null
 }
 
 export type SystemMonitorHardwareKey = 'cpu' | 'memory' | 'storage' | 'network'
@@ -68,6 +70,26 @@ export function formatBytes(value: number): string {
 
   const precision = size >= 10 || unitIndex === 0 ? 0 : 1
   return `${size.toFixed(precision)} ${units[unitIndex]}`
+}
+
+export function formatMemoryBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return '0 B'
+  }
+
+  if (value >= 1024 ** 3) {
+    return `${(value / 1024 ** 3).toFixed(2)} GB`
+  }
+
+  if (value >= 1024 ** 2) {
+    return `${(value / 1024 ** 2).toFixed(1)} MB`
+  }
+
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(1)} KB`
+  }
+
+  return `${Math.round(value)} B`
 }
 
 export function formatStorageBytes(value: number): string {
@@ -155,11 +177,15 @@ export function formatNetworkPort(value: number): string {
 
 export function createSystemMonitorSummary(snapshot: SystemMonitorSnapshot): SystemMonitorSummary {
   const primaryDisk = snapshot.disks.find((disk) => disk.mount === '/') ?? snapshot.disks[0] ?? null
-  const maxDiskUsagePercent = snapshot.disks.reduce((max, disk) => Math.max(max, disk.usagePercent), 0)
+  const highestUsageDisk = snapshot.disks.reduce<SystemMonitorDiskVolume | null>((highest, disk) => !highest || disk.usagePercent > highest.usagePercent ? disk : highest, null)
+  const primaryDiskUsagePercent = primaryDisk?.usagePercent ?? 0
+  const maxDiskUsagePercent = highestUsageDisk?.usagePercent ?? 0
 
   return {
     maxDiskUsagePercent,
-    primaryDisk
+    primaryDisk,
+    primaryDiskUsagePercent,
+    highestUsageDisk
   }
 }
 
@@ -295,10 +321,13 @@ export function createSystemMonitorHardwareMetrics(snapshot: SystemMonitorSnapsh
   const summary = createSystemMonitorSummary(snapshot)
   const activeInterfaces = snapshot.network.interfaces.filter((item) => !item.internal)
   const networkSpeedBytes = snapshot.network.clash.downloadSpeedBytes + snapshot.network.clash.uploadSpeedBytes
-  const storageUsagePercent = summary.maxDiskUsagePercent
+  const storageUsagePercent = summary.primaryDiskUsagePercent
   const primaryDiskDetail = summary.primaryDisk
     ? `${summary.primaryDisk.mount === '/' ? 'Macintosh HD' : summary.primaryDisk.mount} 可用 ${formatStorageBytes(summary.primaryDisk.availableBytes)}`
     : '未读取到磁盘数据'
+  const highestDiskDetail = summary.highestUsageDisk && summary.highestUsageDisk !== summary.primaryDisk && summary.maxDiskUsagePercent > storageUsagePercent
+    ? `最高卷 ${summary.highestUsageDisk.mount} ${formatPercent(summary.maxDiskUsagePercent)}`
+    : ''
   const routeDetail = snapshot.network.route.interface
     ? `出口 ${snapshot.network.route.interface}${snapshot.network.route.gateway ? ` · 网关 ${snapshot.network.route.gateway}` : ''}`
     : '未识别默认出口'
@@ -315,8 +344,10 @@ export function createSystemMonitorHardwareMetrics(snapshot: SystemMonitorSnapsh
       value: toFinitePercent(snapshot.cpu.loadPercent)
     },
     {
-      description: `${formatBytes(snapshot.memory.usedBytes)} / ${formatBytes(snapshot.memory.totalBytes)}`,
-      detail: `剩余 ${formatBytes(snapshot.memory.freeBytes)}`,
+      description: `${formatMemoryBytes(snapshot.memory.usedBytes)} / ${formatMemoryBytes(snapshot.memory.totalBytes)}`,
+      detail: snapshot.memory.source === 'macos-vm'
+        ? `缓存文件 ${formatMemoryBytes(snapshot.memory.cachedFileBytes)}`
+        : `剩余 ${formatMemoryBytes(snapshot.memory.freeBytes)}`,
       displayValue: formatPercent(snapshot.memory.usagePercent),
       key: 'memory',
       label: SYSTEM_MONITOR_HARDWARE_LABELS.memory,
@@ -326,7 +357,9 @@ export function createSystemMonitorHardwareMetrics(snapshot: SystemMonitorSnapsh
     },
     {
       description: primaryDiskDetail,
-      detail: snapshot.disks.length > 1 ? `${snapshot.disks.length} 个卷宗 · 最高使用 ${formatPercent(storageUsagePercent)}` : primaryDiskDetail,
+      detail: snapshot.disks.length > 1
+        ? `${snapshot.disks.length} 个卷宗 · 主磁盘使用 ${formatPercent(storageUsagePercent)}${highestDiskDetail ? ` · ${highestDiskDetail}` : ''}`
+        : primaryDiskDetail,
       displayValue: snapshot.disks.length > 0 ? formatPercent(storageUsagePercent) : '-',
       key: 'storage',
       label: SYSTEM_MONITOR_HARDWARE_LABELS.storage,
@@ -356,7 +389,7 @@ export function createSystemMonitorHistoryPoint(snapshot: SystemMonitorSnapshot)
     hostname: snapshot.system.hostname,
     memoryUsagePercent: toFinitePercent(snapshot.memory.usagePercent),
     networkSpeedBytes: Math.max(0, snapshot.network.clash.downloadSpeedBytes + snapshot.network.clash.uploadSpeedBytes),
-    storageUsagePercent: toFinitePercent(summary.maxDiskUsagePercent)
+    storageUsagePercent: toFinitePercent(summary.primaryDiskUsagePercent)
   }
 }
 

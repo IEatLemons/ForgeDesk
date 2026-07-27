@@ -95,7 +95,14 @@ describe('app theme integration', () => {
       '.release-task-item',
       '.remote-manager',
       '.git-command-console',
-      '.git-operation-box'
+      '.git-operation-box',
+      '.ai-chat-shell.codex-workbench',
+      '.codex-workbench-sidebar',
+      '.codex-workbench-main',
+      '.codex-workbench-inspector',
+      '.codex-composer',
+      '.codex-task-row.is-active',
+      '.codex-task-error'
     ]
 
     for (const selector of customSurfaceSelectors) {

@@ -9,7 +9,8 @@ const projectA = {
   status: 'ready' as const,
   owner: '',
   workspacePath: '/tmp/project-a',
-  createdAt: '2026-06-23T00:00:00.000Z'
+  createdAt: '2026-06-23T00:00:00.000Z',
+  isFavorite: false
 }
 
 const projectB = {
@@ -23,6 +24,18 @@ const repositoryA = {
   id: 'repo-a',
   projectId: 'project-a',
   name: 'repo-a',
+  repositoryKind: 'root' as const,
+  parentRepositoryId: '',
+  relativePath: '.',
+  submoduleName: '',
+  submoduleUrl: '',
+  expectedCommit: '',
+  checkedOutCommit: '',
+  isDetached: false,
+  submoduleState: 'unknown' as const,
+  available: true,
+  scanError: '',
+  active: true,
   localPath: '/tmp/project-a/repo-a',
   remoteUrl: '',
   remotes: [],

@@ -1,0 +1,30 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'app.forgedesk.android'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'app.forgedesk.android'
+        minSdk 24
+        targetSdk 35
+        versionCode 10008
+        versionName '1.0.8'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    sourceSets {
+        main {
+            assets.srcDirs = ['src/main/assets']
+        }
+    }
+}

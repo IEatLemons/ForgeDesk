@@ -3,6 +3,18 @@
 type ScannedRepository = {
   id: string
   name: string
+  repositoryKind: 'root' | 'submodule'
+  parentRepositoryId: string
+  relativePath: string
+  submoduleName: string
+  submoduleUrl: string
+  expectedCommit: string
+  checkedOutCommit: string
+  isDetached: boolean
+  submoduleState: 'aligned' | 'changed' | 'dirty' | 'uninitialized' | 'missing' | 'conflicted' | 'unknown'
+  available: boolean
+  scanError: string
+  active: boolean
   localPath: string
   remoteUrl: string
   remotes: GitRemote[]
@@ -29,6 +41,53 @@ type GitRemote = {
   fetchUrl: string
   pushUrl: string
 }
+
+type DeploymentProviderType = 'vercel' | 'railway' | 'ssh-pm2' | 'docker-compose'
+type DeploymentSourceMode = 'git' | 'local'
+type DeploymentEnvSource = 'provider' | 'local' | 'manual'
+type DeploymentEnvBinding = { key: string; source: DeploymentEnvSource; required: boolean; configured: boolean }
+type ProjectDeploymentConfig = {
+  repositoryId: string
+  provider: DeploymentProviderType
+  sourceMode: DeploymentSourceMode
+  rootDirectory: string
+  branch: string
+  installCommand: string
+  buildCommand: string
+  outputDirectory: string
+  framework: string
+  packageManager: 'pnpm' | 'npm' | 'yarn' | 'bun' | ''
+  runtimeVersion: string
+  startCommand: string
+  port: string
+  healthPath: string
+  remoteHost: string
+  remotePath: string
+  uploadPath: string
+  appName: string
+  dockerContext: string
+  dockerfile: string
+  composeFile: string
+  composeService: string
+  envBindings: DeploymentEnvBinding[]
+  extra: Record<string, string>
+}
+type ProjectDeploymentTarget = {
+  id: string; projectId: string; repositoryId: string; provider: DeploymentProviderType; connectionId: string; serviceId: string
+  externalProjectId: string; externalProjectName: string; externalServiceId: string; externalServiceName: string
+  externalEnvironmentId: string; externalEnvironmentName: string; displayName: string; status: 'draft' | 'ready' | 'attention'
+  latestDeploymentId: string; latestDeploymentUrl: string; lastStatus: string; lastError: string; createdAt: string; updatedAt: string
+  config: ProjectDeploymentConfig
+}
+type ProjectDeploymentTargetInput = Partial<Omit<ProjectDeploymentTarget, 'config'>> & { projectId: string; repositoryId: string; provider: DeploymentProviderType; config: Partial<ProjectDeploymentConfig> }
+type DeploymentProviderCapabilities = { provider: DeploymentProviderType; label: string; supportsGit: boolean; supportsLocal: boolean; supportsCreateTarget: boolean; supportsBuildConfig: boolean; supportsCancel: boolean; configFields: string[]; platformManagedFields: string[] }
+type DeploymentContextFile = { path: string; category: 'manifest' | 'documentation' | 'build' | 'source' | 'container'; sizeBytes: number; includedInAi: boolean; redacted: boolean }
+type DeploymentInspection = { repositoryId: string; repositoryName: string; localPath: string; currentBranch: string; defaultBranch: string; branches: string[]; remoteBranches: string[]; remoteUrl: string; files: DeploymentContextFile[]; detected: { framework: string; packageManager: ProjectDeploymentConfig['packageManager']; scripts: Record<string, string>; nodeVersion: string; pythonVersion: string; hasDockerfile: boolean; hasCompose: boolean; hasReadme: boolean; hasEnvironmentExample: boolean }; aiContext: string }
+type ProjectDeploymentSuggestion = { config: ProjectDeploymentConfig; confidence: number; reasons: string[]; warnings: string[]; sources: string[] }
+type ProjectDeploymentPrepareInput = { targetId?: string; repositoryId: string; provider: DeploymentProviderType; sourceMode: DeploymentSourceMode; config?: Partial<ProjectDeploymentConfig> }
+type ProjectDeploymentPreparation = { target: ProjectDeploymentTarget | null; config: ProjectDeploymentConfig; capabilities: DeploymentProviderCapabilities; issues: string[]; warnings: string[]; previewCommand: string; ready: boolean }
+type ProjectDeploymentTask = { id: string; projectId: string; targetId: string; repositoryId: string; targetName: string; provider: DeploymentProviderType; sourceMode: DeploymentSourceMode; status: 'running' | 'succeeded' | 'failed' | 'cancelled'; phase: string; phaseIndex: number; phaseTotal: number; hint: string; log: string; stdout: string; stderr: string; exitCode: number | null; error?: string; externalDeploymentId?: string; externalDeploymentUrl?: string; externalStatus?: string; artifactPath?: string; config: ProjectDeploymentConfig; startedAt: string; updatedAt: string; finishedAt?: string }
+type ProjectDeploymentTaskStartInput = { projectId: string; targetId: string; config?: Partial<ProjectDeploymentConfig> }
 
 type GitPushTarget = {
   remote: string
@@ -140,6 +199,10 @@ type TerminalCreateInput = {
   reuseKey?: string
   cols?: number
   rows?: number
+  directCommand?: {
+    file: string
+    args?: string[]
+  }
   startupCommand?: string
 }
 
@@ -269,6 +332,7 @@ type TerminalSession = {
   title: string
   cwd: string
   shell: string
+  launchMode?: 'shell' | 'direct'
   pid: number
   reuseKey?: string
   exited: boolean
@@ -317,6 +381,13 @@ type SystemMonitorMemoryInfo = {
   usedBytes: number
   freeBytes: number
   usagePercent: number
+  appBytes: number
+  wiredBytes: number
+  compressedBytes: number
+  cachedFileBytes: number
+  swapUsedBytes: number
+  swapTotalBytes: number
+  source: 'macos-vm' | 'node'
 }
 
 type SystemMonitorCpuInfo = {
@@ -437,6 +508,31 @@ type SystemMonitorSnapshot = {
   network: SystemMonitorNetworkInfo
   app: SystemMonitorAppInfo
 }
+
+type ResourceProcess = {
+  identityKey: string; instanceKey: string; pid: number; parentPid: number; appName: string; processName: string; user: string
+  cpuPercent: number; memoryBytes: number; privateMemoryBytes: number; virtualMemoryBytes: number; threadCount: number; portCount: number
+  pageIns: number; state: string; elapsedSeconds: number; executablePath: string; bundlePath: string; command: string
+}
+type ResourceHistoryPoint = { capturedAt: string; cpuPercent: number; memoryUsagePercent: number; memoryUsedBytes: number; swapUsedBytes: number; storageUsagePercent: number }
+type ProcessHistoryPoint = { capturedAt: string; cpuAverage: number; cpuPeak: number; memoryAverageBytes: number; memoryPeakBytes: number; sampleCount: number }
+type ProcessAnalysis = { identityKey: string; appName: string; processName: string; executablePath: string; averageCpuPercent: number; peakCpuPercent: number; averageMemoryBytes: number; peakMemoryBytes: number; sampleCount: number; aboveThresholdSeconds: number; firstSeenAt: string; lastSeenAt: string }
+type ResourceRetentionStatus = { rawDays: number; fiveMinuteDays: number; sampleIntervalSeconds: number; rawSampleCount: number; rollupSampleCount: number; oldestRawAt: string; databaseBytesEstimate: number }
+type CleanupRisk = 'low' | 'confirm' | 'high' | 'protected'
+type CleanupCategory = 'large-file' | 'stale-file' | 'duplicate-candidate' | 'download' | 'cache' | 'log' | 'development' | 'docker' | 'trash' | 'protected'
+type StorageRoot = { id: string; path: string; label: string; enabled: boolean; source: 'manual' | 'project' | 'category'; createdAt: string; lastScannedAt: string }
+type StorageScanItem = { id: string; scanId: string; rootId: string; path: string; name: string; sizeBytes: number; modifiedAt: string; accessedAt: string; extension: string; category: CleanupCategory; risk: CleanupRisk; reason: string; duplicateKey: string; verifiedHash: string; isDirectory: boolean }
+type StorageScanRun = { id: string; mode: 'quick' | 'deep'; status: 'running' | 'paused' | 'completed' | 'failed'; startedAt: string; finishedAt: string; filesScanned: number; directoriesScanned: number; bytesScanned: number; reclaimableBytes: number; errorCount: number; errors: string[] }
+type CleanupPolicy = { key: CleanupCategory; label: string; description: string; enabled: boolean; risk: CleanupRisk; thresholdBytes: number; staleDays: number; requiresCategoryAuthorization: boolean }
+type CleanupAuditRecord = { id: string; action: 'scan' | 'verify' | 'ignore' | 'trash' | 'command' | 'terminate' | 'force-terminate' | 'export'; target: string; status: 'success' | 'failed' | 'blocked'; detail: string; reclaimedBytes: number; createdAt: string }
+type ExternalCleanupPreview = { key: 'docker-images' | 'docker-containers' | 'docker-build-cache'; label: string; command: string; estimatedBytes: number; risk: 'high'; enabled: boolean }
+type StorageDirectoryEntry = { path: string; name: string; rootId: string; sizeBytes: number; growthBytes: number; parentPath: string; fileCount: number; directoryCount: number; childDirectoryCount: number; depth: number; rootPercent: number }
+type StorageDirectorySortBy = 'name' | 'sizeBytes' | 'growthBytes' | 'fileCount' | 'directoryCount' | 'childDirectoryCount' | 'depth'
+type StorageDirectoryQuery = { scanId?: string; rootId?: string; parentPath?: string; search?: string; limit?: number; offset?: number; sortBy?: StorageDirectorySortBy; sortOrder?: 'asc' | 'desc' }
+type StorageDirectoryList = { scanId: string; total: number; directories: StorageDirectoryEntry[] }
+type StorageTrendPoint = { capturedAt: string; scannedBytes: number; reclaimableBytes: number }
+type StorageOverview = { roots: StorageRoot[]; latestRun: StorageScanRun | null; items: StorageScanItem[]; policies: CleanupPolicy[]; totalReclaimableBytes: number; categoryBytes: Record<string, number>; directories: StorageDirectoryEntry[]; trend: StorageTrendPoint[] }
+type StorageScanProgress = { scanId: string; status: StorageScanRun['status']; currentPath: string; filesScanned: number; directoriesScanned: number; bytesScanned: number; reclaimableBytes: number; errorCount: number }
 
 type QuickBuildTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
@@ -1229,6 +1325,7 @@ type ProjectRecord = {
   owner: string
   workspacePath: string
   createdAt: string
+  isFavorite: boolean
 }
 
 type RepositoryRecord = ScannedRepository & {
@@ -1298,8 +1395,30 @@ type GitSetupStatus = {
   gitVersion: string
   userName: string
   userEmail: string
+  gpgAvailable: boolean
+  gpgVersion: string
+  gpgKeys: GpgSecretKeyRecord[]
+  gitSigningKey: string
+  gitCommitGpgSign: boolean
   sshPublicKeys: SshPublicKeyRecord[]
   sshPrivateKeys: SshPrivateKeyRecord[]
+}
+
+type GpgKeyUserId = {
+  uid: string
+  name: string
+  email: string
+}
+
+type GpgSecretKeyRecord = {
+  keyId: string
+  fingerprint: string
+  algorithm: string
+  createdAt: string
+  expiresAt: string
+  trust: string
+  capabilities: string
+  userIds: GpgKeyUserId[]
 }
 
 type SshKeyKind = 'private' | 'public'
@@ -1370,6 +1489,102 @@ type AiRuntimeStatus = {
   checkedAt: string
 }
 
+type CodexTaskRunStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+type CodexTaskMessage = {
+  id: string
+  taskId: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  images: string[]
+  eventType: string
+  createdAt: string
+}
+
+type CodexTaskEnvironment = {
+  cwd: string
+  branch: string
+  additions: number
+  deletions: number
+  filesChanged: number
+  hasChanges: boolean
+  repositoryAvailable: boolean
+  checkedAt: string
+}
+
+type CodexTaskRecord = {
+  id: string
+  title: string
+  projectId: string
+  cwd: string
+  status: CodexTaskRunStatus
+  model: string
+  branch: string
+  additions: number
+  deletions: number
+  filesChanged: number
+  errorMessage: string
+  runLog: string
+  createdAt: string
+  updatedAt: string
+  finishedAt: string
+  messages: CodexTaskMessage[]
+  environment: CodexTaskEnvironment
+}
+
+type CodexTaskCreateInput = {
+  title?: string
+  projectId?: string
+  cwd?: string
+  model?: string
+}
+
+type CodexTaskRenameInput = {
+  taskId: string
+  title: string
+}
+
+type CodexTaskMessageInput = {
+  taskId: string
+  content: string
+  images?: string[]
+}
+
+type CodexTaskEventType = 'updated' | 'running' | 'output' | 'succeeded' | 'failed' | 'cancelled'
+
+type CodexTaskEvent = {
+  type: CodexTaskEventType
+  task: CodexTaskRecord
+}
+
+type CodexActivitySnapshot = {
+  available: boolean
+  running: number
+  completed: number
+  aborted: number
+  sessions: CodexSessionRecord[]
+  checkedAt: string
+  source: string
+  error: string
+}
+
+type CodexSessionStatus = 'idle' | 'running' | 'completed' | 'aborted'
+
+type CodexSessionRecord = {
+  id: string
+  filePath: string
+  title: string
+  cwd: string
+  status: CodexSessionStatus
+  startedAt: string
+  updatedAt: string
+  tasks: number
+  completed: number
+  aborted: number
+  lastEvent: string
+  lastMessage: string
+}
+
 type OpenRouterModel = {
   id: string
   name: string
@@ -1382,6 +1597,8 @@ type OaSettingsInput = {
   larkAppId: string
   larkAppSecret?: string
   docsHomeUrl: string
+  larkBotUrl: string
+  larkBotAdminToken?: string
   enableDocumentBrowsing: boolean
   enableDocumentEditing: boolean
   enableAiDocumentDrafting: boolean
@@ -1394,6 +1611,9 @@ type OaSettingsView = {
   larkAppSecret: string
   larkAppSecretConfigured: boolean
   docsHomeUrl: string
+  larkBotUrl: string
+  larkBotAdminToken: string
+  larkBotAdminTokenConfigured: boolean
   enableDocumentBrowsing: boolean
   enableDocumentEditing: boolean
   enableAiDocumentDrafting: boolean
@@ -1418,6 +1638,23 @@ type OaDocumentList = {
   unsupportedReason: string
 }
 
+type OaDocumentTaskRecord = {
+  id: string
+  title: string
+  completed: boolean
+  documentToken: string
+  documentName: string
+  documentUrl: string
+}
+
+type OaDocumentTaskList = {
+  documentToken: string
+  documentName: string
+  documentUrl: string
+  tasks: OaDocumentTaskRecord[]
+  unsupportedReason: string
+}
+
 type OaBitableTable = { id: string; name: string; revision: number }
 type OaBitableField = { id: string; name: string; type: number; uiType: string; isPrimary: boolean; property: Record<string, unknown> }
 type OaBitableRecord = { id: string; fields: Record<string, unknown>; createdAt: string; updatedAt: string }
@@ -1430,6 +1667,52 @@ type OaBitableSnapshot = {
   fields: OaBitableField[]
   records: OaBitableRecord[]
   unsupportedReason: string
+}
+
+type LarkBotTask = {
+  recordId: string
+  name: string
+  status: string
+  progress: string
+  owner: string
+  startAt: string
+  dueAt: string
+  note: string
+  completed: boolean
+}
+
+type LarkBotNotification = {
+  id: string
+  category: string
+  title: string
+  body: string
+  createdAt: string
+}
+
+type LarkBotRuntimeSettings = {
+  monitorEnabled: boolean
+  remindersEnabled: boolean
+  pollIntervalSeconds: number
+  reminderHour: number
+  reminderMinute: number
+  reminderDaysAhead: number
+  notifyOnFirstSync: boolean
+  fieldTask: string
+  fieldStatus: string
+  fieldProgress: string
+  fieldOwner: string
+  fieldStart: string
+  fieldDue: string
+  fieldNote: string
+  completedStatuses: string
+}
+
+type LarkBotDashboard = {
+  settings: LarkBotRuntimeSettings
+  connection: { apiBaseUrl: string; appId: string; appToken: string; tableId: string; chatId: string }
+  stats: { total: number; completed: number; inProgress: number; overdue: number; dueSoon: number }
+  state: { lastSyncAt: string; lastSyncResult: Record<string, unknown> | null; lastEventAt: string; lastError: string }
+  tasks: LarkBotTask[]
 }
 
 type MonthlyPerformancePreviewInput = {
@@ -1792,6 +2075,111 @@ type CloudflareDnsRecord = {
   modifiedAt: string
 }
 
+type DataSourceKind = 'mysql' | 'postgresql' | 'redis' | 's3'
+
+type DataSourceConfig = {
+  host?: string
+  port?: number
+  database?: string
+  username?: string
+  ssl?: boolean
+  url?: string
+  tls?: boolean
+  region?: string
+  bucket?: string
+  endpoint?: string
+  forcePathStyle?: boolean
+  accessKeyId?: string
+}
+
+type DataSourceSecret = {
+  password?: string
+  secretAccessKey?: string
+  sessionToken?: string
+}
+
+type DataSourceConnectionInput = {
+  id?: string
+  kind: DataSourceKind
+  name: string
+  config: DataSourceConfig
+  secret?: DataSourceSecret
+}
+
+type DataSourceConnection = {
+  id: string
+  kind: DataSourceKind
+  name: string
+  config: DataSourceConfig
+  secretConfigured: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+type DataSourceConnectionTestResult = {
+  ok: boolean
+  message: string
+  detail: string
+}
+
+type DataSourceDatabaseTable = {
+  schema: string
+  name: string
+  type: string
+}
+
+type DataSourceTabularResult = {
+  columns: string[]
+  rows: Array<Record<string, unknown>>
+  rowCount: number
+  truncated: boolean
+  durationMs: number
+}
+
+type DataSourceRedisScanResult = {
+  keys: string[]
+  nextCursor: string
+  scannedCount: number
+}
+
+type DataSourceRedisValuePreview = {
+  key: string
+  type: string
+  ttlSeconds: number
+  size: number
+  value: unknown
+  rows: Array<Record<string, unknown>>
+}
+
+type DataSourceS3Object = {
+  key: string
+  size: number
+  lastModified: string
+  etag: string
+  storageClass: string
+}
+
+type DataSourceS3ListResult = {
+  bucket: string
+  prefix: string
+  objects: DataSourceS3Object[]
+  nextContinuationToken: string
+  truncated: boolean
+}
+
+type DataSourceS3ObjectPreview = {
+  bucket: string
+  key: string
+  size: number
+  lastModified: string
+  etag: string
+  contentType: string
+  isText: boolean
+  content: string
+  bytesRead: number
+  truncated: boolean
+}
+
 type MenuBarItemSection = 'visible' | 'hidden' | 'always-hidden'
 
 type MenuBarManagerSettings = {
@@ -1852,8 +2240,11 @@ interface Window {
   forgeDesk: {
     listProjects: () => Promise<WorkspaceSnapshot>
     createProject: (input: { name: string; workspacePath: string; repositories: ScannedRepository[] }) => Promise<WorkspaceSnapshot>
+    createProjectFromRemote: (input: { name: string; remoteUrl: string; parentPath: string }) => Promise<WorkspaceSnapshot>
     updateProject: (input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }) => Promise<WorkspaceSnapshot>
+    setProjectFavorite: (input: { id: string; isFavorite: boolean }) => Promise<WorkspaceSnapshot>
     deleteProject: (projectId: string) => Promise<WorkspaceSnapshot>
+    rescanProjectRepositories: (projectId: string) => Promise<WorkspaceSnapshot>
     listRepositories: (projectId?: string) => Promise<RepositoryRecord[]>
     getRepositoryDetail: (repositoryId: string) => Promise<RepositoryRecord>
     listRepositoryCommits: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) => Promise<GitCommitRecord[]>
@@ -1861,13 +2252,14 @@ interface Window {
     syncRepositoryRemote: (repositoryId: string) => Promise<RepositoryRecord>
     saveRepositoryRemote: (input: RepositoryRemoteInput) => Promise<RepositoryRecord>
     deleteRepositoryRemote: (repositoryId: string, remoteName: string) => Promise<RepositoryRecord>
-    fetchRepositoryRemote: (repositoryId: string, remoteName?: string) => Promise<RepositoryRecord>
+    fetchRepositoryRemote: (repositoryId: string, remoteName?: string, operationId?: string) => Promise<RepositoryRecord>
     switchRepositoryBranch: (repositoryId: string, input: GitBranchSwitchInput) => Promise<RepositoryRecord>
     runRepositoryGitCommand: (input: GitCommandRequest) => Promise<GitCommandResult>
     getRepositoryWorkspaceStatus: (repositoryId: string) => Promise<GitWorkspaceStatus>
     gitAdd: (repositoryId: string, input: GitAddInput) => Promise<GitOperationResult>
     gitCommit: (repositoryId: string, input: GitCommitInput) => Promise<GitOperationResult>
-    gitPush: (repositoryId: string, input: GitPushInput) => Promise<GitOperationResult>
+    gitPush: (repositoryId: string, input: GitPushInput, operationId?: string) => Promise<GitOperationResult>
+    cancelRepositoryGitOperation: (operationId: string) => Promise<boolean>
     getRepositoryDeploymentApprovalConfig: (repositoryId: string) => Promise<DeploymentApprovalConfig | null>
     saveRepositoryDeploymentApprovalConfig: (input: DeploymentApprovalConfig) => Promise<DeploymentApprovalConfig>
     analyzeRepositoryDeploymentApproval: (repositoryId: string, input?: { manualBaselineSha?: string }) => Promise<DeploymentApprovalAnalysis>
@@ -1917,6 +2309,17 @@ interface Window {
     listProjectCloudflareDnsRecords: (projectId: string) => Promise<CloudflareDnsRecord[]>
     saveProjectCloudflareDnsRecord: (projectId: string, input: CloudflareDnsRecordInput) => Promise<CloudflareDnsRecord[]>
     deleteProjectCloudflareDnsRecord: (projectId: string, recordId: string) => Promise<CloudflareDnsRecord[]>
+    listDataSourceConnections: () => Promise<DataSourceConnection[]>
+    saveDataSourceConnection: (input: DataSourceConnectionInput) => Promise<DataSourceConnection>
+    deleteDataSourceConnection: (connectionId: string) => Promise<DataSourceConnection[]>
+    testDataSourceConnection: (connectionId: string) => Promise<DataSourceConnectionTestResult>
+    listDatabaseTables: (connectionId: string) => Promise<DataSourceDatabaseTable[]>
+    previewDatabaseTable: (connectionId: string, input: { schema?: string; table: string; limit?: number; offset?: number }) => Promise<DataSourceTabularResult>
+    runDataSourceSql: (connectionId: string, input: { sql: string; limit?: number }) => Promise<DataSourceTabularResult>
+    scanRedisKeys: (connectionId: string, input?: { pattern?: string; cursor?: string; limit?: number }) => Promise<DataSourceRedisScanResult>
+    previewRedisValue: (connectionId: string, input: { key: string; limit?: number }) => Promise<DataSourceRedisValuePreview>
+    listS3Objects: (connectionId: string, input?: { prefix?: string; continuationToken?: string; limit?: number }) => Promise<DataSourceS3ListResult>
+    previewS3Object: (connectionId: string, input: { key: string }) => Promise<DataSourceS3ObjectPreview>
     listServiceConnections: () => Promise<ServiceConnectionRecord[]>
     saveServiceConnection: (input: ServiceConnectionInput) => Promise<ServiceConnectionRecord>
     deleteServiceConnection: (connectionId: string) => Promise<ServiceConnectionRecord[]>
@@ -1944,6 +2347,16 @@ interface Window {
     verifyServiceDomain: (serviceId: string, domain: string) => Promise<ProjectServiceRecord>
     inspectServiceDomainConfig: (serviceId: string, domain: string) => Promise<VercelDomainConfig>
     listServiceRuntimeLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
+    inspectProjectDeploymentContext: (repositoryId: string) => Promise<DeploymentInspection>
+    suggestProjectDeploymentConfig: (repositoryId: string, input: { provider: DeploymentProviderType; sourceMode: DeploymentSourceMode }) => Promise<ProjectDeploymentSuggestion>
+    listProjectDeploymentTargets: (projectId: string) => Promise<ProjectDeploymentTarget[]>
+    saveProjectDeploymentTarget: (input: ProjectDeploymentTargetInput) => Promise<ProjectDeploymentTarget>
+    deleteProjectDeploymentTarget: (projectId: string, targetId: string) => Promise<ProjectDeploymentTarget[]>
+    prepareProjectDeployment: (input: ProjectDeploymentPrepareInput) => Promise<ProjectDeploymentPreparation>
+    startProjectDeploymentTask: (input: ProjectDeploymentTaskStartInput) => Promise<ProjectDeploymentTask>
+    listProjectDeploymentTasks: (projectId?: string) => Promise<ProjectDeploymentTask[]>
+    getProjectDeploymentTask: (taskId: string) => Promise<ProjectDeploymentTask | null>
+    cancelProjectDeploymentTask: (taskId: string) => Promise<ProjectDeploymentTask>
     getDockerSnapshot: () => Promise<DockerSnapshot>
     getDockerContainerDetail: (containerId: string) => Promise<DockerContainerDetail>
     createDockerDevEnvironment: (input: DockerDevEnvironmentInput) => Promise<DockerDevEnvironmentTaskSnapshot>
@@ -1963,23 +2376,73 @@ interface Window {
     clearRepositoryIdentity: (localPath: string) => Promise<ScannedRepository>
     selectDirectory: () => Promise<string | null>
     selectFile: () => Promise<string | null>
+    selectImage: () => Promise<string | null>
     getGitSetupStatus: () => Promise<GitSetupStatus>
     configureGitIdentity: (identity: { userName: string; userEmail: string }) => Promise<GitSetupStatus>
+    installGpg: () => Promise<{ status: GitSetupStatus; requiresManualInstall: boolean }>
+    importGpgBundle: (input: { sourcePath: string }) => Promise<GitSetupStatus>
+    copyGpgPublicKey: (fingerprint: string) => Promise<void>
+    configureGitGpgSigning: (fingerprint: string) => Promise<GitSetupStatus>
     getAiSettings: () => Promise<AiSettingsView>
     getAiRuntimeStatus: (verify?: boolean) => Promise<AiRuntimeStatus>
+    getCodexRuntimeStatus: (verify?: boolean) => Promise<AiRuntimeStatus>
+    getCodexActivitySnapshot: () => Promise<CodexActivitySnapshot>
+    listCodexTasks: () => Promise<CodexTaskRecord[]>
+    createCodexTask: (input?: CodexTaskCreateInput) => Promise<CodexTaskRecord>
+    renameCodexTask: (input: CodexTaskRenameInput) => Promise<CodexTaskRecord>
+    sendCodexTaskMessage: (input: CodexTaskMessageInput) => Promise<CodexTaskRecord>
+    cancelCodexTask: (taskId: string) => Promise<CodexTaskRecord>
+    deleteCodexTask: (taskId: string) => Promise<CodexTaskRecord[]>
+    getCodexTaskEnvironment: (taskId: string) => Promise<CodexTaskEnvironment>
+    onCodexTaskEvent: (listener: (event: CodexTaskEvent) => void) => () => void
     listOpenRouterModels: () => Promise<OpenRouterModel[]>
     saveAiSettings: (input: AiSettingsInput) => Promise<AiSettingsView>
     getOverviewSnapshot: () => Promise<OverviewSnapshot>
     refreshOverviewNews: () => Promise<OverviewNewsReport>
     refreshOverviewProjects: () => Promise<OverviewProjectReport>
     getSystemMonitorSnapshot: () => Promise<SystemMonitorSnapshot>
+    listCurrentResourceProcesses: () => Promise<ResourceProcess[]>
+    listResourceHistory: (range?: { from?: string; to?: string }) => Promise<ResourceHistoryPoint[]>
+    importLegacyResourceHistory: (points: Array<{ checkedAt: string; cpuLoadPercent: number; memoryUsagePercent: number; storageUsagePercent: number }>) => Promise<number>
+    listProcessResourceHistory: (identityKey: string, range?: { from?: string; to?: string }) => Promise<ProcessHistoryPoint[]>
+    listProcessAnalysis: (range?: { from?: string; to?: string }) => Promise<ProcessAnalysis[]>
+    getResourceRetentionStatus: () => Promise<ResourceRetentionStatus>
+    signalResourceProcess: (pid: number, force?: boolean) => Promise<void>
+    revealResourceProcess: (path: string) => Promise<void>
+    exportProcessAnalysis: (input: { format: 'csv' | 'json'; range?: { from?: string; to?: string } }) => Promise<{ canceled: boolean; path: string }>
+    getResourceMonitorSettings: () => Promise<{ sampleIntervalSeconds: number; rawRetentionDays: number; fiveMinuteRetentionDays: number; loginStartEnabled: boolean }>
+    setResourceLoginStart: (enabled: boolean) => Promise<{ enabled: boolean }>
+    getStorageGovernanceOverview: () => Promise<StorageOverview>
+    listStorageDirectories: (query?: StorageDirectoryQuery) => Promise<StorageDirectoryList>
+    selectStorageGovernanceRoots: () => Promise<StorageOverview>
+    saveStorageGovernanceRoot: (input: { path: string; label?: string; source?: 'manual' | 'project' | 'category' }) => Promise<StorageOverview>
+    deleteStorageGovernanceRoot: (rootId: string) => Promise<StorageOverview>
+    setCleanupCategoryAuthorization: (category: CleanupCategory, enabled: boolean) => Promise<StorageOverview>
+    startStorageGovernanceScan: (mode: 'quick' | 'deep') => Promise<StorageScanRun>
+    pauseStorageGovernanceScan: (scanId: string, paused: boolean) => Promise<void>
+    verifyStorageDuplicateGroup: (itemId: string) => Promise<StorageScanItem[]>
+    previewStorageCleanup: (itemIds: string[]) => Promise<StorageScanItem[]>
+    executeStorageCleanup: (itemIds: string[]) => Promise<CleanupAuditRecord[]>
+    listStorageCleanupAudit: () => Promise<CleanupAuditRecord[]>
+    listExternalCleanupPreviews: () => Promise<ExternalCleanupPreview[]>
+    executeExternalCleanup: (key: ExternalCleanupPreview['key']) => Promise<CleanupAuditRecord>
+    onStorageGovernanceProgress: (listener: (event: StorageScanProgress) => void) => () => void
     getOaSettings: () => Promise<OaSettingsView>
     saveOaSettings: (input: OaSettingsInput) => Promise<OaSettingsView>
     openOaDocs: () => Promise<void>
     listOaDocuments: () => Promise<OaDocumentList>
+    getOaDocumentTasks: (document: OaDocumentRecord) => Promise<OaDocumentTaskList>
     getOaBitable: (tableId?: string) => Promise<OaBitableSnapshot>
     saveOaBitableRecord: (input: { tableId: string; recordId?: string; fields: Record<string, unknown> }) => Promise<OaBitableRecord>
     deleteOaBitableRecord: (input: { tableId: string; recordId: string }) => Promise<void>
+    getLarkBotDashboard: () => Promise<LarkBotDashboard>
+    listLarkBotTasks: (query?: { q?: string; status?: string }) => Promise<LarkBotTask[]>
+    listLarkBotNotifications: () => Promise<LarkBotNotification[]>
+    getLarkBotSettings: () => Promise<LarkBotRuntimeSettings>
+    saveLarkBotSettings: (input: Partial<LarkBotRuntimeSettings>) => Promise<LarkBotRuntimeSettings>
+    syncLarkBot: () => Promise<Record<string, unknown>>
+    sendLarkBotTestMessage: () => Promise<void>
+    sendLarkBotReminder: () => Promise<void>
     getMenuBarManagerStatus: () => Promise<MenuBarManagerStatus>
     saveMenuBarManagerSettings: (input: Partial<MenuBarManagerSettings>) => Promise<MenuBarManagerStatus>
     requestMenuBarManagerPermission: () => Promise<MenuBarManagerStatus>

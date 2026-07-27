@@ -7,9 +7,16 @@ import { createAiNetworkError, createAiRequestError } from './ai-errors.js'
 import { buildAiRequestHeaders, isAiSettingsConfigured, isLocalAiProvider, type AiProvider, type AiSettings } from './ai-settings.js'
 
 const execFileAsync = promisify(execFile)
-const localProviderCommands: Record<'codex-cli' | 'cursor-cli', string[]> = {
-  'codex-cli': ['codex', '/Applications/ChatGPT.app/Contents/Resources/codex'],
-  'cursor-cli': ['cursor-agent', 'agent', join(process.env.HOME || '', '.local/bin/cursor-agent')]
+type LocalAiProvider = 'codex-cli' | 'cursor-cli'
+type ExecFileText = (file: string, args: string[], options: { timeout?: number }) => Promise<{ stdout: string; stderr: string }>
+
+type LocalCommandLookupOptions = {
+  env?: NodeJS.ProcessEnv
+  executableExists?: (command: string, env?: NodeJS.ProcessEnv) => Promise<boolean>
+}
+
+type AiRuntimeInspectionOptions = LocalCommandLookupOptions & {
+  execFileText?: ExecFileText
 }
 
 export type AiRuntimeStatus = {
@@ -26,7 +33,15 @@ export type AiRuntimeStatus = {
 
 type AiMessage = { role: 'system' | 'user' | 'assistant'; content: string }
 
-async function executableExists(command: string): Promise<boolean> {
+export function getLocalProviderCommandCandidates(provider: LocalAiProvider, env: NodeJS.ProcessEnv = process.env): string[] {
+  if (provider === 'codex-cli') {
+    return ['codex', '/Applications/ChatGPT.app/Contents/Resources/codex']
+  }
+
+  return ['cursor-agent', 'agent', join(env.HOME || '', '.local/bin/cursor-agent')]
+}
+
+async function executableExists(command: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   if (command.includes('/')) {
     try {
       await access(command)
@@ -36,7 +51,7 @@ async function executableExists(command: string): Promise<boolean> {
     }
   }
 
-  for (const directory of (process.env.PATH || '').split(delimiter).filter(Boolean)) {
+  for (const directory of (env.PATH || '').split(delimiter).filter(Boolean)) {
     try {
       await access(join(directory, command))
       return true
@@ -47,9 +62,12 @@ async function executableExists(command: string): Promise<boolean> {
   return false
 }
 
-async function findLocalCommand(provider: 'codex-cli' | 'cursor-cli'): Promise<string> {
-  for (const command of localProviderCommands[provider]) {
-    if (command && await executableExists(command)) return command
+export async function findLocalAiCommand(provider: LocalAiProvider, options: LocalCommandLookupOptions = {}): Promise<string> {
+  const exists = options.executableExists ?? executableExists
+  const env = options.env ?? process.env
+
+  for (const command of getLocalProviderCommandCandidates(provider, env)) {
+    if (command && await exists(command, env)) return command
   }
   return ''
 }
@@ -63,9 +81,9 @@ function promptFromMessages(messages: AiMessage[]): string {
 }
 
 async function runLocalAi(settings: AiSettings, messages: AiMessage[]): Promise<string> {
-  const provider = settings.provider as 'codex-cli' | 'cursor-cli'
-  const command = await findLocalCommand(provider)
-  if (!command) throw new Error(provider === 'codex-cli' ? '未检测到 Codex CLI，请先安装或打开 Codex/ChatGPT 桌面应用。' : '未检测到 Cursor Agent CLI，请先安装 cursor-agent。')
+  const provider = settings.provider as LocalAiProvider
+  const command = await findLocalAiCommand(provider)
+  if (!command) throw new Error(provider === 'codex-cli' ? '未检测到 AI 编程助手运行环境，请先安装或打开 ChatGPT 桌面应用。' : '未检测到 Cursor Agent CLI，请先安装 cursor-agent。')
 
   const prompt = promptFromMessages(messages)
   const args = provider === 'codex-cli'
@@ -134,6 +152,25 @@ export async function requestAiText(input: {
 }
 
 export async function inspectAiRuntime(settings: AiSettings, verify = false): Promise<AiRuntimeStatus> {
+  return inspectAiRuntimeWithOptions(settings, verify)
+}
+
+export async function inspectCodexRuntime(verify = false): Promise<AiRuntimeStatus> {
+  return inspectAiRuntimeWithOptions({
+    apiKey: '',
+    baseUrl: '',
+    enabled: true,
+    model: '',
+    provider: 'codex-cli',
+    temperature: 0.2
+  }, verify)
+}
+
+export async function inspectAiRuntimeWithOptions(
+  settings: AiSettings,
+  verify = false,
+  options: AiRuntimeInspectionOptions = {}
+): Promise<AiRuntimeStatus> {
   const checkedAt = new Date().toISOString()
   if (!isLocalAiProvider(settings.provider)) {
     if (!verify) return { provider: settings.provider, configured: isAiSettingsConfigured(settings), available: true, usable: null, label: settings.provider === 'openrouter' ? 'OpenRouter' : 'OpenAI-compatible', command: '', version: '', message: '已保存配置，尚未验证连接', checkedAt }
@@ -145,13 +182,13 @@ export async function inspectAiRuntime(settings: AiSettings, verify = false): Pr
     }
   }
 
-  const localProvider = settings.provider as 'codex-cli' | 'cursor-cli'
-  const command = await findLocalCommand(localProvider)
-  const label = localProvider === 'codex-cli' ? 'Codex CLI' : 'Cursor CLI'
+  const localProvider = settings.provider as LocalAiProvider
+  const command = await findLocalAiCommand(localProvider, options)
+  const label = localProvider === 'codex-cli' ? 'AI 编程助手' : 'Cursor CLI'
   if (!command) return { provider: localProvider, configured: isAiSettingsConfigured(settings), available: false, usable: false, label, command: '', version: '', message: `未检测到 ${label}`, checkedAt }
   let version = ''
   try {
-    version = (await execFileAsync(command, ['--version'], { timeout: 5_000 })).stdout.trim().split('\n').pop() || ''
+    version = (await (options.execFileText ?? execFileAsync)(command, ['--version'], { timeout: 5_000 })).stdout.trim().split('\n').pop() || ''
   } catch {
     // The executable is still present; verification below will report auth/runtime errors.
   }

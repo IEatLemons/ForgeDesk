@@ -70,7 +70,7 @@ export function createGuiToolFallbackPath({
     join(homeDirectory, '.yarn', 'bin')
   ]
   const systemPaths = platform === 'darwin'
-    ? ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/local/sbin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']
+    ? ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/local/sbin', '/usr/local/MacGPG2/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']
     : ['/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']
 
   return mergePathValues([...homePaths, ...systemPaths].join(delimiter))

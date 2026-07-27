@@ -113,6 +113,7 @@ describe('terminal service', () => {
         id: 'term-1',
         cwd: home,
         exited: false,
+        launchMode: 'shell',
         pid: 4321,
         reuseKey: `cwd:${home}`,
         shell: '/bin/zsh',
@@ -147,25 +148,64 @@ describe('terminal service', () => {
     }
   })
 
-  it('writes a startup command to newly created terminal sessions', async () => {
+  it('writes a startup command to newly created shell terminal sessions', async () => {
     const home = await mkdtemp(join(tmpdir(), 'forgedesk-terminal-home-'))
-    const spawned: FakePty[] = []
+    const spawned: Array<{ file: string; args: string[]; pty: FakePty }> = []
     const service = new TerminalService({
       env: { SHELL: '/bin/zsh', PATH: '/usr/bin' },
       homeDirectory: home,
       idFactory: () => `term-${spawned.length + 1}`,
       platform: 'darwin',
-      ptyFactory: (_file, _args, options) => {
+      ptyFactory: (file, args, options) => {
         const pty = new FakePty(options.cols ?? 80, options.rows ?? 24)
-        spawned.push(pty)
+        spawned.push({ args, file, pty })
         return pty
       }
     })
 
     try {
-      service.create({ cwd: home, startupCommand: 'ssh deploy@example.com\r', title: 'remote' })
+      const session = service.create({ cwd: home, startupCommand: 'ssh deploy@example.com\r', title: 'remote' })
 
-      assert.deepEqual(spawned[0]?.writes, ['ssh deploy@example.com\r'])
+      assert.equal(session.launchMode, 'shell')
+      assert.equal(spawned[0]?.file, '/bin/zsh')
+      assert.deepEqual(spawned[0]?.args, ['-l'])
+      assert.deepEqual(spawned[0]?.pty.writes, ['ssh deploy@example.com\r'])
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('spawns direct terminal commands without writing startup commands', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'forgedesk-terminal-home-'))
+    const spawned: Array<{ file: string; args: string[]; options: { cwd?: string }; pty: FakePty }> = []
+    const service = new TerminalService({
+      env: { SHELL: '/bin/zsh', PATH: '/usr/bin' },
+      homeDirectory: home,
+      idFactory: () => `term-${spawned.length + 1}`,
+      platform: 'darwin',
+      ptyFactory: (file, args, options) => {
+        const pty = new FakePty(options.cols ?? 80, options.rows ?? 24)
+        spawned.push({ args, file, options, pty })
+        return pty
+      }
+    })
+
+    try {
+      const session = service.create({
+        cwd: home,
+        directCommand: { file: '  /Applications/ChatGPT.app/Contents/Resources/codex  ', args: ['--model', 'gpt-5.5'] },
+        reuseKey: `codex:${home}`,
+        startupCommand: 'codex\r',
+        title: 'Codex'
+      })
+
+      assert.equal(session.launchMode, 'direct')
+      assert.equal(session.shell, '/Applications/ChatGPT.app/Contents/Resources/codex')
+      assert.equal(session.reuseKey, `codex:${home}`)
+      assert.equal(spawned[0]?.file, '/Applications/ChatGPT.app/Contents/Resources/codex')
+      assert.deepEqual(spawned[0]?.args, ['--model', 'gpt-5.5'])
+      assert.equal(spawned[0]?.options.cwd, home)
+      assert.deepEqual(spawned[0]?.pty.writes, [])
     } finally {
       await rm(home, { recursive: true, force: true })
     }

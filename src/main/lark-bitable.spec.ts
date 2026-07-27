@@ -9,6 +9,8 @@ const settings: OaSettings = {
   larkAppId: 'cli_test',
   larkAppSecret: 'secret',
   docsHomeUrl: 'https://example.feishu.cn/base/TtTibZxeHas7kPsnEt1jHAA5peb?table=tblPlan',
+  larkBotUrl: '',
+  larkBotAdminToken: '',
   enableDocumentBrowsing: true,
   enableDocumentEditing: true,
   enableAiDocumentDrafting: false

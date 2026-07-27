@@ -25,8 +25,11 @@ type ForgeDeskState = {
   loadingWorkspace: boolean
   setSelectedProjectId: (projectId: string) => void
   loadWorkspace: () => Promise<void>
+  rescanProjectRepositories: (projectId: string) => Promise<void>
   createProject: (projectName: string, workspacePath: string, scanned: ScannedRepository[]) => Promise<void>
+  createProjectFromRemote: (projectName: string, remoteUrl: string, parentPath: string) => Promise<void>
   updateProject: (input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }) => Promise<void>
+  setProjectFavorite: (input: { id: string; isFavorite: boolean }) => Promise<void>
   deleteProject: (projectId: string) => Promise<void>
   updateRepository: (repository: ScannedRepository) => void
   setProjectSummary: (summary: ProjectGitSummary) => void
@@ -57,6 +60,14 @@ export const useForgeDeskStore = create<ForgeDeskState>((set) => ({
       set({ loadingWorkspace: false })
     }
   },
+  rescanProjectRepositories: async (projectId) => {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const snapshot = await window.forgeDesk.rescanProjectRepositories(projectId)
+    set((state) => applyWorkspaceSnapshot(state, snapshot))
+  },
   updateRepository: (repository) =>
     set((state) => ({
       repositories: state.repositories.map((current) => (current.id === repository.id ? { ...current, ...repository } : current))
@@ -78,12 +89,37 @@ export const useForgeDeskStore = create<ForgeDeskState>((set) => ({
       selectedProjectId: newestProject?.id ?? null
     })
   },
+  createProjectFromRemote: async (projectName, remoteUrl, parentPath) => {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const snapshot = await window.forgeDesk.createProjectFromRemote({
+      name: projectName,
+      remoteUrl,
+      parentPath
+    })
+    const newestProject = snapshot.projects[0]
+    set({
+      projects: snapshot.projects,
+      repositories: snapshot.repositories,
+      selectedProjectId: newestProject?.id ?? null
+    })
+  },
   updateProject: async (input) => {
     if (!window.forgeDesk) {
       return
     }
 
     const snapshot = await window.forgeDesk.updateProject(input)
+    set((state) => applyWorkspaceSnapshot(state, snapshot))
+  },
+  setProjectFavorite: async (input) => {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const snapshot = await window.forgeDesk.setProjectFavorite(input)
     set((state) => applyWorkspaceSnapshot(state, snapshot))
   },
   deleteProject: async (projectId) => {

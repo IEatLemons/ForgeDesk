@@ -4,6 +4,12 @@ out
 dist
 dist-electron
 resources/MenuBarHelper
+android/.gradle
+android/.gradle-home
+android/local.properties
+android/build
+android/app/build
+android/app/src/main/assets/renderer
 .DS_Store
 *.log
 *.sqlite

@@ -17,6 +17,8 @@ describe('oa settings', () => {
       assert.equal(settings.larkAppId, '')
       assert.equal(settings.larkAppSecret, '')
       assert.equal(settings.docsHomeUrl, 'https://docs.feishu.cn')
+      assert.equal(settings.larkBotUrl, '')
+      assert.equal(settings.larkBotAdminToken, '')
       assert.equal(settings.enableDocumentBrowsing, true)
       assert.equal(settings.enableDocumentEditing, true)
       assert.equal(settings.enableAiDocumentDrafting, true)
@@ -35,6 +37,8 @@ describe('oa settings', () => {
         larkAppId: ' cli_aabbcc ',
         larkAppSecret: ' app-secret ',
         docsHomeUrl: 'https://docs.feishu.cn/wiki/space?from=test',
+        larkBotUrl: ' http://127.0.0.1:8000/ ',
+        larkBotAdminToken: ' admin-token ',
         enableDocumentBrowsing: true,
         enableDocumentEditing: false,
         enableAiDocumentDrafting: true
@@ -51,6 +55,9 @@ describe('oa settings', () => {
         larkAppSecret: '',
         larkAppSecretConfigured: true,
         docsHomeUrl: 'https://docs.feishu.cn/wiki/space',
+        larkBotUrl: 'http://127.0.0.1:8000',
+        larkBotAdminToken: '',
+        larkBotAdminTokenConfigured: true,
         enableDocumentBrowsing: true,
         enableDocumentEditing: false,
         enableAiDocumentDrafting: true
@@ -65,6 +72,16 @@ describe('oa settings', () => {
       () =>
         normalizeOaSettings({
           docsHomeUrl: 'file:///tmp/docs'
+        }),
+      /有效的 Lark 文档 URL/
+    )
+  })
+
+  it('rejects non-http bot service URLs', () => {
+    assert.throws(
+      () =>
+        normalizeOaSettings({
+          larkBotUrl: 'file:///tmp/lark-bot'
         }),
       /有效的 Lark 文档 URL/
     )

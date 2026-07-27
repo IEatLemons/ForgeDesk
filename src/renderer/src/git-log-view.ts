@@ -251,7 +251,15 @@ function getGraphLaneCount(row: GitGraphRow): number {
 }
 
 export function getGraphLaneColor(index: number): string {
-  return graphLaneFallbackColors[index % graphLaneFallbackColors.length]
+  if (index < graphLaneFallbackColors.length) {
+    return graphLaneFallbackColors[index]
+  }
+
+  const hue = Math.round((index * 137.508 + 29) % 360)
+  const saturation = index % 3 === 0 ? 78 : index % 3 === 1 ? 68 : 84
+  const lightness = index % 2 === 0 ? 42 : 48
+
+  return `hsl(${hue} ${saturation}% ${lightness}%)`
 }
 
 export function getGitGraphColumnWidth(rows: GitGraphRow[]): number {
@@ -447,6 +455,17 @@ export function getRefShortBranchName(ref: string): string {
   return value.trim().replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '').replace(/^[^/]+\//, '')
 }
 
+export function getRefCopyText(ref: string): string {
+  const value = ref.includes(' -> ') ? (ref.split(' -> ').pop() ?? ref) : ref
+  const normalized = value.trim()
+
+  if (normalized.startsWith('tag:')) {
+    return normalized.replace(/^tag:\s*/, '')
+  }
+
+  return normalized.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '')
+}
+
 export function getRefColor(ref: string, branchTags: BranchTagColorRule[] = [], currentBranch = ''): RefTone | string {
   if (ref.startsWith('tag:')) {
     return 'gold'
@@ -498,6 +517,66 @@ function getCommitGraphRefColor(commit: GraphCommitInput, branchTags: BranchTagC
   return null
 }
 
+function normalizeGraphColor(color: string): string {
+  const value = color.trim().toLowerCase()
+  const hex = value.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
+
+  if (!hex) {
+    return value
+  }
+
+  const digits = hex[1]
+
+  return digits.length === 3
+    ? `#${digits.split('').map((digit) => `${digit}${digit}`).join('')}`
+    : `#${digits}`
+}
+
+function getGraphRowColoredLaneIndexes(row: GitGraphRow): number[] {
+  return uniqueSortedIndexes([
+    row.graphLaneIndex,
+    ...row.graphParentLaneIndexes,
+    ...row.graphTopLaneIndexes,
+    ...row.graphBottomLaneIndexes,
+    ...row.graphParentEdges.flatMap((edge) => [edge.fromLaneIndex, edge.toLaneIndex])
+  ])
+}
+
+function chooseDistinctGraphLaneColor(laneIndex: number, preferredColor: string, usedColors: Set<string>): string {
+  if (!usedColors.has(normalizeGraphColor(preferredColor))) {
+    return preferredColor
+  }
+
+  for (let offset = 0; offset < graphLaneFallbackColors.length + 360; offset += 1) {
+    const candidate = getGraphLaneColor(laneIndex + offset)
+
+    if (!usedColors.has(normalizeGraphColor(candidate))) {
+      return candidate
+    }
+  }
+
+  return `hsl(${(laneIndex * 53 + usedColors.size * 97) % 360} 72% 44%)`
+}
+
+function makeGraphLaneColorsDistinct(row: GitGraphRow, laneColors: string[]): string[] {
+  const distinctColors = laneColors.slice()
+  const usedColors = new Set<string>()
+  const coloredLaneIndexes = getGraphRowColoredLaneIndexes(row)
+  const prioritizedLaneIndexes = [
+    row.graphLaneIndex,
+    ...coloredLaneIndexes.filter((laneIndex) => laneIndex !== row.graphLaneIndex)
+  ]
+
+  for (const laneIndex of prioritizedLaneIndexes) {
+    const distinctColor = chooseDistinctGraphLaneColor(laneIndex, distinctColors[laneIndex] ?? getGraphLaneColor(laneIndex), usedColors)
+
+    distinctColors[laneIndex] = distinctColor
+    usedColors.add(normalizeGraphColor(distinctColor))
+  }
+
+  return distinctColors
+}
+
 export function applyBranchColorsToGraphRows<TCommit extends GraphCommitInput>(
   rows: Array<GitGraphRow<TCommit>>,
   branchTags: BranchTagColorRule[] = [],
@@ -523,11 +602,14 @@ export function applyBranchColorsToGraphRows<TCommit extends GraphCommitInput>(
       }
     })
 
-    const graphLaneColors = range(laneCount).map((laneIndex) => laneColors[laneIndex] ?? getGraphLaneColor(laneIndex))
+    const graphLaneColors = makeGraphLaneColorsDistinct(
+      row,
+      range(laneCount).map((laneIndex) => laneColors[laneIndex] ?? getGraphLaneColor(laneIndex))
+    )
     const nextLaneColors: Array<string | undefined> = []
 
     for (const laneIndex of row.graphBottomLaneIndexes) {
-      nextLaneColors[laneIndex] = laneColors[laneIndex]
+      nextLaneColors[laneIndex] = graphLaneColors[laneIndex]
     }
 
     carriedLaneColors = nextLaneColors

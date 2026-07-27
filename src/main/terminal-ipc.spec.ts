@@ -46,6 +46,15 @@ describe('terminal ipc', () => {
     assert.deepEqual(Array.from(ipcMain.handlers.keys()), ['terminal:list', 'terminal:create', 'terminal:write', 'terminal:resize', 'terminal:close'])
     assert.deepEqual(await ipcMain.handlers.get('terminal:list')?.({}), [snapshot])
     assert.deepEqual(await ipcMain.handlers.get('terminal:create')?.({}, { cwd: session.cwd, reuseKey: session.reuseKey }), session)
+    assert.deepEqual(
+      await ipcMain.handlers.get('terminal:create')?.({}, {
+        cwd: session.cwd,
+        directCommand: { file: '/Applications/ChatGPT.app/Contents/Resources/codex', args: [] },
+        reuseKey: 'ai-chat:project:project-a',
+        title: 'Codex'
+      }),
+      session
+    )
     await ipcMain.handlers.get('terminal:write')?.({}, session.id, 'npm test\r')
     await ipcMain.handlers.get('terminal:resize')?.({}, session.id, 120, 34)
     await ipcMain.handlers.get('terminal:close')?.({}, session.id)
@@ -53,6 +62,7 @@ describe('terminal ipc', () => {
     assert.deepEqual(calls, [
       'list',
       `create:{"cwd":"${session.cwd}","reuseKey":"${session.reuseKey}"}`,
+      `create:{"cwd":"${session.cwd}","directCommand":{"file":"/Applications/ChatGPT.app/Contents/Resources/codex","args":[]},"reuseKey":"ai-chat:project:project-a","title":"Codex"}`,
       `write:${session.id}:npm test\r`,
       `resize:${session.id}:120x34`,
       `close:${session.id}`

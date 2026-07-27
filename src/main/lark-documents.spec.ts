@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { listLarkDocuments, parseLarkDocsSource, type LarkFetch } from './lark-documents.js'
+import { formatLarkDocumentAccessError, getLarkDocumentTasks, listLarkDocuments, parseLarkDocsSource, type LarkFetch } from './lark-documents.js'
 import type { OaSettings } from './oa-settings.js'
 
 const readySettings: OaSettings = {
@@ -9,6 +9,8 @@ const readySettings: OaSettings = {
   larkAppId: 'cli_test',
   larkAppSecret: 'secret',
   docsHomeUrl: 'https://docs.feishu.cn',
+  larkBotUrl: '',
+  larkBotAdminToken: '',
   enableDocumentBrowsing: true,
   enableDocumentEditing: true,
   enableAiDocumentDrafting: true
@@ -140,5 +142,79 @@ describe('lark documents', () => {
       url: 'https://docs.feishu.cn/?folder_token=fld-query',
       token: 'fld-query'
     })
+  })
+
+  it('returns an actionable scope diagnosis instead of an empty list when Drive access is denied', async () => {
+    const fetcher: LarkFetch = async (url) => {
+      if (String(url).includes('/auth/v3/tenant_access_token/internal')) {
+        return jsonResponse({ code: 0, tenant_access_token: 'tenant-token' })
+      }
+
+      return jsonResponse({ code: 99991663, msg: 'Access denied. One of the following scopes is required: [drive:drive, drive:drive:readonly, space:document:retrieve]' }, false)
+    }
+    const result = await listLarkDocuments(
+      {
+        ...readySettings,
+        docsHomeUrl: 'https://mjpw70zc6m3j.jp.larksuite.com/drive/me/'
+      },
+      fetcher
+    )
+
+    assert.equal(result.documents.length, 0)
+    assert.match(result.unsupportedReason, /drive:drive:readonly/)
+    assert.match(result.unsupportedReason, /发布最新应用版本/)
+  })
+
+  it('reads todo blocks from a direct document', async () => {
+    const requests: string[] = []
+    const fetcher: LarkFetch = async (url) => {
+      requests.push(String(url))
+
+      if (String(url).includes('/auth/v3/tenant_access_token/internal')) {
+        return jsonResponse({ code: 0, tenant_access_token: 'tenant-token' })
+      }
+
+      return jsonResponse({
+        code: 0,
+        data: {
+          items: [
+            {
+              block_id: 'todo-1',
+              block_type: 17,
+              todo: {
+                done: true,
+                text: { elements: [{ text_run: { content: '完成周报' } }] }
+              }
+            },
+            {
+              block_id: 'text-1',
+              block_type: 2,
+              text: { elements: [{ text_run: { content: '普通段落' } }] }
+            }
+          ],
+          has_more: false
+        }
+      })
+    }
+
+    const document = {
+      id: 'docx:doc-token',
+      token: 'doc-token',
+      name: '项目任务',
+      type: 'docx',
+      url: 'https://docs.feishu.cn/docx/doc-token',
+      createdAt: '',
+      updatedAt: ''
+    }
+    const result = await getLarkDocumentTasks(readySettings, document, fetcher)
+
+    assert.equal(requests.length, 2)
+    assert.equal(result.unsupportedReason, '')
+    assert.deepEqual(result.tasks.map((task) => ({ title: task.title, completed: task.completed })), [{ title: '完成周报', completed: true }])
+    assert.equal(new URL(requests[1]).searchParams.get('document_revision_id'), '-1')
+  })
+
+  it('keeps non-scope errors readable', () => {
+    assert.equal(formatLarkDocumentAccessError('读取 Lark 文档任务', new Error('文档不存在')), '读取 Lark 文档任务失败：文档不存在')
   })
 })

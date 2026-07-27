@@ -22,6 +22,7 @@ describe('shell environment helpers', () => {
     assert.ok(paths.includes('/Users/dev/Library/pnpm'))
     assert.ok(paths.includes('/opt/homebrew/bin'))
     assert.ok(paths.includes('/usr/local/bin'))
+    assert.ok(paths.includes('/usr/local/MacGPG2/bin'))
     assert.ok(paths.includes('/usr/bin'))
   })
 

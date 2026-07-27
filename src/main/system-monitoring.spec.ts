@@ -4,6 +4,7 @@ import {
   collectSystemMonitorSnapshot,
   normalizeClashControllerUrl,
   normalizeDiskVolumesForDisplay,
+  parseMacOsMemoryInfo,
   parseClashConfig,
   parseDfOutput,
   parseNetstatRouteOutput,
@@ -77,6 +78,29 @@ map auto_home 0 0 0 100% /System/Volumes/Data/home
     assert.equal(resolveSystemMonitorStatus({ usagePercent: 74 }, [{ usagePercent: 10 }]), 'healthy')
     assert.equal(resolveSystemMonitorStatus({ usagePercent: 75 }, [{ usagePercent: 10 }]), 'warning')
     assert.equal(resolveSystemMonitorStatus({ usagePercent: 10 }, [{ usagePercent: 90 }]), 'critical')
+    assert.equal(resolveSystemMonitorStatus({ usagePercent: 86 }, [{ usagePercent: 80 }, { usagePercent: 97 }]), 'warning')
+  })
+
+  it('uses the same macOS memory categories shown by Activity Monitor', () => {
+    const memory = parseMacOsMemoryInfo(`Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free: 100.
+Pages speculative: 20.
+Pages wired down: 200.
+Pages purgeable: 40.
+File-backed pages: 300.
+Anonymous pages: 400.
+Pages occupied by compressor: 50.
+`, 32 * 1024 ** 3, 'vm.swapusage: total = 16.00G  used = 13.50G  free = 2.50G  (encrypted)')
+
+    assert.ok(memory)
+    assert.equal(memory.source, 'macos-vm')
+    assert.equal(memory.appBytes, 400 * 16384)
+    assert.equal(memory.wiredBytes, 200 * 16384)
+    assert.equal(memory.compressedBytes, 50 * 16384)
+    assert.equal(memory.cachedFileBytes, 340 * 16384)
+    assert.equal(memory.usedBytes, 650 * 16384)
+    assert.equal(memory.freeBytes, 120 * 16384)
+    assert.equal(memory.swapUsedBytes, 13.5 * 1024 ** 3)
   })
 
   it('parses macOS proxy output', () => {

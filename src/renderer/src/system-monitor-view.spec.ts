@@ -7,6 +7,7 @@ import {
   createSystemMonitorSummary,
   formatBytes,
   formatDurationSeconds,
+  formatMemoryBytes,
   formatNetworkPort,
   formatPercent,
   formatProxyEndpoint,
@@ -63,10 +64,17 @@ const snapshot: SystemMonitorSnapshot = {
     }
   ],
   memory: {
+    appBytes: 8 * 1024 ** 3,
+    cachedFileBytes: 2 * 1024 ** 3,
+    compressedBytes: 2 * 1024 ** 3,
     freeBytes: 4 * 1024 ** 3,
+    source: 'macos-vm',
+    swapTotalBytes: 4 * 1024 ** 3,
+    swapUsedBytes: 1 * 1024 ** 3,
     totalBytes: 16 * 1024 ** 3,
     usagePercent: 75,
-    usedBytes: 12 * 1024 ** 3
+    usedBytes: 12 * 1024 ** 3,
+    wiredBytes: 2 * 1024 ** 3
   },
   network: {
     clash: {
@@ -133,6 +141,11 @@ describe('system monitor view model', () => {
     assert.equal(formatStorageBytes(245_110_267_904), '245.11 GB')
   })
 
+  it('formats Activity Monitor memory values with useful precision', () => {
+    assert.equal(formatMemoryBytes(27.7 * 1024 ** 3), '27.70 GB')
+    assert.equal(formatMemoryBytes(891.8 * 1024 ** 2), '891.8 MB')
+  })
+
   it('formats percentages and durations', () => {
     assert.equal(formatPercent(74.6), '75%')
     assert.equal(formatPercent(Number.NaN), '0%')
@@ -158,8 +171,10 @@ describe('system monitor view model', () => {
 
   it('summarizes primary and max disk usage', () => {
     assert.deepEqual(createSystemMonitorSummary(snapshot), {
+      highestUsageDisk: snapshot.disks[1],
       maxDiskUsagePercent: 95,
-      primaryDisk: snapshot.disks[0]
+      primaryDisk: snapshot.disks[0],
+      primaryDiskUsagePercent: 80
     })
   })
 
@@ -169,7 +184,8 @@ describe('system monitor view model', () => {
     assert.deepEqual(metrics.map((metric) => metric.key), ['cpu', 'memory', 'storage', 'network'])
     assert.equal(metrics.find((metric) => metric.key === 'cpu')?.displayValue, '20%')
     assert.equal(metrics.find((metric) => metric.key === 'memory')?.status, 'warning')
-    assert.equal(metrics.find((metric) => metric.key === 'storage')?.status, 'critical')
+    assert.equal(metrics.find((metric) => metric.key === 'storage')?.displayValue, '80%')
+    assert.equal(metrics.find((metric) => metric.key === 'storage')?.status, 'warning')
     assert.equal(metrics.find((metric) => metric.key === 'network')?.displayValue, '1.5 KB/s')
   })
 

@@ -12,9 +12,9 @@ describe('global settings layout', () => {
     const source = readRendererSource('App.tsx')
 
     assert.match(source, /type SettingsOverviewCategory/)
-    assert.match(source, /title: '个性化'[\s\S]*keys: \['appearance', 'log-refresh', 'menu-bar'\]/)
-    assert.match(source, /title: 'Git 与 SSH'[\s\S]*keys: \['git', 'private', 'public', 'config'\]/)
-    assert.match(source, /title: '集成与服务'[\s\S]*keys: \['github', 'codemagic', 'services', 'plane', 'oa', 'ai'\]/)
+    assert.match(source, /title: '个性化'[\s\S]*keys: \['appearance', 'menu-bar'\]/)
+    assert.match(source, /title: 'Git 与仓库'[\s\S]*keys: \['git'\]/)
+    assert.match(source, /title: '集成与服务'[\s\S]*keys: \['codemagic', 'services', 'plane', 'oa', 'ai'\]/)
     assert.match(source, /title: '应用维护'[\s\S]*keys: \['updates'\]/)
     assert.match(source, /title: '菜单栏整理'/)
     assert.match(source, /settingsModuleByKey\.get\(key\)/)
@@ -32,6 +32,14 @@ describe('global settings layout', () => {
     assert.match(source, /申请文档权限/)
     assert.match(source, /发布到企业/)
     assert.match(source, /Lark 云盘、文件夹或文档入口链接/)
+  })
+
+  it('offers a direct recovery path for missing GPG', () => {
+    const source = readRendererSource('App.tsx')
+
+    assert.match(source, /ForgeDesk 可以通过 Homebrew 自动安装 gnupg/)
+    assert.match(source, /一键安装 GPG/)
+    assert.match(source, /https:\/\/gpgtools\.org\//)
   })
 
   it('styles settings categories without turning them into cards', () => {

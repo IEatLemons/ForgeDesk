@@ -17,6 +17,7 @@ import {
   getRefColor,
   getRepositoryDefaultPushTarget,
   getNextVisibleCommitCount,
+  getRefCopyText,
   getRefTone,
   normalizeGitLogRefreshPreferences,
   prependWorkingTreeCommit,
@@ -132,6 +133,13 @@ describe('git log view helpers', () => {
     assert.equal(getRefTone('main'), 'blue')
   })
 
+  it('normalizes ref copy text while keeping remote branch prefixes', () => {
+    assert.equal(getRefCopyText('HEAD -> develop'), 'develop')
+    assert.equal(getRefCopyText('origin/develop'), 'origin/develop')
+    assert.equal(getRefCopyText('refs/remotes/company/codex/unipie/dailishangxitong'), 'company/codex/unipie/dailishangxitong')
+    assert.equal(getRefCopyText('tag: v1.2.2'), 'v1.2.2')
+  })
+
   it('uses project branch tag colors by short branch name', () => {
     const branchTags = [
       { label: '主分支', branchName: 'main', color: '#f5222d' },
@@ -168,6 +176,20 @@ describe('git log view helpers', () => {
 
     assert.equal(rows[0].graphLaneColors[rows[0].graphLaneIndex], '#722ed1')
     assert.equal(rows[1].graphLaneColors[rows[1].graphLaneIndex], '#722ed1')
+  })
+
+  it('avoids duplicate colors for simultaneously visible graph lanes', () => {
+    const rows = applyBranchColorsToGraphRows(
+      createGraphRows([
+        { hash: 'merge', parentHashes: ['main-parent', 'feature-parent'] },
+        { hash: 'main-parent', parentHashes: ['root'], refs: ['origin/main'] },
+        { hash: 'feature-parent', parentHashes: ['root'], refs: ['origin/feature/card-form'] },
+        { hash: 'root', parentHashes: [], refs: [] }
+      ])
+    )
+    const visibleLaneColors = rows[1].graphTopLaneIndexes.map((laneIndex) => rows[1].graphLaneColors[laneIndex])
+
+    assert.equal(new Set(visibleLaneColors).size, visibleLaneColors.length)
   })
 
   it('increments visible commit count and clamps to total commits', () => {

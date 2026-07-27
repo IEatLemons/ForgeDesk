@@ -2,6 +2,9 @@ import {
   addVercelProjectDomain,
   cancelRailwayDeployment,
   cancelVercelDeployment,
+  createVercelProject,
+  deployVercelProject,
+  deployVercelStaticProject,
   deployRailwayServiceInstance,
   inspectVercelDomainConfig,
   listRailwayDeployments,
@@ -42,7 +45,9 @@ import {
   type VercelDomainConfig,
   type VercelDomainInput,
   type VercelEnvVarInput,
-  type VercelEnvVarRecord
+  type VercelEnvVarRecord,
+  type VercelGitSource,
+  type VercelStaticDeploymentInput
 } from './service-provider-adapters.js'
 
 export type {
@@ -57,7 +62,8 @@ export type {
   VercelDomainConfig,
   VercelDomainInput,
   VercelEnvVarInput,
-  VercelEnvVarRecord
+  VercelEnvVarRecord,
+  VercelGitSource
 }
 
 export type ServiceMonitorStatus = 'online' | 'degraded' | 'offline' | 'unknown'
@@ -112,6 +118,21 @@ export type ProjectServiceInput = {
   lastSyncedAt?: string
   environments?: ProjectServiceEnvironmentInput[]
   domains?: ProjectServiceDomainInput[]
+}
+
+export type VercelProjectDeploymentServiceInput = {
+  projectId: string
+  repositoryId: string
+  connectionId: string
+  name: string
+  remoteUrl: string
+  branch?: string
+  framework?: string
+  installCommand?: string
+  buildCommand?: string
+  outputDirectory?: string
+  rootDirectory?: string
+  runtimeVersion?: string
 }
 
 export type ProjectServiceBindingInput = {
@@ -207,6 +228,7 @@ export type ServiceDeploymentActionInput = {
   deploymentId?: string
   environmentId?: string
   description?: string
+  gitSource?: VercelGitSource
 }
 
 export type VercelDeploymentActionInput = ServiceDeploymentActionInput
@@ -1124,6 +1146,56 @@ export function saveProjectService(db: DatabaseLike, input: ProjectServiceInput)
   return getProjectService(db, id) as ProjectServiceRecord
 }
 
+function inferVercelGitSource(remoteUrl: string, branch?: string): VercelGitSource | undefined {
+  const trimmed = remoteUrl.trim()
+  const match = trimmed.match(/(?:git@|https?:\/\/)(github\.com|gitlab\.com|bitbucket\.org)[:/]([^/]+\/[^/]+?)(?:\.git)?$/i)
+  if (!match) return undefined
+  const type = match[1].toLowerCase() === 'github.com' ? 'github' : match[1].toLowerCase() === 'gitlab.com' ? 'gitlab' : 'bitbucket'
+  return { type, repo: match[2], ...(branch?.trim() ? { ref: branch.trim() } : {}) }
+}
+
+export async function createVercelProjectDeploymentService(
+  db: DatabaseLike,
+  input: VercelProjectDeploymentServiceInput,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<ProjectServiceRecord> {
+  const connection = getServiceConnectionSecret(db, input.connectionId)
+  if (!connection?.token) throw new Error('请先配置 Vercel Token')
+
+  const created = await createVercelProject(connection, {
+    name: input.name,
+    framework: input.framework,
+    installCommand: input.installCommand,
+    buildCommand: input.buildCommand,
+    outputDirectory: input.outputDirectory,
+    rootDirectory: input.rootDirectory,
+    nodeVersion: input.runtimeVersion,
+    gitRepository: inferVercelGitSource(input.remoteUrl, input.branch)
+  }, fetcher)
+
+  return saveProjectService(db, {
+    projectId: input.projectId,
+    repositoryId: input.repositoryId,
+    provider: 'vercel',
+    connectionId: input.connectionId,
+    name: created.name,
+    externalProjectId: created.id,
+    externalProjectName: created.name,
+    defaultEnvironment: 'production',
+    environments: [{ name: 'production' }]
+  })
+}
+
+export async function deployVercelStaticProjectForService(
+  db: DatabaseLike,
+  serviceId: string,
+  input: VercelStaticDeploymentInput,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<VercelDeploymentSummary> {
+  const { connection, projectId } = getVercelServiceContext(db, serviceId)
+  return deployVercelStaticProject(connection, projectId, input, fetcher)
+}
+
 export function bindProjectService(db: DatabaseLike, input: ProjectServiceBindingInput): ProjectServiceRecord[] {
   assertProjectExists(db, input.projectId)
 
@@ -1549,18 +1621,26 @@ export async function runServiceDeploymentAction(
   }
 
   const { service, connection, projectId } = getVercelServiceContext(db, serviceId)
-  const deploymentId = getRequiredDeploymentId(input, 'Vercel')
+  if (input.action === 'deploy') {
+    if (!input.gitSource) {
+      throw new Error('Vercel Git 部署缺少仓库来源')
+    }
 
-  if (input.action === 'redeploy') {
-    await redeployVercelDeployment(connection, deploymentId, fetcher)
-  } else if (input.action === 'cancel') {
-    await cancelVercelDeployment(connection, deploymentId, fetcher)
-  } else if (input.action === 'promote') {
-    await promoteVercelDeployment(connection, projectId, deploymentId, fetcher)
-  } else if (input.action === 'rollback') {
-    await rollbackVercelDeployment(connection, projectId, deploymentId, input.description ?? '', fetcher)
+    await deployVercelProject(connection, projectId, input.gitSource)
   } else {
-    throw new Error('不支持的 Vercel 部署操作')
+    const deploymentId = getRequiredDeploymentId(input, 'Vercel')
+
+    if (input.action === 'redeploy') {
+      await redeployVercelDeployment(connection, deploymentId, fetcher)
+    } else if (input.action === 'cancel') {
+      await cancelVercelDeployment(connection, deploymentId, fetcher)
+    } else if (input.action === 'promote') {
+      await promoteVercelDeployment(connection, projectId, deploymentId, fetcher)
+    } else if (input.action === 'rollback') {
+      await rollbackVercelDeployment(connection, projectId, deploymentId, input.description ?? '', fetcher)
+    } else {
+      throw new Error('不支持的 Vercel 部署操作')
+    }
   }
 
   return syncServiceAndRead(db, service, fetcher)

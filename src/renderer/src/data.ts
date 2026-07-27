@@ -8,6 +8,7 @@ export type Project = {
   owner: string
   workspacePath: string
   createdAt: string
+  isFavorite: boolean
 }
 
 export type RsaPrivateKeySize = 2048 | 4096
@@ -251,10 +252,127 @@ export type CloudflareDnsRecord = {
   modifiedAt: string
 }
 
+export type DataSourceKind = 'mysql' | 'postgresql' | 'redis' | 's3'
+
+export type DataSourceConfig = {
+  host?: string
+  port?: number
+  database?: string
+  username?: string
+  ssl?: boolean
+  url?: string
+  tls?: boolean
+  region?: string
+  bucket?: string
+  endpoint?: string
+  forcePathStyle?: boolean
+  accessKeyId?: string
+}
+
+export type DataSourceSecret = {
+  password?: string
+  secretAccessKey?: string
+  sessionToken?: string
+}
+
+export type DataSourceConnectionInput = {
+  id?: string
+  kind: DataSourceKind
+  name: string
+  config: DataSourceConfig
+  secret?: DataSourceSecret
+}
+
+export type DataSourceConnection = {
+  id: string
+  kind: DataSourceKind
+  name: string
+  config: DataSourceConfig
+  secretConfigured: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type DataSourceConnectionTestResult = {
+  ok: boolean
+  message: string
+  detail: string
+}
+
+export type DataSourceDatabaseTable = {
+  schema: string
+  name: string
+  type: string
+}
+
+export type DataSourceTabularResult = {
+  columns: string[]
+  rows: Array<Record<string, unknown>>
+  rowCount: number
+  truncated: boolean
+  durationMs: number
+}
+
+export type DataSourceRedisScanResult = {
+  keys: string[]
+  nextCursor: string
+  scannedCount: number
+}
+
+export type DataSourceRedisValuePreview = {
+  key: string
+  type: string
+  ttlSeconds: number
+  size: number
+  value: unknown
+  rows: Array<Record<string, unknown>>
+}
+
+export type DataSourceS3Object = {
+  key: string
+  size: number
+  lastModified: string
+  etag: string
+  storageClass: string
+}
+
+export type DataSourceS3ListResult = {
+  bucket: string
+  prefix: string
+  objects: DataSourceS3Object[]
+  nextContinuationToken: string
+  truncated: boolean
+}
+
+export type DataSourceS3ObjectPreview = {
+  bucket: string
+  key: string
+  size: number
+  lastModified: string
+  etag: string
+  contentType: string
+  isText: boolean
+  content: string
+  bytesRead: number
+  truncated: boolean
+}
+
 export type Repository = {
   id: string
   projectId: string
   name: string
+  repositoryKind: 'root' | 'submodule'
+  parentRepositoryId: string
+  relativePath: string
+  submoduleName: string
+  submoduleUrl: string
+  expectedCommit: string
+  checkedOutCommit: string
+  isDetached: boolean
+  submoduleState: 'aligned' | 'changed' | 'dirty' | 'uninitialized' | 'missing' | 'conflicted' | 'unknown'
+  available: boolean
+  scanError: string
+  active: boolean
   localPath: string
   remoteUrl: string
   remotes: GitRemote[]
@@ -366,6 +484,10 @@ export type TerminalCreateInput = {
   reuseKey?: string
   cols?: number
   rows?: number
+  directCommand?: {
+    file: string
+    args?: string[]
+  }
   startupCommand?: string
 }
 
@@ -374,6 +496,7 @@ export type TerminalSession = {
   title: string
   cwd: string
   shell: string
+  launchMode?: 'shell' | 'direct'
   pid: number
   reuseKey?: string
   exited: boolean
@@ -422,6 +545,13 @@ export type SystemMonitorMemoryInfo = {
   usedBytes: number
   freeBytes: number
   usagePercent: number
+  appBytes: number
+  wiredBytes: number
+  compressedBytes: number
+  cachedFileBytes: number
+  swapUsedBytes: number
+  swapTotalBytes: number
+  source: 'macos-vm' | 'node'
 }
 
 export type SystemMonitorCpuInfo = {
@@ -542,6 +672,35 @@ export type SystemMonitorSnapshot = {
   network: SystemMonitorNetworkInfo
   app: SystemMonitorAppInfo
 }
+
+export type ResourceProcess = {
+  identityKey: string; instanceKey: string; pid: number; parentPid: number; appName: string; processName: string; user: string
+  cpuPercent: number; memoryBytes: number; privateMemoryBytes: number; virtualMemoryBytes: number; threadCount: number; portCount: number
+  pageIns: number; state: string; elapsedSeconds: number; executablePath: string; bundlePath: string; command: string
+}
+
+export type ResourceHistoryPoint = { capturedAt: string; cpuPercent: number; memoryUsagePercent: number; memoryUsedBytes: number; swapUsedBytes: number; storageUsagePercent: number }
+export type ProcessHistoryPoint = { capturedAt: string; cpuAverage: number; cpuPeak: number; memoryAverageBytes: number; memoryPeakBytes: number; sampleCount: number }
+export type ProcessAnalysis = {
+  identityKey: string; appName: string; processName: string; executablePath: string; averageCpuPercent: number; peakCpuPercent: number
+  averageMemoryBytes: number; peakMemoryBytes: number; sampleCount: number; aboveThresholdSeconds: number; firstSeenAt: string; lastSeenAt: string
+}
+export type ResourceRetentionStatus = { rawDays: number; fiveMinuteDays: number; sampleIntervalSeconds: number; rawSampleCount: number; rollupSampleCount: number; oldestRawAt: string; databaseBytesEstimate: number }
+export type CleanupRisk = 'low' | 'confirm' | 'high' | 'protected'
+export type CleanupCategory = 'large-file' | 'stale-file' | 'duplicate-candidate' | 'download' | 'cache' | 'log' | 'development' | 'docker' | 'trash' | 'protected'
+export type StorageRoot = { id: string; path: string; label: string; enabled: boolean; source: 'manual' | 'project' | 'category'; createdAt: string; lastScannedAt: string }
+export type StorageScanItem = { id: string; scanId: string; rootId: string; path: string; name: string; sizeBytes: number; modifiedAt: string; accessedAt: string; extension: string; category: CleanupCategory; risk: CleanupRisk; reason: string; duplicateKey: string; verifiedHash: string; isDirectory: boolean }
+export type StorageScanRun = { id: string; mode: 'quick' | 'deep'; status: 'running' | 'paused' | 'completed' | 'failed'; startedAt: string; finishedAt: string; filesScanned: number; directoriesScanned: number; bytesScanned: number; reclaimableBytes: number; errorCount: number; errors: string[] }
+export type CleanupPolicy = { key: CleanupCategory; label: string; description: string; enabled: boolean; risk: CleanupRisk; thresholdBytes: number; staleDays: number; requiresCategoryAuthorization: boolean }
+export type CleanupAuditRecord = { id: string; action: 'scan' | 'verify' | 'ignore' | 'trash' | 'command' | 'terminate' | 'force-terminate' | 'export'; target: string; status: 'success' | 'failed' | 'blocked'; detail: string; reclaimedBytes: number; createdAt: string }
+export type ExternalCleanupPreview = { key: 'docker-images' | 'docker-containers' | 'docker-build-cache'; label: string; command: string; estimatedBytes: number; risk: 'high'; enabled: boolean }
+export type StorageDirectoryEntry = { path: string; name: string; rootId: string; sizeBytes: number; growthBytes: number; parentPath: string; fileCount: number; directoryCount: number; childDirectoryCount: number; depth: number; rootPercent: number }
+export type StorageDirectorySortBy = 'name' | 'sizeBytes' | 'growthBytes' | 'fileCount' | 'directoryCount' | 'childDirectoryCount' | 'depth'
+export type StorageDirectoryQuery = { scanId?: string; rootId?: string; parentPath?: string; search?: string; limit?: number; offset?: number; sortBy?: StorageDirectorySortBy; sortOrder?: 'asc' | 'desc' }
+export type StorageDirectoryList = { scanId: string; total: number; directories: StorageDirectoryEntry[] }
+export type StorageTrendPoint = { capturedAt: string; scannedBytes: number; reclaimableBytes: number }
+export type StorageOverview = { roots: StorageRoot[]; latestRun: StorageScanRun | null; items: StorageScanItem[]; policies: CleanupPolicy[]; totalReclaimableBytes: number; categoryBytes: Record<string, number>; directories: StorageDirectoryEntry[]; trend: StorageTrendPoint[] }
+export type StorageScanProgress = { scanId: string; status: StorageScanRun['status']; currentPath: string; filesScanned: number; directoriesScanned: number; bytesScanned: number; reclaimableBytes: number; errorCount: number }
 
 export type QuickBuildTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
@@ -974,6 +1133,181 @@ export type Provider = {
 }
 
 export type ServiceProviderType = 'railway' | 'vercel'
+
+export type DeploymentProviderType = 'vercel' | 'railway' | 'ssh-pm2' | 'docker-compose'
+export type DeploymentSourceMode = 'git' | 'local'
+export type DeploymentTargetStatus = 'draft' | 'ready' | 'attention'
+export type ProjectDeploymentTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
+export type DeploymentEnvSource = 'provider' | 'local' | 'manual'
+
+export type DeploymentEnvBinding = {
+  key: string
+  source: DeploymentEnvSource
+  required: boolean
+  configured: boolean
+}
+
+export type ProjectDeploymentConfig = {
+  repositoryId: string
+  provider: DeploymentProviderType
+  sourceMode: DeploymentSourceMode
+  rootDirectory: string
+  branch: string
+  installCommand: string
+  buildCommand: string
+  outputDirectory: string
+  framework: string
+  packageManager: 'pnpm' | 'npm' | 'yarn' | 'bun' | ''
+  runtimeVersion: string
+  startCommand: string
+  port: string
+  healthPath: string
+  remoteHost: string
+  remotePath: string
+  uploadPath: string
+  appName: string
+  dockerContext: string
+  dockerfile: string
+  composeFile: string
+  composeService: string
+  envBindings: DeploymentEnvBinding[]
+  extra: Record<string, string>
+}
+
+export type ProjectDeploymentTarget = {
+  id: string
+  projectId: string
+  repositoryId: string
+  provider: DeploymentProviderType
+  connectionId: string
+  serviceId: string
+  externalProjectId: string
+  externalProjectName: string
+  externalServiceId: string
+  externalServiceName: string
+  externalEnvironmentId: string
+  externalEnvironmentName: string
+  displayName: string
+  status: DeploymentTargetStatus
+  latestDeploymentId: string
+  latestDeploymentUrl: string
+  lastStatus: string
+  lastError: string
+  createdAt: string
+  updatedAt: string
+  config: ProjectDeploymentConfig
+}
+
+export type ProjectDeploymentTargetInput = Partial<Omit<ProjectDeploymentTarget, 'config'>> & {
+  projectId: string
+  repositoryId: string
+  provider: DeploymentProviderType
+  config: Partial<ProjectDeploymentConfig>
+}
+
+export type DeploymentProviderCapabilities = {
+  provider: DeploymentProviderType
+  label: string
+  supportsGit: boolean
+  supportsLocal: boolean
+  supportsCreateTarget: boolean
+  supportsBuildConfig: boolean
+  supportsCancel: boolean
+  configFields: string[]
+  platformManagedFields: string[]
+}
+
+export type DeploymentContextFile = {
+  path: string
+  category: 'manifest' | 'documentation' | 'build' | 'source' | 'container'
+  sizeBytes: number
+  includedInAi: boolean
+  redacted: boolean
+}
+
+export type DeploymentInspection = {
+  repositoryId: string
+  repositoryName: string
+  localPath: string
+  currentBranch: string
+  defaultBranch: string
+  branches: string[]
+  remoteBranches: string[]
+  remoteUrl: string
+  files: DeploymentContextFile[]
+  detected: {
+    framework: string
+    packageManager: ProjectDeploymentConfig['packageManager']
+    scripts: Record<string, string>
+    nodeVersion: string
+    pythonVersion: string
+    hasDockerfile: boolean
+    hasCompose: boolean
+    hasReadme: boolean
+    hasEnvironmentExample: boolean
+  }
+  aiContext: string
+}
+
+export type ProjectDeploymentSuggestion = {
+  config: ProjectDeploymentConfig
+  confidence: number
+  reasons: string[]
+  warnings: string[]
+  sources: string[]
+}
+
+export type ProjectDeploymentPrepareInput = {
+  targetId?: string
+  repositoryId: string
+  provider: DeploymentProviderType
+  sourceMode: DeploymentSourceMode
+  config?: Partial<ProjectDeploymentConfig>
+}
+
+export type ProjectDeploymentPreparation = {
+  target: ProjectDeploymentTarget | null
+  config: ProjectDeploymentConfig
+  capabilities: DeploymentProviderCapabilities
+  issues: string[]
+  warnings: string[]
+  previewCommand: string
+  ready: boolean
+}
+
+export type ProjectDeploymentTask = {
+  id: string
+  projectId: string
+  targetId: string
+  repositoryId: string
+  targetName: string
+  provider: DeploymentProviderType
+  sourceMode: DeploymentSourceMode
+  status: ProjectDeploymentTaskStatus
+  phase: string
+  phaseIndex: number
+  phaseTotal: number
+  hint: string
+  log: string
+  stdout: string
+  stderr: string
+  exitCode: number | null
+  error?: string
+  externalDeploymentId?: string
+  externalDeploymentUrl?: string
+  externalStatus?: string
+  artifactPath?: string
+  config: ProjectDeploymentConfig
+  startedAt: string
+  updatedAt: string
+  finishedAt?: string
+}
+
+export type ProjectDeploymentTaskStartInput = {
+  projectId: string
+  targetId: string
+  config?: Partial<ProjectDeploymentConfig>
+}
 
 export type RailwayTokenType = 'account' | 'workspace' | 'project'
 
@@ -1423,12 +1757,117 @@ export type AiSettingsView = {
   temperature: number
 }
 
+export type AiRuntimeStatus = {
+  provider: AiSettingsView['provider']
+  configured: boolean
+  available: boolean
+  usable: boolean | null
+  label: string
+  command: string
+  version: string
+  message: string
+  checkedAt: string
+}
+
+export type CodexTaskRunStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+export type CodexTaskMessage = {
+  id: string
+  taskId: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  images: string[]
+  eventType: string
+  createdAt: string
+}
+
+export type CodexTaskEnvironment = {
+  cwd: string
+  branch: string
+  additions: number
+  deletions: number
+  filesChanged: number
+  hasChanges: boolean
+  repositoryAvailable: boolean
+  checkedAt: string
+}
+
+export type CodexTaskRecord = {
+  id: string
+  title: string
+  projectId: string
+  cwd: string
+  status: CodexTaskRunStatus
+  model: string
+  branch: string
+  additions: number
+  deletions: number
+  filesChanged: number
+  errorMessage: string
+  runLog: string
+  createdAt: string
+  updatedAt: string
+  finishedAt: string
+  messages: CodexTaskMessage[]
+  environment: CodexTaskEnvironment
+}
+
+export type CodexTaskCreateInput = {
+  title?: string
+  projectId?: string
+  cwd?: string
+  model?: string
+}
+
+export type CodexTaskMessageInput = {
+  taskId: string
+  content: string
+  images?: string[]
+}
+
+export type CodexTaskEventType = 'updated' | 'running' | 'output' | 'succeeded' | 'failed' | 'cancelled'
+
+export type CodexTaskEvent = {
+  type: CodexTaskEventType
+  task: CodexTaskRecord
+}
+
+export type CodexActivitySnapshot = {
+  available: boolean
+  running: number
+  completed: number
+  aborted: number
+  sessions: CodexSessionRecord[]
+  checkedAt: string
+  source: string
+  error: string
+}
+
+export type CodexSessionStatus = 'idle' | 'running' | 'completed' | 'aborted'
+
+export type CodexSessionRecord = {
+  id: string
+  filePath: string
+  title: string
+  cwd: string
+  status: CodexSessionStatus
+  startedAt: string
+  updatedAt: string
+  tasks: number
+  completed: number
+  aborted: number
+  lastEvent: string
+  lastMessage: string
+}
+
 export type OaSettingsInput = {
   enabled: boolean
   provider?: 'lark'
   larkAppId: string
   larkAppSecret?: string
   docsHomeUrl: string
+  larkBotUrl: string
+  larkBotAdminToken?: string
   enableDocumentBrowsing: boolean
   enableDocumentEditing: boolean
   enableAiDocumentDrafting: boolean
@@ -1441,6 +1880,9 @@ export type OaSettingsView = {
   larkAppSecret: string
   larkAppSecretConfigured: boolean
   docsHomeUrl: string
+  larkBotUrl: string
+  larkBotAdminToken: string
+  larkBotAdminTokenConfigured: boolean
   enableDocumentBrowsing: boolean
   enableDocumentEditing: boolean
   enableAiDocumentDrafting: boolean
@@ -1465,6 +1907,23 @@ export type OaDocumentList = {
   unsupportedReason: string
 }
 
+export type OaDocumentTaskRecord = {
+  id: string
+  title: string
+  completed: boolean
+  documentToken: string
+  documentName: string
+  documentUrl: string
+}
+
+export type OaDocumentTaskList = {
+  documentToken: string
+  documentName: string
+  documentUrl: string
+  tasks: OaDocumentTaskRecord[]
+  unsupportedReason: string
+}
+
 export type OaBitableTable = { id: string; name: string; revision: number }
 export type OaBitableField = { id: string; name: string; type: number; uiType: string; isPrimary: boolean; property: Record<string, unknown> }
 export type OaBitableRecord = { id: string; fields: Record<string, unknown>; createdAt: string; updatedAt: string }
@@ -1477,6 +1936,69 @@ export type OaBitableSnapshot = {
   fields: OaBitableField[]
   records: OaBitableRecord[]
   unsupportedReason: string
+}
+
+export type LarkBotTask = {
+  recordId: string
+  name: string
+  status: string
+  progress: string
+  owner: string
+  startAt: string
+  dueAt: string
+  note: string
+  completed: boolean
+}
+
+export type LarkBotNotification = {
+  id: string
+  category: string
+  title: string
+  body: string
+  createdAt: string
+}
+
+export type LarkBotRuntimeSettings = {
+  monitorEnabled: boolean
+  remindersEnabled: boolean
+  pollIntervalSeconds: number
+  reminderHour: number
+  reminderMinute: number
+  reminderDaysAhead: number
+  notifyOnFirstSync: boolean
+  fieldTask: string
+  fieldStatus: string
+  fieldProgress: string
+  fieldOwner: string
+  fieldStart: string
+  fieldDue: string
+  fieldNote: string
+  completedStatuses: string
+}
+
+export type LarkBotDashboard = {
+  settings: LarkBotRuntimeSettings
+  connection: {
+    apiBaseUrl: string
+    appId: string
+    appToken: string
+    tableId: string
+    chatId: string
+  }
+  stats: {
+    total: number
+    completed: number
+    inProgress: number
+    overdue: number
+    dueSoon: number
+  }
+  state: {
+    lastSyncAt: string
+    lastSyncResult: Record<string, unknown> | null
+    lastEventAt: string
+    lastError: string
+  }
+  tasks: LarkBotTask[]
 }
 
 export type MonthlyPerformancePreviewInput = {

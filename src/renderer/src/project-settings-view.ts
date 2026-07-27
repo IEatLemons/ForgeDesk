@@ -1,4 +1,4 @@
-export type ProjectSettingsModuleKey = 'basic' | 'people' | 'branches' | 'repositories' | 'remotes' | 'services' | 'cloudflare' | 'plane' | 'commands'
+export type ProjectSettingsModuleKey = 'basic' | 'people' | 'branches' | 'git' | 'services' | 'cloudflare' | 'plane'
 
 export type ProjectSettingsModule = {
   key: ProjectSettingsModuleKey
@@ -28,14 +28,9 @@ export const PROJECT_SETTINGS_MODULES: ProjectSettingsModule[] = [
     description: '按分支短名维护 Log 树里的 ref 标签颜色。'
   },
   {
-    key: 'repositories',
-    title: 'Git 仓库',
-    description: '查看当前项目仓库状态，并配置单仓库提交身份。'
-  },
-  {
-    key: 'remotes',
-    title: '远端管理',
-    description: '维护仓库远端 Fetch URL 和 Push URL。'
+    key: 'git',
+    title: 'Git 与仓库',
+    description: '统一查看仓库状态、维护远端、设置主推送目标并运行 Git 操作。'
   },
   {
     key: 'services',
@@ -51,11 +46,6 @@ export const PROJECT_SETTINGS_MODULES: ProjectSettingsModule[] = [
     key: 'plane',
     title: 'Plane 绑定',
     description: '绑定 Plane workspace/project，让项目详情显示 Plane 内容。'
-  },
-  {
-    key: 'commands',
-    title: '命令台',
-    description: '运行受控 Git 命令查看仓库状态。'
   }
 ]
 

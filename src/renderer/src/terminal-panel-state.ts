@@ -3,6 +3,7 @@ export type TerminalPanelSession = {
   title: string
   cwd: string
   shell: string
+  launchMode?: 'shell' | 'direct'
   pid: number
   reuseKey?: string
   exited: boolean

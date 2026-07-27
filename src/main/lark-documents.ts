@@ -21,6 +21,23 @@ export type LarkDocumentList = {
   unsupportedReason: string
 }
 
+export type LarkDocumentTaskRecord = {
+  id: string
+  title: string
+  completed: boolean
+  documentToken: string
+  documentName: string
+  documentUrl: string
+}
+
+export type LarkDocumentTaskList = {
+  documentToken: string
+  documentName: string
+  documentUrl: string
+  tasks: LarkDocumentTaskRecord[]
+  unsupportedReason: string
+}
+
 type LarkDocsSource =
   | { kind: 'home'; url: string }
   | { kind: 'drive-root'; url: string }
@@ -44,8 +61,19 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
 function textValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function booleanValue(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return null
 }
 
 function getLarkApiBaseUrl(settings: Pick<OaSettings, 'docsHomeUrl'>): string {
@@ -147,6 +175,31 @@ function createUnsupportedList(source: LarkDocsSource, reason: string): LarkDocu
   }
 }
 
+function createUnsupportedTaskList(document: LarkDocumentRecord, reason: string): LarkDocumentTaskList {
+  return {
+    documentToken: document.token,
+    documentName: document.name,
+    documentUrl: document.url,
+    tasks: [],
+    unsupportedReason: reason
+  }
+}
+
+function getErrorText(error: unknown): string {
+  if (error instanceof Error) return error.message
+  return textValue(error) || '未知错误'
+}
+
+export function formatLarkDocumentAccessError(action: string, error: unknown): string {
+  const detail = getErrorText(error)
+
+  if (/scope|permission|forbidden|denied|unauthori[sz]ed|access denied|403|1770032|1061002/i.test(detail)) {
+    return `${action}失败：Lark 应用没有文档读取权限。请在 Lark / 飞书开放平台的权限管理中开通云盘读取权限（drive:drive:readonly 或 drive:drive）和文档内容权限（space:document:retrieve），发布最新应用版本后再点击“重新读取”。原始错误：${detail}`
+  }
+
+  return `${action}失败：${detail}`
+}
+
 function normalizeLarkDocument(value: unknown, settings: OaSettings): LarkDocumentRecord | null {
   const record = asRecord(value)
   const token = textValue(record.token ?? record.file_token ?? record.obj_token ?? record.node_token)
@@ -238,6 +291,103 @@ async function listDriveFiles(settings: OaSettings, source: Extract<LarkDocsSour
   }
 }
 
+function collectText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(collectText).join('')
+  if (!isRecord(value)) return ''
+
+  const content = textValue(value.content)
+  if (content) return content
+
+  for (const key of ['elements', 'text_run', 'text', 'todo', 'task']) {
+    const nestedText = collectText(value[key])
+    if (nestedText) return nestedText
+  }
+
+  return ''
+}
+
+function readCompleted(block: Record<string, unknown>, payload: Record<string, unknown>): boolean {
+  for (const value of [payload.done, payload.completed, asRecord(payload.style).done, asRecord(payload.style).completed, block.done]) {
+    const result = booleanValue(value)
+    if (result !== null) return result
+  }
+
+  return false
+}
+
+function normalizeTaskBlock(value: unknown, document: LarkDocumentRecord): LarkDocumentTaskRecord | null {
+  if (!isRecord(value)) return null
+
+  const blockType = value.block_type
+  const todo = asRecord(value.todo)
+  const task = asRecord(value.task)
+  const payload = Object.keys(todo).length > 0 ? todo : task
+  const isTodoBlock = blockType === 17 || blockType === 'todo' || blockType === 'task' || Object.keys(payload).length > 0
+
+  if (!isTodoBlock) return null
+
+  const title = collectText(payload) || collectText(value.text)
+  if (!title) return null
+
+  const blockId = textValue(value.block_id) || `${document.token}:${title}`
+  return {
+    id: blockId,
+    title,
+    completed: readCompleted(value, payload),
+    documentToken: document.token,
+    documentName: document.name,
+    documentUrl: document.url
+  }
+}
+
+async function listDocumentBlocks(settings: OaSettings, document: LarkDocumentRecord, fetcher: LarkFetch): Promise<LarkDocumentTaskList> {
+  if (!['docx', 'doc'].includes(document.type)) {
+    return createUnsupportedTaskList(document, '目前只支持读取新版文档（DOCX）中的任务 Block；表格、知识库和多维表格请从对应入口查看。')
+  }
+
+  const tenantAccessToken = await getTenantAccessToken(settings, fetcher)
+  const tasks: LarkDocumentTaskRecord[] = []
+  let pageToken = ''
+  let hasMore = true
+
+  while (hasMore) {
+    const url = new URL(`${getLarkApiBaseUrl(settings)}/open-apis/docx/v1/documents/${encodeURIComponent(document.token)}/blocks`)
+    url.searchParams.set('page_size', '500')
+    url.searchParams.set('document_revision_id', '-1')
+    if (pageToken) url.searchParams.set('page_token', pageToken)
+
+    const response = await fetcher(url, { headers: { Authorization: `Bearer ${tenantAccessToken}` } })
+    const payload = await readJsonResponse(response)
+    const code = Number(payload.code ?? 0)
+
+    if (!response.ok || code !== 0) {
+      throw new Error(textValue(payload.msg) || textValue(payload.message) || '读取 Lark 文档任务失败')
+    }
+
+    const data = asRecord(payload.data)
+    for (const item of asArray(data.items)) {
+      const task = normalizeTaskBlock(item, document)
+      if (task) tasks.push(task)
+    }
+
+    hasMore = Boolean(data.has_more)
+    pageToken = textValue(data.page_token ?? data.next_page_token)
+
+    if (hasMore && !pageToken) {
+      break
+    }
+  }
+
+  return {
+    documentToken: document.token,
+    documentName: document.name,
+    documentUrl: document.url,
+    tasks,
+    unsupportedReason: ''
+  }
+}
+
 export async function listLarkDocuments(settings: OaSettings, fetcher: LarkFetch = fetch): Promise<LarkDocumentList> {
   const source = parseLarkDocsSource(settings.docsHomeUrl)
 
@@ -274,5 +424,25 @@ export async function listLarkDocuments(settings: OaSettings, fetcher: LarkFetch
     }
   }
 
-  return listDriveFiles(settings, source, fetcher)
+  try {
+    return await listDriveFiles(settings, source, fetcher)
+  } catch (error) {
+    return createUnsupportedList(source, formatLarkDocumentAccessError('读取 Lark 云盘文件', error))
+  }
+}
+
+export async function getLarkDocumentTasks(
+  settings: OaSettings,
+  document: LarkDocumentRecord,
+  fetcher: LarkFetch = fetch
+): Promise<LarkDocumentTaskList> {
+  if (!settings.enableDocumentBrowsing) {
+    return createUnsupportedTaskList(document, '快速浏览文档未启用，请先在 OA 设置里打开这个能力。')
+  }
+
+  try {
+    return await listDocumentBlocks(settings, document, fetcher)
+  } catch (error) {
+    return createUnsupportedTaskList(document, formatLarkDocumentAccessError('读取 Lark 文档任务', error))
+  }
 }

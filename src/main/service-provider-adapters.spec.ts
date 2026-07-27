@@ -4,6 +4,9 @@ import {
   addVercelProjectDomain,
   cancelRailwayDeployment,
   cancelVercelDeployment,
+  createVercelProject,
+  deployVercelProject,
+  deployVercelStaticProject,
   deployRailwayServiceInstance,
   inspectVercelDomainConfig,
   listRailwayDeployments,
@@ -61,6 +64,50 @@ function parseGraphqlBody(init?: RequestInit): { query: string; variables: Recor
 }
 
 describe('service provider adapters', () => {
+  it('creates Vercel projects and starts Git deployments with team scope', async () => {
+    const requests: Array<{ url: string; method: string; body: Record<string, unknown> }> = []
+    const fetcher: ServiceProviderFetch = async (url, init) => {
+      requests.push({ url: String(url), method: init?.method ?? 'GET', body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> })
+      if (String(url).includes('/projects')) return createJsonResponse({ id: 'prj_new', name: 'web' })
+      return createJsonResponse({ uid: 'dpl_new', url: 'web-new.vercel.app', state: 'QUEUED', target: 'production' })
+    }
+    const connection = { token: 'vercel-token', teamId: 'team_123' }
+
+    const project = await createVercelProject(connection, {
+      name: 'web',
+      framework: 'nextjs',
+      rootDirectory: 'apps/web',
+      gitRepository: { type: 'github', repo: 'example/web', ref: 'main' }
+    }, fetcher)
+    const deployment = await deployVercelProject(connection, project.id, { type: 'github', repo: 'example/web', ref: 'main' }, fetcher)
+
+    assert.equal(project.id, 'prj_new')
+    assert.equal(deployment.id, 'dpl_new')
+    assert.equal(requests[0].method, 'POST')
+    assert.equal(requests[0].body.gitRepository && (requests[0].body.gitRepository as { repo?: string }).repo, 'example/web')
+    assert.equal(requests.every((request) => request.url.includes('teamId=team_123')), true)
+  })
+
+  it('uploads static files by digest before creating a Vercel deployment', async () => {
+    const uploads: Array<{ digest: string; bytes: number }> = []
+    const fetcher: ServiceProviderFetch = async (url, init) => {
+      if (String(url).includes('/v2/files')) {
+        uploads.push({ digest: String((init?.headers as Record<string, string>)['x-vercel-digest']), bytes: Number((init?.body as Uint8Array).byteLength) })
+        return createTextResponse('')
+      }
+      return createJsonResponse({ uid: 'dpl_static', url: 'static.vercel.app', state: 'QUEUED', target: 'production' })
+    }
+
+    const deployment = await deployVercelStaticProject({ token: 'vercel-token' }, 'prj_1', {
+      name: 'web',
+      framework: 'vite',
+      files: [{ file: 'index.html', sha: 'sha-1', size: 5, content: new TextEncoder().encode('hello') }]
+    }, fetcher)
+
+    assert.equal(deployment.id, 'dpl_static')
+    assert.deepEqual(uploads, [{ digest: 'sha-1', bytes: 5 }])
+  })
+
   it('reads Vercel projects, deployments and custom domains using bearer auth and team scope', async () => {
     const requests: Array<{ url: string; authorization: string }> = []
     const fetcher: ServiceProviderFetch = async (url, init) => {

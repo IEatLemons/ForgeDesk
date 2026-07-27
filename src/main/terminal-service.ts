@@ -31,12 +31,18 @@ export type TerminalPtyOptions = {
 
 export type TerminalPtyFactory = (file: string, args: string[], options: TerminalPtyOptions) => TerminalPtyLike
 
+export type TerminalDirectCommand = {
+  file: string
+  args?: string[]
+}
+
 export type TerminalCreateInput = {
   cwd?: string
   title?: string
   reuseKey?: string
   cols?: number
   rows?: number
+  directCommand?: TerminalDirectCommand
   startupCommand?: string
 }
 
@@ -45,6 +51,7 @@ export type TerminalSession = {
   title: string
   cwd: string
   shell: string
+  launchMode?: 'shell' | 'direct'
   pid: number
   reuseKey?: string
   exited: boolean
@@ -131,6 +138,19 @@ export function resolveTerminalShell({
 
 function getTerminalShellArgs(platform: NodeJS.Platform): string[] {
   return platform === 'win32' ? [] : ['-l']
+}
+
+function normalizeDirectCommand(command: TerminalDirectCommand | undefined): { file: string; args: string[] } | null {
+  const file = command?.file.trim()
+
+  if (!file) {
+    return null
+  }
+
+  return {
+    args: command?.args?.map((arg) => String(arg)) ?? [],
+    file
+  }
 }
 
 function createDefaultPtyFactory(): TerminalPtyFactory {
@@ -221,14 +241,16 @@ export class TerminalService {
       this.sessions.delete(existingSessionId)
     }
 
-    const shell = resolveTerminalShell({ env: this.env, platform: this.platform })
+    const directCommand = normalizeDirectCommand(input.directCommand)
+    const shell = directCommand?.file ?? resolveTerminalShell({ env: this.env, platform: this.platform })
+    const shellArgs = directCommand ? directCommand.args : getTerminalShellArgs(this.platform)
     const id = this.idFactory()
     const cols = normalizeDimension(input.cols, 80)
     const rows = normalizeDimension(input.rows, 24)
     let pty: TerminalPtyLike
 
     try {
-      pty = this.ptyFactory(shell, getTerminalShellArgs(this.platform), {
+      pty = this.ptyFactory(shell, shellArgs, {
         cols,
         cwd,
         env: this.env,
@@ -242,6 +264,7 @@ export class TerminalService {
       id,
       cwd,
       exited: false,
+      launchMode: directCommand ? 'direct' : 'shell',
       pid: pty.pid,
       shell,
       title: input.title?.trim() || cwd.split(/[\\/]/).filter(Boolean).pop() || cwd
@@ -285,7 +308,7 @@ export class TerminalService {
     )
     this.sessions.set(id, record)
 
-    if (input.startupCommand) {
+    if (!directCommand && input.startupCommand) {
       pty.write(input.startupCommand)
     }
 

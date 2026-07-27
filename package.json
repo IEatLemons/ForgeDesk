@@ -13,6 +13,7 @@
     "build:menu-bar-helper": "node scripts/build-menu-bar-helper.mjs",
     "dev": "node scripts/build-menu-bar-helper.mjs && node scripts/rebuild-native.mjs && electron-vite dev",
     "build": "node scripts/build-menu-bar-helper.mjs && node scripts/rebuild-native.mjs && tsc --noEmit && electron-vite build",
+    "package:android": "node scripts/build-android.mjs",
     "package:mac": "node scripts/build-menu-bar-helper.mjs && node scripts/rebuild-native.mjs && tsc --noEmit && electron-vite build && electron-builder --mac --publish never",
     "publish:mac": "node scripts/publish-mac.mjs",
     "package:mac:legacy": "node scripts/package-mac.mjs",
@@ -22,17 +23,22 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1090.0",
     "better-sqlite3": "^11.7.0",
     "chokidar": "^4.0.3",
     "electron-updater": "^6.8.9",
     "exceljs": "^4.4.0",
+    "mysql2": "^3.23.1",
     "node-pty": "^1.0.0",
+    "pg": "^8.22.0",
+    "redis": "^6.1.0",
     "simple-git": "^3.27.0"
   },
   "devDependencies": {
     "@ant-design/icons": "^5.6.1",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.20.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",

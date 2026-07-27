@@ -20,6 +20,13 @@ export type SystemMonitorMemoryInfo = {
   usedBytes: number
   freeBytes: number
   usagePercent: number
+  appBytes: number
+  wiredBytes: number
+  compressedBytes: number
+  cachedFileBytes: number
+  swapUsedBytes: number
+  swapTotalBytes: number
+  source: 'macos-vm' | 'node'
 }
 
 export type SystemMonitorCpuInfo = {
@@ -143,6 +150,14 @@ export type SystemMonitorSnapshot = {
   app: SystemMonitorAppInfo
 }
 
+export type LightweightResourceSnapshot = {
+  capturedAt: string
+  memoryUsagePercent: number
+  memoryUsedBytes: number
+  swapUsedBytes: number
+  storageUsagePercent: number
+}
+
 export type SystemMonitorAppContext = Pick<
   SystemMonitorAppInfo,
   'version' | 'isPackaged' | 'isDevelopmentBuild' | 'isDevServer' | 'appPath' | 'projectRoot'
@@ -180,6 +195,25 @@ type ClashConfig = {
 
 export const systemMonitorWarningThreshold = 75
 export const systemMonitorCriticalThreshold = 90
+
+function getSystemCpuTimes(): { idle: number; total: number } {
+  return cpus().reduce((sum, cpu) => {
+    sum.idle += cpu.times.idle
+    sum.total += Object.values(cpu.times).reduce((total, value) => total + value, 0)
+    return sum
+  }, { idle: 0, total: 0 })
+}
+
+let previousCpuTimes: { idle: number; total: number } | null = getSystemCpuTimes()
+
+function readSystemCpuUsagePercent(): number {
+  const totals = getSystemCpuTimes()
+  const previous = previousCpuTimes
+  previousCpuTimes = totals
+  if (!previous) return 0
+  const totalDelta = totals.total - previous.total
+  return totalDelta > 0 ? Math.max(0, Math.min(100, ((totalDelta - (totals.idle - previous.idle)) / totalDelta) * 100)) : 0
+}
 
 function toBytesFromKilobytes(value: number): number {
   return value * 1024
@@ -306,11 +340,118 @@ function createMemoryInfo(totalBytes: number, freeBytes: number): SystemMonitorM
   const usagePercent = safeTotalBytes > 0 ? (usedBytes / safeTotalBytes) * 100 : 0
 
   return {
+    appBytes: usedBytes,
+    cachedFileBytes: 0,
+    compressedBytes: 0,
     freeBytes: safeFreeBytes,
+    source: 'node',
+    swapTotalBytes: 0,
+    swapUsedBytes: 0,
     totalBytes: safeTotalBytes,
     usagePercent,
-    usedBytes
+    usedBytes,
+    wiredBytes: 0
   }
+}
+
+function parseVmStatValues(output: string): { pageSize: number; values: Map<string, number> } | null {
+  const pageSizeMatch = output.match(/page size of\s+(\d+)\s+bytes/i)
+  const pageSize = Number(pageSizeMatch?.[1])
+
+  if (!Number.isFinite(pageSize) || pageSize <= 0) {
+    return null
+  }
+
+  const values = new Map<string, number>()
+
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^\s*"?([^":]+)"?:\s+([\d.]+)\.?\s*$/)
+
+    if (match) {
+      values.set(match[1].trim().toLowerCase(), Number(match[2]))
+    }
+  }
+
+  return { pageSize, values }
+}
+
+function parseSwapUsage(output: string): { totalBytes: number; usedBytes: number } {
+  const match = output.match(/total\s*=\s*([\d.]+)([KMGTP])\s+used\s*=\s*([\d.]+)([KMGTP])/i)
+
+  if (!match) {
+    return { totalBytes: 0, usedBytes: 0 }
+  }
+
+  const multipliers: Record<string, number> = {
+    K: 1024,
+    M: 1024 ** 2,
+    G: 1024 ** 3,
+    T: 1024 ** 4,
+    P: 1024 ** 5
+  }
+
+  return {
+    totalBytes: Number(match[1]) * multipliers[match[2].toUpperCase()],
+    usedBytes: Number(match[3]) * multipliers[match[4].toUpperCase()]
+  }
+}
+
+export function parseMacOsMemoryInfo(
+  vmStatOutput: string,
+  totalBytes: number,
+  swapUsageOutput = ''
+): SystemMonitorMemoryInfo | null {
+  const parsed = parseVmStatValues(vmStatOutput)
+
+  if (!parsed) {
+    return null
+  }
+
+  const pages = (key: string): number => Math.max(0, parsed.values.get(key) ?? 0)
+  const bytes = (key: string): number => pages(key) * parsed.pageSize
+  const safeTotalBytes = Math.max(0, totalBytes)
+  const appBytes = bytes('anonymous pages')
+  const wiredBytes = bytes('pages wired down')
+  const compressedBytes = bytes('pages occupied by compressor')
+  const cachedFileBytes = bytes('file-backed pages') + bytes('pages purgeable')
+  const freeBytes = bytes('pages free') + bytes('pages speculative')
+  const usedBytes = Math.min(safeTotalBytes, appBytes + wiredBytes + compressedBytes)
+  const usagePercent = safeTotalBytes > 0 ? (usedBytes / safeTotalBytes) * 100 : 0
+  const swap = parseSwapUsage(swapUsageOutput)
+
+  return {
+    appBytes,
+    cachedFileBytes,
+    compressedBytes,
+    freeBytes: Math.min(safeTotalBytes, freeBytes),
+    source: 'macos-vm',
+    swapTotalBytes: swap.totalBytes,
+    swapUsedBytes: swap.usedBytes,
+    totalBytes: safeTotalBytes,
+    usagePercent,
+    usedBytes,
+    wiredBytes
+  }
+}
+
+async function readMemoryInfo(execFileRunner: ExecFileRunner, currentPlatform: NodeJS.Platform): Promise<SystemMonitorMemoryInfo> {
+  const totalBytes = totalmem()
+  const fallback = createMemoryInfo(totalBytes, freemem())
+
+  if (currentPlatform !== 'darwin') {
+    return fallback
+  }
+
+  const [vmStat, swapUsage] = await Promise.all([
+    runCommand(execFileRunner, '/usr/bin/vm_stat', []),
+    runCommand(execFileRunner, '/usr/sbin/sysctl', ['vm.swapusage'])
+  ])
+
+  if (vmStat.error) {
+    return fallback
+  }
+
+  return parseMacOsMemoryInfo(vmStat.stdout, totalBytes, swapUsage.error ? '' : swapUsage.stdout) ?? fallback
 }
 
 function createCpuInfo(): SystemMonitorCpuInfo {
@@ -322,7 +463,7 @@ function createCpuInfo(): SystemMonitorCpuInfo {
   return {
     coreCount,
     loadAverage,
-    loadPercent: Math.max(0, Math.min(100, (loadAverage[0] / coreCount) * 100)),
+    loadPercent: readSystemCpuUsagePercent(),
     model: cpuList[0]?.model ?? 'Unknown CPU',
     speedMhz
   }
@@ -845,8 +986,8 @@ export function resolveSystemMonitorStatus(
   memory: Pick<SystemMonitorMemoryInfo, 'usagePercent'>,
   disks: Array<Pick<SystemMonitorDiskVolume, 'usagePercent'>>
 ): SystemMonitorStatus {
-  const maxDiskUsage = disks.reduce((max, disk) => Math.max(max, disk.usagePercent), 0)
-  const maxUsage = Math.max(memory.usagePercent, maxDiskUsage)
+  const primaryDiskUsage = disks[0]?.usagePercent ?? 0
+  const maxUsage = Math.max(memory.usagePercent, primaryDiskUsage)
 
   if (maxUsage >= systemMonitorCriticalThreshold) {
     return 'critical'
@@ -875,7 +1016,7 @@ export async function collectSystemMonitorSnapshot(
   options: { execFileRunner?: ExecFileRunner; now?: Date; currentPlatform?: NodeJS.Platform; fetchImpl?: typeof fetch } = {}
 ): Promise<SystemMonitorSnapshot> {
   const execFileRunner = options.execFileRunner ?? createDefaultExecFileRunner()
-  const memory = createMemoryInfo(totalmem(), freemem())
+  const memory = await readMemoryInfo(execFileRunner, options.currentPlatform ?? platform())
   const diskResult = await readDiskVolumes({
     currentPlatform: options.currentPlatform,
     execFileRunner
@@ -911,5 +1052,25 @@ export async function collectSystemMonitorSnapshot(
       release: release(),
       uptimeSeconds: safeSystemUptimeSeconds()
     }
+  }
+}
+
+export async function collectLightweightResourceSnapshot(
+  options: { execFileRunner?: ExecFileRunner; now?: Date; currentPlatform?: NodeJS.Platform } = {}
+): Promise<LightweightResourceSnapshot> {
+  const execFileRunner = options.execFileRunner ?? createDefaultExecFileRunner()
+  const currentPlatform = options.currentPlatform ?? platform()
+  const [memory, diskResult] = await Promise.all([
+    readMemoryInfo(execFileRunner, currentPlatform),
+    readDiskVolumes({ currentPlatform, execFileRunner })
+  ])
+  const primaryDisk = diskResult.volumes.find((volume) => volume.mount === '/') ?? diskResult.volumes[0]
+
+  return {
+    capturedAt: (options.now ?? new Date()).toISOString(),
+    memoryUsagePercent: memory.usagePercent,
+    memoryUsedBytes: memory.usedBytes,
+    storageUsagePercent: primaryDisk?.usagePercent ?? 0,
+    swapUsedBytes: memory.swapUsedBytes
   }
 }

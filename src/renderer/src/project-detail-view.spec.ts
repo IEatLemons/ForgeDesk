@@ -131,6 +131,21 @@ describe('project detail view helpers', () => {
     assert.equal(fields.some((field) => field.value === repositorySummary.name), false)
   })
 
+  it('adds submodule HEAD and parent lock information to the summary strip', () => {
+    const fields = createRepositorySummaryFields({
+      ...repositorySummary,
+      repositoryKind: 'submodule',
+      expectedCommit: '1234567890abcdef',
+      checkedOutCommit: '1234567890abcdef',
+      submoduleState: 'aligned',
+      isDetached: true
+    }, 4)
+
+    assert.deepEqual(fields.map((field) => field.label), ['当前分支', '当前 HEAD', '父仓库锁定', '子模块状态', '最近提交', '提交总数'])
+    assert.equal(fields[0]?.value, 'Detached HEAD')
+    assert.equal(fields[3]?.value, '已对齐')
+  })
+
   it('builds stable project and repository terminal requests', () => {
     assert.deepEqual(createProjectTerminalOpenRequest(projects[0]), {
       cwd: '/Users/stone/Dev/ForgeDesk',

@@ -13,9 +13,45 @@ describe('git error guidance', () => {
 
     assert.equal(guidance.title, '同步远端失败：SSH 公钥无权限')
     assert.match(guidance.summary, /当前 SSH 公钥没有访问这个远端仓库的权限/)
-    assert.ok(guidance.actions.some((action) => action.includes('复制到 GitHub')))
+    assert.ok(guidance.actions.some((action) => action.includes('Gitea')))
     assert.ok(guidance.actions.some((action) => action.includes('SSH config')))
     assert.ok(guidance.actions.some((action) => action.includes('远端地址')))
+  })
+
+  it('explains missing or mismatched remote repositories', () => {
+    const guidance = createGitErrorGuidance(
+      new Error('origin: ERROR: Repository not found. fatal: Could not read from remote repository.'),
+      '同步全部远端'
+    )
+
+    assert.equal(guidance.title, '同步全部远端失败：远端仓库不存在或地址不匹配')
+    assert.ok(guidance.actions.some((action) => action.includes('单独 Fetch 新的 Gitea 远端')))
+    assert.ok(guidance.actions.some((action) => action.includes('upstream')))
+  })
+
+  it('explains ssh host key verification failures', () => {
+    const guidance = createGitErrorGuidance('Host key verification failed.', '同步远端 company')
+
+    assert.equal(guidance.title, '同步远端 company失败：SSH 主机指纹需要确认')
+    assert.match(guidance.summary, /known_hosts/)
+    assert.ok(guidance.actions.some((action) => action.includes('终端')))
+  })
+
+  it('explains ssh banner exchange failures from non-ssh remote ports', () => {
+    const guidance = createGitErrorGuidance('Connection timed out during banner exchange', '同步远端 company')
+
+    assert.equal(guidance.title, '同步远端 company失败：远端 SSH 端口不可用')
+    assert.match(guidance.summary, /Git SSH 端口/)
+    assert.ok(guidance.actions.some((action) => action.includes('HTTPS')))
+    assert.ok(guidance.actions.some((action) => action.includes('Personal Access Token')))
+  })
+
+  it('explains git command timeouts', () => {
+    const guidance = createGitErrorGuidance('git fetch company --prune 执行超时，可能在等待 SSH 密码、主机指纹确认，或远端网络没有响应。', '同步远端')
+
+    assert.equal(guidance.title, '同步远端失败：Git 操作超时')
+    assert.ok(guidance.actions.some((action) => action.includes('ssh-agent')))
+    assert.ok(guidance.actions.some((action) => action.includes('HTTPS remote')))
   })
 
   it('explains missing remote configuration failures', () => {

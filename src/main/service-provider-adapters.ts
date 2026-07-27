@@ -69,6 +69,36 @@ export type VercelDeploymentListOptions = {
   limit?: number
 }
 
+export type VercelGitSource = {
+  type: 'github' | 'gitlab' | 'bitbucket'
+  repo: string
+  ref?: string
+}
+
+export type VercelProjectCreateInput = {
+  name: string
+  framework?: string
+  installCommand?: string
+  buildCommand?: string
+  outputDirectory?: string
+  rootDirectory?: string
+  nodeVersion?: string
+  gitRepository?: VercelGitSource
+}
+
+export type VercelDeploymentFile = {
+  file: string
+  sha: string
+  size: number
+  content: Uint8Array
+}
+
+export type VercelStaticDeploymentInput = {
+  name: string
+  files: VercelDeploymentFile[]
+  framework?: string
+}
+
 export type ServiceDeploymentListOptions = VercelDeploymentListOptions
 
 export type VercelEnvVarRecord = {
@@ -575,6 +605,96 @@ export async function listVercelDeployments(
   const deploymentsJson = await readVercelJson(connection, deploymentsUrl, '读取 Vercel 部署历史', fetcher)
 
   return asArray(asRecord(deploymentsJson).deployments).map(normalizeVercelDeployment)
+}
+
+export async function createVercelProject(
+  connection: ServiceProviderConnection,
+  input: VercelProjectCreateInput,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<{ id: string; name: string }> {
+  const projectJson = await readVercelJson(
+    connection,
+    createVercelApiUrl('/v11/projects', connection.teamId),
+    '创建 Vercel 项目',
+    fetcher,
+    {
+      method: 'POST',
+      body: JSON.stringify(cleanJsonBody({
+        name: input.name,
+        framework: input.framework,
+        installCommand: input.installCommand,
+        buildCommand: input.buildCommand,
+        outputDirectory: input.outputDirectory,
+        rootDirectory: input.rootDirectory,
+        nodeVersion: input.nodeVersion,
+        gitRepository: input.gitRepository
+      }))
+    }
+  )
+  const project = asRecord(projectJson)
+  const id = stringField(project, 'id', 'projectId')
+  const name = stringField(project, 'name') || input.name
+
+  if (!id) throw new Error('创建 Vercel 项目失败：响应中缺少项目 ID')
+  return { id, name }
+}
+
+export async function deployVercelProject(
+  connection: ServiceProviderConnection,
+  projectId: string,
+  gitSource: VercelGitSource,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<VercelDeploymentSummary> {
+  const deploymentJson = await readVercelJson(
+    connection,
+    createVercelApiUrl('/v13/deployments', connection.teamId),
+    '启动 Vercel Git 部署',
+    fetcher,
+    {
+      method: 'POST',
+      body: JSON.stringify({ project: projectId, target: 'production', gitSource })
+    }
+  )
+  return normalizeVercelDeployment(deploymentJson)
+}
+
+export async function deployVercelStaticProject(
+  connection: ServiceProviderConnection,
+  projectId: string,
+  input: VercelStaticDeploymentInput,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<VercelDeploymentSummary> {
+  for (const file of input.files) {
+    const uploadUrl = createVercelApiUrl('/v2/files', connection.teamId)
+    const response = await fetcher(uploadUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${connection.token}`,
+        'Content-Type': 'application/octet-stream',
+        'x-vercel-digest': file.sha
+      },
+      body: file.content as unknown as BodyInit
+    })
+    await readTextResponse(response, `上传 Vercel 文件 ${file.file}`)
+  }
+
+  const deploymentJson = await readVercelJson(
+    connection,
+    createVercelApiUrl('/v13/deployments', connection.teamId),
+    '创建 Vercel 静态部署',
+    fetcher,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        name: input.name,
+        project: projectId,
+        target: 'production',
+        files: input.files.map(({ file, sha, size }) => ({ file, sha, size })),
+        projectSettings: { framework: input.framework || null }
+      })
+    }
+  )
+  return normalizeVercelDeployment(deploymentJson)
 }
 
 export async function redeployVercelDeployment(

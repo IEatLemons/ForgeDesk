@@ -1,0 +1,19 @@
+#!/bin/sh
+
+set -e
+
+APP_HOME=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+
+if [ -n "${JAVA_HOME:-}" ]; then
+    JAVACMD="$JAVA_HOME/bin/java"
+else
+    JAVACMD="$(command -v java 2>/dev/null || true)"
+fi
+
+if [ -z "$JAVACMD" ] || ! "$JAVACMD" -version >/dev/null 2>&1; then
+    echo "ForgeDesk Android build requires a JDK. Set JAVA_HOME or install Java 17+." >&2
+    exit 1
+fi
+
+CLASSPATH="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+exec "$JAVACMD" -Xmx64m -Xms64m -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"

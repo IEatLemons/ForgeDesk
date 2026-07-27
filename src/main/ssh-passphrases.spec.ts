@@ -14,8 +14,12 @@ import {
 } from './ssh-passphrases.js'
 
 function runAskpass(command: string, prompt: string, env: NodeJS.ProcessEnv): Promise<string> {
+  return runCommand(command, [prompt], env)
+}
+
+function runCommand(command: string, args: string[], env: NodeJS.ProcessEnv = process.env): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(command, [prompt], { env }, (error, stdout, stderr) => {
+    execFile(command, args, { env }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(stderr || error.message))
         return
@@ -72,5 +76,23 @@ describe('ssh private key passphrases', () => {
     })
 
     assert.equal(withAskpass, 'wrapped-secret\n')
+  })
+
+  it('derives a public key from a passphrase-protected private key through SSH_ASKPASS', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'forgedesk-ssh-derive-'))
+    const keyPath = join(directory, 'id_ed25519_work')
+
+    try {
+      await runCommand('ssh-keygen', ['-q', '-t', 'ed25519', '-C', 'work@example.com', '-f', keyPath, '-N', 's3cr3t'])
+
+      const publicKey = await withSshPassphraseAskpass([{ path: keyPath, passphrase: 's3cr3t' }], (env) =>
+        runCommand('ssh-keygen', ['-y', '-f', keyPath], { ...process.env, ...env })
+      )
+
+      assert.match(publicKey, /^ssh-ed25519 /)
+      assert.match(publicKey, /work@example\.com\n$/)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 })

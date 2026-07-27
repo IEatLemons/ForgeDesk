@@ -1,16 +1,19 @@
-import { Alert, Badge, Button, Descriptions, Empty, Progress, Space, Spin, Switch, Table, Tag, Typography, message } from 'antd'
+import { Alert, Badge, Button, Descriptions, Empty, Progress, Space, Spin, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { ApiOutlined, ArrowLeftOutlined, DashboardOutlined, DesktopOutlined, GlobalOutlined, HddOutlined, ReloadOutlined } from '@ant-design/icons'
+import { ApiOutlined, DashboardOutlined, DesktopOutlined, GlobalOutlined, HddOutlined, ReloadOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SystemMonitorDiskVolume, SystemMonitorNetworkInterface, SystemMonitorSnapshot } from './data'
+import { ResourceGovernancePanel } from './resource-governance-panel'
 import { getErrorMessage } from './error-messages'
+import { ModuleBackButton } from './module-navigation'
 import {
   SYSTEM_MONITOR_HARDWARE_LABELS,
   createSystemMonitorHardwareMetrics,
   createSystemMonitorSummary,
   formatBytes,
   formatDurationSeconds,
+  formatMemoryBytes,
   formatNetworkPort,
   formatPercent,
   formatProxyEndpoint,
@@ -66,7 +69,10 @@ function formatHistoryTime(value: string): string {
 function createHardwareHistoryChartOption(key: SystemMonitorHardwareKey, history: SystemMonitorHistoryPoint[]): Record<string, unknown> {
   const visibleHistory = history.slice(-80)
   const isNetworkMetric = key === 'network'
-  const color = getHardwareChartColor(key)
+  const latestValue = visibleHistory.length > 0 ? getSystemMonitorHistoryValue(visibleHistory[visibleHistory.length - 1], key) : 0
+  const color = key === 'memory'
+    ? latestValue >= 90 ? '#ff4d4f' : latestValue >= 75 ? '#faad14' : '#52c41a'
+    : getHardwareChartColor(key)
 
   return {
     color: [color],
@@ -156,6 +162,10 @@ export function SystemMonitorPanel({ onBack }: { onBack: () => void }): JSX.Elem
 
   useEffect(() => {
     mountedRef.current = true
+    const migrationKey = 'forgedesk.systemMonitor.sqliteHistoryMigrated'
+    if (window.localStorage.getItem(migrationKey) !== '1') {
+      window.forgeDesk?.importLegacyResourceHistory(readStoredSystemMonitorHistory()).then(() => window.localStorage.setItem(migrationKey, '1')).catch(() => undefined)
+    }
     loadSnapshot('initial').catch(() => undefined)
 
     const intervalId = window.setInterval(() => {
@@ -283,12 +293,20 @@ export function SystemMonitorPanel({ onBack }: { onBack: () => void }): JSX.Elem
     if (activeHardwareKey === 'memory') {
       return (
         <Space direction="vertical" size={12} className="system-monitor-detail-stack">
-          <Progress percent={Math.round(snapshot.memory.usagePercent)} status={snapshot.memory.usagePercent >= 90 ? 'exception' : snapshot.memory.usagePercent >= 75 ? 'active' : 'normal'} />
-          <Descriptions bordered size="small" column={1}>
-            <Descriptions.Item label="总量">{formatBytes(snapshot.memory.totalBytes)}</Descriptions.Item>
-            <Descriptions.Item label="已用">{formatBytes(snapshot.memory.usedBytes)}</Descriptions.Item>
-            <Descriptions.Item label="可用">{formatBytes(snapshot.memory.freeBytes)}</Descriptions.Item>
-          </Descriptions>
+          {snapshot.memory.source !== 'macos-vm' ? <Alert type="info" showIcon message="当前系统不支持 macOS 活动监视器内存口径，已使用兼容统计。" /> : null}
+          <div className="system-monitor-memory-details">
+            <Descriptions bordered size="small" column={1}>
+              <Descriptions.Item label="物理内存">{formatMemoryBytes(snapshot.memory.totalBytes)}</Descriptions.Item>
+              <Descriptions.Item label="已使用内存">{formatMemoryBytes(snapshot.memory.usedBytes)}</Descriptions.Item>
+              <Descriptions.Item label="缓存文件">{formatMemoryBytes(snapshot.memory.cachedFileBytes)}</Descriptions.Item>
+              <Descriptions.Item label="已使用的交换">{formatMemoryBytes(snapshot.memory.swapUsedBytes)}</Descriptions.Item>
+            </Descriptions>
+            <Descriptions bordered size="small" column={1}>
+              <Descriptions.Item label="App 内存">{formatMemoryBytes(snapshot.memory.appBytes)}</Descriptions.Item>
+              <Descriptions.Item label="联动内存">{formatMemoryBytes(snapshot.memory.wiredBytes)}</Descriptions.Item>
+              <Descriptions.Item label="被压缩">{formatMemoryBytes(snapshot.memory.compressedBytes)}</Descriptions.Item>
+            </Descriptions>
+          </div>
         </Space>
       )
     }
@@ -298,7 +316,9 @@ export function SystemMonitorPanel({ onBack }: { onBack: () => void }): JSX.Elem
         <Space direction="vertical" size={12} className="system-monitor-detail-stack">
           {snapshot.diskError ? <Alert type="warning" showIcon message={snapshot.diskError} /> : null}
           <Typography.Text type="secondary">
-            {summary?.primaryDisk ? `主磁盘可用 ${formatStorageBytes(summary.primaryDisk.availableBytes)}，最高使用率 ${formatPercent(summary.maxDiskUsagePercent)}` : '未读取到磁盘数据'}
+            {summary?.primaryDisk
+              ? `主磁盘可用 ${formatStorageBytes(summary.primaryDisk.availableBytes)}，主磁盘使用率 ${formatPercent(summary.primaryDiskUsagePercent)}${summary.highestUsageDisk && summary.highestUsageDisk !== summary.primaryDisk && summary.maxDiskUsagePercent > summary.primaryDiskUsagePercent ? `；最高卷 ${summary.highestUsageDisk.mount} ${formatPercent(summary.maxDiskUsagePercent)}` : ''}`
+              : '未读取到磁盘数据'}
           </Typography.Text>
           <Table
             rowKey={(volume) => `${volume.filesystem}:${volume.mount}`}
@@ -384,6 +404,9 @@ export function SystemMonitorPanel({ onBack }: { onBack: () => void }): JSX.Elem
 
   return (
     <section className="workspace-section system-monitor-panel">
+      <div className="module-back-row">
+        <ModuleBackButton label="返回总览" onClick={onBack} />
+      </div>
       <div className="project-log-toolbar system-monitor-toolbar">
         <Space direction="vertical" size={2}>
           <Typography.Title level={3}>电脑监控</Typography.Title>
@@ -395,9 +418,6 @@ export function SystemMonitorPanel({ onBack }: { onBack: () => void }): JSX.Elem
               <Badge status={statusMeta.badgeStatus} text={snapshot.statusMessage} />
             </Tag>
           ) : null}
-          <Button icon={<ArrowLeftOutlined />} onClick={onBack}>
-            返回总览
-          </Button>
           <Button type="primary" icon={<ReloadOutlined />} loading={refreshing} onClick={() => loadSnapshot('manual')}>
             刷新
           </Button>
@@ -407,7 +427,15 @@ export function SystemMonitorPanel({ onBack }: { onBack: () => void }): JSX.Elem
       {error ? <Alert type="warning" showIcon message="电脑监控暂不可用" description={error} /> : null}
 
       {snapshot ? (
-        <Space direction="vertical" size={16} className="system-monitor-content">
+        <Tabs
+          className="resource-governance-tabs"
+          destroyInactiveTabPane={false}
+          items={[
+            {
+              key: 'overview',
+              label: '总览',
+              children: (
+                <Space direction="vertical" size={16} className="system-monitor-content">
           <div className="system-monitor-meta-row">
             <Typography.Text type="secondary">最后更新：{new Date(snapshot.checkedAt).toLocaleString()}</Typography.Text>
             <Typography.Text type="secondary">主机：{snapshot.system.hostname}</Typography.Text>
@@ -446,7 +474,7 @@ export function SystemMonitorPanel({ onBack }: { onBack: () => void }): JSX.Elem
             <div className="system-monitor-section system-monitor-history-section">
               <div className="system-monitor-section-heading">
                 <div>
-                  <Typography.Title level={4}>{activeMetric ? `${activeMetric.label} 历史` : '历史数据'}</Typography.Title>
+                  <Typography.Title level={4}>{activeHardwareKey === 'memory' ? '内存压力' : activeMetric ? `${activeMetric.label} 历史` : '历史数据'}</Typography.Title>
                   <Typography.Text type="secondary">每分钟自动记录一次，展示最近 80 个采样点</Typography.Text>
                 </div>
               </div>
@@ -473,36 +501,15 @@ export function SystemMonitorPanel({ onBack }: { onBack: () => void }): JSX.Elem
             </div>
           </div>
 
-          <div className="system-monitor-detail-grid">
-            <div className="system-monitor-section">
-              <div className="system-monitor-section-heading">
-                <Typography.Title level={4}>基础信息</Typography.Title>
-              </div>
-              <Descriptions bordered size="small" column={1}>
-                <Descriptions.Item label="操作系统">{snapshot.system.platform} {snapshot.system.release}</Descriptions.Item>
-                <Descriptions.Item label="架构">{snapshot.system.arch}</Descriptions.Item>
-                <Descriptions.Item label="CPU">{snapshot.cpu.model}</Descriptions.Item>
-                <Descriptions.Item label="核心数">{snapshot.cpu.coreCount} 核 · {snapshot.cpu.speedMhz} MHz</Descriptions.Item>
-                <Descriptions.Item label="内存总量">{formatBytes(snapshot.memory.totalBytes)}</Descriptions.Item>
-              </Descriptions>
-            </div>
-
-            <div className="system-monitor-section">
-              <div className="system-monitor-section-heading">
-                <Typography.Title level={4}>运行环境</Typography.Title>
-              </div>
-              <Descriptions bordered size="small" column={1}>
-                <Descriptions.Item label="ForgeDesk">{snapshot.app.version}</Descriptions.Item>
-                <Descriptions.Item label="运行模式">{snapshot.app.isPackaged ? '正式应用' : snapshot.app.isDevServer ? '开发服务' : '开发构建'}</Descriptions.Item>
-                <Descriptions.Item label="进程 PID">{snapshot.app.processId}</Descriptions.Item>
-                <Descriptions.Item label="Node">{snapshot.app.nodeVersion}</Descriptions.Item>
-                <Descriptions.Item label="Electron">{snapshot.app.electronVersion || '-'}</Descriptions.Item>
-                <Descriptions.Item label="Chrome">{snapshot.app.chromeVersion || '-'}</Descriptions.Item>
-                <Descriptions.Item label="V8">{snapshot.app.v8Version || '-'}</Descriptions.Item>
-              </Descriptions>
-            </div>
-          </div>
-        </Space>
+                </Space>
+              )
+            },
+            { key: 'processes', label: '进程', children: <ResourceGovernancePanel view="processes" /> },
+            { key: 'history', label: '历史', children: <ResourceGovernancePanel view="history" /> },
+            { key: 'storage', label: '存储分析', children: <ResourceGovernancePanel view="storage" /> },
+            { key: 'cleanup', label: '清理策略', children: <ResourceGovernancePanel view="cleanup" /> }
+          ]}
+        />
       ) : (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无电脑监控信息" />
       )}

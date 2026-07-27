@@ -13,7 +13,7 @@ import { Terminal } from '@xterm/xterm'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import '@xterm/xterm/css/xterm.css'
 import { getErrorMessage as getNormalizedErrorMessage } from './error-messages'
-import type { ProjectTerminalCommandRecord, TerminalSessionSnapshot } from './data'
+import type { ProjectTerminalCommandRecord, TerminalCreateInput, TerminalSessionSnapshot } from './data'
 import type { TerminalOpenRequest } from './terminal-panel-events'
 import {
   closeTerminalTab,
@@ -32,9 +32,14 @@ type TerminalHandle = {
 }
 
 type TerminalWorkspaceProps = {
+  ariaLabel?: string
+  autoOpen?: boolean
   defaultCwd?: string
+  defaultDirectCommand?: TerminalCreateInput['directCommand']
   defaultReuseKey?: string
+  defaultStartupCommand?: string
   defaultTitle?: string
+  emptyActionLabel?: string
   openRequest?: TerminalOpenRequest | null
   projectId?: string
 }
@@ -170,7 +175,11 @@ function getTerminalRequestKey(request: TerminalOpenRequest): string {
     return `id:${request.requestId}`
   }
 
-  return `value:${request.projectId ?? ''}:${request.repositoryId ?? ''}:${request.cwd ?? ''}:${request.reuseKey ?? ''}:${request.title ?? ''}:${request.startupCommand ?? ''}`
+  const directCommandKey = request.directCommand
+    ? `${request.directCommand.file}:${JSON.stringify(request.directCommand.args ?? [])}`
+    : ''
+
+  return `value:${request.projectId ?? ''}:${request.repositoryId ?? ''}:${request.cwd ?? ''}:${request.reuseKey ?? ''}:${request.title ?? ''}:${request.startupCommand ?? ''}:${directCommandKey}`
 }
 
 function toTerminalPanelSession(snapshot: TerminalSessionSnapshot): TerminalPanelSession {
@@ -208,7 +217,18 @@ function shouldHandleTerminalOpenRequest(request: TerminalOpenRequest, defaultCw
   return !defaultCwd || !request.cwd || request.cwd === defaultCwd
 }
 
-export function TerminalWorkspace({ defaultCwd, defaultReuseKey, defaultTitle, openRequest, projectId }: TerminalWorkspaceProps): JSX.Element {
+export function TerminalWorkspace({
+  ariaLabel = '项目终端',
+  autoOpen = true,
+  defaultCwd,
+  defaultDirectCommand,
+  defaultReuseKey,
+  defaultStartupCommand,
+  defaultTitle,
+  emptyActionLabel = '新建终端',
+  openRequest,
+  projectId
+}: TerminalWorkspaceProps): JSX.Element {
   const [state, setState] = useState<TerminalPanelState>(() => createTerminalPanelState())
   const [restored, setRestored] = useState(false)
   const [commandModalOpen, setCommandModalOpen] = useState(false)
@@ -258,9 +278,10 @@ export function TerminalWorkspace({ defaultCwd, defaultReuseKey, defaultTitle, o
         const session = await window.forgeDesk.openTerminal({
           cols: 80,
           cwd: request.cwd ?? defaultCwd,
+          directCommand: request.directCommand ?? defaultDirectCommand,
           reuseKey: request.reuseKey ?? defaultReuseKey,
           rows: 24,
-          startupCommand: request.startupCommand,
+          startupCommand: request.startupCommand ?? defaultStartupCommand,
           title: request.title ?? defaultTitle
         })
         setState((current) => upsertTerminalTab(current, session))
@@ -270,7 +291,7 @@ export function TerminalWorkspace({ defaultCwd, defaultReuseKey, defaultTitle, o
         return null
       }
     },
-    [defaultCwd, defaultReuseKey, defaultTitle, reportError]
+    [defaultCwd, defaultDirectCommand, defaultReuseKey, defaultStartupCommand, defaultTitle, reportError]
   )
 
   useEffect(() => {
@@ -327,7 +348,7 @@ export function TerminalWorkspace({ defaultCwd, defaultReuseKey, defaultTitle, o
             }
           }
           setState(createTerminalPanelStateFromSessions(snapshots.map(toTerminalPanelSession), focusRequest))
-        } else if (!latestOpenRequestRef.current || !shouldHandleTerminalOpenRequest(latestOpenRequestRef.current, defaultCwd, defaultReuseKey)) {
+        } else if (autoOpen && (!latestOpenRequestRef.current || !shouldHandleTerminalOpenRequest(latestOpenRequestRef.current, defaultCwd, defaultReuseKey))) {
           await openTerminal()
         } else {
           setState(createTerminalPanelState())
@@ -348,7 +369,7 @@ export function TerminalWorkspace({ defaultCwd, defaultReuseKey, defaultTitle, o
     return () => {
       cancelled = true
     }
-  }, [defaultCwd, defaultReuseKey, openTerminal, reportError])
+  }, [autoOpen, defaultCwd, defaultReuseKey, openTerminal, reportError])
 
   useEffect(() => {
     if (!openRequest) {
@@ -513,7 +534,7 @@ export function TerminalWorkspace({ defaultCwd, defaultReuseKey, defaultTitle, o
   const showCommandSidebar = Boolean(projectId && projectCommands.length > 0)
 
   return (
-    <section className="terminal-workspace" aria-label="项目终端">
+    <section className="terminal-workspace" aria-label={ariaLabel}>
       <div className="terminal-workspace-header">
         <div className="terminal-tab-list" role="tablist" aria-label="终端会话">
           {hasTabs ? (
@@ -584,7 +605,7 @@ export function TerminalWorkspace({ defaultCwd, defaultReuseKey, defaultTitle, o
             <div className="terminal-empty">
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无终端会话">
                 <Button type="primary" icon={<PlusOutlined />} onClick={() => openTerminal().catch(reportError)}>
-                  新建终端
+                  {emptyActionLabel}
                 </Button>
               </Empty>
             </div>

@@ -9,6 +9,8 @@ export type OaSettings = {
   larkAppId: string
   larkAppSecret: string
   docsHomeUrl: string
+  larkBotUrl: string
+  larkBotAdminToken: string
   enableDocumentBrowsing: boolean
   enableDocumentEditing: boolean
   enableAiDocumentDrafting: boolean
@@ -16,6 +18,7 @@ export type OaSettings = {
 
 export type RedactedOaSettings = OaSettings & {
   larkAppSecretConfigured: boolean
+  larkBotAdminTokenConfigured: boolean
 }
 
 const defaultOaSettings: OaSettings = {
@@ -24,6 +27,8 @@ const defaultOaSettings: OaSettings = {
   larkAppId: '',
   larkAppSecret: '',
   docsHomeUrl: 'https://docs.feishu.cn',
+  larkBotUrl: '',
+  larkBotAdminToken: '',
   enableDocumentBrowsing: true,
   enableDocumentEditing: true,
   enableAiDocumentDrafting: true
@@ -55,6 +60,12 @@ function normalizeHttpUrl(value: unknown, fallback: string): string {
   }
 }
 
+function normalizeOptionalHttpUrl(value: unknown): string {
+  const raw = trimText(value)
+  if (!raw) return ''
+  return normalizeHttpUrl(raw, '')
+}
+
 export function normalizeOaSettings(input: Partial<OaSettings>): OaSettings {
   return {
     ...defaultOaSettings,
@@ -64,6 +75,8 @@ export function normalizeOaSettings(input: Partial<OaSettings>): OaSettings {
     larkAppId: trimText(input.larkAppId),
     larkAppSecret: trimText(input.larkAppSecret),
     docsHomeUrl: normalizeHttpUrl(input.docsHomeUrl, defaultOaSettings.docsHomeUrl),
+    larkBotUrl: normalizeOptionalHttpUrl(input.larkBotUrl),
+    larkBotAdminToken: trimText(input.larkBotAdminToken),
     enableDocumentBrowsing: input.enableDocumentBrowsing === undefined ? defaultOaSettings.enableDocumentBrowsing : Boolean(input.enableDocumentBrowsing),
     enableDocumentEditing: input.enableDocumentEditing === undefined ? defaultOaSettings.enableDocumentEditing : Boolean(input.enableDocumentEditing),
     enableAiDocumentDrafting: input.enableAiDocumentDrafting === undefined ? defaultOaSettings.enableAiDocumentDrafting : Boolean(input.enableAiDocumentDrafting)
@@ -92,6 +105,8 @@ export function getRedactedOaSettings(settings: OaSettings): RedactedOaSettings 
   return {
     ...settings,
     larkAppSecret: '',
-    larkAppSecretConfigured: Boolean(settings.larkAppSecret)
+    larkAppSecretConfigured: Boolean(settings.larkAppSecret),
+    larkBotAdminToken: '',
+    larkBotAdminTokenConfigured: Boolean(settings.larkBotAdminToken)
   }
 }

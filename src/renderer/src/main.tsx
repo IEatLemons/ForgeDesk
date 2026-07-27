@@ -21,7 +21,13 @@ function ForgeDeskRoot(): JSX.Element {
     () => ({
       algorithm: resolvedTheme === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
       token: {
-        colorPrimary: '#2563eb',
+        colorPrimary: resolvedTheme === 'dark' ? '#60a5fa' : '#2563eb',
+        colorBgBase: resolvedTheme === 'dark' ? '#0d1117' : '#f6f7f9',
+        colorBgContainer: resolvedTheme === 'dark' ? '#101721' : '#ffffff',
+        colorBgElevated: resolvedTheme === 'dark' ? '#151c25' : '#ffffff',
+        colorTextBase: resolvedTheme === 'dark' ? '#e5edf6' : '#172033',
+        colorBorder: resolvedTheme === 'dark' ? '#263244' : '#e4e8ef',
+        colorBorderSecondary: resolvedTheme === 'dark' ? '#263244' : '#e6eaf1',
         borderRadius: 6,
         fontFamily:
           'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'

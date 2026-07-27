@@ -1,7 +1,7 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, shell, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, powerMonitor, shell, type MenuItemConstructorOptions } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { execFile, spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -11,7 +11,18 @@ import { requestCommitMessageSuggestion, type CommitMessageSuggestion } from './
 import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion } from './ai-conflict-assistant'
 import { requestReleaseSuggestion, type ReleaseSuggestion } from './ai-release-assistant'
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
-import { inspectAiRuntime, type AiRuntimeStatus } from './ai-runtime'
+import { inspectAiRuntime, inspectCodexRuntime, type AiRuntimeStatus } from './ai-runtime'
+import { CodexActivityService, type CodexActivitySnapshot } from './codex-activity'
+import {
+  CodexTaskService,
+  migrateCodexTaskTables,
+  type CodexTaskCreateInput,
+  type CodexTaskEnvironment,
+  type CodexTaskEvent,
+  type CodexTaskMessageInput,
+  type CodexTaskRenameInput,
+  type CodexTaskRecord
+} from './codex-tasks'
 import { listOpenRouterModels, type OpenRouterModel } from './openrouter-models'
 import {
   readOverviewSnapshot,
@@ -21,15 +32,60 @@ import {
   type OverviewProjectReport,
   type OverviewSnapshot
 } from './overview-assistant'
-import { collectSystemMonitorSnapshot, type SystemMonitorSnapshot } from './system-monitoring'
+import { collectLightweightResourceSnapshot, collectSystemMonitorSnapshot, type SystemMonitorSnapshot } from './system-monitoring'
+import {
+  ResourceMonitorService,
+  collectResourceProcesses,
+  deleteStorageRoot,
+  executeCleanupToTrash,
+  executeExternalCleanup,
+  exportProcessAnalysisCsv,
+  getResourceRetentionStatus,
+  getStorageOverview,
+  importLegacyResourceHistory,
+  listCleanupAudit,
+  listExternalCleanupPreviews,
+  listLatestProcesses,
+  listProcessAnalysis,
+  listProcessHistory,
+  listResourceHistory,
+  listStorageDirectories,
+  migrateResourceGovernanceTables,
+  pauseStorageScan,
+  previewCleanup,
+  runResourceRetention,
+  saveStorageRoot,
+  setCleanupCategoryAuthorization,
+  signalResourceProcess,
+  startStorageScan,
+  verifyDuplicateGroup,
+  type CleanupCategory,
+  type ProcessAnalysis,
+  type StorageDirectoryQuery,
+  type StorageScanProgress
+} from './resource-governance'
 import { getRedactedOaSettings, readOaSettingsFile, writeOaSettingsFile, type OaSettings, type RedactedOaSettings } from './oa-settings'
-import { listLarkDocuments, type LarkDocumentList } from './lark-documents'
+import { getLarkDocumentTasks, listLarkDocuments, type LarkDocumentList, type LarkDocumentRecord, type LarkDocumentTaskList } from './lark-documents'
 import {
   deleteLarkBitableRecord,
   getLarkBitableSnapshot,
   saveLarkBitableRecord,
   type LarkBitableSnapshot
 } from './lark-bitable'
+import {
+  getLarkBotDashboard,
+  getLarkBotSettings,
+  listLarkBotNotifications,
+  listLarkBotTasks,
+  saveLarkBotSettings,
+  sendLarkBotReminder,
+  sendLarkBotTestMessage,
+  syncLarkBot,
+  type LarkBotDashboard,
+  type LarkBotNotification,
+  type LarkBotRuntimeSettings,
+  type LarkBotTask
+} from './lark-bot-service'
 import { MenuBarManagerService } from './menu-bar-manager'
 import { collectCloseGuardActivities, createCloseGuardPrompt, type CloseGuardAction, type CloseGuardActivity } from './app-close-guard'
 import { registerAppUpdateIpc } from './app-updates'
@@ -75,7 +131,31 @@ import {
   type ProjectCloudflareSettings,
   type ProjectCloudflareSettingsInput
 } from './cloudflare'
+import {
+  deleteDataSourceConnection as deleteDataSourceConnectionRecord,
+  listDataSourceConnections as listDataSourceConnectionRecords,
+  listDatabaseTables as listDataSourceDatabaseTables,
+  listS3Objects as listDataSourceS3Objects,
+  migrateDataSourceTables,
+  previewDatabaseTable as previewDataSourceDatabaseTable,
+  previewRedisValue as previewDataSourceRedisValue,
+  previewS3Object as previewDataSourceS3Object,
+  runDataSourceSql as runDataSourceSqlQuery,
+  saveDataSourceConnection as saveDataSourceConnectionRecord,
+  scanRedisKeys as scanDataSourceRedisKeys,
+  testDataSourceConnection as testDataSourceConnectionRecord,
+  type DataSourceConnectionInput,
+  type DataSourceConnectionRecord,
+  type DataSourceConnectionTestResult,
+  type DataSourceDatabaseTable,
+  type DataSourceRedisScanResult,
+  type DataSourceRedisValuePreview,
+  type DataSourceS3ListResult,
+  type DataSourceS3ObjectPreview,
+  type DataSourceTabularResult
+} from './data-sources'
 import { buildGitAuthorLookup, resolveGitAuthorDisplay, type GitAuthorLookup } from './git-author-mapping'
+import { discoverSubmoduleTree, type SubmoduleDescriptor } from './git-submodules'
 import {
   analyzeDeploymentApproval,
   executeDeploymentApproval,
@@ -98,7 +178,7 @@ import {
   type GithubTokenInput,
   type GithubTokenView
 } from './github-tokens'
-import { createScriptExecutionEnv } from './shell-environment'
+import { createGuiToolFallbackPath, createScriptExecutionEnv, mergePathValues } from './shell-environment'
 import {
   buildGitAddArgs,
   buildGitCommitArgs,
@@ -125,6 +205,7 @@ import {
   type GitPushTarget,
   type GitStatusFile
 } from './git-workspace'
+import { buildRemoteCloneArgs, deriveRemoteRepositoryName, findNearestRepositoryParent, resolveRemoteCloneTarget, type RemoteProjectCreateInput } from './project-creation'
 import { extractConflictSections, hasConflictMarkers, type ConflictSection } from './merge-conflicts'
 import {
   deleteProjectBranchTag as deleteProjectBranchTagRecord,
@@ -182,6 +263,7 @@ import {
   type SshPrivateKeyRecord,
   type SshPublicKeyRecord
 } from './ssh-keys'
+import { createGpgImportPlan, parseGpgSecretKeys, type GpgSecretKeyRecord } from './gpg-keys'
 import {
   clearSshPassphrase,
   listSshPassphrasePaths,
@@ -198,9 +280,35 @@ import {
   type NextjsPm2DeployConfig,
   type NextjsPm2DeployConfigInput
 } from './nextjs-pm2-release'
+import { requestProjectDeploymentSuggestion } from './ai-project-deployment-assistant'
+import {
+  createProjectDeploymentTask,
+  deleteProjectDeploymentTarget,
+  getDeploymentProviderCapabilities,
+  getDefaultDeploymentConfig,
+  getProjectDeploymentTarget,
+  getProjectDeploymentTask,
+  inspectProjectDeploymentContext,
+  listProjectDeploymentTargets,
+  listProjectDeploymentTasks,
+  migrateProjectDeploymentTables,
+  recoverProjectDeploymentTasks,
+  saveProjectDeploymentTarget,
+  saveProjectDeploymentTask,
+  validateProjectDeploymentConfig,
+  type DeploymentInspection,
+  type DeploymentProviderType,
+  type DeploymentSourceMode,
+  type ProjectDeploymentConfig,
+  type ProjectDeploymentPreparation,
+  type ProjectDeploymentSuggestion,
+  type ProjectDeploymentTarget,
+  type ProjectDeploymentTargetInput,
+  type ProjectDeploymentTaskSnapshot
+} from './project-deployment'
 import { registerTerminalIpc } from './terminal-ipc'
 import { TerminalService, type TerminalDataEvent, type TerminalExitEvent } from './terminal-service'
-import { parseRemoteAlignment, summarizeRemoteAlignment, type GitRemote, type RemoteAlignmentSummary } from './remote-alignment'
+import { createEmptyRemoteAlignment, parseRemoteAlignment, summarizeRemoteAlignment, type GitRemote, type RemoteAlignmentSummary } from './remote-alignment'
 import {
   createReleasePlan,
   createReleaseTagName,
@@ -224,6 +332,8 @@ import {
   bindProjectService as bindProjectServiceRecord,
   addServiceDomain as addServiceDomainRecord,
   checkServiceDomain,
+  createVercelProjectDeploymentService,
+  deployVercelStaticProjectForService,
   deleteServiceEnvVar as deleteServiceEnvVarRecord,
   deleteOldServiceMonitorHistory,
   deleteServiceConnection as deleteServiceConnectionRecord,
@@ -308,6 +418,18 @@ import {
 type RepositoryScanResult = {
   id: string
   name: string
+  repositoryKind: 'root' | 'submodule'
+  parentRepositoryId: string
+  relativePath: string
+  submoduleName: string
+  submoduleUrl: string
+  expectedCommit: string
+  checkedOutCommit: string
+  isDetached: boolean
+  submoduleState: 'aligned' | 'changed' | 'dirty' | 'uninitialized' | 'missing' | 'conflicted' | 'unknown'
+  available: boolean
+  scanError: string
+  active: boolean
   localPath: string
   remoteUrl: string
   remotes: GitRemote[]
@@ -492,6 +614,7 @@ type ProjectRecord = {
   owner: string
   workspacePath: string
   createdAt: string
+  isFavorite: boolean
 }
 
 type RepositoryRecord = RepositoryScanResult & {
@@ -615,8 +738,18 @@ type GitSetupStatus = {
   gitVersion: string
   userName: string
   userEmail: string
+  gpgAvailable: boolean
+  gpgVersion: string
+  gpgKeys: GpgSecretKeyRecord[]
+  gitSigningKey: string
+  gitCommitGpgSign: boolean
   sshPublicKeys: SshPublicKeyRecord[]
   sshPrivateKeys: SshPrivateKeyRecord[]
+}
+
+type GpgInstallResult = {
+  status: GitSetupStatus
+  requiresManualInstall: boolean
 }
 
 type AppRuntimeInfo = {
@@ -666,6 +799,12 @@ type QuickBuildTaskSnapshot = {
 
 type GitExecutionOptions = {
   env?: NodeJS.ProcessEnv
+  operationId?: string
+}
+
+type GitExecutionError = Error & {
+  killed?: boolean
+  signal?: NodeJS.Signals | null
 }
 
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
@@ -677,9 +816,16 @@ const terminalService = new TerminalService({
   onExit: (event) => sendTerminalEvent('terminal:exit', event),
   ptyFactory: createNodePtyFactory()
 })
+const codexTaskService = new CodexTaskService({
+  db: () => getDatabase(),
+  emit: (event) => sendCodexTaskEvent(event)
+})
+const codexActivityService = new CodexActivityService()
 const releasePublishTasks = new Map<string, RepositoryReleasePublishTaskSnapshot>()
 const releasePublishTaskProcesses = new Map<string, ChildProcessWithoutNullStreams>()
 const releasePublishTaskExternalCancelers = new Map<string, () => Promise<void>>()
+const projectDeploymentTasks = new Map<string, ProjectDeploymentTaskSnapshot>()
+const projectDeploymentTaskProcesses = new Map<string, ChildProcessWithoutNullStreams>()
 const releaseTaskMaxLogLength = 1024 * 1024
 const releaseTaskHistoryLimit = 20
 const releasePublishPhaseTotal = 9
@@ -691,6 +837,8 @@ let closeGuardPrompt: Promise<boolean> | null = null
 let forceQuitRequested = false
 const confirmedWindowCloseIds = new Set<number>()
 let menuBarManagerService: MenuBarManagerService | null = null
+const resourceMonitorService = new ResourceMonitorService(() => getDatabase(), collectLightweightResourceSnapshot)
+let storageGovernanceTimer: NodeJS.Timeout | null = null
 
 function getPrimaryWindow(): BrowserWindow | null {
   return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ?? null
@@ -1453,6 +1601,12 @@ function sendTerminalEvent(channel: 'terminal:data' | 'terminal:exit', event: Te
   }
 }
 
+function sendCodexTaskEvent(event: CodexTaskEvent): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('codex:tasks:event', event)
+  }
+}
+
 function expandHomePath(path: string): string {
   if (path === '~') {
     return homedir()
@@ -1491,6 +1645,137 @@ function runGitStrict(args: string[]): Promise<string> {
   })
 }
 
+const GPG_COMMAND_CANDIDATES = [
+  'gpg',
+  'gpg2',
+  '/opt/homebrew/bin/gpg',
+  '/opt/homebrew/bin/gpg2',
+  '/usr/local/bin/gpg',
+  '/usr/local/bin/gpg2',
+  '/usr/local/MacGPG2/bin/gpg',
+  '/usr/local/MacGPG2/bin/gpg2'
+]
+
+const BREW_COMMAND_CANDIDATES = ['brew', '/opt/homebrew/bin/brew', '/usr/local/bin/brew']
+
+type GpgExecutionError = Error & { code?: string }
+
+function createGpgExecutionEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PATH: mergePathValues(process.env.PATH, createGuiToolFallbackPath())
+  }
+}
+
+function isMissingGpgExecutable(error: unknown): boolean {
+  return (error as GpgExecutionError | undefined)?.code === 'ENOENT'
+}
+
+function createMissingGpgError(): Error {
+  return new Error('未检测到 gpg 命令。请先安装 GPG Suite，或在终端运行 brew install gnupg；安装后回到 ForgeDesk 重新检测。')
+}
+
+function runGpgCommand(command: string, args: string[], timeout: number): Promise<string> {
+  return new Promise((resolveOutput, reject) => {
+    execFile(command, args, { timeout, maxBuffer: 1024 * 1024 * 20, env: createGpgExecutionEnv() }, (error, stdout, stderr) => {
+      if (error) {
+        reject(Object.assign(new Error(stderr.trim() || error.message), { code: (error as NodeJS.ErrnoException).code }))
+        return
+      }
+
+      resolveOutput(stdout.trim())
+    })
+  })
+}
+
+async function runGpg(args: string[]): Promise<string> {
+  for (const command of GPG_COMMAND_CANDIDATES) {
+    try {
+      return await runGpgCommand(command, args, 10000)
+    } catch (error) {
+      if (isMissingGpgExecutable(error)) {
+        continue
+      }
+
+      return ''
+    }
+  }
+
+  return ''
+}
+
+async function runGpgStrict(args: string[]): Promise<string> {
+  for (const command of GPG_COMMAND_CANDIDATES) {
+    try {
+      return await runGpgCommand(command, args, 30000)
+    } catch (error) {
+      if (isMissingGpgExecutable(error)) {
+        continue
+      }
+
+      throw error
+    }
+  }
+
+  throw createMissingGpgError()
+}
+
+function runBrewInstallGpg(command: string): Promise<void> {
+  return new Promise((resolveInstall, rejectInstall) => {
+    execFile(command, ['install', 'gnupg'], { timeout: 300000, maxBuffer: 1024 * 1024 * 20, env: createGpgExecutionEnv() }, (error, _stdout, stderr) => {
+      if (error) {
+        rejectInstall(Object.assign(new Error(stderr.trim() || error.message), { code: (error as NodeJS.ErrnoException).code }))
+        return
+      }
+
+      resolveInstall()
+    })
+  })
+}
+
+async function installGpgWithBrew(): Promise<GpgInstallResult> {
+  if (process.platform !== 'darwin') {
+    throw new Error('ForgeDesk 当前只支持在 macOS 上自动安装 GPG，请手动安装 gnupg。')
+  }
+
+  for (const command of BREW_COMMAND_CANDIDATES) {
+    try {
+      await runBrewInstallGpg(command)
+      const status = await getGitSetupStatus()
+
+      if (!status.gpgAvailable) {
+        throw new Error('Homebrew 已完成安装，但 ForgeDesk 仍未检测到 gpg。请点击“重新检测”或重启 ForgeDesk。')
+      }
+
+      return { status, requiresManualInstall: false }
+    } catch (error) {
+      if (isMissingGpgExecutable(error)) {
+        continue
+      }
+
+      throw new Error(`GPG 安装失败：${(error as Error).message}`)
+    }
+  }
+
+  return {
+    status: await getGitSetupStatus(),
+    requiresManualInstall: true
+  }
+}
+
+function unzipToDirectory(zipPath: string, targetDirectory: string): Promise<void> {
+  return new Promise((resolveOutput, reject) => {
+    execFile('unzip', ['-qq', '-o', zipPath, '-d', targetDirectory], { timeout: 30000, maxBuffer: 1024 * 1024 * 20 }, (error, _stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr.trim() || error.message))
+        return
+      }
+
+      resolveOutput()
+    })
+  })
+}
+
 function runGitInPath(localPath: string, args: string[]): Promise<string> {
   return new Promise((resolveOutput) => {
     execFile('git', ['-C', localPath, ...args], { timeout: 5000 }, (error, stdout) => {
@@ -1514,7 +1799,7 @@ function runGitLog(localPath: string, options: { sinceDate?: string; branchName?
   if (options.branchName) {
     args.push(options.branchName)
   } else if (options.allRefs) {
-    args.push('--all')
+    args.push('--all', 'HEAD')
   }
 
   args.push('--date=iso-strict', '--numstat', '--decorate=short', '--pretty=format:__FORGEDESK_COMMIT__%x1f%H%x1f%P%x1f%D%x1f%an%x1f%ae%x1f%aI%x1f%s')
@@ -1679,6 +1964,7 @@ function migrateDatabase(db: Database.Database): void {
       status TEXT NOT NULL DEFAULT 'ready',
       owner TEXT NOT NULL DEFAULT '',
       workspace_path TEXT NOT NULL DEFAULT '',
+      is_favorite INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -1687,6 +1973,18 @@ function migrateDatabase(db: Database.Database): void {
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
       name TEXT NOT NULL,
+      repository_kind TEXT NOT NULL DEFAULT 'root',
+      parent_repository_id TEXT NOT NULL DEFAULT '',
+      relative_path TEXT NOT NULL DEFAULT '.',
+      submodule_name TEXT NOT NULL DEFAULT '',
+      submodule_url TEXT NOT NULL DEFAULT '',
+      expected_commit TEXT NOT NULL DEFAULT '',
+      checked_out_commit TEXT NOT NULL DEFAULT '',
+      is_detached INTEGER NOT NULL DEFAULT 0,
+      submodule_state TEXT NOT NULL DEFAULT 'unknown',
+      available INTEGER NOT NULL DEFAULT 1,
+      scan_error TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
       local_path TEXT NOT NULL,
       remote_url TEXT NOT NULL DEFAULT '',
       remotes_json TEXT NOT NULL DEFAULT '[]',
@@ -1777,11 +2075,28 @@ function migrateDatabase(db: Database.Database): void {
   migrateTerminalRemoteShortcutTables(db)
   migratePlaneIntegrationTables(db)
   migrateProjectCloudflareTables(db)
+  migrateDataSourceTables(db)
   migrateCodemagicRepositoryBindingTable(db)
   migrateReleasePublishTaskTable(db)
+  migrateProjectDeploymentTables(db)
+  recoverProjectDeploymentTasks(db)
   migrateMonthlyPerformanceTables(db)
+  migrateResourceGovernanceTables(db)
+  migrateCodexTaskTables(db)
 
   addColumnIfMissing(db, 'repositories', 'remotes_json', "TEXT NOT NULL DEFAULT '[]'")
+  addColumnIfMissing(db, 'repositories', 'repository_kind', "TEXT NOT NULL DEFAULT 'root'")
+  addColumnIfMissing(db, 'repositories', 'parent_repository_id', "TEXT NOT NULL DEFAULT ''")
+  addColumnIfMissing(db, 'repositories', 'relative_path', "TEXT NOT NULL DEFAULT '.'")
+  addColumnIfMissing(db, 'repositories', 'submodule_name', "TEXT NOT NULL DEFAULT ''")
+  addColumnIfMissing(db, 'repositories', 'submodule_url', "TEXT NOT NULL DEFAULT ''")
+  addColumnIfMissing(db, 'repositories', 'expected_commit', "TEXT NOT NULL DEFAULT ''")
+  addColumnIfMissing(db, 'repositories', 'checked_out_commit', "TEXT NOT NULL DEFAULT ''")
+  addColumnIfMissing(db, 'repositories', 'is_detached', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(db, 'repositories', 'submodule_state', "TEXT NOT NULL DEFAULT 'unknown'")
+  addColumnIfMissing(db, 'repositories', 'available', 'INTEGER NOT NULL DEFAULT 1')
+  addColumnIfMissing(db, 'repositories', 'scan_error', "TEXT NOT NULL DEFAULT ''")
+  addColumnIfMissing(db, 'repositories', 'active', 'INTEGER NOT NULL DEFAULT 1')
   addColumnIfMissing(db, 'repositories', 'remote_count', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(db, 'repositories', 'local_branch_count', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(db, 'repositories', 'remote_branch_count', 'INTEGER NOT NULL DEFAULT 0')
@@ -1790,6 +2105,7 @@ function migrateDatabase(db: Database.Database): void {
   addColumnIfMissing(db, 'repositories', 'push_targets_json', "TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(db, 'repositories', 'remote_alignment_json', "TEXT NOT NULL DEFAULT '{}'")
   addColumnIfMissing(db, 'git_commits', 'branch_name', "TEXT NOT NULL DEFAULT ''")
+  addColumnIfMissing(db, 'projects', 'is_favorite', 'INTEGER NOT NULL DEFAULT 0')
 }
 
 function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string): void {
@@ -1825,7 +2141,8 @@ function mapProjectRow(row: Record<string, unknown>): ProjectRecord {
     status: (String(row.status) as ProjectRecord['status']) || 'ready',
     owner: String(row.owner ?? ''),
     workspacePath: String(row.workspace_path ?? ''),
-    createdAt: String(row.created_at)
+    createdAt: String(row.created_at),
+    isFavorite: Number(row.is_favorite ?? 0) === 1
   }
 }
 
@@ -1840,6 +2157,18 @@ function mapRepositoryRow(row: Record<string, unknown>): RepositoryRecord {
     id: String(row.id),
     projectId: String(row.project_id),
     name: String(row.name),
+    repositoryKind: String(row.repository_kind ?? 'root') === 'submodule' ? 'submodule' : 'root',
+    parentRepositoryId: String(row.parent_repository_id ?? ''),
+    relativePath: String(row.relative_path ?? '.'),
+    submoduleName: String(row.submodule_name ?? ''),
+    submoduleUrl: String(row.submodule_url ?? ''),
+    expectedCommit: String(row.expected_commit ?? ''),
+    checkedOutCommit: String(row.checked_out_commit ?? ''),
+    isDetached: Number(row.is_detached ?? 0) === 1,
+    submoduleState: (String(row.submodule_state ?? 'unknown') as RepositoryRecord['submoduleState']) || 'unknown',
+    available: Number(row.available ?? 1) === 1,
+    scanError: String(row.scan_error ?? ''),
+    active: Number(row.active ?? 1) === 1,
     localPath: String(row.local_path),
     remoteUrl: String(row.remote_url ?? ''),
     remotes,
@@ -1864,7 +2193,7 @@ function mapRepositoryRow(row: Record<string, unknown>): RepositoryRecord {
 
 function listProjects(): ProjectRecord[] {
   return getDatabase()
-    .prepare('SELECT * FROM projects ORDER BY created_at DESC')
+    .prepare('SELECT * FROM projects ORDER BY is_favorite DESC, created_at DESC, id DESC')
     .all()
     .map((row) => mapProjectRow(row as Record<string, unknown>))
 }
@@ -1881,8 +2210,8 @@ function getProjectOrThrow(projectId: string): ProjectRecord {
 
 function listRepositories(projectId?: string): RepositoryRecord[] {
   const statement = projectId
-    ? getDatabase().prepare('SELECT * FROM repositories WHERE project_id = ? ORDER BY name ASC')
-    : getDatabase().prepare('SELECT * FROM repositories ORDER BY name ASC')
+    ? getDatabase().prepare('SELECT * FROM repositories WHERE project_id = ? AND active = 1 ORDER BY relative_path ASC, name ASC')
+    : getDatabase().prepare('SELECT * FROM repositories WHERE active = 1 ORDER BY relative_path ASC, name ASC')
   const rows = projectId ? statement.all(projectId) : statement.all()
   return rows.map((row) => mapRepositoryRow(row as Record<string, unknown>))
 }
@@ -2083,15 +2412,29 @@ function upsertRepository(projectId: string, repository: RepositoryScanResult): 
     .prepare(
       `
       INSERT INTO repositories (
-        id, project_id, name, local_path, remote_url, remotes_json, remote_count, local_branch_count,
+        id, project_id, name, repository_kind, parent_repository_id, relative_path, submodule_name, submodule_url,
+        expected_commit, checked_out_commit, is_detached, submodule_state, available, scan_error, active,
+        local_path, remote_url, remotes_json, remote_count, local_branch_count,
         remote_branch_count, branches_json, remote_branches_json, push_targets_json, remote_alignment_json, default_branch, current_branch, latest_commit,
         has_changes, ahead, local_user_name, local_user_email, effective_user_name, effective_user_email,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         project_id = excluded.project_id,
         name = excluded.name,
+        repository_kind = excluded.repository_kind,
+        parent_repository_id = excluded.parent_repository_id,
+        relative_path = excluded.relative_path,
+        submodule_name = excluded.submodule_name,
+        submodule_url = excluded.submodule_url,
+        expected_commit = excluded.expected_commit,
+        checked_out_commit = excluded.checked_out_commit,
+        is_detached = excluded.is_detached,
+        submodule_state = excluded.submodule_state,
+        available = excluded.available,
+        scan_error = excluded.scan_error,
+        active = excluded.active,
         local_path = excluded.local_path,
         remote_url = excluded.remote_url,
         remotes_json = excluded.remotes_json,
@@ -2118,6 +2461,18 @@ function upsertRepository(projectId: string, repository: RepositoryScanResult): 
       repository.id,
       projectId,
       repository.name,
+      repository.repositoryKind,
+      repository.parentRepositoryId,
+      repository.relativePath,
+      repository.submoduleName,
+      repository.submoduleUrl,
+      repository.expectedCommit,
+      repository.checkedOutCommit,
+      repository.isDetached ? 1 : 0,
+      repository.submoduleState,
+      repository.available ? 1 : 0,
+      repository.scanError,
+      1,
       repository.localPath,
       repository.remoteUrl,
       JSON.stringify(repository.remotes),
@@ -2148,16 +2503,119 @@ function createGitExecutionEnv(options: GitExecutionOptions = {}): NodeJS.Proces
   return options.env ? { ...process.env, ...options.env } : process.env
 }
 
+const activeGitProcesses = new Map<string, Set<ChildProcess>>()
+const cancelledGitOperations = new Set<string>()
+
+function isGitOperationCancelled(operationId?: string): boolean {
+  return Boolean(operationId && cancelledGitOperations.has(operationId))
+}
+
+function registerGitProcess(operationId: string | undefined, child: ChildProcess): void {
+  if (!operationId) return
+
+  const processes = activeGitProcesses.get(operationId) ?? new Set<ChildProcess>()
+  processes.add(child)
+  activeGitProcesses.set(operationId, processes)
+
+  if (isGitOperationCancelled(operationId)) {
+    terminateGitProcess(child, 'SIGTERM')
+  }
+}
+
+function unregisterGitProcess(operationId: string | undefined, child: ChildProcess): void {
+  if (!operationId) return
+
+  const processes = activeGitProcesses.get(operationId)
+  if (!processes) return
+
+  processes.delete(child)
+  if (processes.size === 0) activeGitProcesses.delete(operationId)
+}
+
+function terminateGitProcess(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM'): boolean {
+  if (!child.pid) return false
+
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(-child.pid, signal)
+      return true
+    } catch {
+      // The process may have already exited; fall back to the child handle.
+    }
+  }
+
+  try {
+    return child.kill(signal)
+  } catch {
+    return false
+  }
+}
+
+function cancelRepositoryGitOperation(operationId: string): boolean {
+  const normalizedId = operationId.trim()
+  if (!normalizedId) return false
+
+  cancelledGitOperations.add(normalizedId)
+  const processes = activeGitProcesses.get(normalizedId)
+  let terminated = false
+
+  processes?.forEach((child) => {
+    terminated = terminateGitProcess(child) || terminated
+    setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) terminateGitProcess(child, 'SIGKILL')
+    }, 1000).unref?.()
+  })
+
+  setTimeout(() => cancelledGitOperations.delete(normalizedId), 60_000).unref?.()
+  return terminated
+}
+
+function formatGitCommandForMessage(args: string[]): string {
+  return `git ${args.join(' ')}`
+}
+
+function createGitFailureMessage(args: string[], error: GitExecutionError, stdout: string | Buffer = '', stderr: string | Buffer = ''): string {
+  const output = [stderr, stdout]
+    .map((value) => value.toString().trim())
+    .filter(Boolean)
+    .join('\n')
+
+  if (output) {
+    return output
+  }
+
+  const lowerMessage = error.message.toLowerCase()
+  const timedOut = error.killed || error.signal === 'SIGTERM' || lowerMessage.includes('timed out')
+
+  if (timedOut) {
+    return `${formatGitCommandForMessage(args)} 执行超时，可能在等待 SSH 密码、主机指纹确认，或远端网络没有响应。`
+  }
+
+  return error.message.trim() || `${formatGitCommandForMessage(args)} 执行失败`
+}
+
 function runGitInPathStrict(localPath: string, args: string[], options: GitExecutionOptions = {}): Promise<string> {
   return new Promise((resolveOutput, reject) => {
-    execFile('git', ['-C', localPath, ...args], { timeout: 30000, maxBuffer: 1024 * 1024 * 20, env: createGitExecutionEnv(options) }, (error, stdout, stderr) => {
+    const child = execFile('git', ['-C', localPath, ...args], {
+      timeout: 30000,
+      maxBuffer: 1024 * 1024 * 20,
+      env: createGitExecutionEnv(options)
+    }, (error, stdout, stderr) => {
+      unregisterGitProcess(options.operationId, child)
+
+      if (isGitOperationCancelled(options.operationId)) {
+        reject(new Error('Git 操作已终止'))
+        return
+      }
+
       if (error) {
-        reject(new Error(stderr.trim() || error.message))
+        reject(new Error(createGitFailureMessage(args, error, stdout, stderr)))
         return
       }
 
       resolveOutput(stdout.trim())
     })
+    registerGitProcess(options.operationId, child)
   })
 }
 
@@ -2176,18 +2634,26 @@ function runGitInPathOptional(localPath: string, args: string[]): Promise<string
 
 function runGitInPathResult(localPath: string, args: string[], options: GitExecutionOptions = {}): Promise<GitCommandResult> {
   return new Promise((resolveResult) => {
-    execFile('git', ['-C', localPath, ...args], { timeout: 30000, maxBuffer: 1024 * 1024 * 20, env: createGitExecutionEnv(options) }, (error, stdout, stderr) => {
+    const child = execFile('git', ['-C', localPath, ...args], {
+      timeout: 30000,
+      maxBuffer: 1024 * 1024 * 20,
+      env: createGitExecutionEnv(options)
+    }, (error, stdout, stderr) => {
+      unregisterGitProcess(options.operationId, child)
       const exitCode = typeof error?.code === 'number' ? error.code : error ? null : 0
+      const cancelled = isGitOperationCancelled(options.operationId)
+      const failureMessage = cancelled ? 'Git 操作已终止' : error ? createGitFailureMessage(args, error, stdout, stderr) : ''
 
       resolveResult({
-        ok: !error,
+        ok: !error && !cancelled,
         command: `git ${args.join(' ')}`,
         args,
         stdout: stdout.trimEnd(),
-        stderr: (stderr || error?.message || '').trimEnd(),
+        stderr: (failureMessage || stderr || '').trimEnd(),
         exitCode
       })
     })
+    registerGitProcess(options.operationId, child)
   })
 }
 
@@ -2195,9 +2661,48 @@ async function withSavedSshPassphrases<T>(operation: (env: NodeJS.ProcessEnv) =>
   return withSshPassphraseAskpass(await readSshPassphrases(app.getPath('userData')), operation)
 }
 
-function runSshKeygen(args: string[]): Promise<string> {
+async function cloneRemoteRepository(remoteUrl: string, targetPath: string): Promise<void> {
+  const args = buildRemoteCloneArgs(remoteUrl, targetPath)
+
+  await withSavedSshPassphrases(
+    (sshEnv) =>
+      new Promise<void>((resolveClone, rejectClone) => {
+        const child = spawn('git', args, {
+          cwd: dirname(targetPath),
+          env: { ...process.env, ...sshEnv },
+          stdio: 'pipe'
+        })
+        let stdout = ''
+        let stderr = ''
+
+        const appendOutput = (current: string, chunk: Buffer): string => {
+          const next = current + chunk.toString()
+          return next.length > 64 * 1024 ? next.slice(-64 * 1024) : next
+        }
+
+        child.stdout.on('data', (chunk: Buffer) => {
+          stdout = appendOutput(stdout, chunk)
+        })
+        child.stderr.on('data', (chunk: Buffer) => {
+          stderr = appendOutput(stderr, chunk)
+        })
+        child.once('error', (error) => rejectClone(new Error(error.message)))
+        child.once('exit', (exitCode) => {
+          if (exitCode === 0) {
+            resolveClone()
+            return
+          }
+
+          const output = [stderr, stdout].map((value) => value.trim()).filter(Boolean).join('\n')
+          rejectClone(new Error(output || `git clone 执行失败（退出码 ${exitCode ?? '未知'}）`))
+        })
+      })
+  )
+}
+
+function runSshKeygen(args: string[], env: NodeJS.ProcessEnv = {}): Promise<string> {
   return new Promise((resolveOutput, reject) => {
-    execFile('ssh-keygen', args, { timeout: 10000 }, (error, stdout, stderr) => {
+    execFile('ssh-keygen', args, { timeout: 10000, env: { ...process.env, ...env } }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(stderr.trim() || error.message))
         return
@@ -2232,8 +2737,9 @@ async function findAvailableSshKeyPath(): Promise<string> {
   }
 }
 
-function createWindow(): void {
+function createWindow(show = true): void {
   const mainWindow = new BrowserWindow({
+    show,
     width: 1360,
     height: 900,
     minWidth: 1080,
@@ -2268,15 +2774,99 @@ function createWindow(): void {
   }
 }
 
-async function scanRepository(localPath: string): Promise<RepositoryScanResult | null> {
+type RepositoryScanContext = {
+  repositoryKind?: 'root' | 'submodule'
+  parentRepositoryId?: string
+  relativePath?: string
+  submoduleName?: string
+  submoduleUrl?: string
+  expectedCommit?: string
+  statusMarker?: SubmoduleDescriptor['statusMarker']
+}
+
+function getSubmoduleState(
+  context: RepositoryScanContext,
+  available: boolean,
+  hasChanges: boolean,
+  checkedOutCommit: string
+): RepositoryScanResult['submoduleState'] {
+  if (context.repositoryKind !== 'submodule') {
+    return 'unknown'
+  }
+
+  if (!available) {
+    return context.statusMarker === '-' ? 'uninitialized' : 'missing'
+  }
+
+  if (context.statusMarker === 'U') {
+    return 'conflicted'
+  }
+
+  if (context.expectedCommit && checkedOutCommit && context.expectedCommit !== checkedOutCommit) {
+    return 'changed'
+  }
+
+  if (hasChanges) {
+    return 'dirty'
+  }
+
+  if (context.expectedCommit && checkedOutCommit) {
+    return 'aligned'
+  }
+
+  return 'unknown'
+}
+
+function createUnavailableRepositoryScan(localPath: string, context: RepositoryScanContext): RepositoryScanResult {
+  const normalizedPath = resolve(expandHomePath(localPath))
+  const submodule = context.repositoryKind === 'submodule'
+
+  return {
+    id: normalizedPath,
+    name: context.submoduleName || basename(normalizedPath),
+    repositoryKind: context.repositoryKind ?? 'root',
+    parentRepositoryId: context.parentRepositoryId ?? '',
+    relativePath: context.relativePath ?? basename(normalizedPath),
+    submoduleName: context.submoduleName ?? '',
+    submoduleUrl: context.submoduleUrl ?? '',
+    expectedCommit: context.expectedCommit ?? '',
+    checkedOutCommit: '',
+    isDetached: false,
+    submoduleState: getSubmoduleState(context, false, false, ''),
+    available: false,
+    scanError: submodule ? '子模块尚未初始化或本地目录不存在' : '仓库已不存在或不是 Git 仓库',
+    active: true,
+    localPath: normalizedPath,
+    remoteUrl: context.submoduleUrl ?? '',
+    remotes: [],
+    remoteCount: 0,
+    localBranchCount: 0,
+    remoteBranchCount: 0,
+    branches: [],
+    remoteBranches: [],
+    pushTargets: [],
+    defaultBranch: '',
+    currentBranch: 'unavailable',
+    latestCommit: context.expectedCommit ? `${context.expectedCommit.slice(0, 7)} 父仓库锁定提交` : '不可用',
+    hasChanges: false,
+    ahead: 0,
+    localUserName: '',
+    localUserEmail: '',
+    effectiveUserName: '',
+    effectiveUserEmail: '',
+    remoteAlignment: createEmptyRemoteAlignment('unknown', '子模块尚未初始化或本地目录不存在')
+  }
+}
+
+async function scanRepository(localPath: string, context: RepositoryScanContext = {}): Promise<RepositoryScanResult | null> {
   const normalizedPath = resolve(expandHomePath(localPath))
 
   if (!existsSync(join(normalizedPath, '.git'))) {
-    return null
+    return context.repositoryKind === 'submodule' ? createUnavailableRepositoryScan(normalizedPath, context) : null
   }
 
   const git = simpleGit(normalizedPath)
-  const [status, log, gitRemotes, branchInfo, localUserName, localUserEmail, effectiveUserName, effectiveUserEmail] = await Promise.all([
+  const [status, log, gitRemotes, branchInfo, localUserName, localUserEmail, effectiveUserName, effectiveUserEmail, branchName, checkedOutCommit] = await Promise.all([
     git.status(),
     git.log({ maxCount: 1 }),
     git.getRemotes(true),
@@ -2284,7 +2874,9 @@ async function scanRepository(localPath: string): Promise<RepositoryScanResult |
     runGitInPath(normalizedPath, ['config', '--local', 'user.name']),
     runGitInPath(normalizedPath, ['config', '--local', 'user.email']),
     runGitInPath(normalizedPath, ['config', 'user.name']),
-    runGitInPath(normalizedPath, ['config', 'user.email'])
+    runGitInPath(normalizedPath, ['config', 'user.email']),
+    runGitInPath(normalizedPath, ['symbolic-ref', '--short', '-q', 'HEAD']),
+    runGitInPath(normalizedPath, ['rev-parse', 'HEAD'])
   ])
   const latest = log.latest
   const remotes = gitRemotes.map((remote) => ({
@@ -2293,7 +2885,7 @@ async function scanRepository(localPath: string): Promise<RepositoryScanResult |
     pushUrl: remote.refs.push ?? ''
   }))
   const origin = remotes.find((remote) => remote.name === 'origin') ?? remotes[0]
-  const currentBranch = status.current ?? 'detached'
+  const currentBranch = branchName || status.current || 'detached'
   const defaultBranch = status.tracking ? status.tracking.replace(/^[^/]+\//, '') : currentBranch
   const [remoteAlignment, pushTargets] = await Promise.all([
     inspectRemoteAlignment(normalizedPath, remotes, currentBranch, defaultBranch),
@@ -2302,7 +2894,19 @@ async function scanRepository(localPath: string): Promise<RepositoryScanResult |
 
   return {
     id: normalizedPath,
-    name: basename(normalizedPath),
+    name: context.submoduleName || basename(normalizedPath),
+    repositoryKind: context.repositoryKind ?? 'root',
+    parentRepositoryId: context.parentRepositoryId ?? '',
+    relativePath: context.relativePath ?? basename(normalizedPath),
+    submoduleName: context.submoduleName ?? '',
+    submoduleUrl: context.submoduleUrl ?? '',
+    expectedCommit: context.expectedCommit ?? '',
+    checkedOutCommit,
+    isDetached: !branchName,
+    submoduleState: getSubmoduleState(context, true, status.files.length > 0, checkedOutCommit),
+    available: true,
+    scanError: '',
+    active: true,
     localPath: normalizedPath,
     remoteUrl: origin?.fetchUrl ?? origin?.pushUrl ?? '',
     remotes,
@@ -2878,7 +3482,14 @@ function getRepositoryOrThrow(repositoryId: string): RepositoryRecord {
 }
 
 async function rescanRepositoryRecord(repository: RepositoryRecord): Promise<RepositoryRecord> {
-  const scanned = await scanRepository(repository.localPath)
+  const scanned = await scanRepository(repository.localPath, {
+    repositoryKind: repository.repositoryKind,
+    parentRepositoryId: repository.parentRepositoryId,
+    relativePath: repository.relativePath,
+    submoduleName: repository.submoduleName,
+    submoduleUrl: repository.submoduleUrl,
+    expectedCommit: repository.expectedCommit
+  })
 
   if (!scanned) {
     throw new Error('仓库已不存在或不是 Git 仓库')
@@ -2946,15 +3557,58 @@ async function deleteRepositoryRemote(repositoryId: string, remoteName: string):
   return rescanRepositoryRecord(repository)
 }
 
-async function fetchRepositoryRemote(repositoryId: string, remoteName?: string): Promise<RepositoryRecord> {
+function formatRemoteFetchFailures(results: Array<{ remoteName: string; result: GitCommandResult }>): string {
+  const failures = results.filter(({ result }) => !result.ok)
+  const successes = results.filter(({ result }) => result.ok).map(({ remoteName }) => remoteName)
+  const failedNames = failures.map(({ remoteName }) => remoteName).join(', ')
+  const heading = successes.length > 0
+    ? `部分远端 Fetch 失败。成功：${successes.join(', ')}；失败：${failedNames}。`
+    : `全部远端 Fetch 失败：${failedNames}。`
+  const details = failures.map(({ remoteName, result }) => {
+    const output = result.stderr || result.stdout || 'Git 没有返回更多错误信息'
+    return `${remoteName}: ${output}`
+  })
+
+  return [heading, ...details].join('\n')
+}
+
+async function fetchRepositoryRemote(repositoryId: string, remoteName?: string, operationId?: string): Promise<RepositoryRecord> {
   const repository = getRepositoryOrThrow(repositoryId)
 
-  if (remoteName) {
-    const name = validateRepositoryRemoteName(remoteName)
-    await withSavedSshPassphrases((env) => runGitInPathStrict(repository.localPath, ['fetch', name, '--prune'], { env }))
-  } else {
-    await withSavedSshPassphrases((env) => runGitInPathStrict(repository.localPath, ['fetch', '--all', '--prune'], { env }))
-  }
+  await withSavedSshPassphrases(async (env) => {
+    if (isGitOperationCancelled(operationId)) {
+      throw new Error('Git 操作已终止')
+    }
+
+    if (remoteName) {
+      const name = validateRepositoryRemoteName(remoteName)
+      await runGitInPathStrict(repository.localPath, ['fetch', name, '--prune'], { env, operationId })
+      return
+    }
+
+    const remoteNames = await listGitRemoteNames(repository.localPath)
+
+    if (remoteNames.length === 0) {
+      throw new Error('当前仓库没有远端配置')
+    }
+
+    const results: Array<{ remoteName: string; result: GitCommandResult }> = []
+
+    for (const name of remoteNames) {
+      if (isGitOperationCancelled(operationId)) {
+        throw new Error('Git 操作已终止')
+      }
+
+      results.push({
+        remoteName: name,
+        result: await runGitInPathResult(repository.localPath, ['fetch', name, '--prune'], { env, operationId })
+      })
+    }
+
+    if (results.some(({ result }) => !result.ok)) {
+      throw new Error(formatRemoteFetchFailures(results))
+    }
+  })
 
   return rescanRepositoryRecord(repository)
 }
@@ -3207,6 +3861,10 @@ async function analyzeRepositoryMerge(repositoryId: string, input: GitMergeAnaly
 async function runRepositoryWriteOperation(repositoryId: string, args: string[], options: GitExecutionOptions = {}): Promise<GitOperationResult> {
   const repository = getRepositoryOrThrow(repositoryId)
   const result = await runGitInPathResult(repository.localPath, args, options)
+  if (isGitOperationCancelled(options.operationId)) {
+    throw new Error('Git 操作已终止')
+  }
+
   const rescannedRepository = await rescanRepositoryRecord(repository)
   const status = await getRepositoryWorkspaceStatus(repositoryId)
 
@@ -3242,19 +3900,27 @@ async function commitRepositoryChanges(repositoryId: string, input: GitCommitInp
   }
 }
 
-async function pushRepositoryChanges(repositoryId: string, input: GitPushInput): Promise<GitOperationResult> {
+async function pushRepositoryChanges(repositoryId: string, input: GitPushInput, operationId?: string): Promise<GitOperationResult> {
   return withSavedSshPassphrases(async (env) => {
     const operationArgs = buildGitPushOperationArgs(input)
 
     if (operationArgs.length === 1) {
-      return runRepositoryWriteOperation(repositoryId, operationArgs[0], { env })
+      return runRepositoryWriteOperation(repositoryId, operationArgs[0], { env, operationId })
     }
 
     const repository = getRepositoryOrThrow(repositoryId)
     const results = []
 
     for (const args of operationArgs) {
-      results.push(await runGitInPathResult(repository.localPath, args, { env }))
+      if (isGitOperationCancelled(operationId)) {
+        throw new Error('Git 操作已终止')
+      }
+
+      results.push(await runGitInPathResult(repository.localPath, args, { env, operationId }))
+    }
+
+    if (isGitOperationCancelled(operationId)) {
+      throw new Error('Git 操作已终止')
     }
 
     const rescannedRepository = await rescanRepositoryRecord(repository)
@@ -4673,6 +5339,434 @@ function startRepositoryReleasePublishTask(repositoryId: string, input: Reposito
   return getReleaseTaskSnapshot(task)
 }
 
+function getProjectDeploymentInspection(repositoryId: string): Promise<DeploymentInspection> {
+  const repository = getRepositoryOrThrow(repositoryId)
+
+  return inspectProjectDeploymentContext({
+    repositoryId: repository.id,
+    repositoryName: repository.name,
+    localPath: repository.localPath,
+    currentBranch: repository.currentBranch,
+    defaultBranch: repository.defaultBranch,
+    branches: repository.branches,
+    remoteBranches: repository.remoteBranches,
+    remoteUrl: repository.remoteUrl || repository.remotes[0]?.fetchUrl || repository.remotes[0]?.pushUrl || ''
+  })
+}
+
+async function suggestProjectDeployment(
+  repositoryId: string,
+  input: { provider: DeploymentProviderType; sourceMode: DeploymentSourceMode }
+): Promise<ProjectDeploymentSuggestion> {
+  const inspection = await getProjectDeploymentInspection(repositoryId)
+  const settings = await readAiSettingsFile(app.getPath('userData'))
+
+  return requestProjectDeploymentSuggestion({
+    settings,
+    inspection,
+    provider: input.provider,
+    sourceMode: input.sourceMode
+  })
+}
+
+async function prepareProjectDeployment(input: {
+  targetId?: string
+  repositoryId: string
+  provider: DeploymentProviderType
+  sourceMode: DeploymentSourceMode
+  config?: Partial<ProjectDeploymentConfig>
+}): Promise<ProjectDeploymentPreparation> {
+  const inspection = await getProjectDeploymentInspection(input.repositoryId)
+  const target = input.targetId ? getProjectDeploymentTarget(getDatabase(), input.targetId) : null
+  const defaultConfig = getDefaultDeploymentConfig(inspection, input.provider, input.sourceMode)
+  const config: ProjectDeploymentConfig = {
+    ...defaultConfig,
+    ...(target?.config ?? {}),
+    ...(input.config ?? {}),
+    repositoryId: input.repositoryId,
+    provider: input.provider,
+    sourceMode: input.sourceMode
+  }
+  const validation = validateProjectDeploymentConfig(config, inspection, target)
+
+  return {
+    target,
+    config,
+    capabilities: getDeploymentProviderCapabilities(input.provider),
+    issues: validation.issues,
+    warnings: validation.warnings,
+    previewCommand: validation.previewCommand,
+    ready: validation.issues.length === 0
+  }
+}
+
+function trimProjectDeploymentLog(value: string): string {
+  return value.length > releaseTaskMaxLogLength ? value.slice(value.length - releaseTaskMaxLogLength) : value
+}
+
+function persistProjectDeploymentTask(task: ProjectDeploymentTaskSnapshot): void {
+  saveProjectDeploymentTask(getDatabase(), task)
+}
+
+function updateProjectDeploymentTask(task: ProjectDeploymentTaskSnapshot, patch: Partial<ProjectDeploymentTaskSnapshot>): void {
+  Object.assign(task, patch, { updatedAt: new Date().toISOString() })
+  persistProjectDeploymentTask(task)
+}
+
+function appendProjectDeploymentTaskLog(task: ProjectDeploymentTaskSnapshot, message: string): void {
+  const time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  updateProjectDeploymentTask(task, { log: trimProjectDeploymentLog([task.log, `[${time}] ${message}`].filter(Boolean).join('\n')) })
+}
+
+function appendProjectDeploymentTaskOutput(task: ProjectDeploymentTaskSnapshot, stream: 'stdout' | 'stderr', chunk: string): void {
+  const next = trimProjectDeploymentLog((stream === 'stdout' ? task.stdout : task.stderr) + chunk)
+  updateProjectDeploymentTask(task, stream === 'stdout' ? { stdout: next } : { stderr: next })
+  chunk.replace(/\r/g, '').split('\n').map((line) => line.trim()).filter(Boolean).forEach((line) => appendProjectDeploymentTaskLog(task, `${stream}: ${line}`))
+}
+
+function setProjectDeploymentTaskPhase(task: ProjectDeploymentTaskSnapshot, phase: string, phaseIndex: number, phaseTotal = 5): void {
+  updateProjectDeploymentTask(task, { phase, phaseIndex, phaseTotal })
+  appendProjectDeploymentTaskLog(task, `当前步骤 ${phaseIndex}/${phaseTotal}：${phase}`)
+}
+
+function inferVercelGitSource(remoteUrl: string, branch: string): ServiceDeploymentActionInput['gitSource'] {
+  const match = remoteUrl.trim().match(/(?:git@|https?:\/\/)(github\.com|gitlab\.com|bitbucket\.org)[:/]([^/]+\/[^/]+?)(?:\.git)?$/i)
+  if (!match) return undefined
+  const host = match[1].toLowerCase()
+  const type = host === 'github.com' ? 'github' : host === 'gitlab.com' ? 'gitlab' : 'bitbucket'
+  return { type, repo: match[2], ...(branch.trim() ? { ref: branch.trim() } : {}) }
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function resolveDeploymentRoot(repository: RepositoryRecord, config: ProjectDeploymentConfig): string {
+  const root = resolve(repository.localPath, config.rootDirectory || '.')
+  const relativeRoot = relative(repository.localPath, root)
+
+  if (relativeRoot.startsWith('..') || isAbsolute(relativeRoot)) {
+    throw new Error('发布 Root Directory 必须位于仓库目录内')
+  }
+
+  return root
+}
+
+async function collectVercelStaticDeploymentFiles(outputRoot: string): Promise<Array<{ file: string; sha: string; size: number; content: Uint8Array }>> {
+  const files: Array<{ file: string; sha: string; size: number; content: Uint8Array }> = []
+  let totalBytes = 0
+
+  async function walk(current: string): Promise<void> {
+    const entries = await readdir(current, { withFileTypes: true })
+
+    for (const entry of entries) {
+      const absolutePath = resolve(current, entry.name)
+      if (entry.isDirectory()) {
+        await walk(absolutePath)
+        continue
+      }
+      if (!entry.isFile()) continue
+
+      const content = await readFile(absolutePath)
+      totalBytes += content.byteLength
+      if (files.length >= 5000 || totalBytes > 64 * 1024 * 1024) {
+        throw new Error('Vercel 静态产物超过单次发布的文件数量或大小上限')
+      }
+      files.push({
+        file: relative(outputRoot, absolutePath).replaceAll('\\', '/'),
+        sha: createHash('sha1').update(content).digest('hex'),
+        size: content.byteLength,
+        content
+      })
+    }
+  }
+
+  await walk(outputRoot)
+  return files
+}
+
+async function executeLocalProjectDeployment(
+  task: ProjectDeploymentTaskSnapshot,
+  repository: RepositoryRecord,
+  target: ProjectDeploymentTarget,
+  config: ProjectDeploymentConfig,
+  callbacks: ReleasePublishCallbacks
+): Promise<{ stdout: string; stderr: string; exitCode: number | null; artifactPath?: string; externalDeploymentId?: string; externalDeploymentUrl?: string; externalStatus?: string }> {
+  const root = resolveDeploymentRoot(repository, config)
+  let stdout = ''
+  let stderr = ''
+
+  const runCommand = async (command: string, label: string): Promise<void> => {
+    if (!command.trim()) return
+    appendProjectDeploymentTaskLog(task, `${label}：${command}`)
+    const result = await runReleaseProcess('/bin/sh', ['-lc', command], { cwd: root }, callbacks)
+    stdout = [stdout, result.stdout].filter(Boolean).join('\n')
+    stderr = [stderr, result.stderr].filter(Boolean).join('\n')
+    if (!result.ok) throw new Error(result.stderr || result.stdout || `${label}失败`)
+  }
+
+  setProjectDeploymentTaskPhase(task, '安装依赖', 1)
+  await runCommand(config.installCommand, '执行安装命令')
+  setProjectDeploymentTaskPhase(task, '执行本地构建', 2)
+  await runCommand(config.buildCommand, '执行构建命令')
+
+  if (config.provider === 'ssh-pm2') {
+    const archivePath = join(tmpdir(), `${task.id}.tar.gz`)
+    setProjectDeploymentTaskPhase(task, '打包发布产物', 3)
+    const archiveResult = await runReleaseProcess('tar', ['-czf', archivePath, '-C', root, '.'], {}, callbacks)
+    if (!archiveResult.ok) throw new Error(archiveResult.stderr || '打包发布产物失败')
+    const prepareUploadResult = await withSavedSshPassphrases((env) =>
+      runReleaseProcess('ssh', [config.remoteHost, `mkdir -p ${shellQuote(config.uploadPath)}`], { env }, callbacks)
+    )
+    if (!prepareUploadResult.ok) throw new Error(prepareUploadResult.stderr || '创建远程上传目录失败')
+    setProjectDeploymentTaskPhase(task, '上传到远程主机', 4)
+    const uploadResult = await withSavedSshPassphrases((env) => runReleaseProcess('scp', [archivePath, `${config.remoteHost}:${config.uploadPath}/${task.id}.tar.gz`], { env }, callbacks))
+    if (!uploadResult.ok) throw new Error(uploadResult.stderr || '上传发布产物失败')
+    const remoteScript = [
+      `mkdir -p ${shellQuote(config.remotePath)} ${shellQuote(config.uploadPath)}`,
+      `mkdir -p ${shellQuote(`${config.remotePath}/current`)}`,
+      `tar -xzf ${shellQuote(`${config.uploadPath}/${task.id}.tar.gz`)} -C ${shellQuote(`${config.remotePath}/current`)}`,
+      config.startCommand.trim() ? `cd ${shellQuote(`${config.remotePath}/current`)} && ${config.startCommand.trim()}` : ''
+    ].filter(Boolean).join(' && ')
+    setProjectDeploymentTaskPhase(task, '远程启动应用', 5)
+    const remoteResult = await withSavedSshPassphrases((env) => runReleaseProcess('ssh', [config.remoteHost, remoteScript], { env }, callbacks))
+    if (!remoteResult.ok) throw new Error(remoteResult.stderr || '远程启动应用失败')
+    stdout = [stdout, remoteResult.stdout].filter(Boolean).join('\n')
+    stderr = [stderr, remoteResult.stderr].filter(Boolean).join('\n')
+    await rm(archivePath, { force: true }).catch(() => undefined)
+    return { stdout, stderr, exitCode: 0, artifactPath: archivePath }
+  }
+
+  if (config.provider === 'vercel') {
+    if (!target.serviceId) throw new Error('Vercel 本地静态发布需要先绑定平台项目')
+    const outputRoot = resolve(root, config.outputDirectory || '.')
+    const outputRelative = relative(root, outputRoot)
+    if (outputRelative.startsWith('..') || isAbsolute(outputRelative)) throw new Error('Output Directory 必须位于 Root Directory 内')
+    setProjectDeploymentTaskPhase(task, '上传静态产物到 Vercel', 3)
+    const files = await collectVercelStaticDeploymentFiles(outputRoot)
+    if (files.length === 0) throw new Error('Output Directory 中没有可发布的文件')
+    const deployment = await deployVercelStaticProjectForService(getDatabase(), target.serviceId, {
+      name: config.appName || task.targetName,
+      files,
+      framework: config.framework
+    })
+    setProjectDeploymentTaskPhase(task, 'Vercel 部署已提交', 4)
+    setProjectDeploymentTaskPhase(task, '发布完成', 5)
+    return {
+      stdout,
+      stderr,
+      exitCode: 0,
+      externalDeploymentId: deployment.id,
+      externalDeploymentUrl: deployment.url,
+      externalStatus: deployment.state
+    }
+  }
+
+  const archivePath = join(tmpdir(), `${task.id}.tar.gz`)
+  setProjectDeploymentTaskPhase(task, '上传 Docker 构建上下文', 3)
+  const archiveResult = await runReleaseProcess('tar', ['-czf', archivePath, '-C', root, '.'], {}, callbacks)
+  if (!archiveResult.ok) throw new Error(archiveResult.stderr || '打包 Docker 构建上下文失败')
+  const prepareRemoteResult = await withSavedSshPassphrases((env) =>
+    runReleaseProcess('ssh', [config.remoteHost, `mkdir -p ${shellQuote(config.remotePath)}`], { env }, callbacks)
+  )
+  if (!prepareRemoteResult.ok) throw new Error(prepareRemoteResult.stderr || '创建远程 Docker 目录失败')
+  const uploadResult = await withSavedSshPassphrases((env) => runReleaseProcess('scp', [archivePath, `${config.remoteHost}:${config.remotePath}/${task.id}.tar.gz`], { env }, callbacks))
+  if (!uploadResult.ok) throw new Error(uploadResult.stderr || '上传 Docker 构建上下文失败')
+  const composeCommand = config.composeFile.trim()
+    ? `docker compose -f ${shellQuote(`${config.remotePath}/${config.composeFile}`)} ${config.composeService.trim() ? `up -d --build ${shellQuote(config.composeService)}` : 'up -d --build'}`
+    : `docker build -f ${shellQuote(`${config.remotePath}/${config.dockerfile || 'Dockerfile'}`)} -t ${shellQuote(config.appName || task.targetName)} ${shellQuote(config.remotePath)}`
+  const remoteScript = [
+    `mkdir -p ${shellQuote(config.remotePath)}`,
+    `tar -xzf ${shellQuote(`${config.remotePath}/${task.id}.tar.gz`)} -C ${shellQuote(config.remotePath)}`,
+    composeCommand
+  ].join(' && ')
+  setProjectDeploymentTaskPhase(task, '远程构建并启动容器', 4)
+  const remoteResult = await withSavedSshPassphrases((env) => runReleaseProcess('ssh', [config.remoteHost, remoteScript], { env }, callbacks))
+  if (!remoteResult.ok) throw new Error(remoteResult.stderr || '远程 Docker/Compose 发布失败')
+  setProjectDeploymentTaskPhase(task, '发布完成', 5)
+  stdout = [stdout, remoteResult.stdout].filter(Boolean).join('\n')
+  stderr = [stderr, remoteResult.stderr].filter(Boolean).join('\n')
+  await rm(archivePath, { force: true }).catch(() => undefined)
+  return { stdout, stderr, exitCode: 0, artifactPath: archivePath }
+}
+
+async function runProjectDeploymentTask(task: ProjectDeploymentTaskSnapshot): Promise<void> {
+  const target = getProjectDeploymentTarget(getDatabase(), task.targetId)
+  const repository = getRepositoryOrThrow(task.repositoryId)
+
+  if (!target) {
+    updateProjectDeploymentTask(task, { status: 'failed', phase: '发布失败', error: '发布目标不存在', finishedAt: new Date().toISOString() })
+    return
+  }
+
+  try {
+    const inspection = await getProjectDeploymentInspection(repository.id)
+    const validation = validateProjectDeploymentConfig(task.config, inspection, target)
+    if (validation.issues.length > 0) throw new Error(validation.issues.join('\n'))
+    appendProjectDeploymentTaskLog(task, '发布前检查通过')
+
+    if (task.config.provider === 'vercel' || task.config.provider === 'railway') {
+      if (!target.serviceId) throw new Error('当前目标还没有绑定已同步的平台服务，请先在服务中心同步并选择目标')
+      setProjectDeploymentTaskPhase(task, '触发平台部署', 3)
+      const action = task.config.provider === 'railway' ? 'deploy' : target.latestDeploymentId ? 'redeploy' : 'deploy'
+      const deploymentId = target.latestDeploymentId || undefined
+      const service = await runServiceDeploymentActionRecord(getDatabase(), target.serviceId, {
+        action,
+        deploymentId,
+        environmentId: target.externalEnvironmentId || undefined,
+        gitSource: action === 'deploy' && task.config.provider === 'vercel' ? inferVercelGitSource(repository.remoteUrl, task.config.branch) : undefined
+      })
+      const environment = service.environments.find((item) => item.name === target.externalEnvironmentName) ?? service.environments[0]
+      updateProjectDeploymentTask(task, {
+        status: 'succeeded',
+        phase: '发布完成',
+        phaseIndex: 5,
+        phaseTotal: 5,
+        hint: '平台已接受发布请求。',
+        exitCode: 0,
+        externalDeploymentId: environment?.latestDeploymentId,
+        externalDeploymentUrl: environment?.latestDeploymentUrl,
+        externalStatus: environment?.deploymentStatus,
+        finishedAt: new Date().toISOString()
+      })
+      saveProjectDeploymentTarget(getDatabase(), {
+        ...target,
+        projectId: target.projectId,
+        repositoryId: target.repositoryId,
+        provider: target.provider,
+        config: task.config,
+        latestDeploymentId: environment?.latestDeploymentId ?? target.latestDeploymentId,
+        latestDeploymentUrl: environment?.latestDeploymentUrl ?? target.latestDeploymentUrl,
+        lastStatus: environment?.deploymentStatus ?? 'submitted',
+        lastError: ''
+      })
+      appendProjectDeploymentTaskLog(task, `${task.targetName} 平台部署已提交`)
+      return
+    }
+
+    const result = await executeLocalProjectDeployment(task, repository, target, task.config, {
+      onOutput: (stream, chunk) => appendProjectDeploymentTaskOutput(task, stream, chunk),
+      onLog: (line) => appendProjectDeploymentTaskLog(task, line),
+      onPhase: (phase, index, total) => setProjectDeploymentTaskPhase(task, phase, index, total),
+      onProcess: (child) => projectDeploymentTaskProcesses.set(task.id, child),
+      shouldCancel: () => task.status === 'cancelled'
+    })
+    if (task.status === 'cancelled') return
+    updateProjectDeploymentTask(task, {
+      status: 'succeeded',
+      phase: '发布完成',
+      phaseIndex: task.phaseTotal || 5,
+      phaseTotal: task.phaseTotal || 5,
+      hint: '本地构建和远程发布已完成。',
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      externalDeploymentId: result.externalDeploymentId,
+      externalDeploymentUrl: result.externalDeploymentUrl,
+      externalStatus: result.externalStatus,
+      artifactPath: result.artifactPath,
+      finishedAt: new Date().toISOString()
+    })
+    saveProjectDeploymentTarget(getDatabase(), {
+      ...target,
+      projectId: target.projectId,
+      repositoryId: target.repositoryId,
+      provider: target.provider,
+      config: task.config,
+      status: 'ready',
+      latestDeploymentId: result.externalDeploymentId ?? target.latestDeploymentId,
+      latestDeploymentUrl: result.externalDeploymentUrl ?? target.latestDeploymentUrl,
+      lastStatus: result.externalStatus ?? 'succeeded',
+      lastError: ''
+    })
+    appendProjectDeploymentTaskLog(task, `${task.targetName} 发布完成`)
+  } catch (error) {
+    const errorMessage = getUnknownErrorMessage(error, '项目发布失败')
+    updateProjectDeploymentTask(task, {
+      status: task.status === 'cancelled' ? 'cancelled' : 'failed',
+      phase: task.status === 'cancelled' ? '发布已终止' : '发布失败',
+      hint: task.status === 'cancelled' ? '发布任务已终止，可能留下部分远程文件或容器。' : '发布失败，请查看日志和预检提示。',
+      error: errorMessage,
+      stderr: task.stderr || errorMessage,
+      finishedAt: new Date().toISOString()
+    })
+    saveProjectDeploymentTarget(getDatabase(), { ...target, projectId: target.projectId, repositoryId: target.repositoryId, provider: target.provider, config: task.config, status: 'attention', lastStatus: 'failed', lastError: errorMessage })
+    appendProjectDeploymentTaskLog(task, errorMessage)
+  } finally {
+    projectDeploymentTaskProcesses.delete(task.id)
+  }
+}
+
+async function startProjectDeploymentTask(input: { projectId: string; targetId: string; config?: Partial<ProjectDeploymentConfig> }): Promise<ProjectDeploymentTaskSnapshot> {
+  const target = getProjectDeploymentTarget(getDatabase(), input.targetId)
+  if (!target || target.projectId !== input.projectId) throw new Error('发布目标不存在')
+  const running = Array.from(projectDeploymentTasks.values()).find((item) => item.targetId === target.id && item.status === 'running')
+  if (running) return { ...running }
+  const config = { ...target.config, ...(input.config ?? {}), repositoryId: target.repositoryId, provider: target.provider }
+  const repository = getRepositoryOrThrow(target.repositoryId)
+  let resolvedTarget = { ...target, config }
+
+  if ((config.provider === 'vercel' || config.provider === 'railway') && !target.serviceId) {
+    if (config.provider === 'railway') {
+      throw new Error('Railway 新建资源暂不支持自动创建，请先同步连接并选择已有项目/服务/环境')
+    }
+    if (!target.connectionId) throw new Error('创建 Vercel 项目需要先选择平台连接')
+    const service = await createVercelProjectDeploymentService(getDatabase(), {
+      projectId: input.projectId,
+      repositoryId: target.repositoryId,
+      connectionId: target.connectionId,
+      name: config.appName || target.displayName || repository.name,
+      remoteUrl: config.sourceMode === 'git' ? repository.remoteUrl : '',
+      branch: config.branch,
+      framework: config.framework,
+      installCommand: config.installCommand,
+      buildCommand: config.buildCommand,
+      outputDirectory: config.outputDirectory,
+      rootDirectory: config.rootDirectory,
+      runtimeVersion: config.runtimeVersion
+    })
+    resolvedTarget = saveProjectDeploymentTarget(getDatabase(), {
+      ...target,
+      projectId: input.projectId,
+      repositoryId: target.repositoryId,
+      provider: target.provider,
+      config,
+      status: 'ready',
+      serviceId: service.id,
+      connectionId: service.connectionId,
+      externalProjectId: service.externalProjectId,
+      externalProjectName: service.externalProjectName,
+      externalServiceName: service.name,
+      externalEnvironmentName: service.defaultEnvironment || 'production'
+    })
+  }
+
+  if ((config.provider === 'vercel' || config.provider === 'railway') && !resolvedTarget.serviceId) {
+    throw new Error('当前目标还没有绑定平台服务，请先选择或创建目标')
+  }
+
+  const task = createProjectDeploymentTask({ projectId: input.projectId, target: resolvedTarget, config })
+  projectDeploymentTasks.set(task.id, task)
+  persistProjectDeploymentTask(task)
+  appendProjectDeploymentTaskLog(task, '项目发布任务已进入后台')
+  void runProjectDeploymentTask(task)
+  return { ...task }
+}
+
+function cancelProjectDeploymentTask(taskId: string): ProjectDeploymentTaskSnapshot {
+  const task = projectDeploymentTasks.get(taskId) ?? getProjectDeploymentTask(getDatabase(), taskId)
+  if (!task) throw new Error('项目发布任务不存在')
+  if (task.status !== 'running') return { ...task }
+  updateProjectDeploymentTask(task, { status: 'cancelled', phase: '正在终止发布', hint: '已请求终止发布任务。', finishedAt: new Date().toISOString() })
+  const child = projectDeploymentTaskProcesses.get(task.id)
+  const pid = child?.pid
+  if (pid) {
+    try { process.kill(-pid, 'SIGTERM') } catch { try { process.kill(pid, 'SIGTERM') } catch { /* already exited */ } }
+  }
+  appendProjectDeploymentTaskLog(task, '已请求终止项目发布')
+  return { ...task }
+}
+
 async function applyRepositoryConflictResolution(repositoryId: string, filePath: string, content: string): Promise<GitOperationResult> {
   const repository = getRepositoryOrThrow(repositoryId)
   const normalizedPath = resolveRepositoryFilePath(repository, filePath)
@@ -4827,7 +5921,6 @@ async function findGitRepositories(rootPath: string): Promise<string[]> {
 
     if (existsSync(join(current.path, '.git'))) {
       repositories.add(current.path)
-      continue
     }
 
     if (current.depth >= maxDepth) {
@@ -4854,6 +5947,82 @@ async function findGitRepositories(rootPath: string): Promise<string[]> {
   return Array.from(repositories)
 }
 
+function createRepositoryScanContext(rootPath: string, localPath: string, repositoryPaths: string[]): RepositoryScanContext {
+  const relativePath = relative(rootPath, localPath)
+
+  return {
+    repositoryKind: 'root',
+    relativePath: relativePath || '.',
+    parentRepositoryId: findNearestRepositoryParent(localPath, repositoryPaths)
+  }
+}
+
+async function scanRepositoryTree(rootPath: string): Promise<RepositoryScanResult[]> {
+  const normalizedRoot = resolve(expandHomePath(rootPath))
+  const repositoryPaths = await findGitRepositories(normalizedRoot)
+  const targets = new Map<string, RepositoryScanContext>()
+
+  for (const repositoryPath of repositoryPaths) {
+    const normalizedRepositoryPath = resolve(repositoryPath)
+    targets.set(normalizedRepositoryPath, createRepositoryScanContext(normalizedRoot, normalizedRepositoryPath, repositoryPaths))
+  }
+
+  for (const repositoryPath of repositoryPaths) {
+    const normalizedRepositoryPath = resolve(repositoryPath)
+    const submodules = await discoverSubmoduleTree(normalizedRepositoryPath, normalizedRoot, runGitInPath)
+
+    for (const submodule of submodules) {
+      targets.set(submodule.localPath, {
+        repositoryKind: 'submodule',
+        parentRepositoryId: submodule.parentRepositoryId,
+        relativePath: submodule.relativePath,
+        submoduleName: submodule.name,
+        submoduleUrl: submodule.url,
+        expectedCommit: submodule.expectedCommit,
+        statusMarker: submodule.statusMarker
+      })
+    }
+  }
+
+  const results = await Promise.all(Array.from(targets.entries()).map(([localPath, context]) => scanRepository(localPath, context)))
+  return results.filter((result): result is RepositoryScanResult => Boolean(result))
+}
+
+async function scanRepositoryTrees(paths: string[]): Promise<RepositoryScanResult[]> {
+  const results = await Promise.all(paths.map((path) => scanRepositoryTree(path)))
+  const unique = new Map<string, RepositoryScanResult>()
+
+  for (const result of results.flat()) {
+    unique.set(result.id, result)
+  }
+
+  return Array.from(unique.values())
+}
+
+async function rescanProjectRepositories(projectId: string): Promise<WorkspaceSnapshot> {
+  const project = getProjectOrThrow(projectId)
+  const scanned = await scanRepositoryTree(project.workspacePath)
+  const db = getDatabase()
+  const scannedIds = new Set(scanned.map((repository) => repository.id))
+
+  const transaction = db.transaction(() => {
+    db.prepare(
+      `UPDATE repositories
+       SET active = 0, available = 0, scan_error = '当前扫描未发现该仓库', updated_at = ?
+       WHERE project_id = ?`
+    ).run(new Date().toISOString(), projectId)
+
+    for (const repository of scanned) {
+      if (scannedIds.has(repository.id)) {
+        upsertRepository(projectId, repository)
+      }
+    }
+  })
+
+  transaction()
+  return getWorkspaceSnapshot()
+}
+
 function readSshFingerprint(path: string, content: string): Promise<string> {
   return new Promise((resolveFingerprint) => {
     execFile('ssh-keygen', ['-lf', path], { timeout: 5000 }, (error, stdout) => {
@@ -4868,33 +6037,40 @@ function readSshFingerprint(path: string, content: string): Promise<string> {
 }
 
 async function getGitSetupStatus(): Promise<GitSetupStatus> {
-  const [gitVersion, userName, userEmail, passphrasePaths] = await Promise.all([
+  const [gitVersion, userName, userEmail, passphrasePaths, gpgVersionOutput, gpgSecretKeyOutput, gitSigningKey, gitCommitGpgSign] = await Promise.all([
     runGit(['--version']),
     runGit(['config', '--global', 'user.name']),
     runGit(['config', '--global', 'user.email']),
-    listSshPassphrasePaths(app.getPath('userData'))
+    listSshPassphrasePaths(app.getPath('userData')),
+    runGpg(['--version']),
+    runGpg(['--list-secret-keys', '--keyid-format=long', '--with-colons']),
+    runGit(['config', '--global', 'user.signingkey']),
+    runGit(['config', '--global', 'commit.gpgsign'])
   ])
   const sshKeys = await readSshKeyInventory(sshDirectory, readSshFingerprint, passphrasePaths)
+  const gpgVersion = gpgVersionOutput.split(/\r?\n/)[0] || ''
 
   return {
     gitAvailable: gitVersion.length > 0,
     gitVersion,
     userName,
     userEmail,
+    gpgAvailable: gpgVersion.length > 0,
+    gpgVersion,
+    gpgKeys: parseGpgSecretKeys(gpgSecretKeyOutput),
+    gitSigningKey,
+    gitCommitGpgSign: gitCommitGpgSign.trim().toLowerCase() === 'true',
     sshPublicKeys: sshKeys.sshPublicKeys,
     sshPrivateKeys: sshKeys.sshPrivateKeys
   }
 }
 
 ipcMain.handle('repositories:scan', async (_event, paths: string[]) => {
-  const results = await Promise.all(paths.map((path) => scanRepository(path)))
-  return results.filter(Boolean)
+  return scanRepositoryTrees(paths)
 })
 
 ipcMain.handle('repositories:scan-workspace', async (_event, rootPath: string) => {
-  const repositoryPaths = await findGitRepositories(rootPath)
-  const results = await Promise.all(repositoryPaths.map((path) => scanRepository(path)))
-  return results.filter(Boolean)
+  return scanRepositoryTree(rootPath)
 })
 
 ipcMain.handle('projects:list', async (): Promise<WorkspaceSnapshot> => getWorkspaceSnapshot())
@@ -4935,6 +6111,88 @@ ipcMain.handle(
 )
 
 ipcMain.handle(
+  'projects:create-from-remote',
+  async (_event, input: RemoteProjectCreateInput): Promise<WorkspaceSnapshot> => {
+    const name = input.name.trim()
+    const remoteUrl = input.remoteUrl.trim()
+
+    if (!name) {
+      throw new Error('请输入项目名称')
+    }
+
+    if (!remoteUrl) {
+      throw new Error('请输入远程仓库地址')
+    }
+
+    if (!input.parentPath.trim()) {
+      throw new Error('请选择本地父目录')
+    }
+
+    const parentPath = resolve(expandHomePath(input.parentPath.trim()))
+
+    let parentStats
+
+    try {
+      parentStats = await stat(parentPath)
+    } catch {
+      throw new Error('本地父目录不存在')
+    }
+
+    if (!parentStats.isDirectory()) {
+      throw new Error('本地父目录不是文件夹')
+    }
+
+    const repositoryName = deriveRemoteRepositoryName(remoteUrl)
+    const workspacePath = resolveRemoteCloneTarget(parentPath, remoteUrl)
+
+    if (repositoryName !== basename(workspacePath)) {
+      throw new Error('远程仓库目标目录无效')
+    }
+
+    if (await pathExists(workspacePath)) {
+      throw new Error(`目标目录已存在：${workspacePath}`)
+    }
+
+    let targetDirectoryCreated = false
+
+    try {
+      await mkdir(workspacePath)
+      targetDirectoryCreated = true
+      await cloneRemoteRepository(remoteUrl, workspacePath)
+      const scanned = await scanRepositoryTree(workspacePath)
+
+      if (scanned.length === 0) {
+        throw new Error('远程仓库克隆完成，但未扫描到 Git 仓库')
+      }
+
+      const now = new Date().toISOString()
+      const projectId = createProjectId(name)
+      const db = getDatabase()
+      const transaction = db.transaction(() => {
+        db.prepare(
+          `
+          INSERT INTO projects (id, name, description, status, owner, workspace_path, created_at, updated_at)
+          VALUES (?, ?, '', 'ready', '', ?, ?, ?)
+        `
+        ).run(projectId, name, workspacePath, now, now)
+
+        for (const repository of scanned) {
+          upsertRepository(projectId, repository)
+        }
+      })
+
+      transaction()
+      return getWorkspaceSnapshot()
+    } catch (error) {
+      if (targetDirectoryCreated) {
+        await rm(workspacePath, { recursive: true, force: true })
+      }
+      throw error
+    }
+  }
+)
+
+ipcMain.handle(
   'projects:update',
   async (_event, input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }): Promise<WorkspaceSnapshot> => {
     const existing = getDatabase().prepare('SELECT * FROM projects WHERE id = ?').get(input.id) as Record<string, unknown> | undefined
@@ -4964,7 +6222,28 @@ ipcMain.handle(
   }
 )
 
+ipcMain.handle(
+  'projects:favorite',
+  async (_event, input: { id: string; isFavorite: boolean }): Promise<WorkspaceSnapshot> => {
+    getProjectOrThrow(input.id)
+
+    getDatabase()
+      .prepare(
+        `
+        UPDATE projects
+        SET is_favorite = ?, updated_at = ?
+        WHERE id = ?
+      `
+      )
+      .run(input.isFavorite ? 1 : 0, new Date().toISOString(), input.id)
+
+    return getWorkspaceSnapshot()
+  }
+)
+
 ipcMain.handle('projects:delete', async (_event, projectId: string): Promise<WorkspaceSnapshot> => deleteProject(projectId))
+
+ipcMain.handle('project:repositories:rescan', async (_event, projectId: string): Promise<WorkspaceSnapshot> => rescanProjectRepositories(projectId))
 
 ipcMain.handle('repositories:list', async (_event, projectId?: string): Promise<RepositoryRecord[]> => listRepositories(projectId))
 
@@ -4975,13 +6254,7 @@ ipcMain.handle('repository:detail', async (_event, repositoryId: string): Promis
     throw new Error('仓库不存在')
   }
 
-  const scanned = await scanRepository(existing.localPath)
-
-  if (!scanned) {
-    throw new Error('仓库已不存在或不是 Git 仓库')
-  }
-
-  return upsertRepository(existing.projectId, scanned)
+  return rescanRepositoryRecord(existing)
 })
 
 ipcMain.handle(
@@ -5002,7 +6275,7 @@ ipcMain.handle('repository:remote:save', async (_event, input: RepositoryRemoteI
 
 ipcMain.handle('repository:remote:delete', async (_event, repositoryId: string, remoteName: string): Promise<RepositoryRecord> => deleteRepositoryRemote(repositoryId, remoteName))
 
-ipcMain.handle('repository:remote:fetch', async (_event, repositoryId: string, remoteName?: string): Promise<RepositoryRecord> => fetchRepositoryRemote(repositoryId, remoteName))
+ipcMain.handle('repository:remote:fetch', async (_event, repositoryId: string, remoteName?: string, operationId?: string): Promise<RepositoryRecord> => fetchRepositoryRemote(repositoryId, remoteName, operationId))
 
 ipcMain.handle('repository:branch:switch', async (_event, repositoryId: string, input: GitBranchSwitchInput): Promise<RepositoryRecord> => switchRepositoryBranch(repositoryId, input))
 
@@ -5018,9 +6291,11 @@ ipcMain.handle('repository:git-commit', async (_event, repositoryId: string, inp
   commitRepositoryChanges(repositoryId, input)
 )
 
-ipcMain.handle('repository:git-push', async (_event, repositoryId: string, input: GitPushInput): Promise<GitOperationResult> =>
-  pushRepositoryChanges(repositoryId, input)
+ipcMain.handle('repository:git-push', async (_event, repositoryId: string, input: GitPushInput, operationId?: string): Promise<GitOperationResult> =>
+  pushRepositoryChanges(repositoryId, input, operationId)
 )
+
+ipcMain.handle('repository:git-operation:cancel', async (_event, operationId: string): Promise<boolean> => cancelRepositoryGitOperation(operationId))
 
 ipcMain.handle('repository:deployment-approval:config:get', async (_event, repositoryId: string): Promise<DeploymentApprovalConfig | null> =>
   getRepositoryDeploymentApprovalConfig(repositoryId)
@@ -5200,6 +6475,60 @@ ipcMain.handle('project:cloudflare:dns-record:delete', async (_event, projectId:
   deleteProjectCloudflareDnsRecord(getDatabase(), projectId, recordId)
 )
 
+ipcMain.handle('data-source:connections:list', async (): Promise<DataSourceConnectionRecord[]> => listDataSourceConnectionRecords(getDatabase()))
+
+ipcMain.handle('data-source:connection:save', async (_event, input: DataSourceConnectionInput): Promise<DataSourceConnectionRecord> =>
+  saveDataSourceConnectionRecord(getDatabase(), input)
+)
+
+ipcMain.handle('data-source:connection:delete', async (_event, connectionId: string): Promise<DataSourceConnectionRecord[]> =>
+  deleteDataSourceConnectionRecord(getDatabase(), connectionId)
+)
+
+ipcMain.handle('data-source:connection:test', async (_event, connectionId: string): Promise<DataSourceConnectionTestResult> =>
+  testDataSourceConnectionRecord(getDatabase(), connectionId)
+)
+
+ipcMain.handle('data-source:database:tables', async (_event, connectionId: string): Promise<DataSourceDatabaseTable[]> =>
+  listDataSourceDatabaseTables(getDatabase(), connectionId)
+)
+
+ipcMain.handle(
+  'data-source:database:preview',
+  async (_event, connectionId: string, input: { schema?: string; table: string; limit?: number; offset?: number }): Promise<DataSourceTabularResult> =>
+    previewDataSourceDatabaseTable(getDatabase(), connectionId, input)
+)
+
+ipcMain.handle(
+  'data-source:database:sql',
+  async (_event, connectionId: string, input: { sql: string; limit?: number }): Promise<DataSourceTabularResult> =>
+    runDataSourceSqlQuery(getDatabase(), connectionId, input)
+)
+
+ipcMain.handle(
+  'data-source:redis:keys',
+  async (_event, connectionId: string, input?: { pattern?: string; cursor?: string; limit?: number }): Promise<DataSourceRedisScanResult> =>
+    scanDataSourceRedisKeys(getDatabase(), connectionId, input)
+)
+
+ipcMain.handle(
+  'data-source:redis:value',
+  async (_event, connectionId: string, input: { key: string; limit?: number }): Promise<DataSourceRedisValuePreview> =>
+    previewDataSourceRedisValue(getDatabase(), connectionId, input)
+)
+
+ipcMain.handle(
+  'data-source:s3:objects',
+  async (_event, connectionId: string, input?: { prefix?: string; continuationToken?: string; limit?: number }): Promise<DataSourceS3ListResult> =>
+    listDataSourceS3Objects(getDatabase(), connectionId, input)
+)
+
+ipcMain.handle(
+  'data-source:s3:object',
+  async (_event, connectionId: string, input: { key: string }): Promise<DataSourceS3ObjectPreview> =>
+    previewDataSourceS3Object(getDatabase(), connectionId, input)
+)
+
 ipcMain.handle('service:connections:list', async (): Promise<ServiceConnectionRecord[]> => listServiceConnectionRecords(getDatabase()))
 
 ipcMain.handle('service:connection:save', async (_event, input: ServiceConnectionInput): Promise<ServiceConnectionRecord> => saveServiceConnectionRecord(getDatabase(), input))
@@ -5317,6 +6646,59 @@ ipcMain.handle('service:runtime:logs', async (_event, serviceId: string, environ
 )
 
 ipcMain.handle(
+  'project:deployment:context:inspect',
+  async (_event, repositoryId: string): Promise<DeploymentInspection> => getProjectDeploymentInspection(repositoryId)
+)
+
+ipcMain.handle(
+  'project:deployment:suggest',
+  async (_event, repositoryId: string, input: { provider: DeploymentProviderType; sourceMode: DeploymentSourceMode }): Promise<ProjectDeploymentSuggestion> =>
+    suggestProjectDeployment(repositoryId, input)
+)
+
+ipcMain.handle(
+  'project:deployment:targets:list',
+  async (_event, projectId: string): Promise<ProjectDeploymentTarget[]> => listProjectDeploymentTargets(getDatabase(), projectId)
+)
+
+ipcMain.handle(
+  'project:deployment:target:save',
+  async (_event, input: ProjectDeploymentTargetInput): Promise<ProjectDeploymentTarget> => saveProjectDeploymentTarget(getDatabase(), input)
+)
+
+ipcMain.handle(
+  'project:deployment:target:delete',
+  async (_event, projectId: string, targetId: string): Promise<ProjectDeploymentTarget[]> => deleteProjectDeploymentTarget(getDatabase(), projectId, targetId)
+)
+
+ipcMain.handle(
+  'project:deployment:prepare',
+  async (_event, input: { targetId?: string; repositoryId: string; provider: DeploymentProviderType; sourceMode: DeploymentSourceMode; config?: Partial<ProjectDeploymentConfig> }): Promise<ProjectDeploymentPreparation> =>
+    prepareProjectDeployment(input)
+)
+
+ipcMain.handle(
+  'project:deployment:task:start',
+  async (_event, input: { projectId: string; targetId: string; config?: Partial<ProjectDeploymentConfig> }): Promise<ProjectDeploymentTaskSnapshot> =>
+    startProjectDeploymentTask(input)
+)
+
+ipcMain.handle(
+  'project:deployment:tasks:list',
+  async (_event, projectId?: string): Promise<ProjectDeploymentTaskSnapshot[]> => listProjectDeploymentTasks(getDatabase(), projectId)
+)
+
+ipcMain.handle(
+  'project:deployment:task:get',
+  async (_event, taskId: string): Promise<ProjectDeploymentTaskSnapshot | null> => projectDeploymentTasks.get(taskId) ?? getProjectDeploymentTask(getDatabase(), taskId)
+)
+
+ipcMain.handle(
+  'project:deployment:task:cancel',
+  async (_event, taskId: string): Promise<ProjectDeploymentTaskSnapshot> => cancelProjectDeploymentTask(taskId)
+)
+
+ipcMain.handle(
   'project:person:save',
   async (
     _event,
@@ -5344,7 +6726,15 @@ ipcMain.handle(
     await runGitInPathStrict(normalizedPath, ['config', '--local', 'user.name', userName])
     await runGitInPathStrict(normalizedPath, ['config', '--local', 'user.email', userEmail])
 
-    const repository = await scanRepository(normalizedPath)
+    const existingRecord = listRepositories().find((item) => item.id === normalizedPath)
+    const repository = await scanRepository(normalizedPath, existingRecord ? {
+      repositoryKind: existingRecord.repositoryKind,
+      parentRepositoryId: existingRecord.parentRepositoryId,
+      relativePath: existingRecord.relativePath,
+      submoduleName: existingRecord.submoduleName,
+      submoduleUrl: existingRecord.submoduleUrl,
+      expectedCommit: existingRecord.expectedCommit
+    } : {})
 
     if (!repository) {
       throw new Error('仓库设置已保存，但重新读取失败')
@@ -5370,7 +6760,15 @@ ipcMain.handle('repository:clear-identity', async (_event, localPath: string): P
   await runGitInPath(normalizedPath, ['config', '--local', '--unset', 'user.name'])
   await runGitInPath(normalizedPath, ['config', '--local', '--unset', 'user.email'])
 
-  const repository = await scanRepository(normalizedPath)
+  const existingRecord = listRepositories().find((item) => item.id === normalizedPath)
+  const repository = await scanRepository(normalizedPath, existingRecord ? {
+    repositoryKind: existingRecord.repositoryKind,
+    parentRepositoryId: existingRecord.parentRepositoryId,
+    relativePath: existingRecord.relativePath,
+    submoduleName: existingRecord.submoduleName,
+    submoduleUrl: existingRecord.submoduleUrl,
+    expectedCommit: existingRecord.expectedCommit
+  } : {})
 
   if (!repository) {
     throw new Error('仓库设置已清除，但重新读取失败')
@@ -5410,10 +6808,102 @@ ipcMain.handle('git:configure-identity', async (_event, identity: { userName: st
   return getGitSetupStatus()
 })
 
+ipcMain.handle('gpg:import-bundle', async (_event, input: { sourcePath: string }): Promise<GitSetupStatus> => {
+  const sourcePath = resolve(expandHomePath(String(input.sourcePath || '')))
+  const sourceInfo = await stat(sourcePath)
+  let importRoot = sourcePath
+  let temporaryDirectory = ''
+
+  try {
+    if (sourceInfo.isFile() && sourcePath.toLowerCase().endsWith('.zip')) {
+      temporaryDirectory = await mkdtemp(join(tmpdir(), 'forgedesk-gpg-import-'))
+      await unzipToDirectory(sourcePath, temporaryDirectory)
+      importRoot = temporaryDirectory
+    }
+
+    const plan = await createGpgImportPlan(importRoot)
+
+    if (plan.keyFiles.length === 0 && plan.ownerTrustFiles.length === 0) {
+      throw new Error('没有在这个 GPG 包中找到 .asc/.gpg/.pgp 密钥或 ownertrust 文件')
+    }
+
+    for (const keyFile of plan.keyFiles) {
+      await runGpgStrict(['--import', keyFile])
+    }
+
+    for (const ownerTrustFile of plan.ownerTrustFiles) {
+      await runGpgStrict(['--import-ownertrust', ownerTrustFile])
+    }
+
+    return getGitSetupStatus()
+  } finally {
+    if (temporaryDirectory) {
+      await rm(temporaryDirectory, { recursive: true, force: true })
+    }
+  }
+})
+
+ipcMain.handle('gpg:install', async (): Promise<GpgInstallResult> => installGpgWithBrew())
+
+ipcMain.handle('gpg:copy-public-key', async (_event, fingerprint: string): Promise<void> => {
+  const normalizedFingerprint = String(fingerprint || '').trim()
+
+  if (!normalizedFingerprint) {
+    throw new Error('请选择要复制的 GPG 密钥')
+  }
+
+  const publicKey = await runGpgStrict(['--armor', '--export', normalizedFingerprint])
+
+  if (!publicKey.trim()) {
+    throw new Error('无法导出 GPG 公钥')
+  }
+
+  clipboard.writeText(`${publicKey.trim()}\n`)
+})
+
+ipcMain.handle('gpg:configure-git-signing', async (_event, fingerprint: string): Promise<GitSetupStatus> => {
+  const normalizedFingerprint = String(fingerprint || '').trim()
+
+  if (!normalizedFingerprint) {
+    throw new Error('请选择要用于 Git 签名的 GPG 密钥')
+  }
+
+  await runGitStrict(['config', '--global', 'user.signingkey', normalizedFingerprint])
+  await runGitStrict(['config', '--global', 'commit.gpgsign', 'true'])
+  await runGitStrict(['config', '--global', 'gpg.program', 'gpg'])
+
+  return getGitSetupStatus()
+})
+
 ipcMain.handle('settings:ai:get', async (): Promise<RedactedAiSettings> => getRedactedAiSettings(await readAiSettingsFile(app.getPath('userData'))))
 
 ipcMain.handle('settings:ai:status', async (_event, verify = false): Promise<AiRuntimeStatus> =>
   inspectAiRuntime(await readAiSettingsFile(app.getPath('userData')), Boolean(verify)))
+
+ipcMain.handle('codex:runtime:status', async (_event, verify = false): Promise<AiRuntimeStatus> =>
+  inspectCodexRuntime(Boolean(verify)))
+
+ipcMain.handle('codex:activity:snapshot', async (): Promise<CodexActivitySnapshot> => codexActivityService.snapshot())
+
+ipcMain.handle('codex:tasks:list', async (): Promise<CodexTaskRecord[]> => codexTaskService.list())
+
+ipcMain.handle('codex:tasks:create', async (_event, input?: CodexTaskCreateInput): Promise<CodexTaskRecord> =>
+  codexTaskService.create(input))
+
+ipcMain.handle('codex:tasks:rename', async (_event, input: CodexTaskRenameInput): Promise<CodexTaskRecord> =>
+  codexTaskService.rename(input))
+
+ipcMain.handle('codex:tasks:send', async (_event, input: CodexTaskMessageInput): Promise<CodexTaskRecord> =>
+  codexTaskService.sendMessage(input))
+
+ipcMain.handle('codex:tasks:cancel', async (_event, taskId: string): Promise<CodexTaskRecord> =>
+  codexTaskService.cancel(taskId))
+
+ipcMain.handle('codex:tasks:delete', async (_event, taskId: string): Promise<CodexTaskRecord[]> =>
+  codexTaskService.delete(taskId))
+
+ipcMain.handle('codex:tasks:environment', async (_event, taskId: string): Promise<CodexTaskEnvironment> =>
+  codexTaskService.environment(taskId))
 
 ipcMain.handle('settings:ai:models:openrouter', async (): Promise<OpenRouterModel[]> => listOpenRouterModels())
 
@@ -5485,6 +6975,114 @@ ipcMain.handle('system-monitor:snapshot', async (): Promise<SystemMonitorSnapsho
   })
 )
 
+ipcMain.handle('system-resource:processes:current', async () => {
+  const stored = listLatestProcesses(getDatabase())
+  return stored.length > 0 ? stored : collectResourceProcesses()
+})
+
+ipcMain.handle('system-resource:history', async (_event, range?: { from?: string; to?: string }) => {
+  const to = range?.to || new Date().toISOString()
+  const from = range?.from || new Date(Date.now() - 24 * 3600_000).toISOString()
+  return listResourceHistory(getDatabase(), from, to)
+})
+
+ipcMain.handle('system-resource:history:import', async (_event, points: Array<{ checkedAt: string; cpuLoadPercent: number; memoryUsagePercent: number; storageUsagePercent: number }>) =>
+  importLegacyResourceHistory(getDatabase(), (Array.isArray(points) ? points : []).map((point) => ({
+    capturedAt: String(point.checkedAt), cpuPercent: Number(point.cpuLoadPercent), memoryUsagePercent: Number(point.memoryUsagePercent),
+    memoryUsedBytes: 0, swapUsedBytes: 0, storageUsagePercent: Number(point.storageUsagePercent)
+  }))))
+
+ipcMain.handle('system-resource:process:history', async (_event, identityKey: string, range?: { from?: string; to?: string }) => {
+  const to = range?.to || new Date().toISOString()
+  const from = range?.from || new Date(Date.now() - 24 * 3600_000).toISOString()
+  return listProcessHistory(getDatabase(), String(identityKey), from, to)
+})
+
+ipcMain.handle('system-resource:analysis', async (_event, range?: { from?: string; to?: string }) => {
+  const to = range?.to || new Date().toISOString()
+  const from = range?.from || new Date(Date.now() - 7 * 86400_000).toISOString()
+  return listProcessAnalysis(getDatabase(), from, to)
+})
+
+ipcMain.handle('system-resource:retention', async () => getResourceRetentionStatus(getDatabase()))
+
+ipcMain.handle('system-resource:process:signal', async (_event, pid: number, force = false): Promise<void> => {
+  await signalResourceProcess(getDatabase(), Number(pid), Boolean(force))
+})
+
+ipcMain.handle('system-resource:process:reveal', async (_event, path: string): Promise<void> => {
+  const normalized = resolve(String(path || ''))
+  if (!isAbsolute(normalized) || !existsSync(normalized)) throw new Error('进程路径不存在')
+  shell.showItemInFolder(normalized)
+})
+
+ipcMain.handle('system-resource:analysis:export', async (_event, input: { format: 'csv' | 'json'; range?: { from?: string; to?: string } }) => {
+  const to = input.range?.to || new Date().toISOString()
+  const from = input.range?.from || new Date(Date.now() - 7 * 86400_000).toISOString()
+  const rows = listProcessAnalysis(getDatabase(), from, to)
+  const format = input.format === 'json' ? 'json' : 'csv'
+  const result = await dialog.showSaveDialog({
+    title: '导出资源分析',
+    defaultPath: join(app.getPath('documents'), `ForgeDesk-resource-analysis-${new Date().toISOString().slice(0, 10)}.${format}`),
+    filters: [{ name: format.toUpperCase(), extensions: [format] }]
+  })
+  if (result.canceled || !result.filePath) return { canceled: true, path: '' }
+  const content = format === 'json' ? JSON.stringify(rows, null, 2) : exportProcessAnalysisCsv(rows as ProcessAnalysis[])
+  await writeFile(result.filePath, content, 'utf8')
+  return { canceled: false, path: result.filePath }
+})
+
+ipcMain.handle('storage-governance:overview', async () => getStorageOverview(getDatabase()))
+
+ipcMain.handle('storage-governance:directories:list', async (_event, query?: StorageDirectoryQuery) => listStorageDirectories(getDatabase(), query ?? {}))
+
+ipcMain.handle('storage-governance:root:select', async () => {
+  const result = await dialog.showOpenDialog({ title: '选择存储扫描目录', properties: ['openDirectory', 'multiSelections'] })
+  if (!result.canceled) for (const path of result.filePaths) saveStorageRoot(getDatabase(), path)
+  return getStorageOverview(getDatabase())
+})
+
+ipcMain.handle('storage-governance:root:save', async (_event, input: { path: string; label?: string; source?: 'manual' | 'project' | 'category' }) => {
+  saveStorageRoot(getDatabase(), input.path, input.label, input.source)
+  return getStorageOverview(getDatabase())
+})
+
+ipcMain.handle('storage-governance:root:delete', async (_event, rootId: string) => {
+  deleteStorageRoot(getDatabase(), rootId)
+  return getStorageOverview(getDatabase())
+})
+
+ipcMain.handle('storage-governance:category:set', async (_event, category: CleanupCategory, enabled: boolean) => {
+  setCleanupCategoryAuthorization(getDatabase(), category, enabled)
+  return getStorageOverview(getDatabase())
+})
+
+ipcMain.handle('storage-governance:scan:start', async (_event, mode: 'quick' | 'deep') =>
+  startStorageScan(getDatabase(), mode === 'deep' ? 'deep' : 'quick', (progress: StorageScanProgress) => {
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('storage-governance:scan:progress', progress)
+  }))
+
+ipcMain.handle('storage-governance:scan:pause', async (_event, scanId: string, paused: boolean): Promise<void> => pauseStorageScan(scanId, paused))
+ipcMain.handle('storage-governance:duplicate:verify', async (_event, itemId: string) => verifyDuplicateGroup(getDatabase(), itemId))
+ipcMain.handle('storage-governance:cleanup:preview', async (_event, itemIds: string[]) => previewCleanup(getDatabase(), itemIds))
+ipcMain.handle('storage-governance:cleanup:execute', async (_event, itemIds: string[]) =>
+  executeCleanupToTrash(getDatabase(), itemIds, (path) => shell.trashItem(path)))
+ipcMain.handle('storage-governance:audit', async () => listCleanupAudit(getDatabase()))
+ipcMain.handle('storage-governance:external:previews', async () => listExternalCleanupPreviews(getDatabase()))
+ipcMain.handle('storage-governance:external:execute', async (_event, key: 'docker-images' | 'docker-containers' | 'docker-build-cache') => executeExternalCleanup(getDatabase(), key))
+
+ipcMain.handle('system-resource:settings', async () => {
+  const settings = getDatabase().prepare('SELECT * FROM system_monitor_settings WHERE id = 1').get() as Record<string, unknown>
+  return { sampleIntervalSeconds: Number(settings.sample_interval_seconds), rawRetentionDays: Number(settings.raw_retention_days),
+    fiveMinuteRetentionDays: Number(settings.five_minute_retention_days), loginStartEnabled: Number(settings.login_start_enabled) === 1 }
+})
+
+ipcMain.handle('system-resource:login-start:set', async (_event, enabled: boolean) => {
+  getDatabase().prepare('UPDATE system_monitor_settings SET login_start_enabled = ? WHERE id = 1').run(enabled ? 1 : 0)
+  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: enabled, openAsHidden: enabled })
+  return { enabled }
+})
+
 ipcMain.handle('settings:oa:get', async (): Promise<RedactedOaSettings> => getRedactedOaSettings(await readOaSettingsFile(app.getPath('userData'))))
 
 ipcMain.handle('settings:oa:save', async (_event, input: Partial<OaSettings>): Promise<RedactedOaSettings> => {
@@ -5492,7 +7090,8 @@ ipcMain.handle('settings:oa:save', async (_event, input: Partial<OaSettings>): P
   const nextSettings = await writeOaSettingsFile(app.getPath('userData'), {
     ...currentSettings,
     ...input,
-    larkAppSecret: input.larkAppSecret === undefined ? currentSettings.larkAppSecret : input.larkAppSecret
+    larkAppSecret: input.larkAppSecret === undefined ? currentSettings.larkAppSecret : input.larkAppSecret,
+    larkBotAdminToken: input.larkBotAdminToken === undefined ? currentSettings.larkBotAdminToken : input.larkBotAdminToken
   })
 
   return getRedactedOaSettings(nextSettings)
@@ -5505,6 +7104,10 @@ ipcMain.handle('settings:oa:open-docs', async (): Promise<void> => {
 
 ipcMain.handle('settings:oa:documents:list', async (): Promise<LarkDocumentList> => listLarkDocuments(await readOaSettingsFile(app.getPath('userData'))))
 
+ipcMain.handle('settings:oa:document:tasks', async (_event, document: LarkDocumentRecord): Promise<LarkDocumentTaskList> =>
+  getLarkDocumentTasks(await readOaSettingsFile(app.getPath('userData')), document)
+)
+
 ipcMain.handle('settings:oa:bitable:get', async (_event, tableId?: string): Promise<LarkBitableSnapshot> =>
   getLarkBitableSnapshot(await readOaSettingsFile(app.getPath('userData')), tableId)
 )
@@ -5515,6 +7118,38 @@ ipcMain.handle('settings:oa:bitable:record:save', async (_event, input: { tableI
 
 ipcMain.handle('settings:oa:bitable:record:delete', async (_event, input: { tableId: string; recordId: string }): Promise<void> =>
   deleteLarkBitableRecord(await readOaSettingsFile(app.getPath('userData')), input)
+)
+
+ipcMain.handle('settings:oa:lark-bot:dashboard', async (): Promise<LarkBotDashboard> =>
+  getLarkBotDashboard(await readOaSettingsFile(app.getPath('userData')))
+)
+
+ipcMain.handle('settings:oa:lark-bot:tasks', async (_event, query?: { q?: string; status?: string }): Promise<LarkBotTask[]> =>
+  listLarkBotTasks(await readOaSettingsFile(app.getPath('userData')), query)
+)
+
+ipcMain.handle('settings:oa:lark-bot:notifications', async (): Promise<LarkBotNotification[]> =>
+  listLarkBotNotifications(await readOaSettingsFile(app.getPath('userData')))
+)
+
+ipcMain.handle('settings:oa:lark-bot:settings:get', async (): Promise<LarkBotRuntimeSettings> =>
+  getLarkBotSettings(await readOaSettingsFile(app.getPath('userData')))
+)
+
+ipcMain.handle('settings:oa:lark-bot:settings:save', async (_event, input: Partial<LarkBotRuntimeSettings>): Promise<LarkBotRuntimeSettings> =>
+  saveLarkBotSettings(await readOaSettingsFile(app.getPath('userData')), input)
+)
+
+ipcMain.handle('settings:oa:lark-bot:sync', async (): Promise<Record<string, unknown>> =>
+  syncLarkBot(await readOaSettingsFile(app.getPath('userData')))
+)
+
+ipcMain.handle('settings:oa:lark-bot:test-message', async (): Promise<void> =>
+  sendLarkBotTestMessage(await readOaSettingsFile(app.getPath('userData')))
+)
+
+ipcMain.handle('settings:oa:lark-bot:reminder', async (): Promise<void> =>
+  sendLarkBotReminder(await readOaSettingsFile(app.getPath('userData')))
 )
 
 ipcMain.handle('settings:github-tokens:list', async (): Promise<GithubTokenView[]> => listGithubTokens(app.getPath('userData')))
@@ -5628,7 +7263,7 @@ ipcMain.handle('ssh:fix-private-key-permissions', async (_event, path: string): 
 
 ipcMain.handle('ssh:derive-public-key', async (_event, privateKeyPath: string): Promise<GitSetupStatus> => {
   const normalizedPrivateKeyPath = resolveSshKeyFilePath(sshDirectory, expandHomePath(privateKeyPath), 'private')
-  const publicKeyContent = await runSshKeygen(['-y', '-f', normalizedPrivateKeyPath])
+  const publicKeyContent = await withSavedSshPassphrases((env) => runSshKeygen(['-y', '-f', normalizedPrivateKeyPath], env))
 
   if (!publicKeyContent.trim()) {
     throw new Error('无法从私钥生成公钥')
@@ -5641,6 +7276,16 @@ ipcMain.handle('ssh:derive-public-key', async (_event, privateKeyPath: string): 
 ipcMain.handle('dialog:select-file', async () => {
   const result = await dialog.showOpenDialog({
     title: 'Select a file',
+    properties: ['openFile']
+  })
+
+  return result.canceled ? null : result.filePaths[0]
+})
+
+ipcMain.handle('dialog:select-image', async () => {
+  const result = await dialog.showOpenDialog({
+    title: '选择图片',
+    filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'svg'] }],
     properties: ['openFile']
   })
 
@@ -5761,6 +7406,25 @@ ipcMain.handle('external:open-url', async (_event, url: string): Promise<void> =
   await shell.openExternal(parsed.toString())
 })
 
+function startStorageGovernanceScheduler(): void {
+  if (storageGovernanceTimer) return
+  const check = async (): Promise<void> => {
+    const db = getDatabase()
+    const roots = db.prepare('SELECT COUNT(*) count FROM storage_roots WHERE enabled = 1').get() as { count?: number }
+    if (!Number(roots.count)) return
+    const settings = db.prepare('SELECT last_quick_scan_at, last_deep_scan_at FROM system_monitor_settings WHERE id = 1').get() as Record<string, unknown>
+    const lastQuick = Date.parse(String(settings.last_quick_scan_at || '')) || 0
+    const lastDeep = Date.parse(String(settings.last_deep_scan_at || '')) || 0
+    const now = Date.now()
+    const progress = (event: StorageScanProgress): void => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('storage-governance:scan:progress', event))
+    if (now - lastDeep >= 7 * 86400_000 && !powerMonitor.isOnBatteryPower() && powerMonitor.getSystemIdleTime() >= 300) await startStorageScan(db, 'deep', progress)
+    else if (now - lastQuick >= 86400_000) await startStorageScan(db, 'quick', progress)
+  }
+  storageGovernanceTimer = setInterval(() => void check().catch((error) => console.warn('Scheduled storage scan skipped', error)), 3600_000)
+  storageGovernanceTimer.unref?.()
+  setTimeout(() => void check().catch((error) => console.warn('Initial storage scan skipped', error)), 30_000).unref?.()
+}
+
 app.whenReady().then(async () => {
   if (process.platform === 'darwin' && existsSync(appIconPath)) {
     app.dock?.setIcon(appIconPath)
@@ -5777,8 +7441,15 @@ app.whenReady().then(async () => {
   await menuBarManagerService.initialize().catch((error) => console.warn('Failed to initialize menu bar manager', error))
 
   installApplicationMenu()
-  createWindow()
+  const openedAsHidden = app.isPackaged && app.getLoginItemSettings().wasOpenedAsHidden
+  createWindow(!openedAsHidden)
   startServiceMonitorScheduler()
+  resourceMonitorService.start()
+  startStorageGovernanceScheduler()
+  const monitorSettings = getDatabase().prepare('SELECT login_start_enabled FROM system_monitor_settings WHERE id = 1').get() as { login_start_enabled?: number }
+  if (app.isPackaged && Number(monitorSettings.login_start_enabled) === 1) {
+    app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true })
+  }
 
   app.on('activate', () => {
     showOrCreatePrimaryWindow()
@@ -5796,6 +7467,9 @@ app.on('before-quit', (event) => {
 
 app.on('will-quit', () => {
   void menuBarManagerService?.shutdown().catch((error) => console.warn('Failed to stop menu bar helper', error))
+  resourceMonitorService.stop()
+  if (storageGovernanceTimer) clearInterval(storageGovernanceTimer)
+  runResourceRetention(getDatabase())
 })
 
 app.on('window-all-closed', () => {
