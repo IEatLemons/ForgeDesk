@@ -70,6 +70,39 @@ describe('codex activity service', () => {
     }
   })
 
+  it('removes Codex injected context from session titles and keeps the actual request', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'forgedesk-codex-activity-'))
+
+    try {
+      await writeFile(join(directory, 'session.jsonl'), [
+        sessionMeta('session-2', '/tmp/ForgeDesk'),
+        userMessage([
+          '<recommended_plugins>',
+          'Here is a list of plugins that are available but not installed.',
+          '</recommended_plugins>',
+          '<environment_context>',
+          '<cwd>/tmp/ForgeDesk</cwd>',
+          '</environment_context>',
+          '',
+          '# Files mentioned by the user:',
+          '',
+          '## My request for Codex:',
+          '看不到项目相关的信息'
+        ].join('\n')),
+        event('task_started')
+      ].join('\n'))
+
+      const snapshot = await new CodexActivityService({ sessionsDirectory: directory }).snapshot()
+      const session = snapshot.sessions[0]
+
+      assert.equal(session?.title, '看不到项目相关的信息')
+      assert.equal(session?.lastMessage, '看不到项目相关的信息')
+      assert.equal(session?.cwd, '/tmp/ForgeDesk')
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  })
+
   it('reuses unchanged session inspections and refreshes changed files', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'forgedesk-codex-activity-'))
 

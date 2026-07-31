@@ -113,6 +113,24 @@ describe('release publishing planning', () => {
     assert.match(plan.warnings.join('\n'), /Codemagic/)
   })
 
+  it('uses the Android packaging script for Firebase release plans when available', () => {
+    const plan = createReleasePlan({
+      repositoryName: 'Mobile',
+      currentVersion: '2.0.0',
+      provider: 'firebase',
+      headCommit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      statusFileCount: 0,
+      localTagCommit: '',
+      remoteTagCommit: '',
+      scripts: { 'package:android': 'node scripts/build-android.mjs' }
+    })
+
+    assert.equal(plan.provider, 'firebase')
+    assert.equal(plan.selectedScript, 'package:android')
+    assert.equal(plan.canPublish, true)
+    assert.match(plan.warnings.join('\n'), /Firebase App Distribution/)
+  })
+
   it('uses the build script for Next.js PM2 release plans', () => {
     const plan = createReleasePlan({
       repositoryName: 'Portal',

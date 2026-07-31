@@ -3,6 +3,14 @@ const SAFE_REF_PATTERN = /^[A-Za-z0-9._/@:+-]+$/
 const REMOTE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/
 const CONFLICT_STATUSES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'])
 
+export function isEmptyRepositoryHeadError(message: string): boolean {
+  const normalized = message.toLowerCase()
+
+  return normalized.includes('needed a single revision') ||
+    normalized.includes('does not have any commits yet') ||
+    (normalized.includes('ambiguous argument') && normalized.includes('head') && normalized.includes('unknown revision'))
+}
+
 export type GitAddInput = {
   mode: 'all' | 'paths'
   paths: string[]

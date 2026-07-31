@@ -221,6 +221,34 @@ export type ProjectCloudflareSettings = {
   updatedAt: string
 }
 
+export type ProjectFirebaseReleaseSettingsInput = {
+  projectId: string
+  enabled?: boolean
+  appId?: string
+  artifactPath?: string
+  buildScript?: string
+  groups?: string[] | string
+  testers?: string[] | string
+  serviceAccountKey?: string
+  serviceAccountKeyFilePath?: string
+}
+
+export type ProjectFirebaseReleaseSettings = {
+  projectId: string
+  enabled: boolean
+  active: boolean
+  appId: string
+  artifactPath: string
+  buildScript: string
+  groups: string[]
+  testers: string[]
+  serviceAccountProjectId: string
+  serviceAccountEmail: string
+  serviceAccountKeyConfigured: boolean
+  createdAt: string
+  updatedAt: string
+}
+
 export type CloudflareConnectionTestResult = {
   ok: boolean
   message: string
@@ -677,13 +705,15 @@ export type ResourceProcess = {
   identityKey: string; instanceKey: string; pid: number; parentPid: number; appName: string; processName: string; user: string
   cpuPercent: number; memoryBytes: number; privateMemoryBytes: number; virtualMemoryBytes: number; threadCount: number; portCount: number
   pageIns: number; state: string; elapsedSeconds: number; executablePath: string; bundlePath: string; command: string
+  networkReceivedBytes: number; networkSentBytes: number
 }
 
-export type ResourceHistoryPoint = { capturedAt: string; cpuPercent: number; memoryUsagePercent: number; memoryUsedBytes: number; swapUsedBytes: number; storageUsagePercent: number }
-export type ProcessHistoryPoint = { capturedAt: string; cpuAverage: number; cpuPeak: number; memoryAverageBytes: number; memoryPeakBytes: number; sampleCount: number }
+export type ResourceHistoryPoint = { capturedAt: string; cpuPercent: number; memoryUsagePercent: number; memoryUsedBytes: number; swapUsedBytes: number; storageUsagePercent: number; networkInBytes?: number; networkOutBytes?: number }
+export type ProcessHistoryPoint = { capturedAt: string; cpuAverage: number; cpuPeak: number; memoryAverageBytes: number; memoryPeakBytes: number; sampleCount: number; networkInBytes: number; networkOutBytes: number }
 export type ProcessAnalysis = {
   identityKey: string; appName: string; processName: string; executablePath: string; averageCpuPercent: number; peakCpuPercent: number
   averageMemoryBytes: number; peakMemoryBytes: number; sampleCount: number; aboveThresholdSeconds: number; firstSeenAt: string; lastSeenAt: string
+  networkReceivedBytes: number; networkSentBytes: number
 }
 export type ResourceRetentionStatus = { rawDays: number; fiveMinuteDays: number; sampleIntervalSeconds: number; rawSampleCount: number; rollupSampleCount: number; oldestRawAt: string; databaseBytesEstimate: number }
 export type CleanupRisk = 'low' | 'confirm' | 'high' | 'protected'
@@ -790,8 +820,8 @@ export type CommitMessageSuggestion = {
   message: string
 }
 
-export type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
-export type ReleasePublishProvider = 'github' | 'codemagic' | 'nextjs-pm2'
+export type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'package:android' | 'build:android' | 'build' | ''
+export type ReleasePublishProvider = 'github' | 'codemagic' | 'firebase' | 'nextjs-pm2'
 export type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
 
 export type ReleasePublishAction = {
@@ -1860,6 +1890,128 @@ export type CodexSessionRecord = {
   lastMessage: string
 }
 
+export type CodexConversationItemKind = 'user' | 'assistant' | 'tool-call' | 'tool-output' | 'status'
+
+export type CodexTokenUsage = {
+  inputTokens: number
+  cachedInputTokens: number
+  cacheWriteInputTokens: number
+  outputTokens: number
+  reasoningOutputTokens: number
+  totalTokens: number
+  cumulativeInputTokens: number
+  cumulativeOutputTokens: number
+  cumulativeTotalTokens: number
+  contextWindow: number
+}
+
+export type CodexConversationItem = {
+  id: string
+  timestamp: string
+  kind: CodexConversationItemKind
+  text: string
+  images: string[]
+  eventType: string
+  toolName: string
+  callId: string
+  input: string
+  output: string
+  usage?: CodexTokenUsage
+}
+
+export type CodexSessionSummary = {
+  id: string
+  title: string
+  cwd: string
+  projectKey: string
+  projectName: string
+  filePath: string
+  status: CodexSessionStatus
+  archived: boolean
+  pinned: boolean
+  createdAt: string
+  updatedAt: string
+  preview: string
+  lastEvent: string
+}
+
+export type CodexSessionDetail = CodexSessionSummary & {
+  items: CodexConversationItem[]
+}
+
+export type CodexProjectRecord = {
+  key: string
+  name: string
+  cwd: string
+  updatedAt: string
+  sessionCount: number
+  runningCount: number
+}
+
+export type CodexSessionsSnapshot = {
+  available: boolean
+  checkedAt: string
+  source: string
+  error: string
+  running: number
+  completed: number
+  aborted: number
+  projects: CodexProjectRecord[]
+  sessions: CodexSessionSummary[]
+}
+
+export type CodexSessionEventType = 'item' | 'running' | 'updated' | 'completed' | 'failed' | 'cancelled'
+
+export type CodexSessionEvent = {
+  type: CodexSessionEventType
+  sessionId: string
+  item?: CodexConversationItem
+  session?: CodexSessionSummary
+  error?: string
+}
+
+export type CodexSessionMessageInput = {
+  sessionId: string
+  content: string
+  images?: string[]
+  model?: string
+}
+
+export type CodexSiteStatus = 'draft' | 'building' | 'ready' | 'previewing' | 'published' | 'error'
+
+export type CodexSite = {
+  id: string
+  name: string
+  prompt: string
+  workspacePath: string
+  linkedSessionId: string
+  previewUrl: string
+  publishedUrl: string
+  status: CodexSiteStatus
+  lastError: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type CodexSiteCreateInput = {
+  name: string
+  prompt: string
+  workspacePath: string
+  linkedSessionId?: string
+}
+
+export type CodexSiteUpdateInput = {
+  id: string
+  name?: string
+  prompt?: string
+  workspacePath?: string
+  linkedSessionId?: string
+  status?: CodexSiteStatus
+  previewUrl?: string
+  publishedUrl?: string
+  lastError?: string
+}
+
 export type OaSettingsInput = {
   enabled: boolean
   provider?: 'lark'
@@ -1925,6 +2077,7 @@ export type OaDocumentTaskList = {
 }
 
 export type OaBitableTable = { id: string; name: string; revision: number }
+export type OaBitableView = { id: string; name: string; type: string }
 export type OaBitableField = { id: string; name: string; type: number; uiType: string; isPrimary: boolean; property: Record<string, unknown> }
 export type OaBitableRecord = { id: string; fields: Record<string, unknown>; createdAt: string; updatedAt: string }
 export type OaBitableSnapshot = {
@@ -1932,7 +2085,10 @@ export type OaBitableSnapshot = {
   sourceUrl: string
   appToken: string
   selectedTableId: string
+  selectedViewId: string
+  selectedViewType: string
   tables: OaBitableTable[]
+  views: OaBitableView[]
   fields: OaBitableField[]
   records: OaBitableRecord[]
   unsupportedReason: string

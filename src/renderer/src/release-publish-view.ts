@@ -4,7 +4,7 @@ export type ReleasePublishPlanView = {
   currentVersion: string
   suggestedVersion: string
   suggestedTagName: string
-  selectedScript: 'publish:mac' | 'package:mac' | 'build' | ''
+  selectedScript: 'publish:mac' | 'package:mac' | 'package:android' | 'build:android' | 'build' | ''
   needsVersionBump: boolean
   canPublish: boolean
   issues: string[]
@@ -14,7 +14,7 @@ export type ReleasePublishPlanView = {
 }
 
 export type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
-export type ReleasePublishProvider = 'github' | 'codemagic' | 'nextjs-pm2'
+export type ReleasePublishProvider = 'github' | 'codemagic' | 'firebase' | 'nextjs-pm2'
 
 export type ReleasePublishAction = {
   key: ReleasePublishActionKey
@@ -134,7 +134,7 @@ export function updateDefaultReleaseMetadataForVersionChange(input: ReleaseMetad
   }
 }
 
-export function createReleasePlatformOptions(input: { plan: ReleasePublishPlanView | null; codemagicBound?: boolean }): ReleasePlatformOption[] {
+export function createReleasePlatformOptions(input: { plan: ReleasePublishPlanView | null; codemagicBound?: boolean; firebaseReady?: boolean }): ReleasePlatformOption[] {
   const scriptLabel = input.plan?.selectedScript || '发布脚本'
 
   return [
@@ -155,6 +155,15 @@ export function createReleasePlatformOptions(input: { plan: ReleasePublishPlanVi
       statusLabel: input.codemagicBound ? '已绑定' : '待配置',
       statusColor: input.codemagicBound ? 'green' : 'orange',
       disabled: false
+    },
+    {
+      key: 'firebase',
+      name: 'Firebase App Distribution',
+      description: '构建并分发 APK、AAB 或 IPA 到 Firebase 测试渠道。',
+      detail: input.firebaseReady ? '当前项目已激活 Firebase 发布配置。' : '需要先在项目设置的发布设置里启用并配置 Firebase。',
+      statusLabel: input.firebaseReady ? '已激活' : '未激活',
+      statusColor: input.firebaseReady ? 'green' : 'orange',
+      disabled: !input.firebaseReady
     },
     {
       key: 'nextjs-pm2',
@@ -179,6 +188,7 @@ export function createReleasePublishViewModel(input: {
   githubToken: string
   provider?: ReleasePublishProvider
   codemagicReady?: boolean
+  firebaseReady?: boolean
   nextjsPm2Ready?: boolean
   selectedActions?: ReleasePublishActionKey[]
 }): ReleasePublishViewModel {
@@ -225,6 +235,15 @@ export function createReleasePublishViewModel(input: {
     }
   }
 
+  if (provider === 'firebase' && !input.firebaseReady) {
+    return {
+      primaryLabel: '配置 Firebase',
+      primaryDisabled: true,
+      issueCount,
+      warningCount
+    }
+  }
+
   if (provider === 'nextjs-pm2' && !input.nextjsPm2Ready) {
     return {
       primaryLabel: '填写远端部署信息',
@@ -235,7 +254,7 @@ export function createReleasePublishViewModel(input: {
   }
 
   return {
-    primaryLabel: `${provider === 'codemagic' ? '构建' : provider === 'nextjs-pm2' ? '部署' : '发布'} ${input.plan.suggestedTagName || input.plan.suggestedVersion}`,
+    primaryLabel: `${provider === 'codemagic' ? '构建' : provider === 'firebase' ? '分发' : provider === 'nextjs-pm2' ? '部署' : '发布'} ${input.plan.suggestedTagName || input.plan.suggestedVersion}`,
     primaryDisabled: false,
     issueCount,
     warningCount
@@ -265,17 +284,17 @@ export function createReleasePublishTaskView(input: { task: ReleasePublishTaskVi
       ? Math.max(Math.round((phaseIndex / phaseTotal) * 100), 1)
       : Math.round((phaseIndex / phaseTotal) * 100)
   const statusView = input.task.status === 'running'
-    ? { label: '发布中', color: 'processing', active: true }
+    ? { label: input.task.provider === 'firebase' ? '分发中' : '发布中', color: 'processing', active: true }
     : input.task.status === 'succeeded'
       ? { label: '已完成', color: 'green', active: false }
       : input.task.status === 'cancelled'
         ? { label: '已终止', color: 'orange', active: false }
         : { label: '失败', color: 'red', active: false }
-  const externalStatusLabel = input.task.provider === 'nextjs-pm2' ? '远端状态' : 'Codemagic 状态'
-  const externalWorkflowLabel = input.task.provider === 'nextjs-pm2' ? 'PM2 应用' : 'Workflow'
+  const externalStatusLabel = input.task.provider === 'nextjs-pm2' ? '远端状态' : input.task.provider === 'firebase' ? 'Firebase 状态' : 'Codemagic 状态'
+  const externalWorkflowLabel = input.task.provider === 'nextjs-pm2' ? 'PM2 应用' : input.task.provider === 'firebase' ? 'Firebase App' : 'Workflow'
   const fallbackLog = [
     input.task.hint ? `中文提示：${input.task.hint}` : '',
-    input.task.externalBuildId ? `Codemagic Build：${input.task.externalBuildId}` : '',
+    input.task.externalBuildId ? `${input.task.provider === 'firebase' ? 'Firebase Release' : 'Codemagic Build'}：${input.task.externalBuildId}` : '',
     input.task.externalStatus ? `${externalStatusLabel}：${input.task.externalStatus}` : '',
     input.task.externalWorkflow ? `${externalWorkflowLabel}：${input.task.externalWorkflow}` : '',
     ...(input.task.artifacts ?? []).map((artifact) =>

@@ -100,8 +100,35 @@ describe('release publish view model', () => {
     assert.equal(platforms[0]?.disabled, false)
     assert.equal(platforms[1]?.key, 'codemagic')
     assert.equal(platforms[1]?.statusLabel, '待配置')
-    assert.equal(platforms[2]?.key, 'nextjs-pm2')
-    assert.equal(platforms[2]?.name, 'Next.js PM2')
+    assert.equal(platforms[2]?.key, 'firebase')
+    assert.equal(platforms[2]?.statusLabel, '未激活')
+    assert.equal(platforms[2]?.disabled, true)
+    assert.equal(platforms[3]?.key, 'nextjs-pm2')
+    assert.equal(platforms[3]?.name, 'Next.js PM2')
+  })
+
+  it('requires project Firebase settings before distribution', () => {
+    const plan = {
+      repositoryName: 'Mobile',
+      provider: 'firebase' as const,
+      currentVersion: '2.0.0',
+      suggestedVersion: '2.0.1',
+      suggestedTagName: 'v2.0.1',
+      selectedScript: 'package:android' as const,
+      needsVersionBump: false,
+      canPublish: true,
+      issues: [],
+      warnings: [],
+      availableActions: [],
+      documentationSources: []
+    }
+    const blocked = createReleasePublishViewModel({ plan, provider: 'firebase', githubToken: '', firebaseReady: false })
+    const allowed = createReleasePublishViewModel({ plan, provider: 'firebase', githubToken: '', firebaseReady: true })
+
+    assert.equal(blocked.primaryLabel, '配置 Firebase')
+    assert.equal(blocked.primaryDisabled, true)
+    assert.equal(allowed.primaryLabel, '分发 v2.0.1')
+    assert.equal(allowed.primaryDisabled, false)
   })
 
   it('requires Codemagic binding before remote builds', () => {

@@ -22,7 +22,8 @@ describe('monthly performance Excel tool layout', () => {
   it('adds Excel as a top-level tool entry', () => {
     const source = getFunctionSource('ToolsPanel', '\nfunction getCurrentMonthValue')
 
-    assert.match(source, /setActiveTool\('excel'\)/)
+    assert.match(source, /key: 'excel'/)
+    assert.match(source, /setActiveTool\(entry\.key\)/)
     assert.match(source, /Excel 工具/)
   })
 

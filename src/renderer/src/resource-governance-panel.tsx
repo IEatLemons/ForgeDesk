@@ -5,7 +5,7 @@ import ReactECharts from 'echarts-for-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { CleanupAuditRecord, CleanupPolicy, ExternalCleanupPreview, ProcessAnalysis, ProcessHistoryPoint, ResourceHistoryPoint, ResourceProcess, ResourceRetentionStatus, StorageDirectoryEntry, StorageOverview, StorageScanItem, StorageScanProgress } from './data'
 import { getErrorMessage } from './error-messages'
-import { formatDurationSeconds, formatMemoryBytes } from './system-monitor-view'
+import { formatBytes, formatDurationSeconds, formatMemoryBytes } from './system-monitor-view'
 
 type ResourceView = 'processes' | 'history' | 'storage' | 'cleanup'
 
@@ -50,6 +50,8 @@ function aggregateProcesses(processes: ResourceProcess[]): ResourceProcess[] {
     current.threadCount += process.threadCount
     current.portCount += process.portCount
     current.pageIns += process.pageIns
+    current.networkReceivedBytes += process.networkReceivedBytes
+    current.networkSentBytes += process.networkSentBytes
   }
   return [...grouped.values()].sort((left, right) => right.memoryBytes - left.memoryBytes)
 }
@@ -92,6 +94,8 @@ function ProcessWorkspace(): JSX.Element {
     } },
     { title: '内存', dataIndex: 'memoryBytes', key: 'memoryBytes', width: 120, sorter: (a, b) => a.memoryBytes - b.memoryBytes, defaultSortOrder: 'descend', render: formatMemoryBytes },
     { title: 'CPU', dataIndex: 'cpuPercent', key: 'cpuPercent', width: 100, sorter: (a, b) => a.cpuPercent - b.cpuPercent, render: (value) => `${Number(value).toFixed(1)}%` },
+    { title: '接收流量', dataIndex: 'networkReceivedBytes', key: 'networkReceivedBytes', width: 120, sorter: (a, b) => a.networkReceivedBytes - b.networkReceivedBytes, render: formatBytes },
+    { title: '发送流量', dataIndex: 'networkSentBytes', key: 'networkSentBytes', width: 120, sorter: (a, b) => a.networkSentBytes - b.networkSentBytes, render: formatBytes },
     { title: '私有内存', dataIndex: 'privateMemoryBytes', key: 'privateMemoryBytes', width: 120, render: formatMemoryBytes },
     { title: '虚拟内存', dataIndex: 'virtualMemoryBytes', key: 'virtualMemoryBytes', width: 120, render: formatMemoryBytes },
     { title: '线程', dataIndex: 'threadCount', key: 'threadCount', width: 80 },
@@ -109,15 +113,15 @@ function ProcessWorkspace(): JSX.Element {
     ) }
   ]
 
-  const chart = { tooltip: { trigger: 'axis' }, legend: { data: ['内存', 'CPU'] }, grid: { left: 56, right: 45, bottom: 32 }, xAxis: { type: 'category', data: history.map((point) => new Date(point.capturedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })) }, yAxis: [{ type: 'value', axisLabel: { formatter: (value: number) => formatMemoryBytes(value) } }, { type: 'value', axisLabel: { formatter: '{value}%' } }], series: [{ name: '内存', type: 'line', smooth: true, symbol: 'none', data: history.map((point) => point.memoryPeakBytes) }, { name: 'CPU', type: 'line', smooth: true, symbol: 'none', yAxisIndex: 1, data: history.map((point) => point.cpuPeak) }] }
+  const chart = { tooltip: { trigger: 'axis' }, legend: { data: ['内存', 'CPU', '接收流量', '发送流量'] }, grid: { left: 56, right: 72, bottom: 32 }, xAxis: { type: 'category', data: history.map((point) => new Date(point.capturedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })) }, yAxis: [{ type: 'value', name: '内存', axisLabel: { formatter: (value: number) => formatMemoryBytes(value) } }, { type: 'value', name: 'CPU', max: 100, axisLabel: { formatter: '{value}%' } }, { type: 'value', name: '流量', axisLabel: { formatter: (value: number) => formatBytes(value) } }], series: [{ name: '内存', type: 'line', smooth: true, symbol: 'none', yAxisIndex: 0, data: history.map((point) => point.memoryPeakBytes) }, { name: 'CPU', type: 'line', smooth: true, symbol: 'none', yAxisIndex: 1, data: history.map((point) => point.cpuPeak) }, { name: '接收流量', type: 'line', smooth: true, symbol: 'none', yAxisIndex: 2, data: history.map((point) => point.networkInBytes) }, { name: '发送流量', type: 'line', smooth: true, symbol: 'none', yAxisIndex: 2, data: history.map((point) => point.networkOutBytes) }] }
 
   return <Space direction="vertical" size={16} className="system-monitor-content">
     <div className="resource-workspace-toolbar">
       <Space wrap><Segmented value={mode} options={[{ label: '按 App', value: 'app' }, { label: '按进程', value: 'process' }]} onChange={(value) => setMode(value as 'app' | 'process')} /><Input allowClear prefix={<SearchOutlined />} placeholder="搜索 App、进程、PID、用户" value={query} onChange={(event) => setQuery(event.target.value)} style={{ width: 300 }} /></Space>
       <Button icon={<ReloadOutlined />} onClick={() => load()}>刷新</Button>
     </div>
-    <div className="system-monitor-section resource-process-table"><Table rowKey={(row) => mode === 'app' ? row.identityKey : row.instanceKey} tableLayout="fixed" loading={loading} size="small" columns={columns} dataSource={rows} pagination={{ pageSize: 25, showSizeChanger: true }} scroll={{ x: 1560 }} /></div>
-    {selected ? <div className="system-monitor-section"><div className="system-monitor-section-heading"><div><Typography.Title level={4}>{selected.appName} 历史</Typography.Title><Typography.Text type="secondary">最近 24 小时峰值趋势 · {selected.executablePath || selected.command}</Typography.Text></div></div>{history.length ? <ReactECharts option={chart} style={{ height: 300 }} /> : <Empty description="后台采样正在积累历史" />}</div> : null}
+    <div className="system-monitor-section resource-process-table"><Table rowKey={(row) => mode === 'app' ? row.identityKey : row.instanceKey} tableLayout="fixed" loading={loading} size="small" columns={columns} dataSource={rows} pagination={{ pageSize: 25, showSizeChanger: true }} scroll={{ x: 1800 }} /></div>
+    {selected ? <div className="system-monitor-section"><div className="system-monitor-section-heading"><div><Typography.Title level={4}>{selected.appName} 历史</Typography.Title><Typography.Text type="secondary">最近 24 小时峰值趋势 · {selected.executablePath || selected.command}</Typography.Text><br /><Typography.Text type="secondary">流量为该 App 进程的累计接收/发送字节；macOS 代理或 TUN 模式可能无法完整归因。</Typography.Text></div></div>{history.length ? <ReactECharts option={chart} style={{ height: 340 }} /> : <Empty description="后台采样正在积累历史；流量从启用采样后开始记录" />}</div> : null}
   </Space>
 }
 
@@ -136,10 +140,12 @@ function HistoryWorkspace(): JSX.Element {
       .catch((error) => message.error(getErrorMessage(error, '历史读取失败'))).finally(() => setLoading(false))
   }, [days])
 
-  const chart = { tooltip: { trigger: 'axis' }, legend: { data: ['CPU', '内存', '存储'] }, grid: { left: 48, right: 18, bottom: 32 }, xAxis: { type: 'category', data: history.map((point) => formatDate(point.capturedAt)) }, yAxis: { type: 'value', min: 0, max: 100, axisLabel: { formatter: '{value}%' } }, series: [
+  const chart = { tooltip: { trigger: 'axis' }, legend: { data: ['CPU', '内存', '存储', '接收流量', '发送流量'] }, grid: { left: 48, right: 72, bottom: 32 }, xAxis: { type: 'category', data: history.map((point) => formatDate(point.capturedAt)) }, yAxis: [{ type: 'value', name: '使用率', min: 0, max: 100, axisLabel: { formatter: '{value}%' } }, { type: 'value', name: '流量', axisLabel: { formatter: (value: number) => formatBytes(value) } }], series: [
     { name: 'CPU', type: 'line', symbol: 'none', smooth: true, data: history.map((point) => point.cpuPercent) },
     { name: '内存', type: 'line', symbol: 'none', smooth: true, data: history.map((point) => point.memoryUsagePercent) },
-    { name: '存储', type: 'line', symbol: 'none', smooth: true, data: history.map((point) => point.storageUsagePercent) }
+    { name: '存储', type: 'line', symbol: 'none', smooth: true, data: history.map((point) => point.storageUsagePercent) },
+    { name: '接收流量', type: 'line', symbol: 'none', smooth: true, yAxisIndex: 1, data: history.map((point) => point.networkInBytes ?? 0) },
+    { name: '发送流量', type: 'line', symbol: 'none', smooth: true, yAxisIndex: 1, data: history.map((point) => point.networkOutBytes ?? 0) }
   ] }
   const columns: ColumnsType<ProcessAnalysis> = [
     { title: 'App / 进程', key: 'name', width: 260, render: (_, row) => <div className="resource-process-analysis-name"><Typography.Text strong ellipsis={{ tooltip: row.appName }}>{row.appName}</Typography.Text><Typography.Text type="secondary" ellipsis={{ tooltip: row.processName }}>{row.processName}</Typography.Text></div> },
@@ -147,6 +153,8 @@ function HistoryWorkspace(): JSX.Element {
     { title: '峰值内存', dataIndex: 'peakMemoryBytes', key: 'peakMemoryBytes', width: 120, sorter: (a, b) => a.peakMemoryBytes - b.peakMemoryBytes, defaultSortOrder: 'descend', render: formatMemoryBytes },
     { title: '平均 CPU', dataIndex: 'averageCpuPercent', key: 'averageCpuPercent', width: 100, render: (value) => `${Number(value).toFixed(1)}%` },
     { title: '峰值 CPU', dataIndex: 'peakCpuPercent', key: 'peakCpuPercent', width: 100, render: (value) => `${Number(value).toFixed(1)}%` },
+    { title: '接收流量', dataIndex: 'networkReceivedBytes', key: 'networkReceivedBytes', width: 120, sorter: (a, b) => a.networkReceivedBytes - b.networkReceivedBytes, render: formatBytes },
+    { title: '发送流量', dataIndex: 'networkSentBytes', key: 'networkSentBytes', width: 120, sorter: (a, b) => a.networkSentBytes - b.networkSentBytes, render: formatBytes },
     { title: '高占用时长', dataIndex: 'aboveThresholdSeconds', key: 'aboveThresholdSeconds', width: 130, render: formatDurationSeconds },
     { title: '样本', dataIndex: 'sampleCount', key: 'sampleCount', width: 90 },
     { title: '最近出现', dataIndex: 'lastSeenAt', key: 'lastSeenAt', width: 180, render: formatDate }
@@ -155,8 +163,8 @@ function HistoryWorkspace(): JSX.Element {
   return <Space direction="vertical" size={16} className="system-monitor-content">
     <div className="resource-workspace-toolbar"><Space wrap><Segmented value={days} options={[{ label: '24 小时', value: 1 }, { label: '7 天', value: 7 }, { label: '30 天', value: 30 }]} onChange={(value) => setDays(Number(value))} />{retention ? <Tag color="blue">15 秒原始 {retention.rawDays} 天 · 5 分钟聚合 {retention.fiveMinuteDays} 天 · 小时长期</Tag> : null}<Typography.Text type="secondary">登录后后台采样</Typography.Text><Switch checked={loginStart} onChange={async (checked) => { await window.forgeDesk.setResourceLoginStart(checked); setLoginStart(checked) }} /></Space><Space><Button icon={<DownloadOutlined />} onClick={() => window.forgeDesk.exportProcessAnalysis({ format: 'csv', range: rangeFromDays(days) })}>CSV</Button><Button onClick={() => window.forgeDesk.exportProcessAnalysis({ format: 'json', range: rangeFromDays(days) })}>JSON</Button></Space></div>
     {retention ? <div className="resource-retention-grid"><Descriptions bordered size="small" column={1}><Descriptions.Item label="原始进程样本">{retention.rawSampleCount.toLocaleString()}</Descriptions.Item><Descriptions.Item label="聚合样本">{retention.rollupSampleCount.toLocaleString()}</Descriptions.Item></Descriptions><Descriptions bordered size="small" column={1}><Descriptions.Item label="最早原始记录">{formatDate(retention.oldestRawAt)}</Descriptions.Item><Descriptions.Item label="预计数据体积">{formatMemoryBytes(retention.databaseBytesEstimate)}</Descriptions.Item></Descriptions></div> : null}
-    <div className="system-monitor-section">{loading ? <Spin /> : history.length ? <ReactECharts option={chart} style={{ height: 320 }} /> : <Empty description="后台历史正在积累" />}</div>
-    <div className="system-monitor-section resource-process-table"><div className="system-monitor-section-heading"><Typography.Title level={4}>高占用分析</Typography.Title><Typography.Text type="secondary">高占用：内存 ≥ 1 GB 或 CPU ≥ 80%</Typography.Text></div><Table rowKey="identityKey" tableLayout="fixed" size="small" columns={columns} dataSource={analysis} pagination={{ pageSize: 20 }} scroll={{ x: 1140 }} /></div>
+    <div className="system-monitor-section">{loading ? <Spin /> : history.length ? <><ReactECharts option={chart} style={{ height: 340 }} /><Typography.Text type="secondary">流量为已采集进程在各采样区间内的接收/发送字节；历史旧记录没有流量字段，会显示为 0。</Typography.Text></> : <Empty description="后台历史正在积累" />}</div>
+    <div className="system-monitor-section resource-process-table"><div className="system-monitor-section-heading"><Typography.Title level={4}>高占用分析</Typography.Title><Typography.Text type="secondary">高占用：内存 ≥ 1 GB 或 CPU ≥ 80%；流量为所选时间范围内的累计变化量</Typography.Text></div><Table rowKey="identityKey" tableLayout="fixed" size="small" columns={columns} dataSource={analysis} pagination={{ pageSize: 20 }} scroll={{ x: 1380 }} /></div>
   </Space>
 }
 

@@ -14,6 +14,21 @@ import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type Ai
 import { inspectAiRuntime, inspectCodexRuntime, type AiRuntimeStatus } from './ai-runtime'
 import { CodexActivityService, type CodexActivitySnapshot } from './codex-activity'
 import {
+  CodexSessionService,
+  type CodexSessionEvent,
+  type CodexSessionMessageInput,
+  type CodexSessionDetail,
+  type CodexSessionSummary,
+  type CodexSessionsSnapshot
+} from './codex-sessions'
+import {
+  CodexSiteService,
+  migrateCodexSiteTables,
+  type CodexSite,
+  type CodexSiteCreateInput,
+  type CodexSiteUpdateInput
+} from './codex-sites'
+import {
   CodexTaskService,
   migrateCodexTaskTables,
   type CodexTaskCreateInput,
@@ -24,6 +39,7 @@ import {
   type CodexTaskRecord
 } from './codex-tasks'
 import { listOpenRouterModels, type OpenRouterModel } from './openrouter-models'
+import { getMarketDataSnapshot, type MarketPeriod } from './market-data'
 import {
   readOverviewSnapshot,
   refreshOverviewNews,
@@ -132,6 +148,15 @@ import {
   type ProjectCloudflareSettingsInput
 } from './cloudflare'
 import {
+  deleteProjectFirebaseReleaseSettings,
+  getProjectFirebaseReleaseSettings,
+  migrateProjectFirebaseReleaseTables,
+  resolveProjectFirebaseReleaseSettings,
+  saveProjectFirebaseReleaseSettings,
+  type ProjectFirebaseReleaseSettings,
+  type ProjectFirebaseReleaseSettingsInput
+} from './firebase-app-distribution'
+import {
   deleteDataSourceConnection as deleteDataSourceConnectionRecord,
   listDataSourceConnections as listDataSourceConnectionRecords,
   listDatabaseTables as listDataSourceDatabaseTables,
@@ -195,6 +220,7 @@ import {
   buildGitSwitchBranchArgs,
   buildGitTagArgs,
   buildGitVerifyRefArgs,
+  isEmptyRepositoryHeadError,
   parsePorcelainStatus,
   type GitAddInput,
   type GitBranchSwitchInput,
@@ -332,7 +358,6 @@ import {
   bindProjectService as bindProjectServiceRecord,
   addServiceDomain as addServiceDomainRecord,
   checkServiceDomain,
-  createVercelProjectDeploymentService,
   deployVercelStaticProjectForService,
   deleteServiceEnvVar as deleteServiceEnvVarRecord,
   deleteOldServiceMonitorHistory,
@@ -821,6 +846,10 @@ const codexTaskService = new CodexTaskService({
   emit: (event) => sendCodexTaskEvent(event)
 })
 const codexActivityService = new CodexActivityService()
+const codexSiteService = new CodexSiteService({ db: () => getDatabase() })
+const codexSessionService = new CodexSessionService({
+  emit: (event) => sendCodexSessionEvent(event)
+})
 const releasePublishTasks = new Map<string, RepositoryReleasePublishTaskSnapshot>()
 const releasePublishTaskProcesses = new Map<string, ChildProcessWithoutNullStreams>()
 const releasePublishTaskExternalCancelers = new Map<string, () => Promise<void>>()
@@ -1256,6 +1285,12 @@ function explainReleaseOutput(task: RepositoryReleasePublishTaskSnapshot, line: 
     return
   }
 
+  if (task.provider === 'firebase' && (lower.includes('firebase') || lower.includes('upload') || lower.includes('appdistribution'))) {
+    setReleaseTaskPhase(task, '上传到 Firebase App Distribution', 6)
+    setReleaseTaskHint(task, '构建产物已经生成，正在上传到 Firebase App Distribution。')
+    return
+  }
+
   if (lower.includes('publishing') || lower.includes('uploading') || lower.includes('github') || lower.includes('release')) {
     setReleaseTaskPhase(task, '上传到 GitHub Releases', 8)
     setReleaseTaskHint(task, '本地产物已经生成，正在上传到 GitHub Releases；如果网络或代理不稳定，这一步最容易长时间停住。')
@@ -1604,6 +1639,13 @@ function sendTerminalEvent(channel: 'terminal:data' | 'terminal:exit', event: Te
 function sendCodexTaskEvent(event: CodexTaskEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send('codex:tasks:event', event)
+  }
+}
+
+function sendCodexSessionEvent(event: CodexSessionEvent): void {
+  codexSiteService.handleSessionEvent(event.sessionId, event.type, event.error)
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('codex:sessions:event', event)
   }
 }
 
@@ -2075,6 +2117,7 @@ function migrateDatabase(db: Database.Database): void {
   migrateTerminalRemoteShortcutTables(db)
   migratePlaneIntegrationTables(db)
   migrateProjectCloudflareTables(db)
+  migrateProjectFirebaseReleaseTables(db)
   migrateDataSourceTables(db)
   migrateCodemagicRepositoryBindingTable(db)
   migrateReleasePublishTaskTable(db)
@@ -2083,6 +2126,7 @@ function migrateDatabase(db: Database.Database): void {
   migrateMonthlyPerformanceTables(db)
   migrateResourceGovernanceTables(db)
   migrateCodexTaskTables(db)
+  migrateCodexSiteTables(db)
 
   addColumnIfMissing(db, 'repositories', 'remotes_json', "TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(db, 'repositories', 'repository_kind', "TEXT NOT NULL DEFAULT 'root'")
@@ -2868,7 +2912,7 @@ async function scanRepository(localPath: string, context: RepositoryScanContext 
   const git = simpleGit(normalizedPath)
   const [status, log, gitRemotes, branchInfo, localUserName, localUserEmail, effectiveUserName, effectiveUserEmail, branchName, checkedOutCommit] = await Promise.all([
     git.status(),
-    git.log({ maxCount: 1 }),
+    git.log({ maxCount: 1 }).catch(() => ({ latest: undefined })),
     git.getRemotes(true),
     listRepositoryBranches(normalizedPath),
     runGitInPath(normalizedPath, ['config', '--local', 'user.name']),
@@ -4447,7 +4491,7 @@ async function resolveGithubReleaseToken(input: RepositoryReleasePublishInput): 
 }
 
 function getReleaseProvider(input: RepositoryReleasePublishInput): ReleasePublishProvider {
-  if (input.provider === 'codemagic' || input.provider === 'nextjs-pm2') {
+  if (input.provider === 'codemagic' || input.provider === 'firebase' || input.provider === 'nextjs-pm2') {
     return input.provider
   }
 
@@ -4604,6 +4648,10 @@ function isCodemagicBuildSuccessful(status: string): boolean {
 function getReleaseProviderLabel(provider: ReleasePublishProvider): string {
   if (provider === 'codemagic') {
     return 'Codemagic'
+  }
+
+  if (provider === 'firebase') {
+    return 'Firebase App Distribution'
   }
 
   if (provider === 'nextjs-pm2') {
@@ -4766,6 +4814,195 @@ async function publishRepositoryCodemagicRelease(
     externalBranch: latestBuild.branch || branch || codemagic.defaultBranch,
     externalTag: latestBuild.tag || tagName,
     artifacts
+  }
+}
+
+async function publishRepositoryFirebaseRelease(
+  repositoryId: string,
+  input: RepositoryReleasePublishInput,
+  callbacks: ReleasePublishCallbacks = {}
+): Promise<RepositoryReleasePublishResult> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const settings = resolveProjectFirebaseReleaseSettings(getDatabase(), repository.projectId)
+  const version = input.version.trim()
+  const tagName = input.tagName.trim()
+  const expectedTagName = createReleaseTagName(version)
+  const releaseActions = input.releaseActions ?? []
+  const selectedActionSet = new Set(releaseActions)
+  const phaseTotal = 7
+  const buildScript = settings.buildScript.trim()
+  const supportedBuildScripts = new Set<ReleaseScriptName>(['package:android', 'build:android', 'build'])
+
+  callbacks.onPhase?.('准备 Firebase 发布参数', 1, phaseTotal)
+  callbacks.onLog?.(`准备 Firebase App Distribution：${repository.name} ${tagName}`)
+  throwIfReleaseCancelled(callbacks)
+
+  if (tagName !== expectedTagName) {
+    throw new Error(`Tag 应为 ${expectedTagName}`)
+  }
+
+  if (buildScript && !supportedBuildScripts.has(buildScript as ReleaseScriptName)) {
+    throw new Error('Firebase 构建脚本只支持 package:android、build:android 或 build')
+  }
+
+  callbacks.onPhase?.('检查发布计划', 2, phaseTotal)
+  callbacks.onLog?.('检查 Firebase 发布计划')
+  throwIfReleaseCancelled(callbacks)
+  const initialPreparation = await prepareRepositoryRelease(repositoryId, { targetVersion: version, provider: 'firebase' })
+  const initialIssues = getUnresolvedReleaseIssues(initialPreparation.plan, releaseActions)
+
+  if (!initialPreparation.plan.canPublish && initialIssues.length > 0) {
+    throw new Error(initialIssues.join('\n') || '发布前检查未通过')
+  }
+
+  const shouldCommitWorkspaceChanges = selectedActionSet.has('commit-workspace-changes')
+  const shouldReplaceLocalTag = selectedActionSet.has('replace-local-tag')
+
+  callbacks.onPhase?.('写入版本并创建提交', 3, phaseTotal)
+  throwIfReleaseCancelled(callbacks)
+  if (initialPreparation.plan.currentVersion !== version) {
+    callbacks.onLog?.(`写入 package.json 版本：${initialPreparation.plan.currentVersion} -> ${version}`)
+    await writeRepositoryPackageVersion(repository.localPath, version)
+  }
+
+  if (shouldCommitWorkspaceChanges) {
+    callbacks.onLog?.('暂存当前工作区全部改动')
+    await runGitInPathStrict(repository.localPath, ['add', '--all'])
+  } else if (initialPreparation.plan.currentVersion !== version) {
+    callbacks.onLog?.('暂存 package.json 版本改动')
+    await runGitInPathStrict(repository.localPath, ['add', 'package.json'])
+  }
+
+  if (initialPreparation.plan.currentVersion !== version || shouldCommitWorkspaceChanges) {
+    callbacks.onLog?.(`创建版本提交：${input.commitMessage.trim() || `chore: release ${tagName}`}`)
+    await runGitInPathStrict(repository.localPath, ['commit', '-m', input.commitMessage.trim() || `chore: release ${tagName}`])
+  } else {
+    callbacks.onLog?.('版本提交已是最新，跳过提交')
+  }
+
+  callbacks.onPhase?.('处理版本 Tag 并推送', 4, phaseTotal)
+  throwIfReleaseCancelled(callbacks)
+  if (shouldReplaceLocalTag) {
+    callbacks.onLog?.(`删除本地旧 Tag：${tagName}`)
+    await runGitInPathStrict(repository.localPath, ['tag', '-d', tagName])
+  }
+
+  const finalPreparation = await prepareRepositoryRelease(repositoryId, { targetVersion: version, provider: 'firebase' })
+  const finalIssues = getUnresolvedReleaseIssues(finalPreparation.plan, releaseActions)
+
+  if (!finalPreparation.plan.canPublish && finalIssues.length > 0) {
+    throw new Error(finalIssues.join('\n') || '版本提交后发布前检查未通过')
+  }
+
+  const localTagCommit = await runGitInPathOptional(repository.localPath, ['rev-parse', '-q', '--verify', `${tagName}^{}`])
+
+  if (!localTagCommit) {
+    callbacks.onLog?.(`创建本地 Tag：${tagName}`)
+    await runGitInPathStrict(repository.localPath, ['tag', tagName])
+  } else {
+    callbacks.onLog?.(`本地 Tag ${tagName} 已在当前提交上`)
+  }
+
+  const branch = await runGitInPath(repository.localPath, ['branch', '--show-current'])
+
+  await withSavedSshPassphrases(async (env) => {
+    if (branch) {
+      callbacks.onLog?.(`推送当前分支到 origin/${branch}`)
+      await runGitInPathStrict(repository.localPath, ['push', 'origin', branch], { env })
+    }
+
+    callbacks.onLog?.(`推送 Tag 到 origin/${tagName}`)
+    await runGitInPathStrict(repository.localPath, ['push', 'origin', tagName], { env })
+  })
+
+  callbacks.onPhase?.('构建应用产物', 5, phaseTotal)
+  throwIfReleaseCancelled(callbacks)
+  let buildOutput = ''
+  let buildError = ''
+
+  if (buildScript) {
+    callbacks.onLog?.(`执行 Firebase 构建脚本：${getReleaseScriptCommand(initialPreparation.packageManager, buildScript as ReleaseScriptName)}`)
+    const buildResult = await runReleaseScript(repository.localPath, initialPreparation.packageManager, buildScript as ReleaseScriptName, {}, callbacks)
+    throwIfReleaseProcessFailed(buildResult, 'Firebase 应用构建失败')
+    buildOutput = buildResult.stdout
+    buildError = buildResult.stderr
+  } else {
+    callbacks.onLog?.('项目设置未配置构建脚本，直接使用已有产物')
+  }
+
+  const artifactPathInput = expandHomePath(settings.artifactPath)
+  const project = getProjectOrThrow(repository.projectId)
+  const artifactCandidates = isAbsolute(artifactPathInput)
+    ? [artifactPathInput]
+    : [resolve(repository.localPath, artifactPathInput), resolve(project.workspacePath, artifactPathInput)]
+  let artifactPath = artifactCandidates[0]
+  let artifactStats = await stat(artifactPath).catch(() => null)
+
+  if (!artifactStats?.isFile() && artifactCandidates[1]) {
+    artifactPath = artifactCandidates[1]
+    artifactStats = await stat(artifactPath).catch(() => null)
+  }
+
+  if (!artifactStats?.isFile()) {
+    throw new Error(`找不到 Firebase 构建产物：${settings.artifactPath}`)
+  }
+
+  callbacks.onPhase?.('上传到 Firebase App Distribution', 6, phaseTotal)
+  throwIfReleaseCancelled(callbacks)
+  const keyDirectory = await mkdtemp(join(tmpdir(), 'forgedesk-firebase-'))
+  const keyPath = join(keyDirectory, 'service-account.json')
+
+  try {
+    await writeFile(keyPath, settings.serviceAccountKey, { encoding: 'utf8', mode: 0o600 })
+    const firebaseArgs = [
+      'appdistribution:distribute',
+      artifactPath,
+      '--app',
+      settings.appId,
+      '--project',
+      settings.serviceAccountProjectId,
+      '--release-notes',
+      input.releaseNotes.trim() || `发布 ${tagName}`
+    ]
+
+    if (settings.groups.length > 0) {
+      firebaseArgs.push('--groups', settings.groups.join(','))
+    }
+
+    if (settings.testers.length > 0) {
+      firebaseArgs.push('--testers', settings.testers.join(','))
+    }
+
+    callbacks.onLog?.(`上传构建产物：${settings.artifactPath}`)
+    const uploadResult = await runReleaseProcess('firebase', firebaseArgs, {
+      cwd: repository.localPath,
+      env: { GOOGLE_APPLICATION_CREDENTIALS: keyPath }
+    }, callbacks)
+    throwIfReleaseProcessFailed(uploadResult, '上传到 Firebase App Distribution 失败')
+    callbacks.onLog?.('Firebase App Distribution 上传完成')
+
+    return {
+      ok: true,
+      provider: 'firebase',
+      repository: await rescanRepositoryRecord(repository),
+      plan: finalPreparation.plan,
+      stdout: [buildOutput, uploadResult.stdout].filter(Boolean).join('\n'),
+      stderr: [buildError, uploadResult.stderr].filter(Boolean).join('\n'),
+      exitCode: 0,
+      externalStatus: 'distributed',
+      externalWorkflow: settings.appId,
+      externalBranch: branch,
+      externalTag: tagName,
+      artifacts: [{
+        name: basename(artifactPath),
+        type: artifactPath.toLowerCase().endsWith('.ipa') ? 'ipa' : artifactPath.toLowerCase().endsWith('.aab') ? 'aab' : 'apk',
+        sizeInBytes: artifactStats.size,
+        downloadUrl: `file://${artifactPath}`,
+        versionName: version
+      }]
+    }
+  } finally {
+    await rm(keyDirectory, { recursive: true, force: true }).catch(() => undefined)
   }
 }
 
@@ -4965,6 +5202,10 @@ async function publishRepositoryRelease(
     return publishRepositoryCodemagicRelease(repositoryId, input, callbacks)
   }
 
+  if (getReleaseProvider(input) === 'firebase') {
+    return publishRepositoryFirebaseRelease(repositoryId, input, callbacks)
+  }
+
   if (getReleaseProvider(input) === 'nextjs-pm2') {
     return publishRepositoryNextjsPm2Release(repositoryId, input, callbacks)
   }
@@ -5162,9 +5403,11 @@ async function runRepositoryReleasePublishTask(task: RepositoryReleasePublishTas
       phase: result.ok
         ? result.provider === 'codemagic'
           ? 'Codemagic 构建完成'
-          : result.provider === 'nextjs-pm2'
-            ? 'Next.js PM2 部署完成'
-            : '发布完成'
+          : result.provider === 'firebase'
+            ? 'Firebase App Distribution 分发完成'
+            : result.provider === 'nextjs-pm2'
+              ? 'Next.js PM2 部署完成'
+              : '发布完成'
         : '发布失败',
       phaseIndex: task.phaseTotal || releasePublishPhaseTotal,
       phaseTotal: task.phaseTotal || releasePublishPhaseTotal,
@@ -5192,9 +5435,11 @@ async function runRepositoryReleasePublishTask(task: RepositoryReleasePublishTas
       updateReleaseTask(task, {
         finishedAt,
         phase: '发布已终止',
-        hint: task.provider === 'nextjs-pm2'
-          ? '发布任务已经终止。重试前请检查本地 Tag、远端发布包和 PM2 进程状态。'
-          : '发布任务已经终止。重试前请检查本地 Tag、远端 Tag 和 GitHub Releases 是否留下半成品。',
+        hint: task.provider === 'firebase'
+          ? '发布任务已经终止。重试前请检查本地 Tag 和 Firebase App Distribution 是否留下版本。'
+          : task.provider === 'nextjs-pm2'
+            ? '发布任务已经终止。重试前请检查本地 Tag、远端发布包和 PM2 进程状态。'
+            : '发布任务已经终止。重试前请检查本地 Tag、远端 Tag 和 GitHub Releases 是否留下半成品。',
         stderr: task.stderr || errorMessage
       })
       appendReleaseTaskLog(task, '发布任务已终止')
@@ -5270,12 +5515,14 @@ async function cancelRepositoryReleasePublishTask(taskId: string): Promise<Repos
     phase: '正在终止发布',
     hint: task.provider === 'codemagic'
       ? '已请求终止 Codemagic 构建。可能已经创建了 Tag 或部分构建产物，重试前请检查 Codemagic。'
+      : task.provider === 'firebase'
+        ? '已请求终止 Firebase 分发。可能已经创建了 Tag 或部分上传版本，重试前请检查 Firebase App Distribution。'
       : task.provider === 'nextjs-pm2'
         ? '已请求终止部署进程。可能已经创建了 Tag、上传包或远端 release 目录，重试前请检查服务器和 PM2。'
         : '已请求终止发布进程。可能已经创建了 Tag、Release 或部分上传资产，重试前请检查 GitHub Releases。',
     finishedAt: new Date().toISOString()
   })
-  appendReleaseTaskLog(task, task.provider === 'codemagic' ? '已请求终止 Codemagic 构建' : '已请求终止发布进程')
+  appendReleaseTaskLog(task, task.provider === 'codemagic' ? '已请求终止 Codemagic 构建' : task.provider === 'firebase' ? '已请求终止 Firebase 分发进程' : '已请求终止发布进程')
 
   if (task.provider === 'codemagic') {
     const externalCancel = releasePublishTaskExternalCancelers.get(task.id)
@@ -5320,7 +5567,7 @@ function startRepositoryReleasePublishTask(repositoryId: string, input: Reposito
     status: 'running',
     phase: '等待后台任务启动',
     phaseIndex: 0,
-    phaseTotal: provider === 'codemagic' ? 7 : releasePublishPhaseTotal,
+    phaseTotal: provider === 'codemagic' || provider === 'firebase' ? 7 : releasePublishPhaseTotal,
     hint: '后台任务已创建，马上开始检查发布条件。',
     lastOutputAt: now,
     startedAt: now,
@@ -5703,46 +5950,10 @@ async function startProjectDeploymentTask(input: { projectId: string; targetId: 
   const running = Array.from(projectDeploymentTasks.values()).find((item) => item.targetId === target.id && item.status === 'running')
   if (running) return { ...running }
   const config = { ...target.config, ...(input.config ?? {}), repositoryId: target.repositoryId, provider: target.provider }
-  const repository = getRepositoryOrThrow(target.repositoryId)
-  let resolvedTarget = { ...target, config }
-
-  if ((config.provider === 'vercel' || config.provider === 'railway') && !target.serviceId) {
-    if (config.provider === 'railway') {
-      throw new Error('Railway 新建资源暂不支持自动创建，请先同步连接并选择已有项目/服务/环境')
-    }
-    if (!target.connectionId) throw new Error('创建 Vercel 项目需要先选择平台连接')
-    const service = await createVercelProjectDeploymentService(getDatabase(), {
-      projectId: input.projectId,
-      repositoryId: target.repositoryId,
-      connectionId: target.connectionId,
-      name: config.appName || target.displayName || repository.name,
-      remoteUrl: config.sourceMode === 'git' ? repository.remoteUrl : '',
-      branch: config.branch,
-      framework: config.framework,
-      installCommand: config.installCommand,
-      buildCommand: config.buildCommand,
-      outputDirectory: config.outputDirectory,
-      rootDirectory: config.rootDirectory,
-      runtimeVersion: config.runtimeVersion
-    })
-    resolvedTarget = saveProjectDeploymentTarget(getDatabase(), {
-      ...target,
-      projectId: input.projectId,
-      repositoryId: target.repositoryId,
-      provider: target.provider,
-      config,
-      status: 'ready',
-      serviceId: service.id,
-      connectionId: service.connectionId,
-      externalProjectId: service.externalProjectId,
-      externalProjectName: service.externalProjectName,
-      externalServiceName: service.name,
-      externalEnvironmentName: service.defaultEnvironment || 'production'
-    })
-  }
+  const resolvedTarget = { ...target, config }
 
   if ((config.provider === 'vercel' || config.provider === 'railway') && !resolvedTarget.serviceId) {
-    throw new Error('当前目标还没有绑定平台服务，请先选择或创建目标')
+    throw new Error(`当前目标还没有绑定 ${config.provider === 'vercel' ? 'Vercel' : 'Railway'} 服务，请先在项目设置 / 服务配置中绑定已有平台项目或服务`)
   }
 
   const task = createProjectDeploymentTask({ projectId: input.projectId, target: resolvedTarget, config })
@@ -5788,6 +5999,18 @@ async function listRepositoryCommits(
 
   if (!repository) {
     throw new Error('仓库不存在')
+  }
+
+  const headResult = await runGitInPathResult(repository.localPath, ['rev-parse', '--verify', 'HEAD'])
+
+  if (!headResult.ok) {
+    const headError = headResult.stderr || headResult.stdout
+
+    if (isEmptyRepositoryHeadError(headError)) {
+      return []
+    }
+
+    throw new Error(headError || '无法读取仓库 HEAD')
   }
 
   const since = options.startDate ? `${options.startDate}T00:00:00.000Z` : undefined
@@ -6023,6 +6246,26 @@ async function rescanProjectRepositories(projectId: string): Promise<WorkspaceSn
   return getWorkspaceSnapshot()
 }
 
+async function initializeProjectRepository(projectId: string): Promise<WorkspaceSnapshot> {
+  const project = getProjectOrThrow(projectId)
+  const workspacePath = resolve(expandHomePath(project.workspacePath))
+
+  let workspaceStats
+
+  try {
+    workspaceStats = await stat(workspacePath)
+  } catch {
+    throw new Error('项目目录不存在，无法初始化本地仓库')
+  }
+
+  if (!workspaceStats.isDirectory()) {
+    throw new Error('项目目录不是文件夹，无法初始化本地仓库')
+  }
+
+  await runGitInPathStrict(workspacePath, ['init'])
+  return rescanProjectRepositories(projectId)
+}
+
 function readSshFingerprint(path: string, content: string): Promise<string> {
   return new Promise((resolveFingerprint) => {
     execFile('ssh-keygen', ['-lf', path], { timeout: 5000 }, (error, stdout) => {
@@ -6244,6 +6487,8 @@ ipcMain.handle(
 ipcMain.handle('projects:delete', async (_event, projectId: string): Promise<WorkspaceSnapshot> => deleteProject(projectId))
 
 ipcMain.handle('project:repositories:rescan', async (_event, projectId: string): Promise<WorkspaceSnapshot> => rescanProjectRepositories(projectId))
+
+ipcMain.handle('project:repository:init', async (_event, projectId: string): Promise<WorkspaceSnapshot> => initializeProjectRepository(projectId))
 
 ipcMain.handle('repositories:list', async (_event, projectId?: string): Promise<RepositoryRecord[]> => listRepositories(projectId))
 
@@ -6473,6 +6718,18 @@ ipcMain.handle(
 
 ipcMain.handle('project:cloudflare:dns-record:delete', async (_event, projectId: string, recordId: string): Promise<CloudflareDnsRecord[]> =>
   deleteProjectCloudflareDnsRecord(getDatabase(), projectId, recordId)
+)
+
+ipcMain.handle('project:firebase-release:settings:get', async (_event, projectId: string): Promise<ProjectFirebaseReleaseSettings | null> =>
+  getProjectFirebaseReleaseSettings(getDatabase(), projectId)
+)
+
+ipcMain.handle('project:firebase-release:settings:save', async (_event, input: ProjectFirebaseReleaseSettingsInput): Promise<ProjectFirebaseReleaseSettings> =>
+  saveProjectFirebaseReleaseSettings(getDatabase(), input)
+)
+
+ipcMain.handle('project:firebase-release:settings:delete', async (_event, projectId: string): Promise<void> =>
+  deleteProjectFirebaseReleaseSettings(getDatabase(), projectId)
 )
 
 ipcMain.handle('data-source:connections:list', async (): Promise<DataSourceConnectionRecord[]> => listDataSourceConnectionRecords(getDatabase()))
@@ -6885,6 +7142,28 @@ ipcMain.handle('codex:runtime:status', async (_event, verify = false): Promise<A
 
 ipcMain.handle('codex:activity:snapshot', async (): Promise<CodexActivitySnapshot> => codexActivityService.snapshot())
 
+ipcMain.handle('codex:sessions:list', async (): Promise<CodexSessionsSnapshot> => codexSessionService.list())
+
+ipcMain.handle('codex:sessions:get', async (_event, sessionId: string): Promise<CodexSessionDetail> => codexSessionService.get(sessionId))
+
+ipcMain.handle('codex:sessions:pin', async (_event, sessionId: string): Promise<CodexSessionSummary> => codexSessionService.togglePin(sessionId))
+
+ipcMain.handle('codex:sessions:send', async (_event, input: CodexSessionMessageInput): Promise<CodexSessionDetail> => codexSessionService.sendMessage(input))
+
+ipcMain.handle('codex:sessions:cancel', async (_event, sessionId: string): Promise<CodexSessionDetail> => codexSessionService.cancel(sessionId))
+
+ipcMain.handle('codex:sites:list', async (): Promise<CodexSite[]> => codexSiteService.list())
+
+ipcMain.handle('codex:sites:create', async (_event, input: CodexSiteCreateInput): Promise<CodexSite> => codexSiteService.create(input))
+
+ipcMain.handle('codex:sites:update', async (_event, input: CodexSiteUpdateInput): Promise<CodexSite> => codexSiteService.update(input))
+
+ipcMain.handle('codex:sites:delete', async (_event, siteId: string): Promise<CodexSite[]> => codexSiteService.delete(siteId))
+
+ipcMain.handle('codex:sites:preview:start', async (_event, siteId: string): Promise<CodexSite> => codexSiteService.startPreview(siteId))
+
+ipcMain.handle('codex:sites:preview:stop', async (_event, siteId: string): Promise<CodexSite | null> => codexSiteService.stopPreview(siteId))
+
 ipcMain.handle('codex:tasks:list', async (): Promise<CodexTaskRecord[]> => codexTaskService.list())
 
 ipcMain.handle('codex:tasks:create', async (_event, input?: CodexTaskCreateInput): Promise<CodexTaskRecord> =>
@@ -6919,6 +7198,8 @@ ipcMain.handle('settings:ai:save', async (_event, input: Partial<AiSettings>): P
 })
 
 ipcMain.handle('overview:snapshot:get', async (): Promise<OverviewSnapshot> => readOverviewSnapshot(app.getPath('userData')))
+
+ipcMain.handle('market-data:snapshot', async (_event, period?: MarketPeriod) => getMarketDataSnapshot(app.getPath('userData'), period ?? '1M'))
 
 ipcMain.handle('overview:news:refresh', async (): Promise<OverviewNewsReport> => {
   const settings = await readAiSettingsFile(app.getPath('userData'))
@@ -7108,8 +7389,8 @@ ipcMain.handle('settings:oa:document:tasks', async (_event, document: LarkDocume
   getLarkDocumentTasks(await readOaSettingsFile(app.getPath('userData')), document)
 )
 
-ipcMain.handle('settings:oa:bitable:get', async (_event, tableId?: string): Promise<LarkBitableSnapshot> =>
-  getLarkBitableSnapshot(await readOaSettingsFile(app.getPath('userData')), tableId)
+ipcMain.handle('settings:oa:bitable:get', async (_event, tableId?: string, viewId?: string): Promise<LarkBitableSnapshot> =>
+  getLarkBitableSnapshot(await readOaSettingsFile(app.getPath('userData')), tableId, viewId)
 )
 
 ipcMain.handle('settings:oa:bitable:record:save', async (_event, input: { tableId: string; recordId?: string; fields: Record<string, unknown> }) =>
@@ -7290,6 +7571,47 @@ ipcMain.handle('dialog:select-image', async () => {
   })
 
   return result.canceled ? null : result.filePaths[0]
+})
+
+const imageMimeTypes: Record<string, string> = {
+  '.avif': 'image/avif',
+  '.bmp': 'image/bmp',
+  '.gif': 'image/gif',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.webp': 'image/webp'
+}
+
+async function readLocalImageData(imagePath: string): Promise<string | null> {
+  if (!isAbsolute(imagePath)) return null
+  const normalizedPath = resolve(imagePath)
+  const extension = normalizedPath.slice(normalizedPath.lastIndexOf('.')).toLowerCase()
+  const mimeType = imageMimeTypes[extension]
+  if (!mimeType) return null
+  const metadata = await stat(normalizedPath)
+  if (metadata.size > 16 * 1024 * 1024) return null
+  const contents = await readFile(normalizedPath)
+  return `data:${mimeType};base64,${contents.toString('base64')}`
+}
+
+ipcMain.handle('clipboard:read-image', async (): Promise<string | null> => {
+  const image = clipboard.readImage()
+  if (image.isEmpty()) return null
+  const directory = join(tmpdir(), 'forgedesk-clipboard-images')
+  await mkdir(directory, { recursive: true })
+  const imagePath = join(directory, `clipboard-${Date.now()}-${randomUUID()}.png`)
+  await writeFile(imagePath, image.toPNG())
+  return imagePath
+})
+
+ipcMain.handle('file:read-image-data', async (_event, imagePath: string): Promise<string | null> => {
+  try {
+    return await readLocalImageData(imagePath)
+  } catch {
+    return null
+  }
 })
 
 ipcMain.handle('ssh:read-config', async (): Promise<SshConfigFile> => readSshConfigFile(sshDirectory))

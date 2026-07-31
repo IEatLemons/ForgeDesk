@@ -17,6 +17,7 @@ import {
   buildGitSwitchBranchArgs,
   buildGitTagArgs,
   buildGitVerifyRefArgs,
+  isEmptyRepositoryHeadError,
   parsePorcelainStatus
 } from './git-workspace.js'
 
@@ -97,5 +98,12 @@ describe('git workspace operations', () => {
     assert.deepEqual(parsePorcelainStatus('M src/main/ai-conflict-assistant.ts\n'), [
       { path: 'src/main/ai-conflict-assistant.ts', oldPath: '', indexStatus: 'M', worktreeStatus: ' ', conflict: false }
     ])
+  })
+
+  it('recognizes empty repository HEAD errors without hiding other Git failures', () => {
+    assert.equal(isEmptyRepositoryHeadError('fatal: Needed a single revision'), true)
+    assert.equal(isEmptyRepositoryHeadError("fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree."), true)
+    assert.equal(isEmptyRepositoryHeadError('fatal: not a git repository'), false)
+    assert.equal(isEmptyRepositoryHeadError("fatal: ambiguous argument 'main': unknown revision or path not in the working tree."), false)
   })
 })

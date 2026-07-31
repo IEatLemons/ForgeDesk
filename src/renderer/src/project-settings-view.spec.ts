@@ -18,7 +18,7 @@ describe('project settings view helpers', () => {
   it('defines the project settings modules in the intended entry order', () => {
     assert.deepEqual(
       PROJECT_SETTINGS_MODULES.map((module) => module.key),
-      ['basic', 'people', 'branches', 'git', 'services', 'cloudflare', 'plane']
+      ['basic', 'people', 'branches', 'git', 'services', 'release', 'cloudflare', 'plane']
     )
   })
 

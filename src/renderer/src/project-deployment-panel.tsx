@@ -484,7 +484,7 @@ export function ProjectDeploymentPanel({ project, repositories, open }: Props): 
           ) : null}
           {(provider === 'vercel' || provider === 'railway') ? (
             <>
-              <Typography.Text type="secondary">目标层级：连接 → 已同步服务 → 环境。没有选择已有服务时，保存的是草稿；确认发布时由 Provider 决定是否能创建平台资源。</Typography.Text>
+              <Typography.Text type="secondary">目标层级：平台连接 → 已同步服务 → 环境。请先在项目设置 / 服务配置中绑定已有的 Vercel 或 Railway 项目；同一个 ForgeDesk 项目可以绑定多个平台项目。</Typography.Text>
             </>
           ) : null}
           {serviceId && environments.length > 0 ? (

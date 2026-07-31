@@ -28,6 +28,8 @@ export type ResourceProcess = {
   executablePath: string
   bundlePath: string
   command: string
+  networkReceivedBytes: number
+  networkSentBytes: number
 }
 
 export type ResourceHistoryPoint = {
@@ -37,6 +39,8 @@ export type ResourceHistoryPoint = {
   memoryUsedBytes: number
   swapUsedBytes: number
   storageUsagePercent: number
+  networkInBytes?: number
+  networkOutBytes?: number
 }
 
 export type ProcessHistoryPoint = {
@@ -46,6 +50,8 @@ export type ProcessHistoryPoint = {
   memoryAverageBytes: number
   memoryPeakBytes: number
   sampleCount: number
+  networkInBytes: number
+  networkOutBytes: number
 }
 
 export type ProcessAnalysis = {
@@ -61,6 +67,8 @@ export type ProcessAnalysis = {
   aboveThresholdSeconds: number
   firstSeenAt: string
   lastSeenAt: string
+  networkReceivedBytes: number
+  networkSentBytes: number
 }
 
 export type ResourceRetentionStatus = {
@@ -236,6 +244,68 @@ function parseSize(value: string): number {
   return Number(match[1]) * multipliers[(match[2] || 'B').toUpperCase()]
 }
 
+function parseNetworkBytes(value: unknown): number {
+  const normalized = String(value ?? '').trim().replace(/,/g, '')
+  if (!normalized) return 0
+  const direct = Number(normalized)
+  if (Number.isFinite(direct)) return Math.max(0, direct)
+  const match = normalized.match(/^([\d.]+)\s*(B|K|M|G|T|P)(?:i?B)?$/i)
+  if (!match) return 0
+  const multipliers: Record<string, number> = { B: 1, K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4, P: 1024 ** 5 }
+  return Math.max(0, Number(match[1]) * multipliers[match[2].toUpperCase()])
+}
+
+function parseCsvLine(line: string): string[] {
+  const values: string[] = []
+  let value = ''
+  let quoted = false
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]
+    if (character === '"') {
+      if (quoted && line[index + 1] === '"') {
+        value += '"'
+        index += 1
+      } else {
+        quoted = !quoted
+      }
+    } else if (character === ',' && !quoted) {
+      values.push(value.trim())
+      value = ''
+    } else {
+      value += character
+    }
+  }
+  values.push(value.trim())
+  return values
+}
+
+export function parseNettopProcessOutput(output: string): Map<number, { networkReceivedBytes: number; networkSentBytes: number }> {
+  const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const headerIndex = lines.findIndex((line) => {
+    const columns = parseCsvLine(line).map((column) => column.toLowerCase())
+    return columns.includes('bytes_in') && columns.includes('bytes_out')
+  })
+  if (headerIndex < 0) return new Map()
+
+  const header = parseCsvLine(lines[headerIndex]).map((column) => column.toLowerCase())
+  const pidIndex = header.indexOf('pid') >= 0 ? header.indexOf('pid') : header.indexOf('epid')
+  const inIndex = header.indexOf('bytes_in')
+  const outIndex = header.indexOf('bytes_out')
+  const usage = new Map<number, { networkReceivedBytes: number; networkSentBytes: number }>()
+  for (const line of lines.slice(headerIndex + 1)) {
+    const values = parseCsvLine(line)
+    const embeddedPid = values[0]?.match(/\.(\d+)$/)?.[1]
+    const explicitPid = pidIndex >= 0 ? parseNetworkBytes(values[pidIndex]) : 0
+    const pid = Math.round(explicitPid || parseNetworkBytes(embeddedPid))
+    if (pid <= 0) continue
+    usage.set(pid, {
+      networkReceivedBytes: parseNetworkBytes(values[inIndex]),
+      networkSentBytes: parseNetworkBytes(values[outIndex])
+    })
+  }
+  return usage
+}
+
 export async function listExternalCleanupPreviews(db: ResourceDatabase): Promise<ExternalCleanupPreview[]> {
   const dockerEnabled = listCleanupPolicies(db).find((policy) => policy.key === 'docker')?.enabled === true
   const previews: ExternalCleanupPreview[] = [
@@ -318,11 +388,29 @@ export function parsePsProcessOutput(output: string, capturedAt = new Date()): R
       state: match[8],
       threadCount: 0,
       user: match[3],
-      virtualMemoryBytes: Number(match[6]) * 1024
+      virtualMemoryBytes: Number(match[6]) * 1024,
+      networkReceivedBytes: 0,
+      networkSentBytes: 0
     })
   }
 
   return processes
+}
+
+async function enrichProcessNetworkUsage(processes: ResourceProcess[]): Promise<void> {
+  if (process.platform !== 'darwin' || processes.length === 0) return
+  // Current macOS emits the process label (including PID) as the first CSV
+  // field. Keep the selector list to columns supported across recent macOS
+  // versions; invalid selectors make nettop exit with its usage text.
+  const result = await runFile('/usr/bin/nettop', ['-P', '-n', '-x', '-L', '1', '-J', 'bytes_in,bytes_out'], 15_000)
+  if (result.error) return
+  const usage = parseNettopProcessOutput(result.stdout)
+  for (const processInfo of processes) {
+    const network = usage.get(processInfo.pid)
+    if (!network) continue
+    processInfo.networkReceivedBytes = network.networkReceivedBytes
+    processInfo.networkSentBytes = network.networkSentBytes
+  }
 }
 
 export function mergeTopProcessOutput(processes: ResourceProcess[], output: string): ResourceProcess[] {
@@ -371,9 +459,12 @@ export async function collectResourceProcesses(): Promise<ResourceProcess[]> {
     if (!top.error) mergeTopProcessOutput(processes, top.stdout)
   }
 
+  await enrichProcessNetworkUsage(processes)
+
   const selected = new Map<number, ResourceProcess>()
   for (const process of [...processes].sort((left, right) => right.memoryBytes - left.memoryBytes).slice(0, processLimit / 2)) selected.set(process.pid, process)
   for (const process of [...processes].sort((left, right) => right.cpuPercent - left.cpuPercent).slice(0, processLimit / 2)) selected.set(process.pid, process)
+  for (const process of [...processes].sort((left, right) => (right.networkReceivedBytes + right.networkSentBytes) - (left.networkReceivedBytes + left.networkSentBytes)).slice(0, Math.floor(processLimit / 4))) selected.set(process.pid, process)
   return [...selected.values()].sort((left, right) => right.memoryBytes - left.memoryBytes).slice(0, processLimit)
 }
 
@@ -409,7 +500,8 @@ export function migrateResourceGovernanceTables(db: ResourceDatabase): void {
       private_memory_bytes INTEGER NOT NULL, virtual_memory_bytes INTEGER NOT NULL,
       thread_count INTEGER NOT NULL, port_count INTEGER NOT NULL, page_ins INTEGER NOT NULL,
       process_state TEXT NOT NULL, elapsed_seconds INTEGER NOT NULL,
-      executable_path TEXT NOT NULL, bundle_path TEXT NOT NULL, command_text TEXT NOT NULL
+      executable_path TEXT NOT NULL, bundle_path TEXT NOT NULL, command_text TEXT NOT NULL,
+      network_received_bytes INTEGER NOT NULL DEFAULT 0, network_sent_bytes INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_process_samples_identity_time ON system_process_samples(identity_key, captured_at);
     CREATE INDEX IF NOT EXISTS idx_process_samples_time ON system_process_samples(captured_at);
@@ -418,7 +510,9 @@ export function migrateResourceGovernanceTables(db: ResourceDatabase): void {
       app_name TEXT NOT NULL, process_name TEXT NOT NULL, executable_path TEXT NOT NULL,
       cpu_average REAL NOT NULL, cpu_peak REAL NOT NULL,
       memory_average_bytes INTEGER NOT NULL, memory_peak_bytes INTEGER NOT NULL,
-      sample_count INTEGER NOT NULL, PRIMARY KEY(bucket_at, bucket_seconds, identity_key)
+      sample_count INTEGER NOT NULL,
+      network_received_bytes INTEGER NOT NULL DEFAULT 0, network_sent_bytes INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(bucket_at, bucket_seconds, identity_key)
     );
     CREATE INDEX IF NOT EXISTS idx_process_rollups_identity_time ON system_process_rollups(identity_key, bucket_at);
     CREATE TABLE IF NOT EXISTS system_monitor_settings (
@@ -475,6 +569,20 @@ export function migrateResourceGovernanceTables(db: ResourceDatabase): void {
   addColumn('directory_count', 'INTEGER NOT NULL DEFAULT 0')
   addColumn('child_directory_count', 'INTEGER NOT NULL DEFAULT 0')
   addColumn('depth', 'INTEGER NOT NULL DEFAULT 0')
+  const processSampleColumns = new Set((db.prepare('PRAGMA table_info(system_process_samples)').all() as Record<string, unknown>[])
+    .map((row) => String(row.name)))
+  const addProcessSampleColumn = (name: string, definition: string): void => {
+    if (!processSampleColumns.has(name)) db.exec(`ALTER TABLE system_process_samples ADD COLUMN ${name} ${definition}`)
+  }
+  addProcessSampleColumn('network_received_bytes', 'INTEGER NOT NULL DEFAULT 0')
+  addProcessSampleColumn('network_sent_bytes', 'INTEGER NOT NULL DEFAULT 0')
+  const processRollupColumns = new Set((db.prepare('PRAGMA table_info(system_process_rollups)').all() as Record<string, unknown>[])
+    .map((row) => String(row.name)))
+  const addProcessRollupColumn = (name: string, definition: string): void => {
+    if (!processRollupColumns.has(name)) db.exec(`ALTER TABLE system_process_rollups ADD COLUMN ${name} ${definition}`)
+  }
+  addProcessRollupColumn('network_received_bytes', 'INTEGER NOT NULL DEFAULT 0')
+  addProcessRollupColumn('network_sent_bytes', 'INTEGER NOT NULL DEFAULT 0')
 }
 
 function recordAudit(db: ResourceDatabase, input: Omit<CleanupAuditRecord, 'id' | 'createdAt'>): CleanupAuditRecord {
@@ -493,13 +601,15 @@ export function recordResourceSample(db: ResourceDatabase, snapshot: {
   const statement = db.prepare(`INSERT INTO system_process_samples(
     captured_at, identity_key, instance_key, pid, parent_pid, app_name, process_name, user_name,
     cpu_percent, memory_bytes, private_memory_bytes, virtual_memory_bytes, thread_count, port_count,
-    page_ins, process_state, elapsed_seconds, executable_path, bundle_path, command_text
-  ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    page_ins, process_state, elapsed_seconds, executable_path, bundle_path, command_text,
+    network_received_bytes, network_sent_bytes
+  ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
   for (const process of snapshot.processes) {
     statement.run(snapshot.capturedAt, process.identityKey, process.instanceKey, process.pid, process.parentPid,
       process.appName, process.processName, process.user, process.cpuPercent, process.memoryBytes,
       process.privateMemoryBytes, process.virtualMemoryBytes, process.threadCount, process.portCount,
-      process.pageIns, process.state, process.elapsedSeconds, process.executablePath, process.bundlePath, process.command)
+      process.pageIns, process.state, process.elapsedSeconds, process.executablePath, process.bundlePath, process.command,
+      process.networkReceivedBytes, process.networkSentBytes)
   }
 }
 
@@ -509,18 +619,29 @@ export function runResourceRetention(db: ResourceDatabase, now = new Date()): vo
   db.exec(`
     INSERT OR REPLACE INTO system_process_rollups(
       bucket_at, bucket_seconds, identity_key, app_name, process_name, executable_path,
-      cpu_average, cpu_peak, memory_average_bytes, memory_peak_bytes, sample_count
+      cpu_average, cpu_peak, memory_average_bytes, memory_peak_bytes, sample_count,
+      network_received_bytes, network_sent_bytes
+    )
+    WITH samples_with_previous AS (
+      SELECT *,
+        LAG(network_received_bytes) OVER (PARTITION BY instance_key ORDER BY captured_at) AS previous_network_received_bytes,
+        LAG(network_sent_bytes) OVER (PARTITION BY instance_key ORDER BY captured_at) AS previous_network_sent_bytes
+      FROM system_process_samples
     )
     SELECT strftime('%Y-%m-%dT%H:', captured_at) || printf('%02d:00.000Z', (CAST(strftime('%M', captured_at) AS INTEGER) / 5) * 5),
       300, identity_key, MAX(app_name), MAX(process_name), MAX(executable_path),
-      AVG(cpu_percent), MAX(cpu_percent), CAST(AVG(memory_bytes) AS INTEGER), MAX(memory_bytes), COUNT(*)
-    FROM system_process_samples GROUP BY 1, identity_key;
+      AVG(cpu_percent), MAX(cpu_percent), CAST(AVG(memory_bytes) AS INTEGER), MAX(memory_bytes), COUNT(*),
+      SUM(CASE WHEN network_received_bytes > previous_network_received_bytes THEN network_received_bytes - previous_network_received_bytes ELSE 0 END),
+      SUM(CASE WHEN network_sent_bytes > previous_network_sent_bytes THEN network_sent_bytes - previous_network_sent_bytes ELSE 0 END)
+    FROM samples_with_previous GROUP BY 1, identity_key;
     INSERT OR REPLACE INTO system_process_rollups(
       bucket_at, bucket_seconds, identity_key, app_name, process_name, executable_path,
-      cpu_average, cpu_peak, memory_average_bytes, memory_peak_bytes, sample_count
+      cpu_average, cpu_peak, memory_average_bytes, memory_peak_bytes, sample_count,
+      network_received_bytes, network_sent_bytes
     )
     SELECT substr(bucket_at, 1, 13) || ':00:00.000Z', 3600, identity_key, MAX(app_name), MAX(process_name), MAX(executable_path),
-      AVG(cpu_average), MAX(cpu_peak), CAST(AVG(memory_average_bytes) AS INTEGER), MAX(memory_peak_bytes), SUM(sample_count)
+      AVG(cpu_average), MAX(cpu_peak), CAST(AVG(memory_average_bytes) AS INTEGER), MAX(memory_peak_bytes), SUM(sample_count),
+      SUM(network_received_bytes), SUM(network_sent_bytes)
     FROM system_process_rollups WHERE bucket_seconds = 300 GROUP BY 1, identity_key;
   `)
   db.prepare('DELETE FROM system_process_samples WHERE captured_at < ?').run(rawCutoff)
@@ -536,7 +657,8 @@ function mapProcessRow(row: Record<string, unknown>): ResourceProcess {
     identityKey: String(row.identity_key ?? ''), instanceKey: String(row.instance_key ?? ''), memoryBytes: numberValue(row.memory_bytes),
     pageIns: numberValue(row.page_ins), parentPid: numberValue(row.parent_pid), pid: numberValue(row.pid), portCount: numberValue(row.port_count),
     privateMemoryBytes: numberValue(row.private_memory_bytes), processName: String(row.process_name ?? ''), state: String(row.process_state ?? ''),
-    threadCount: numberValue(row.thread_count), user: String(row.user_name ?? ''), virtualMemoryBytes: numberValue(row.virtual_memory_bytes)
+    threadCount: numberValue(row.thread_count), user: String(row.user_name ?? ''), virtualMemoryBytes: numberValue(row.virtual_memory_bytes),
+    networkReceivedBytes: numberValue(row.network_received_bytes), networkSentBytes: numberValue(row.network_sent_bytes)
   }
 }
 
@@ -547,10 +669,25 @@ export function listLatestProcesses(db: ResourceDatabase): ResourceProcess[] {
 }
 
 export function listResourceHistory(db: ResourceDatabase, from: string, to: string): ResourceHistoryPoint[] {
-  return (db.prepare(`SELECT captured_at, cpu_percent, memory_usage_percent, memory_used_bytes, swap_used_bytes, storage_usage_percent
-    FROM system_resource_samples WHERE captured_at BETWEEN ? AND ? ORDER BY captured_at`).all(from, to) as Record<string, unknown>[]).map((row) => ({
+  return (db.prepare(`WITH process_samples_with_previous AS (
+      SELECT captured_at, network_received_bytes, network_sent_bytes,
+        LAG(network_received_bytes) OVER (PARTITION BY instance_key ORDER BY captured_at) AS previous_network_received_bytes,
+        LAG(network_sent_bytes) OVER (PARTITION BY instance_key ORDER BY captured_at) AS previous_network_sent_bytes
+      FROM system_process_samples
+    ), process_network AS (
+      SELECT captured_at,
+        SUM(CASE WHEN network_received_bytes > previous_network_received_bytes THEN network_received_bytes - previous_network_received_bytes ELSE 0 END) AS network_in_bytes,
+        SUM(CASE WHEN network_sent_bytes > previous_network_sent_bytes THEN network_sent_bytes - previous_network_sent_bytes ELSE 0 END) AS network_out_bytes
+      FROM process_samples_with_previous GROUP BY captured_at
+    )
+    SELECT resource.captured_at, resource.cpu_percent, resource.memory_usage_percent, resource.memory_used_bytes,
+      resource.swap_used_bytes, resource.storage_usage_percent, COALESCE(process_network.network_in_bytes, 0) AS network_in_bytes,
+      COALESCE(process_network.network_out_bytes, 0) AS network_out_bytes
+    FROM system_resource_samples resource LEFT JOIN process_network ON process_network.captured_at = resource.captured_at
+    WHERE resource.captured_at BETWEEN ? AND ? ORDER BY resource.captured_at`).all(from, to) as Record<string, unknown>[]).map((row) => ({
       capturedAt: String(row.captured_at), cpuPercent: numberValue(row.cpu_percent), memoryUsagePercent: numberValue(row.memory_usage_percent),
-      memoryUsedBytes: numberValue(row.memory_used_bytes), storageUsagePercent: numberValue(row.storage_usage_percent), swapUsedBytes: numberValue(row.swap_used_bytes)
+      memoryUsedBytes: numberValue(row.memory_used_bytes), storageUsagePercent: numberValue(row.storage_usage_percent), swapUsedBytes: numberValue(row.swap_used_bytes),
+      networkInBytes: numberValue(row.network_in_bytes), networkOutBytes: numberValue(row.network_out_bytes)
     }))
 }
 
@@ -568,26 +705,44 @@ export function importLegacyResourceHistory(db: ResourceDatabase, points: Resour
 }
 
 export function listProcessHistory(db: ResourceDatabase, identityKey: string, from: string, to: string): ProcessHistoryPoint[] {
-  const raw = db.prepare(`SELECT captured_at, cpu_percent AS cpu_average, cpu_percent AS cpu_peak, memory_bytes AS memory_average_bytes,
-    memory_bytes AS memory_peak_bytes, 1 AS sample_count FROM system_process_samples
-    WHERE identity_key = ? AND captured_at BETWEEN ? AND ? ORDER BY captured_at`).all(identityKey, from, to) as Record<string, unknown>[]
+  const raw = db.prepare(`WITH samples_with_previous AS (
+      SELECT captured_at, cpu_percent, memory_bytes, network_received_bytes, network_sent_bytes,
+        LAG(network_received_bytes) OVER (PARTITION BY instance_key ORDER BY captured_at) AS previous_network_received_bytes,
+        LAG(network_sent_bytes) OVER (PARTITION BY instance_key ORDER BY captured_at) AS previous_network_sent_bytes
+      FROM system_process_samples WHERE identity_key = ? AND captured_at BETWEEN ? AND ?
+    )
+    SELECT captured_at, AVG(cpu_percent) AS cpu_average, MAX(cpu_percent) AS cpu_peak,
+      CAST(AVG(memory_bytes) AS INTEGER) AS memory_average_bytes, MAX(memory_bytes) AS memory_peak_bytes, COUNT(*) AS sample_count,
+      SUM(CASE WHEN network_received_bytes > previous_network_received_bytes THEN network_received_bytes - previous_network_received_bytes ELSE 0 END) AS network_in_bytes,
+      SUM(CASE WHEN network_sent_bytes > previous_network_sent_bytes THEN network_sent_bytes - previous_network_sent_bytes ELSE 0 END) AS network_out_bytes
+    FROM samples_with_previous GROUP BY captured_at ORDER BY captured_at`).all(identityKey, from, to) as Record<string, unknown>[]
   const rows = raw.length > 0 ? raw : db.prepare(`SELECT bucket_at AS captured_at, cpu_average, cpu_peak, memory_average_bytes,
-    memory_peak_bytes, sample_count FROM system_process_rollups WHERE identity_key = ? AND bucket_at BETWEEN ? AND ?
+    memory_peak_bytes, sample_count, network_received_bytes AS network_in_bytes, network_sent_bytes AS network_out_bytes
+    FROM system_process_rollups WHERE identity_key = ? AND bucket_at BETWEEN ? AND ?
     ORDER BY bucket_at`).all(identityKey, from, to) as Record<string, unknown>[]
   return rows.map((row) => ({ capturedAt: String(row.captured_at), cpuAverage: numberValue(row.cpu_average), cpuPeak: numberValue(row.cpu_peak),
-    memoryAverageBytes: numberValue(row.memory_average_bytes), memoryPeakBytes: numberValue(row.memory_peak_bytes), sampleCount: numberValue(row.sample_count) }))
+    memoryAverageBytes: numberValue(row.memory_average_bytes), memoryPeakBytes: numberValue(row.memory_peak_bytes), sampleCount: numberValue(row.sample_count),
+    networkInBytes: numberValue(row.network_in_bytes), networkOutBytes: numberValue(row.network_out_bytes) }))
 }
 
 export function listProcessAnalysis(db: ResourceDatabase, from: string, to: string): ProcessAnalysis[] {
-  return (db.prepare(`SELECT identity_key, MAX(app_name) app_name, MAX(process_name) process_name, MAX(executable_path) executable_path,
-    AVG(cpu_percent) average_cpu, MAX(cpu_percent) peak_cpu, CAST(AVG(memory_bytes) AS INTEGER) average_memory,
-    MAX(memory_bytes) peak_memory, COUNT(*) sample_count, MIN(captured_at) first_seen, MAX(captured_at) last_seen,
-    SUM(CASE WHEN memory_bytes >= 1073741824 OR cpu_percent >= 80 THEN 15 ELSE 0 END) above_seconds
-    FROM system_process_samples WHERE captured_at BETWEEN ? AND ? GROUP BY identity_key ORDER BY peak_memory DESC LIMIT 200`).all(from, to) as Record<string, unknown>[]).map((row) => ({
+  return (db.prepare(`WITH samples_with_previous AS (
+      SELECT *,
+        LAG(network_received_bytes) OVER (PARTITION BY instance_key ORDER BY captured_at) AS previous_network_received_bytes,
+        LAG(network_sent_bytes) OVER (PARTITION BY instance_key ORDER BY captured_at) AS previous_network_sent_bytes
+      FROM system_process_samples WHERE captured_at BETWEEN ? AND ?
+    )
+    SELECT identity_key, MAX(app_name) app_name, MAX(process_name) process_name, MAX(executable_path) executable_path,
+      AVG(cpu_percent) average_cpu, MAX(cpu_percent) peak_cpu, CAST(AVG(memory_bytes) AS INTEGER) average_memory,
+      MAX(memory_bytes) peak_memory, COUNT(*) sample_count, MIN(captured_at) first_seen, MAX(captured_at) last_seen,
+      SUM(CASE WHEN memory_bytes >= 1073741824 OR cpu_percent >= 80 THEN 15 ELSE 0 END) above_seconds,
+      SUM(CASE WHEN network_received_bytes > previous_network_received_bytes THEN network_received_bytes - previous_network_received_bytes ELSE 0 END) network_received_bytes,
+      SUM(CASE WHEN network_sent_bytes > previous_network_sent_bytes THEN network_sent_bytes - previous_network_sent_bytes ELSE 0 END) network_sent_bytes
+    FROM samples_with_previous GROUP BY identity_key ORDER BY peak_memory DESC LIMIT 200`).all(from, to) as Record<string, unknown>[]).map((row) => ({
       identityKey: String(row.identity_key), appName: String(row.app_name), processName: String(row.process_name), executablePath: String(row.executable_path),
       averageCpuPercent: numberValue(row.average_cpu), peakCpuPercent: numberValue(row.peak_cpu), averageMemoryBytes: numberValue(row.average_memory),
       peakMemoryBytes: numberValue(row.peak_memory), sampleCount: numberValue(row.sample_count), aboveThresholdSeconds: numberValue(row.above_seconds),
-      firstSeenAt: String(row.first_seen), lastSeenAt: String(row.last_seen)
+      firstSeenAt: String(row.first_seen), lastSeenAt: String(row.last_seen), networkReceivedBytes: numberValue(row.network_received_bytes), networkSentBytes: numberValue(row.network_sent_bytes)
     }))
 }
 
@@ -1067,9 +1222,10 @@ export async function executeCleanupToTrash(
 
 export function exportProcessAnalysisCsv(rows: ProcessAnalysis[]): string {
   const escape = (value: unknown): string => `"${String(value ?? '').replace(/"/g, '""')}"`
-  const header = ['App', 'Process', 'Path', 'Average CPU %', 'Peak CPU %', 'Average Memory Bytes', 'Peak Memory Bytes', 'Samples', 'Above Threshold Seconds', 'First Seen', 'Last Seen']
+  const header = ['App', 'Process', 'Path', 'Average CPU %', 'Peak CPU %', 'Average Memory Bytes', 'Peak Memory Bytes', 'Received Bytes', 'Sent Bytes', 'Samples', 'Above Threshold Seconds', 'First Seen', 'Last Seen']
   return [header.map(escape).join(','), ...rows.map((row) => [row.appName, row.processName, row.executablePath, row.averageCpuPercent,
-    row.peakCpuPercent, row.averageMemoryBytes, row.peakMemoryBytes, row.sampleCount, row.aboveThresholdSeconds, row.firstSeenAt, row.lastSeenAt].map(escape).join(','))].join('\n')
+    row.peakCpuPercent, row.averageMemoryBytes, row.peakMemoryBytes, row.networkReceivedBytes, row.networkSentBytes,
+    row.sampleCount, row.aboveThresholdSeconds, row.firstSeenAt, row.lastSeenAt].map(escape).join(','))].join('\n')
 }
 
 export class ResourceMonitorService {

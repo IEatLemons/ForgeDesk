@@ -26,6 +26,7 @@ type ForgeDeskState = {
   setSelectedProjectId: (projectId: string) => void
   loadWorkspace: () => Promise<void>
   rescanProjectRepositories: (projectId: string) => Promise<void>
+  initializeProjectRepository: (projectId: string) => Promise<void>
   createProject: (projectName: string, workspacePath: string, scanned: ScannedRepository[]) => Promise<void>
   createProjectFromRemote: (projectName: string, remoteUrl: string, parentPath: string) => Promise<void>
   updateProject: (input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }) => Promise<void>
@@ -66,6 +67,14 @@ export const useForgeDeskStore = create<ForgeDeskState>((set) => ({
     }
 
     const snapshot = await window.forgeDesk.rescanProjectRepositories(projectId)
+    set((state) => applyWorkspaceSnapshot(state, snapshot))
+  },
+  initializeProjectRepository: async (projectId) => {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const snapshot = await window.forgeDesk.initializeProjectRepository(projectId)
     set((state) => applyWorkspaceSnapshot(state, snapshot))
   },
   updateRepository: (repository) =>

@@ -52,7 +52,6 @@ function normalizeHttpUrl(value: unknown, fallback: string): string {
       throw new Error('invalid protocol')
     }
 
-    url.search = ''
     url.hash = ''
     return url.toString().replace(/\/+$/, '')
   } catch {

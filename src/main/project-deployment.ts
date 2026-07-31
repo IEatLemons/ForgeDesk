@@ -481,8 +481,10 @@ export function validateProjectDeploymentConfig(
     if (!config.remoteHost.trim()) issues.push('Docker/Compose 需要填写远程主机')
     if (!config.composeFile.trim() && !config.dockerfile.trim()) issues.push('Docker/Compose 需要填写 Dockerfile 或 Compose 文件')
   }
-  if ((config.provider === 'vercel' || config.provider === 'railway') && !target?.connectionId) warnings.push('还没有绑定平台连接，请先选择或配置连接')
-  if ((config.provider === 'vercel' || config.provider === 'railway') && !target?.serviceId && !target?.externalProjectId) warnings.push('还没有选择已有平台服务；确认后将进入目标创建/绑定流程')
+  if (config.provider === 'vercel' || config.provider === 'railway') {
+    if (!target?.connectionId) warnings.push('还没有绑定平台连接，请先在服务中心配置并选择连接')
+    if (!target?.serviceId) issues.push(`还没有绑定已有 ${config.provider === 'vercel' ? 'Vercel' : 'Railway'} 服务，请先在项目设置 / 服务配置中完成实际绑定`)
+  }
 
   const sourcePath = root ? `${root}/` : ''
   const command = config.sourceMode === 'local'

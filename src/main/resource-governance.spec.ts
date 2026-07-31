@@ -9,8 +9,12 @@ import {
   getStorageOverview,
   importLegacyResourceHistory,
   listLatestProcesses,
+  listProcessAnalysis,
+  listProcessHistory,
+  listResourceHistory,
   listStorageDirectories,
   migrateResourceGovernanceTables,
+  parseNettopProcessOutput,
   parsePsProcessOutput,
   recordResourceSample,
   runResourceRetention,
@@ -27,6 +31,35 @@ function createDatabase(): ResourceDatabase {
 }
 
 describe('resource governance', () => {
+  it('parses per-process network totals from nettop CSV output', () => {
+    const usage = parseNettopProcessOutput('pid,process,bytes_in,bytes_out\n123,"Google Chrome, Helper",1048576,2048\n456,ssh,1.5 MiB,512')
+    assert.deepEqual(usage.get(123), { networkReceivedBytes: 1048576, networkSentBytes: 2048 })
+    assert.deepEqual(usage.get(456), { networkReceivedBytes: 1.5 * 1024 ** 2, networkSentBytes: 512 })
+
+    const modernUsage = parseNettopProcessOutput(',bytes_in,bytes_out,\nClashX Meta.789,4096,8192,')
+    assert.deepEqual(modernUsage.get(789), { networkReceivedBytes: 4096, networkSentBytes: 8192 })
+  })
+
+  it('calculates process traffic deltas and app totals from cumulative counters', () => {
+    const db = createDatabase()
+    const base = parsePsProcessOutput('123 1 stone 10 100 200 00:10 S /Applications/Test.app/Contents/MacOS/Test', new Date('2026-07-16T12:00:00.000Z'))[0]
+    const first = { ...base, networkReceivedBytes: 1000, networkSentBytes: 2000 }
+    const second = { ...base, networkReceivedBytes: 1800, networkSentBytes: 2600 }
+    recordResourceSample(db, { capturedAt: '2026-07-16T12:00:00.000Z', cpuPercent: 20, memoryUsagePercent: 50, memoryUsedBytes: 1000, swapUsedBytes: 0, storageUsagePercent: 40, processes: [first] })
+    recordResourceSample(db, { capturedAt: '2026-07-16T12:01:00.000Z', cpuPercent: 30, memoryUsagePercent: 60, memoryUsedBytes: 2000, swapUsedBytes: 10, storageUsagePercent: 41, processes: [second] })
+
+    const history = listProcessHistory(db, base.identityKey, '2026-07-16T11:59:00.000Z', '2026-07-16T12:02:00.000Z')
+    assert.equal(history[1].networkInBytes, 800)
+    assert.equal(history[1].networkOutBytes, 600)
+    const systemHistory = listResourceHistory(db, '2026-07-16T11:59:00.000Z', '2026-07-16T12:02:00.000Z')
+    assert.equal(systemHistory[1].networkInBytes, 800)
+    assert.equal(systemHistory[1].networkOutBytes, 600)
+    const analysis = listProcessAnalysis(db, '2026-07-16T11:59:00.000Z', '2026-07-16T12:02:00.000Z')
+    assert.equal(analysis[0].networkReceivedBytes, 800)
+    assert.equal(analysis[0].networkSentBytes, 600)
+    db.close()
+  })
+
   it('parses process identity, resources, parent pid and start instance from ps output', () => {
     const processes = parsePsProcessOutput(`  123 1 stone 88.5 1048576 2097152 01:02:03 S /Applications/Figma.app/Contents/MacOS/Figma --flag
   456 123 stone 2.5 524288 1048576 2-03:04:05 R /Applications/Figma.app/Contents/Frameworks/Figma Helper.app/Contents/MacOS/Figma Helper

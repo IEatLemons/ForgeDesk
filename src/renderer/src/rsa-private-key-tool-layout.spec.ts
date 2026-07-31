@@ -19,11 +19,11 @@ function getRendererStyles(): string {
 }
 
 describe('RSA private key tool layout', () => {
-  it('keeps tool entry cards in one row at the default window width', () => {
+  it('uses a deliberate card grid with a featured primary tool', () => {
     const styles = getRendererStyles()
 
-    assert.match(styles, /\.tool-entry-grid \{[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(200px, 1fr\)\);/)
-    assert.doesNotMatch(styles, /\.tool-entry-grid \{[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(280px, 360px\)\);/)
+    assert.match(styles, /\.tool-entry-grid \{[\s\S]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/)
+    assert.match(styles, /\.tool-entry-card\.is-featured \{[\s\S]*grid-column: span 2;/)
   })
 
   it('opens the generation form from a standalone button modal', () => {

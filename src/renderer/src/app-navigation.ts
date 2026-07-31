@@ -2,6 +2,7 @@ import type { AppMode } from './app-mode'
 
 export type AppNavigationKey =
   | 'overview'
+  | 'market-news'
   | 'tasks'
   | 'docs'
   | 'projects'
@@ -41,6 +42,7 @@ export const APP_NAVIGATION_SECTIONS: AppNavigationSection[] = [
 
 export const APP_NAVIGATION_ITEMS: AppNavigationItem[] = [
   { key: 'overview', label: '总览', section: 'home' },
+  { key: 'market-news', label: '资讯', section: 'home' },
   { key: 'settings', label: '设置', section: 'system' },
   { key: 'tasks', label: '待办与安排', section: 'life' },
   { key: 'docs', label: '资料与文档', section: 'study' },

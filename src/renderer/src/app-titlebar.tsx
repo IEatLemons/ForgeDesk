@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { CodexActivitySnapshot, CodexSessionRecord, SystemMonitorSnapshot } from './data'
+import type { CodexSessionSummary, CodexSessionsSnapshot, SystemMonitorSnapshot } from './data'
 import {
   createSystemMonitorHardwareMetrics,
   getSystemMonitorStatusMeta,
@@ -40,11 +40,11 @@ function formatCodexSessionTime(value: string): string {
   return `${Math.floor(hours / 24)} 天前`
 }
 
-function codexSessionProject(session: CodexSessionRecord): string {
-  return session.cwd.split(/[\\/]/).filter(Boolean).pop() || '未记录项目'
+function codexSessionProject(session: CodexSessionSummary): string {
+  return session.projectName || session.cwd.split(/[\\/]/).filter(Boolean).pop() || '未记录项目'
 }
 
-function codexSessionStatusLabel(session: CodexSessionRecord): string {
+function codexSessionStatusLabel(session: CodexSessionSummary): string {
   if (session.status === 'running') return '进行中'
   if (session.status === 'completed') return '已完成'
   if (session.status === 'aborted') return '已中止'
@@ -66,7 +66,7 @@ export function AppTitleBar({
   const [snapshot, setSnapshot] = useState<SystemMonitorSnapshot | null>(null)
   const [overviewHardwareKeys, setOverviewHardwareKeys] = useState<SystemMonitorHardwareKey[]>(() => readStoredSystemMonitorOverviewHardwareKeys())
   const [error, setError] = useState('')
-  const [codexActivity, setCodexActivity] = useState<CodexActivitySnapshot | null>(null)
+  const [codexActivity, setCodexActivity] = useState<CodexSessionsSnapshot | null>(null)
   const [codexActivityError, setCodexActivityError] = useState('')
   const [codexPopoverOpen, setCodexPopoverOpen] = useState(false)
   const [systemPopoverOpen, setSystemPopoverOpen] = useState(false)
@@ -186,7 +186,7 @@ export function AppTitleBar({
 
     async function loadCodexActivity(): Promise<void> {
       try {
-        const nextActivity = await window.forgeDesk?.getCodexActivitySnapshot()
+        const nextActivity = await window.forgeDesk?.listCodexSessions()
 
         if (!mounted || !nextActivity) {
           return
@@ -264,7 +264,7 @@ export function AppTitleBar({
                 <strong>Codex</strong>
                 <span>本机实时会话</span>
               </div>
-              <button className="app-titlebar-codex-popover-refresh" type="button" onClick={() => window.forgeDesk?.getCodexActivitySnapshot().then((nextActivity) => {
+              <button className="app-titlebar-codex-popover-refresh" type="button" onClick={() => window.forgeDesk?.listCodexSessions().then((nextActivity) => {
                 setCodexActivity(nextActivity)
                 setCodexActivityError(nextActivity.available ? '' : '读取失败')
               }).catch(() => setCodexActivityError('读取失败'))}>
@@ -283,7 +283,7 @@ export function AppTitleBar({
                   {runningCodexSessions.length > 0 ? runningCodexSessions.map((session) => (
                     <button className="app-titlebar-codex-popover-session is-running" key={session.id} type="button" onClick={openCodexSessionManager}>
                       <span className="app-titlebar-codex-popover-session-title">{session.title}</span>
-                      <span className="app-titlebar-codex-popover-session-meta">{codexSessionProject(session)} · {session.tasks} 个任务</span>
+                      <span className="app-titlebar-codex-popover-session-meta">项目：{codexSessionProject(session)} · {session.preview || '正在处理'}</span>
                     </button>
                   )) : <div className="app-titlebar-codex-popover-empty">当前没有正在运行的会话</div>}
                 </section>
@@ -292,7 +292,7 @@ export function AppTitleBar({
                   {recentCodexSessions.length > 0 ? recentCodexSessions.map((session) => (
                     <button className="app-titlebar-codex-popover-session" key={session.id} type="button" onClick={openCodexSessionManager}>
                       <span className="app-titlebar-codex-popover-session-title">{session.title}</span>
-                      <span className="app-titlebar-codex-popover-session-meta">{codexSessionStatusLabel(session)} · {codexSessionProject(session)} · {formatCodexSessionTime(session.updatedAt)}</span>
+                      <span className="app-titlebar-codex-popover-session-meta">{codexSessionStatusLabel(session)} · 项目：{codexSessionProject(session)} · {session.preview || formatCodexSessionTime(session.updatedAt)}</span>
                     </button>
                   )) : <div className="app-titlebar-codex-popover-empty">暂无最近会话</div>}
                 </section>

@@ -8,7 +8,7 @@ const settings: OaSettings = {
   provider: 'lark',
   larkAppId: 'cli_test',
   larkAppSecret: 'secret',
-  docsHomeUrl: 'https://example.feishu.cn/base/TtTibZxeHas7kPsnEt1jHAA5peb?table=tblPlan',
+  docsHomeUrl: 'https://example.feishu.cn/base/TtTibZxeHas7kPsnEt1jHAA5peb?table=tblPlan&view=vewGantt',
   larkBotUrl: '',
   larkBotAdminToken: '',
   enableDocumentBrowsing: true,
@@ -24,6 +24,7 @@ test('parses a base app token and table id', () => {
   assert.deepEqual(parseLarkBitableSource(settings.docsHomeUrl), {
     appToken: 'TtTibZxeHas7kPsnEt1jHAA5peb',
     tableId: 'tblPlan',
+    viewId: 'vewGantt',
     url: settings.docsHomeUrl
   })
   assert.equal(parseLarkBitableSource('https://docs.feishu.cn/docx/abc'), null)
@@ -35,18 +36,21 @@ test('loads tables, fields and records from a bitable link', async () => {
     const value = String(url)
     urls.push(value)
     if (value.includes('/auth/')) return response({ code: 0, tenant_access_token: 'tenant-token' })
+    if (value.includes('/views')) return response({ code: 0, data: { items: [{ view_id: 'vewGantt', view_name: '开发甘特图', view_type: 'gantt' }] } })
     if (value.includes('/fields')) return response({ code: 0, data: { items: [{ field_id: 'fldTitle', field_name: '标题', type: 1, is_primary: true }] } })
     if (value.includes('/records/search')) return response({ code: 0, data: { items: [{ record_id: 'rec1', fields: { 标题: '任务' }, created_time: 1_700_000_000 }] } })
     return response({ code: 0, data: { items: [{ table_id: 'tblPlan', name: '开发计划', revision: 3 }] } })
   }
 
-  const snapshot = await getLarkBitableSnapshot(settings, '', fetcher)
+  const snapshot = await getLarkBitableSnapshot(settings, '', '', fetcher)
   assert.equal(snapshot.appToken, 'TtTibZxeHas7kPsnEt1jHAA5peb')
   assert.equal(snapshot.selectedTableId, 'tblPlan')
+  assert.equal(snapshot.selectedViewId, 'vewGantt')
+  assert.equal(snapshot.selectedViewType, 'gantt')
   assert.equal(snapshot.tables[0].name, '开发计划')
   assert.equal(snapshot.fields[0].name, '标题')
   assert.deepEqual(snapshot.records[0].fields, { 标题: '任务' })
-  assert.ok(urls.some((url) => url.endsWith('/records/search?page_size=500')))
+  assert.ok(urls.some((url) => url.includes('/records/search?page_size=500&view_id=vewGantt')))
 })
 
 test('creates, updates and deletes records', async () => {

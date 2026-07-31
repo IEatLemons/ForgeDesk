@@ -7,6 +7,12 @@ export type LarkBitableTable = {
   revision: number
 }
 
+export type LarkBitableView = {
+  id: string
+  name: string
+  type: string
+}
+
 export type LarkBitableField = {
   id: string
   name: string
@@ -28,7 +34,10 @@ export type LarkBitableSnapshot = {
   sourceUrl: string
   appToken: string
   selectedTableId: string
+  selectedViewId: string
+  selectedViewType: string
   tables: LarkBitableTable[]
+  views: LarkBitableView[]
   fields: LarkBitableField[]
   records: LarkBitableRecord[]
   unsupportedReason: string
@@ -37,6 +46,7 @@ export type LarkBitableSnapshot = {
 type BitableSource = {
   appToken: string
   tableId: string
+  viewId: string
   url: string
 }
 
@@ -73,6 +83,7 @@ export function parseLarkBitableSource(input: string): BitableSource | null {
     return {
       appToken,
       tableId: text(url.searchParams.get('table')),
+      viewId: text(url.searchParams.get('view')),
       url: url.toString()
     }
   } catch {
@@ -137,6 +148,17 @@ function normalizeTable(value: unknown): LarkBitableTable | null {
   return { id, name: text(item.name) || '未命名数据表', revision: Number(item.revision ?? item.rev ?? 0) }
 }
 
+function normalizeView(value: unknown): LarkBitableView | null {
+  const item = asRecord(value)
+  const id = text(item.view_id ?? item.id)
+  if (!id) return null
+  return {
+    id,
+    name: text(item.view_name ?? item.name) || '未命名视图',
+    type: text(item.view_type ?? item.type).toLowerCase() || 'grid'
+  }
+}
+
 function normalizeField(value: unknown): LarkBitableField | null {
   const item = asRecord(value)
   const id = text(item.field_id ?? item.id)
@@ -166,6 +188,7 @@ function normalizeRecord(value: unknown): LarkBitableRecord | null {
 export async function getLarkBitableSnapshot(
   settings: OaSettings,
   requestedTableId = '',
+  requestedViewId = '',
   fetcher: LarkFetch = fetch
 ): Promise<LarkBitableSnapshot> {
   const source = parseLarkBitableSource(settings.docsHomeUrl)
@@ -175,7 +198,10 @@ export async function getLarkBitableSnapshot(
       sourceUrl: settings.docsHomeUrl,
       appToken: '',
       selectedTableId: '',
+      selectedViewId: '',
+      selectedViewType: '',
       tables: [],
+      views: [],
       fields: [],
       records: [],
       unsupportedReason: '当前入口不是多维表格链接，请粘贴 /base/... 链接。'
@@ -188,14 +214,33 @@ export async function getLarkBitableSnapshot(
   const selectedTableId = requestedTableId || source.tableId || tables[0]?.id || ''
 
   if (!selectedTableId) {
-    return { supported: true, sourceUrl: source.url, appToken: source.appToken, selectedTableId: '', tables, fields: [], records: [], unsupportedReason: '该多维表格中没有数据表。' }
+    return {
+      supported: true,
+      sourceUrl: source.url,
+      appToken: source.appToken,
+      selectedTableId: '',
+      selectedViewId: '',
+      selectedViewType: '',
+      tables,
+      views: [],
+      fields: [],
+      records: [],
+      unsupportedReason: '该多维表格中没有数据表。'
+    }
   }
 
   const encodedApp = encodeURIComponent(source.appToken)
   const encodedTable = encodeURIComponent(selectedTableId)
+  const viewData = await request(settings, `/open-apis/bitable/v1/apps/${encodedApp}/tables/${encodedTable}/views?page_size=100`, fetcher, {}, token)
+  const views = asArray(viewData.items).map(normalizeView).filter((item): item is LarkBitableView => Boolean(item))
+  const selectedViewId = requestedViewId || (requestedTableId ? '' : source.viewId) || views[0]?.id || ''
+  const selectedViewType = views.find((view) => view.id === selectedViewId)?.type || (selectedViewId === source.viewId ? 'grid' : '')
+  const recordSearchParams = new URLSearchParams({ page_size: '500' })
+  if (selectedViewId) recordSearchParams.set('view_id', selectedViewId)
+
   const [fieldData, recordData] = await Promise.all([
     request(settings, `/open-apis/bitable/v1/apps/${encodedApp}/tables/${encodedTable}/fields?page_size=100`, fetcher, {}, token),
-    request(settings, `/open-apis/bitable/v1/apps/${encodedApp}/tables/${encodedTable}/records/search?page_size=500`, fetcher, { method: 'POST', body: '{}' }, token)
+    request(settings, `/open-apis/bitable/v1/apps/${encodedApp}/tables/${encodedTable}/records/search?${recordSearchParams.toString()}`, fetcher, { method: 'POST', body: '{}' }, token)
   ])
 
   return {
@@ -203,7 +248,10 @@ export async function getLarkBitableSnapshot(
     sourceUrl: source.url,
     appToken: source.appToken,
     selectedTableId,
+    selectedViewId,
+    selectedViewType,
     tables,
+    views,
     fields: asArray(fieldData.items).map(normalizeField).filter((item): item is LarkBitableField => Boolean(item)),
     records: asArray(recordData.items).map(normalizeRecord).filter((item): item is LarkBitableRecord => Boolean(item)),
     unsupportedReason: ''

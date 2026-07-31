@@ -1,4 +1,4 @@
-export type ProjectSettingsModuleKey = 'basic' | 'people' | 'branches' | 'git' | 'services' | 'cloudflare' | 'plane'
+export type ProjectSettingsModuleKey = 'basic' | 'people' | 'branches' | 'git' | 'services' | 'release' | 'cloudflare' | 'plane'
 
 export type ProjectSettingsModule = {
   key: ProjectSettingsModuleKey
@@ -35,7 +35,12 @@ export const PROJECT_SETTINGS_MODULES: ProjectSettingsModule[] = [
   {
     key: 'services',
     title: '服务配置',
-    description: '从服务中心绑定当前项目需要查看和监控的服务。'
+    description: '先配置平台连接，再把一个或多个 Vercel、Railway 项目绑定到当前项目。'
+  },
+  {
+    key: 'release',
+    title: '发布设置',
+    description: '按项目启用 Firebase App Distribution，并维护 App ID、产物和发布凭证。'
   },
   {
     key: 'cloudflare',

@@ -61,6 +61,7 @@ import {
   InfoCircleOutlined,
   KeyOutlined,
   LinkOutlined,
+  LineChartOutlined,
   LockOutlined,
   DockerOutlined,
   MoreOutlined,
@@ -139,6 +140,7 @@ import type {
   Project,
   ProjectBranchTag,
   ProjectCloudflareSettings,
+  ProjectFirebaseReleaseSettings,
   ProjectGitSummary,
   ProjectPerson,
   ProjectService,
@@ -186,6 +188,13 @@ import { AiChatPanel } from './ai-chat-panel'
 import { CodexSessionManagerPanel } from './codex-session-manager-panel'
 import { DataSourcePanel } from './data-source-panel'
 import { DockerPanel } from './docker-panel'
+import { LarkBitableGantt } from './lark-bitable-gantt'
+import {
+  createLarkBitableGanttRange,
+  createLarkBitableScheduleRows,
+  inferLarkBitableScheduleFields,
+  type LarkBitableScheduleFieldMap
+} from './lark-bitable-view'
 import { ProjectDeploymentPanel } from './project-deployment-panel'
 import { createAppUpdateViewModel } from './app-update-view'
 import { createDiffResultLines, createSourceDiffLines, type DiffDisplayLine } from './diff-view'
@@ -363,6 +372,7 @@ import type { TerminalOpenRequest } from './terminal-panel-events'
 import { TerminalRemoteShortcuts } from './terminal-remote-shortcuts'
 import { TaskListPanel } from './task-list-panel'
 import { OverviewDashboard } from './overview-dashboard'
+import { MarketNewsDashboard } from './market-news-dashboard'
 import { SystemMonitorPanel } from './system-monitor-panel'
 import { SystemInfoPanel } from './system-info-panel'
 import { AppTitleBar } from './app-titlebar'
@@ -421,11 +431,158 @@ type SettingsModuleKey =
   | 'log-refresh'
   | 'menu-bar'
 type SettingsOverviewModuleKey = Exclude<SettingsModuleKey, 'overview'>
+type SettingsCategoryKey = 'system' | 'development' | 'integrations' | 'maintenance'
+type SettingsStatusKind = 'loading' | 'not-configured' | 'saved' | 'verified' | 'attention' | 'error' | 'disabled'
+type SettingsModuleStatus = {
+  kind: SettingsStatusKind
+  label: string
+  detail?: string
+}
+type SettingsModuleDefinition = {
+  key: SettingsOverviewModuleKey
+  category: SettingsCategoryKey
+  title: string
+  description: string
+  icon: JSX.Element
+}
+type SettingsOverviewModule = SettingsModuleDefinition & {
+  status: SettingsModuleStatus
+  secondary?: string
+}
 type SettingsOverviewCategory = {
   title: string
   description: string
+  key: SettingsCategoryKey
   keys: SettingsOverviewModuleKey[]
 }
+
+const settingsOverviewCategories: SettingsOverviewCategory[] = [
+  {
+    key: 'system',
+    title: '界面与系统',
+    description: '控制 ForgeDesk 的外观、系统能力和日常视图。',
+    keys: ['appearance', 'menu-bar', 'log-refresh']
+  },
+  {
+    key: 'development',
+    title: '开发环境与凭据',
+    description: '管理 Git 身份、SSH、签名和远程构建凭据。',
+    keys: ['git', 'github', 'private', 'public', 'gpg', 'config', 'codemagic']
+  },
+  {
+    key: 'integrations',
+    title: '外部集成',
+    description: '连接 Plane、Lark / 飞书和 AI 能力。',
+    keys: ['plane', 'oa', 'ai']
+  },
+  {
+    key: 'maintenance',
+    title: '应用维护',
+    description: '检查并安装 ForgeDesk 新版本。',
+    keys: ['updates']
+  }
+]
+
+const settingsModuleDefinitions: SettingsModuleDefinition[] = [
+  {
+    key: 'appearance',
+    category: 'system',
+    title: '外观',
+    description: '切换白天、黑夜，或自动跟随系统。',
+    icon: <DesktopOutlined />
+  },
+  {
+    key: 'menu-bar',
+    category: 'system',
+    title: '菜单栏整理',
+    description: '隐藏、显示和整理 macOS 菜单栏项目。',
+    icon: <DesktopOutlined />
+  },
+  {
+    key: 'log-refresh',
+    category: 'system',
+    title: 'Log 树刷新',
+    description: '设置 Log 树自动重读本地 Git 数据的频率。',
+    icon: <ReloadOutlined />
+  },
+  {
+    key: 'git',
+    category: 'development',
+    title: 'Git 身份与环境',
+    description: '配置本机 Git 命令和提交用户名、邮箱。',
+    icon: <SettingOutlined />
+  },
+  {
+    key: 'github',
+    category: 'development',
+    title: 'GitHub Token',
+    description: '保存 GitHub 访问凭据，并检查返回的权限范围。',
+    icon: <GithubOutlined />
+  },
+  {
+    key: 'private',
+    category: 'development',
+    title: '私钥管理',
+    description: '生成、导入、修复权限并管理 SSH 私钥。',
+    icon: <KeyOutlined />
+  },
+  {
+    key: 'public',
+    category: 'development',
+    title: '公钥管理',
+    description: '导入、复制并检查 SSH 公钥配对。',
+    icon: <CopyOutlined />
+  },
+  {
+    key: 'gpg',
+    category: 'development',
+    title: 'GPG 签名',
+    description: '导入 GPG 密钥并配置 Git 提交签名。',
+    icon: <LockOutlined />
+  },
+  {
+    key: 'config',
+    category: 'development',
+    title: 'SSH config',
+    description: '绑定 Host、端口和 IdentityFile。',
+    icon: <FileTextOutlined />
+  },
+  {
+    key: 'codemagic',
+    category: 'development',
+    title: 'Codemagic Token',
+    description: '保存移动端远程构建和包同步使用的 API Token。',
+    icon: <UploadOutlined />
+  },
+  {
+    key: 'plane',
+    category: 'integrations',
+    title: 'Plane 集成',
+    description: '配置 Plane 地址、API Token 和项目内容读取能力。',
+    icon: <LinkOutlined />
+  },
+  {
+    key: 'oa',
+    category: 'integrations',
+    title: 'Lark 集成',
+    description: '连接 Lark / 飞书文档、机器人监听和群通知。',
+    icon: <TeamOutlined />
+  },
+  {
+    key: 'ai',
+    category: 'integrations',
+    title: 'AI 助手',
+    description: '配置合并冲突建议使用的模型。',
+    icon: <RobotOutlined />
+  },
+  {
+    key: 'updates',
+    category: 'maintenance',
+    title: '应用更新',
+    description: '通过 GitHub Releases 检查和安装新版。',
+    icon: <DownloadOutlined />
+  }
+]
 
 type AppProps = {
   themePreference: ThemePreference
@@ -586,6 +743,16 @@ type CloudflareSettingsForm = {
   domain: string
   zoneId: string
   apiToken?: string
+}
+
+type FirebaseReleaseSettingsForm = {
+  enabled: boolean
+  appId: string
+  artifactPath: string
+  buildScript: string
+  groups?: string
+  testers?: string
+  serviceAccountKey?: string
 }
 
 type BranchTagForm = {
@@ -2147,6 +2314,10 @@ const oaSetupSteps = [
     description: '在权限管理里开通 drive:drive:readonly（或 drive:drive）和 space:document:retrieve；需要管理 Base 时，再开通“查看、评论、编辑和管理多维表格”，发布最新版本后才会生效。'
   },
   {
+    title: '不用上传多维表格小组件',
+    description: 'ForgeDesk 直接通过 Lark OpenAPI 读取数据，不需要在“多维表格记录视图”页面上传小组件版本。'
+  },
+  {
     title: '发布到企业',
     description: '在版本管理与发布里创建版本并发布，确保当前企业成员可以使用这个应用。'
   },
@@ -2514,17 +2685,23 @@ function formatBitableCell(value: unknown): string {
   return String(value)
 }
 
+function getLarkBitableViewTypeLabel(type: string): string {
+  return ({ grid: '表格', gantt: '甘特图', kanban: '看板', gallery: '画册', form: '表单' } as Record<string, string>)[type] || type || '视图'
+}
+
 function OaBitableManager({ editingEnabled }: { editingEnabled: boolean }): JSX.Element {
   const [snapshot, setSnapshot] = useState<OaBitableSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editingRecord, setEditingRecord] = useState<OaBitableRecord | null | undefined>(undefined)
   const [fieldsJson, setFieldsJson] = useState('')
+  const [viewMode, setViewMode] = useState<'table' | 'gantt'>('table')
+  const [scheduleFields, setScheduleFields] = useState<LarkBitableScheduleFieldMap>({ title: '', start: '', end: '', status: '', owner: '', priority: '' })
 
-  async function refresh(tableId?: string): Promise<void> {
+  async function refresh(tableId?: string, viewId?: string): Promise<void> {
     setLoading(true)
     try {
-      setSnapshot(await window.forgeDesk.getOaBitable(tableId))
+      setSnapshot(await window.forgeDesk.getOaBitable(tableId, viewId))
     } catch (error) {
       message.error(getErrorMessage(error, '读取多维表格失败'))
     } finally {
@@ -2576,7 +2753,7 @@ function OaBitableManager({ editingEnabled }: { editingEnabled: boolean }): JSX.
       })
       message.success(editingRecord ? '记录已更新并同步到飞书' : '记录已新增并同步到飞书')
       setEditingRecord(undefined)
-      await refresh(snapshot.selectedTableId)
+      await refresh(snapshot.selectedTableId, snapshot.selectedViewId)
     } catch (error) {
       message.error(getErrorMessage(error, '保存多维表格记录失败'))
     } finally {
@@ -2589,7 +2766,7 @@ function OaBitableManager({ editingEnabled }: { editingEnabled: boolean }): JSX.
     try {
       await window.forgeDesk.deleteOaBitableRecord({ tableId: snapshot.selectedTableId, recordId })
       message.success('记录已从飞书多维表格删除')
-      await refresh(snapshot.selectedTableId)
+      await refresh(snapshot.selectedTableId, snapshot.selectedViewId)
     } catch (error) {
       message.error(getErrorMessage(error, '删除多维表格记录失败'))
     }
@@ -2598,6 +2775,32 @@ function OaBitableManager({ editingEnabled }: { editingEnabled: boolean }): JSX.
   useEffect(() => {
     refresh()
   }, [])
+
+  useEffect(() => {
+    if (!snapshot) return
+    const inferred = inferLarkBitableScheduleFields(snapshot.fields)
+    const availableNames = new Set(snapshot.fields.map((field) => field.name))
+    const keepOrInfer = (current: string, fallback: string): string => availableNames.has(current) ? current : fallback
+    setScheduleFields((current) => ({
+      title: keepOrInfer(current.title, inferred.title),
+      start: keepOrInfer(current.start, inferred.start),
+      end: keepOrInfer(current.end, inferred.end),
+      status: keepOrInfer(current.status, inferred.status),
+      owner: keepOrInfer(current.owner, inferred.owner),
+      priority: keepOrInfer(current.priority, inferred.priority)
+    }))
+    setViewMode(snapshot.selectedViewType === 'gantt' ? 'gantt' : 'table')
+  }, [snapshot?.selectedTableId, snapshot?.selectedViewId, snapshot?.fields])
+
+  const scheduleRows = useMemo(
+    () => createLarkBitableScheduleRows(snapshot?.records ?? [], scheduleFields),
+    [snapshot?.records, scheduleFields]
+  )
+  const ganttRange = useMemo(() => createLarkBitableGanttRange(scheduleRows), [scheduleRows])
+  const fieldOptions = (allowEmpty = false) => [
+    ...(allowEmpty ? [{ label: '不使用', value: '' }] : []),
+    ...(snapshot?.fields ?? []).map((field) => ({ label: field.name, value: field.name }))
+  ]
 
   const columns: ColumnsType<OaBitableRecord> = [
     ...(snapshot?.fields ?? []).map((field) => ({
@@ -2643,22 +2846,53 @@ function OaBitableManager({ editingEnabled }: { editingEnabled: boolean }): JSX.
             options={(snapshot?.tables ?? []).map((table) => ({ value: table.id, label: table.name }))}
             onChange={(tableId) => refresh(tableId)}
           />
+          <Select
+            style={{ minWidth: 220 }}
+            value={snapshot?.selectedViewId || undefined}
+            placeholder="选择视图"
+            options={(snapshot?.views ?? []).map((view) => ({ value: view.id, label: `${view.name} · ${getLarkBitableViewTypeLabel(view.type)}` }))}
+            onChange={(viewId) => refresh(snapshot?.selectedTableId, viewId)}
+          />
+          <Segmented
+            value={viewMode}
+            options={[{ label: '表格', value: 'table' }, { label: '甘特图', value: 'gantt' }]}
+            onChange={(value) => setViewMode(value as 'table' | 'gantt')}
+          />
           <Typography.Text type="secondary">{snapshot?.records.length ?? 0} 条记录</Typography.Text>
         </Space>
         <Space wrap>
-          <Button icon={<ReloadOutlined />} loading={loading} onClick={() => refresh(snapshot?.selectedTableId)}>同步</Button>
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={() => refresh(snapshot?.selectedTableId, snapshot?.selectedViewId)}>同步</Button>
           <Button type="primary" icon={<PlusOutlined />} disabled={!snapshot?.selectedTableId || !editingEnabled} onClick={() => openEditor(null)}>新增记录</Button>
         </Space>
       </div>
-      <Table
-        rowKey="id"
-        size="small"
-        loading={loading}
-        columns={columns}
-        dataSource={snapshot?.records ?? []}
-        scroll={{ x: 'max-content' }}
-        pagination={{ pageSize: 20, showSizeChanger: true }}
-      />
+      {viewMode === 'gantt' ? (
+        <>
+          <div className="oa-bitable-field-mapping">
+            <Typography.Text strong>甘特图字段</Typography.Text>
+            <Typography.Text type="secondary">自动识别失败时，可以在这里手动指定任务、开始和结束日期字段。</Typography.Text>
+            <div className="oa-bitable-field-mapping-grid">
+              <Select value={scheduleFields.title || undefined} placeholder="任务字段" options={fieldOptions()} onChange={(value) => setScheduleFields((current) => ({ ...current, title: value }))} />
+              <Select value={scheduleFields.start || undefined} placeholder="开始日期" options={fieldOptions()} onChange={(value) => setScheduleFields((current) => ({ ...current, start: value }))} />
+              <Select value={scheduleFields.end || undefined} placeholder="结束日期" options={fieldOptions(true)} onChange={(value) => setScheduleFields((current) => ({ ...current, end: value }))} />
+              <Select value={scheduleFields.status || undefined} placeholder="状态（可选）" options={fieldOptions(true)} onChange={(value) => setScheduleFields((current) => ({ ...current, status: value }))} />
+              <Select value={scheduleFields.owner || undefined} placeholder="负责人（可选）" options={fieldOptions(true)} onChange={(value) => setScheduleFields((current) => ({ ...current, owner: value }))} />
+              <Select value={scheduleFields.priority || undefined} placeholder="优先级（可选）" options={fieldOptions(true)} onChange={(value) => setScheduleFields((current) => ({ ...current, priority: value }))} />
+            </div>
+          </div>
+          {scheduleRows.length > ganttRange.rows.length ? <Alert showIcon type="info" message={`已读取 ${scheduleRows.length} 条记录，其中 ${scheduleRows.length - ganttRange.rows.length} 条缺少有效日期，暂不绘制到甘特图。`} /> : null}
+          <LarkBitableGantt range={ganttRange} totalRows={scheduleRows.length} onOpenRecord={editingEnabled ? openEditor : undefined} />
+        </>
+      ) : (
+        <Table
+          rowKey="id"
+          size="small"
+          loading={loading}
+          columns={columns}
+          dataSource={snapshot?.records ?? []}
+          scroll={{ x: 'max-content' }}
+          pagination={{ pageSize: 20, showSizeChanger: true }}
+        />
+      )}
       <Modal
         title={editingRecord ? '编辑记录' : '新增记录'}
         open={editingRecord !== undefined}
@@ -2934,7 +3168,6 @@ function OaDocsPanel({ onOpenSettings }: OaDocsPanelProps): JSX.Element {
 }
 
 function SettingsPanel({
-  onCreateProject,
   initialModule = 'overview',
   themePreference,
   resolvedTheme,
@@ -2943,7 +3176,6 @@ function SettingsPanel({
   onDeploymentRefreshActiveChange,
   onOpenSystemLog
 }: {
-  onCreateProject: () => void
   initialModule?: SettingsModuleKey
   themePreference: ThemePreference
   resolvedTheme: ResolvedTheme
@@ -3012,12 +3244,14 @@ function SettingsPanel({
     status: 'idle',
     currentVersion: ''
   })
+  const [appUpdateStateLoaded, setAppUpdateStateLoaded] = useState(false)
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false)
   const [installingAppUpdate, setInstallingAppUpdate] = useState(false)
   const [menuBarStatus, setMenuBarStatus] = useState<MenuBarManagerStatus | null>(null)
   const [loadingMenuBarStatus, setLoadingMenuBarStatus] = useState(false)
   const [savingMenuBarSettings, setSavingMenuBarSettings] = useState(false)
   const [workingMenuBarAction, setWorkingMenuBarAction] = useState<string | null>(null)
+  const [refreshingSettingsOverview, setRefreshingSettingsOverview] = useState(false)
 
   useEffect(() => {
     setActiveSettingsModule(initialModule)
@@ -3038,6 +3272,11 @@ function SettingsPanel({
         }
       })
       .catch((error) => message.error(getErrorMessage(error)))
+      .finally(() => {
+        if (mounted) {
+          setAppUpdateStateLoaded(true)
+        }
+      })
 
     const unsubscribe = window.forgeDesk.onAppUpdateState((state) => setAppUpdateState(state))
 
@@ -3223,6 +3462,41 @@ function SettingsPanel({
       message.error(getErrorMessage(error))
     } finally {
       setLoadingMenuBarStatus(false)
+    }
+  }
+
+  async function refreshAppUpdateState(): Promise<void> {
+    if (!window.forgeDesk) {
+      setAppUpdateStateLoaded(true)
+      return
+    }
+
+    try {
+      setAppUpdateState(await window.forgeDesk.getAppUpdateState())
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setAppUpdateStateLoaded(true)
+    }
+  }
+
+  async function refreshSettingsOverview(): Promise<void> {
+    setRefreshingSettingsOverview(true)
+
+    try {
+      await Promise.all([
+        refreshGitStatus(),
+        refreshSshConfig(),
+        refreshAiSettings(),
+        refreshGithubTokens(),
+        refreshCodemagicTokens(),
+        refreshPlaneSettings(),
+        refreshOaSettings(),
+        refreshMenuBarStatus(),
+        refreshAppUpdateState()
+      ])
+    } finally {
+      setRefreshingSettingsOverview(false)
     }
   }
 
@@ -4227,160 +4501,216 @@ function SettingsPanel({
     await window.forgeDesk.openAppReleases()
   }
 
-  const settingsModules: Array<{
-    key: SettingsOverviewModuleKey
-    title: string
-    description: string
-    icon: JSX.Element
-    meta: string
-    tone: 'ok' | 'warning' | 'neutral' | 'danger'
-  }> = [
-    {
-      key: 'appearance',
-      title: '外观',
-      description: '切换白天、黑夜，或自动跟随系统。',
-      icon: <DesktopOutlined />,
-      meta: themePreference === 'system' ? getResolvedThemeLabel(resolvedTheme) : getThemePreferenceLabel(themePreference),
-      tone: 'neutral'
-    },
-    {
-      key: 'git',
-      title: 'Git 与仓库',
-      description: '统一管理 Git 身份、平台账号、远端访问、SSH 和 GPG。',
-      icon: <SettingOutlined />,
-      meta: gitReady ? 'Git 已配置' : '需要配置',
-      tone: gitReady ? 'ok' : 'danger'
-    },
-    {
-      key: 'log-refresh',
-      title: 'Log 树刷新',
-      description: '设置 Log 树自动重读本地 Git 数据的频率。',
-      icon: <ReloadOutlined />,
-      meta: gitLogRefreshPreferences.autoRefreshEnabled ? `${gitLogRefreshPreferences.intervalSeconds} 秒` : '手动',
-      tone: gitLogRefreshPreferences.autoRefreshEnabled ? 'ok' : 'neutral'
-    },
-    {
-      key: 'menu-bar',
-      title: '菜单栏整理',
-      description: '隐藏、显示和整理 macOS 菜单栏项目。',
-      icon: <DesktopOutlined />,
-      meta: menuBarReady ? '已启用' : menuBarStatus?.settings.enabled ? '需授权' : '关闭',
-      tone: menuBarReady ? 'ok' : menuBarStatus?.settings.enabled ? 'warning' : 'neutral'
-    },
-    {
-      key: 'github',
-      title: 'GitHub Token',
-      description: '保存发布用 Token，并读取 GitHub 返回的权限范围。',
-      icon: <GithubOutlined />,
-      meta: githubTokenReady ? `${githubTokens.length} 个` : '需要配置',
-      tone: githubTokenReady ? 'ok' : 'warning'
-    },
-    {
-      key: 'codemagic',
-      title: 'Codemagic Token',
-      description: '保存移动端远程构建和包同步使用的 API Token。',
-      icon: <UploadOutlined />,
-      meta: codemagicTokenReady ? `${codemagicTokens.length} 个` : '需要配置',
-      tone: codemagicTokenReady ? 'ok' : 'warning'
-    },
-    {
-      key: 'private',
-      title: '私钥管理',
-      description: '生成、导入、修复权限、设置密码和生成 pub。',
-      icon: <KeyOutlined />,
-      meta: `${sshPrivateKeys.length} 个${sshPassphraseCount > 0 ? ` · ${sshPassphraseCount} 个有密码` : ''}${
-        sshPrivateKeys.some((key) => !key.hasPublicKey) ? ' · 缺 pub' : ''
-      }`,
-      tone: sshPrivateKeys.some((key) => !key.hasPublicKey || key.needsPermissionFix) ? 'warning' : sshPrivateKeys.length > 0 ? 'ok' : 'neutral'
-    },
-    {
-      key: 'public',
-      title: '公钥管理',
-      description: '导入、复制和检查私钥配对。',
-      icon: <CopyOutlined />,
-      meta: `${sshPublicKeys.length} 个`,
-      tone: sshPublicKeys.some((key) => !key.pairedPrivateKeyPath) ? 'warning' : sshPublicKeys.length > 0 ? 'ok' : 'neutral'
-    },
-    {
-      key: 'gpg',
-      title: 'GPG 签名',
-      description: '导入 GPG 包、复制公钥并配置 Git 提交签名。',
-      icon: <LockOutlined />,
-      meta: !gitStatus?.gpgAvailable ? '未检测到' : gpgSigningConfigured ? '已启用签名' : gpgReady ? `${gpgKeys.length} 个` : '未导入',
-      tone: !gitStatus?.gpgAvailable ? 'warning' : gpgSigningConfigured ? 'ok' : gpgReady ? 'neutral' : 'warning'
-    },
-    {
-      key: 'config',
-      title: 'SSH config',
-      description: '绑定 Host、端口和 IdentityFile。',
-      icon: <FileTextOutlined />,
-      meta: sshConfig?.exists ? '已存在' : '未创建',
-      tone: sshConfig?.exists ? 'ok' : 'neutral'
-    },
-    {
-      key: 'services',
-      title: '服务中心',
-      description: '维护 Vercel / Railway 连接、同步服务和自定义域名。',
-      icon: <ThunderboltOutlined />,
-      meta: '全局',
-      tone: 'neutral'
-    },
-    {
-      key: 'plane',
-      title: 'Plane 集成',
-      description: '配置 Plane URL、API Token 和项目内容读取能力。',
-      icon: <LinkOutlined />,
-      meta: planeReady ? '已配置' : '需要配置',
-      tone: planeReady ? 'ok' : 'warning'
-    },
-    {
-      key: 'oa',
-      title: 'OA / Lark 文档',
-      description: '连接 Lark / 飞书文档，以及多维表格机器人监听和群通知。',
-      icon: <TeamOutlined />,
-      meta: isLarkBotServiceReady(oaSettings) ? '文档 + 机器人' : oaReady ? '已接入文档' : oaSettings?.larkAppSecretConfigured ? '未启用' : '需要配置',
-      tone: isLarkBotServiceReady(oaSettings) || oaReady ? 'ok' : oaSettings?.larkAppSecretConfigured ? 'neutral' : 'warning'
-    },
-    {
-      key: 'updates',
-      title: '应用更新',
-      description: '通过 GitHub Releases 检查和安装新版。',
-      icon: <DownloadOutlined />,
-      meta: appUpdateState.status === 'downloaded' ? '待安装' : appUpdateState.status === 'downloading' ? '下载中' : appUpdateState.currentVersion || '当前版本',
-      tone: appUpdateState.status === 'downloaded' ? 'warning' : appUpdateState.status === 'error' ? 'danger' : 'neutral'
-    },
-    {
-      key: 'ai',
-      title: 'AI 助手',
-      description: '配置合并冲突建议使用的模型。',
-      icon: <SettingOutlined />,
-      meta: aiVerified ? '已验证可用' : aiReady ? '待检测' : aiSettings?.apiKeyConfigured ? '未启用' : '需要配置',
-      tone: aiVerified ? 'ok' : 'warning'
+  const aiStatusFailed = Boolean(aiRuntimeStatus && aiSettings && aiRuntimeStatus.provider === aiSettings.provider && (aiRuntimeStatus.available === false || aiRuntimeStatus.usable === false))
+
+  function resolveSettingsModuleState(key: SettingsOverviewModuleKey): Pick<SettingsOverviewModule, 'status' | 'secondary'> {
+    switch (key) {
+      case 'appearance':
+        return {
+          status: { kind: 'saved', label: '已设置' },
+          secondary: `当前：${themePreference === 'system' ? `${getThemePreferenceLabel(themePreference)} · ${getResolvedThemeLabel(resolvedTheme)}` : getThemePreferenceLabel(themePreference)}`
+        }
+      case 'menu-bar':
+        if (!menuBarStatus || loadingMenuBarStatus) {
+          return { status: { kind: 'loading', label: '读取中' } }
+        }
+        if (!menuBarStatus.supported || !menuBarStatus.helperAvailable) {
+          return { status: { kind: 'attention', label: '不可用', detail: menuBarStatus.message } }
+        }
+        if (menuBarStatus.settings.enabled && !menuBarStatus.accessibilityTrusted) {
+          return { status: { kind: 'attention', label: '需授权', detail: '需要 macOS 辅助功能权限' } }
+        }
+        if (menuBarReady) {
+          return { status: { kind: 'verified', label: '已启用' }, secondary: `已发现 ${menuBarStatus.items.length} 个项目` }
+        }
+        return { status: { kind: 'disabled', label: '未启用' }, secondary: '可在详情中开启' }
+      case 'log-refresh':
+        return gitLogRefreshPreferences.autoRefreshEnabled
+          ? { status: { kind: 'saved', label: '已开启' }, secondary: `每 ${gitLogRefreshPreferences.intervalSeconds} 秒刷新` }
+          : { status: { kind: 'disabled', label: '未启用' }, secondary: '手动刷新' }
+      case 'git':
+        if (!gitStatus || loadingGit) {
+          return { status: { kind: 'loading', label: '读取中' } }
+        }
+        if (!gitStatus.gitAvailable) {
+          return { status: { kind: 'error', label: 'Git 不可用', detail: '请先安装 Git' } }
+        }
+        if (!gitStatus.userName || !gitStatus.userEmail) {
+          return { status: { kind: 'attention', label: '配置不完整', detail: '需要提交用户名和邮箱' } }
+        }
+        return { status: { kind: 'verified', label: '已验证' }, secondary: gitStatus.gitVersion }
+      case 'github':
+        if (loadingGithubTokens) {
+          return { status: { kind: 'loading', label: '读取中' } }
+        }
+        if (githubTokens.length === 0) {
+          return { status: { kind: 'not-configured', label: '未配置' }, secondary: '添加 Token 后可连接 GitHub' }
+        }
+        if (githubTokens.some((token) => token.lastCheckedAt)) {
+          return { status: { kind: 'verified', label: '已验证' }, secondary: `${githubTokens.length} 个 Token` }
+        }
+        return { status: { kind: 'saved', label: '已保存' }, secondary: `${githubTokens.length} 个 Token，尚未检查` }
+      case 'private':
+        if (!gitStatus || loadingGit) {
+          return { status: { kind: 'loading', label: '读取中' } }
+        }
+        if (sshPrivateKeys.length === 0) {
+          return { status: { kind: 'not-configured', label: '未配置' }, secondary: '可生成或导入私钥' }
+        }
+        if (sshPrivateKeys.some((key) => !key.hasPublicKey || key.needsPermissionFix)) {
+          return { status: { kind: 'attention', label: '需处理' }, secondary: `${sshPrivateKeys.length} 个私钥中存在问题` }
+        }
+        return { status: { kind: 'saved', label: '已配置' }, secondary: `${sshPrivateKeys.length} 个私钥` }
+      case 'public':
+        if (!gitStatus || loadingGit) {
+          return { status: { kind: 'loading', label: '读取中' } }
+        }
+        if (sshPublicKeys.length === 0) {
+          return { status: { kind: 'not-configured', label: '未配置' }, secondary: '可导入或生成公钥' }
+        }
+        if (sshPublicKeys.some((key) => !key.pairedPrivateKeyPath)) {
+          return { status: { kind: 'attention', label: '需配对' }, secondary: `${sshPublicKeys.length} 个公钥中存在未配对项` }
+        }
+        return { status: { kind: 'saved', label: '已配置' }, secondary: `${sshPublicKeys.length} 个公钥` }
+      case 'gpg':
+        if (!gitStatus || loadingGit) {
+          return { status: { kind: 'loading', label: '读取中' } }
+        }
+        if (!gitStatus.gpgAvailable) {
+          return { status: { kind: 'attention', label: '未检测到', detail: '可在详情中安装 GPG' } }
+        }
+        if (gpgSigningConfigured) {
+          return { status: { kind: 'verified', label: '已启用' }, secondary: `${gpgKeys.length} 个 GPG 密钥` }
+        }
+        if (gpgReady) {
+          return { status: { kind: 'saved', label: '已导入' }, secondary: `${gpgKeys.length} 个 GPG 密钥，尚未启用签名` }
+        }
+        return { status: { kind: 'not-configured', label: '未配置' }, secondary: '导入密钥后可启用签名' }
+      case 'config':
+        if (loadingSshConfig || sshConfig === null) {
+          return { status: { kind: 'loading', label: '读取中' } }
+        }
+        return sshConfig.exists
+          ? { status: { kind: 'saved', label: '已配置' }, secondary: '已读取 ~/.ssh/config' }
+          : { status: { kind: 'not-configured', label: '未创建' }, secondary: '可用向导生成 SSH config' }
+      case 'codemagic':
+        if (loadingCodemagicTokens) {
+          return { status: { kind: 'loading', label: '读取中' } }
+        }
+        if (codemagicTokens.length === 0) {
+          return { status: { kind: 'not-configured', label: '未配置' }, secondary: '添加 Token 后可连接远程构建' }
+        }
+        if (codemagicTokens.some((token) => token.lastCheckedAt)) {
+          return { status: { kind: 'verified', label: '已验证' }, secondary: `${codemagicTokens.length} 个 Token` }
+        }
+        return { status: { kind: 'saved', label: '已保存' }, secondary: `${codemagicTokens.length} 个 Token，尚未检查` }
+      case 'plane':
+        if (loadingPlaneSettings || planeSettings === null) {
+          return { status: { kind: 'loading', label: '读取中' } }
+        }
+        if (planeTestResult && !planeTestResult.ok) {
+          return { status: { kind: 'error', label: '连接失败' }, secondary: planeTestResult.message }
+        }
+        if (planeTestResult?.ok) {
+          return { status: { kind: 'verified', label: '已验证' }, secondary: '连接测试成功' }
+        }
+        if (planeReady) {
+          return { status: { kind: 'saved', label: '已保存' }, secondary: '尚未测试连接' }
+        }
+        return { status: { kind: 'attention', label: '配置不完整' }, secondary: '需要 API 地址和 Token' }
+      case 'oa':
+        if (loadingOaSettings || oaSettings === null) {
+          return { status: { kind: 'loading', label: '读取中' } }
+        }
+        if (oaReady) {
+          return { status: { kind: 'saved', label: '已保存' }, secondary: isLarkBotServiceReady(oaSettings) ? '文档与机器人已接入' : '文档入口已配置' }
+        }
+        if (oaSettings.larkAppSecretConfigured && !oaSettings.enabled) {
+          return { status: { kind: 'disabled', label: '未启用' }, secondary: '凭据已保存，可在详情中开启' }
+        }
+        if (oaSettings.larkAppSecretConfigured || oaSettings.larkAppId || oaSettings.docsHomeUrl) {
+          return { status: { kind: 'attention', label: '配置不完整' }, secondary: '需要入口链接、App ID 和 App Secret' }
+        }
+        return { status: { kind: 'not-configured', label: '未配置' }, secondary: '连接 Lark / 飞书文档' }
+      case 'ai':
+        if (loadingAiSettings || aiSettings === null) {
+          return { status: { kind: 'loading', label: '读取中' } }
+        }
+        if (aiStatusFailed) {
+          return { status: { kind: 'error', label: '检测失败' }, secondary: '请检查模型、地址或 API Key' }
+        }
+        if (aiVerified) {
+          return { status: { kind: 'verified', label: '已验证' }, secondary: '模型可用' }
+        }
+        if (aiReady) {
+          return { status: { kind: 'saved', label: '已保存' }, secondary: '尚未检测模型可用性' }
+        }
+        if (aiSettings.apiKeyConfigured && !aiSettings.enabled) {
+          return { status: { kind: 'disabled', label: '未启用' }, secondary: '配置已保存，可在详情中开启' }
+        }
+        return { status: { kind: 'not-configured', label: '未配置' }, secondary: '选择模型并保存 API 设置' }
+      case 'updates':
+        if (!appUpdateStateLoaded) {
+          return { status: { kind: 'loading', label: '读取中' } }
+        }
+        if (appUpdateState.status === 'error') {
+          return { status: { kind: 'error', label: '检查失败' }, secondary: appUpdateState.error || '请稍后重试' }
+        }
+        if (appUpdateState.status === 'downloaded') {
+          return { status: { kind: 'attention', label: '待安装' }, secondary: appUpdateState.availableVersion ? `新版本 ${appUpdateState.availableVersion}` : '新版已下载' }
+        }
+        if (appUpdateState.status === 'downloading') {
+          return { status: { kind: 'attention', label: '下载中' }, secondary: `${Math.round(appUpdateState.percent ?? 0)}%` }
+        }
+        if (appUpdateState.status === 'not-available') {
+          return { status: { kind: 'verified', label: '已是最新' }, secondary: appUpdateState.currentVersion || '当前版本未知' }
+        }
+        return { status: { kind: 'saved', label: '未检查' }, secondary: appUpdateState.currentVersion || '当前版本未知' }
+      case 'services':
+        return { status: { kind: 'saved', label: '工作台' }, secondary: '请从主导航进入服务' }
     }
-  ]
+  }
+
+  const settingsModules: SettingsOverviewModule[] = settingsModuleDefinitions.map((definition) => ({
+    ...definition,
+    ...resolveSettingsModuleState(definition.key)
+  }))
   const settingsModuleByKey = new Map(settingsModules.map((module) => [module.key, module]))
-  const settingsOverviewCategories: SettingsOverviewCategory[] = [
-    {
-      title: '个性化',
-      description: '控制界面外观、菜单栏和日常视图。',
-      keys: ['appearance', 'menu-bar']
-    },
-    {
-      title: 'Git 与仓库',
-      description: '管理提交身份、平台账号、远端仓库、密钥、签名和 Git 数据刷新。',
-      keys: ['git']
-    },
-    {
-      title: '集成与服务',
-      description: '配置外部账号、服务平台、Plane 和 AI 能力。',
-      keys: ['codemagic', 'services', 'plane', 'oa', 'ai']
-    },
-    {
-      title: '应用维护',
-      description: '检查、下载并安装 ForgeDesk 新版本。',
-      keys: ['updates']
-    }
-  ]
+  const settingsAttentionModules = settingsModules.filter((module) => ['not-configured', 'attention', 'error'].includes(module.status.kind))
+
+  function renderSettingsStatus(status: SettingsModuleStatus): JSX.Element {
+    const icon = status.kind === 'loading' ? <Spin size="small" /> : status.kind === 'verified' || status.kind === 'saved' ? <CheckCircleOutlined /> : status.kind === 'error' ? <CloseCircleOutlined /> : status.kind === 'attention' ? <InfoCircleOutlined /> : status.kind === 'disabled' ? <StopOutlined /> : <SettingOutlined />
+
+    return (
+      <span className={`settings-status settings-status-${status.kind}`} title={status.detail}>
+        {icon}
+        <span>{status.label}</span>
+      </span>
+    )
+  }
+
+  function renderSettingsEntry(module: SettingsOverviewModule): JSX.Element {
+    const isActive = activeSettingsModule === module.key
+
+    return (
+      <button
+        className={`settings-entry-row${isActive ? ' is-active' : ''}`}
+        key={module.key}
+        type="button"
+        aria-current={isActive ? 'page' : undefined}
+        onClick={() => setActiveSettingsModule(module.key)}
+      >
+        <span className="settings-entry-icon">{module.icon}</span>
+        <span className="settings-entry-copy">
+          <span className="settings-entry-title">{module.title}</span>
+          <span className="settings-entry-description">{module.description}</span>
+          {module.secondary ? <span className="settings-entry-secondary">{module.secondary}</span> : null}
+        </span>
+        <span className="settings-entry-status">{renderSettingsStatus(module.status)}</span>
+        <ArrowRightOutlined className="settings-entry-arrow" />
+      </button>
+    )
+  }
 
   function renderModuleHeader(title: string, description: string, actions?: JSX.Element): JSX.Element {
     return (
@@ -4451,21 +4781,14 @@ function SettingsPanel({
   }
 
   function renderGitModule(): JSX.Element {
-    const gitSubmoduleKeys: SettingsOverviewModuleKey[] = ['github', 'private', 'public', 'gpg', 'config', 'log-refresh']
-
     return (
       <div className="panel settings-module-panel">
         {renderModuleHeader(
-          'Git 与仓库',
-          '从一个入口管理本机 Git、平台账号、远端访问和仓库相关设置。',
-          <Space wrap>
-            <Button icon={<PlusOutlined />} onClick={onCreateProject}>
-              创建或接入项目
-            </Button>
-            <Button icon={<ReloadOutlined />} loading={loadingGit} onClick={refreshGitStatus}>
-              重新检测
-            </Button>
-          </Space>
+          'Git 身份与环境',
+          '配置本机 Git 命令和提交身份。具体项目的仓库、remote 和主推送目标，请在项目设置中管理。',
+          <Button icon={<ReloadOutlined />} loading={loadingGit} onClick={refreshGitStatus}>
+            重新读取
+          </Button>
         )}
         <Alert
           className="settings-module-alert"
@@ -4509,42 +4832,6 @@ function SettingsPanel({
             打开 Git 下载页
           </Button>
         )}
-        <div className="settings-submodule-grid">
-          {gitSubmoduleKeys.map((key) => {
-            const module = settingsModuleByKey.get(key)
-
-            if (!module) {
-              return null
-            }
-
-            return (
-              <button
-                className={`settings-entry-card settings-entry-card-${module.tone}`}
-                key={module.key}
-                type="button"
-                onClick={() => setActiveSettingsModule(module.key)}
-              >
-                <span className="settings-entry-icon">{module.icon}</span>
-                <span className="settings-entry-copy">
-                  <span className="settings-entry-title-row">
-                    <Typography.Text strong className="settings-entry-title">
-                      {module.key === 'github' ? '平台账号与 Token' : module.title}
-                    </Typography.Text>
-                    <Tag
-                      className="settings-entry-meta"
-                      color={module.tone === 'ok' ? 'green' : module.tone === 'warning' ? 'gold' : module.tone === 'danger' ? 'red' : 'default'}
-                    >
-                      {module.meta}
-                    </Tag>
-                  </span>
-                  <Typography.Text className="settings-entry-description" type="secondary">
-                    {module.key === 'github' ? '连接 GitHub 账号，保存发布和仓库访问使用的 Token。' : module.description}
-                  </Typography.Text>
-                </span>
-              </button>
-            )
-          })}
-        </div>
       </div>
     )
   }
@@ -5469,55 +5756,81 @@ function SettingsPanel({
     )
   }
 
-  function renderOverview(): JSX.Element {
+  function renderSettingsNavigation(): JSX.Element {
     return (
-      <div className="settings-category-list">
-        {settingsOverviewCategories.map((category) => (
-          <section className="settings-category-section" key={category.title}>
-            <div className="settings-category-heading">
-              <Typography.Title className="settings-category-title" level={3}>
-                {category.title}
-              </Typography.Title>
-              <Typography.Text type="secondary">{category.description}</Typography.Text>
-            </div>
-            <div className="settings-module-grid">
-              {category.keys.map((key) => {
-                const module = settingsModuleByKey.get(key)
+      <aside className="settings-navigation" aria-label="设置分类">
+        <div className="settings-navigation-heading">
+          <Typography.Text strong>设置分类</Typography.Text>
+          <Typography.Text type="secondary">选择一个模块管理配置</Typography.Text>
+        </div>
+        <nav>
+          {settingsOverviewCategories.map((category) => (
+            <section className="settings-navigation-section" key={category.key}>
+              <div className="settings-navigation-category">
+                <span>{category.title}</span>
+                <Typography.Text type="secondary">{category.description}</Typography.Text>
+              </div>
+              <div className="settings-navigation-list">
+                {category.keys.map((key) => {
+                  const module = settingsModuleByKey.get(key)
+                  return module ? renderSettingsEntry(module) : null
+                })}
+              </div>
+            </section>
+          ))}
+        </nav>
+      </aside>
+    )
+  }
 
-                if (!module) {
-                  return null
-                }
+  function renderOverview(): JSX.Element {
+    const attentionCount = settingsAttentionModules.length
+    const configuredCount = settingsModules.filter((module) => ['saved', 'verified'].includes(module.status.kind)).length
 
-                return (
-                  <button
-                    className={`settings-entry-card settings-entry-card-${module.tone}`}
-                    key={module.key}
-                    type="button"
-                    onClick={() => setActiveSettingsModule(module.key)}
-                  >
-                    <span className="settings-entry-icon">{module.icon}</span>
-                    <span className="settings-entry-copy">
-                      <span className="settings-entry-title-row">
-                        <Typography.Text strong className="settings-entry-title">
-                          {module.title}
-                        </Typography.Text>
-                        <Tag
-                          className="settings-entry-meta"
-                          color={module.tone === 'ok' ? 'green' : module.tone === 'warning' ? 'gold' : module.tone === 'danger' ? 'red' : 'default'}
-                        >
-                          {module.meta}
-                        </Tag>
-                      </span>
-                      <Typography.Text className="settings-entry-description" type="secondary">
-                        {module.description}
-                      </Typography.Text>
-                    </span>
-                  </button>
-                )
-              })}
+    return (
+      <div className="settings-overview-content">
+        <div className="settings-overview-summary">
+          <div className={`settings-overview-summary-icon${attentionCount > 0 ? ' is-attention' : ' is-ready'}`}>
+            {attentionCount > 0 ? <InfoCircleOutlined /> : <CheckCircleOutlined />}
+          </div>
+          <div className="settings-overview-summary-copy">
+            <Typography.Title level={3}>{attentionCount > 0 ? `${attentionCount} 项设置需要处理` : '设置状态正常'}</Typography.Title>
+            <Typography.Text type="secondary">
+              {attentionCount > 0 ? '优先处理下面的配置或授权问题，其他设置可以按需调整。' : '当前已配置的模块可以继续使用，也可以从左侧进入任意设置。'}
+            </Typography.Text>
+          </div>
+          <div className="settings-overview-summary-metrics">
+            <span>
+              <strong>{configuredCount}</strong>
+              已配置
+            </span>
+            <span>
+              <strong>{attentionCount}</strong>
+              待处理
+            </span>
+            <span>
+              <strong>{settingsModules.length}</strong>
+              个模块
+            </span>
+          </div>
+        </div>
+
+        <section className="settings-overview-attention">
+          <div className="settings-overview-section-heading">
+            <div>
+              <Typography.Title level={4}>待处理事项</Typography.Title>
+              <Typography.Text type="secondary">只显示未配置、配置不完整或检测失败的模块。</Typography.Text>
             </div>
-          </section>
-        ))}
+          </div>
+          {attentionCount > 0 ? (
+            <div className="settings-overview-entry-list">{settingsAttentionModules.map(renderSettingsEntry)}</div>
+          ) : (
+            <div className="settings-overview-empty">
+              <CheckCircleOutlined />
+              <span>暂时没有需要处理的设置</span>
+            </div>
+          )}
+        </section>
       </div>
     )
   }
@@ -5564,19 +5877,19 @@ function SettingsPanel({
       <div className="section-heading">
         <div>
           <Typography.Title level={2}>设置</Typography.Title>
-          <Typography.Text type="secondary">管理本机 Git / SSH、AI、OA 和服务集成。</Typography.Text>
+          <Typography.Text type="secondary">管理界面、开发环境凭据和外部服务集成。</Typography.Text>
         </div>
         <Space>
-          <Button icon={<PlusOutlined />} onClick={onCreateProject}>
-            去创建项目
-          </Button>
-          <Button icon={<ReloadOutlined />} loading={loadingGit} onClick={refreshGitStatus}>
-            重新检测
+          <Button icon={<ReloadOutlined />} loading={refreshingSettingsOverview} onClick={() => void refreshSettingsOverview()}>
+            刷新设置状态
           </Button>
         </Space>
       </div>
 
-      {renderActiveSettingsModule()}
+      <div className="settings-layout">
+        {renderSettingsNavigation()}
+        <main className="settings-main">{renderActiveSettingsModule()}</main>
+      </div>
 
       <Modal
         title={`导入 SSH ${getSshKeyKindLabel(sshImportKind)}`}
@@ -6490,8 +6803,8 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
             <Alert
               type="info"
               showIcon
-              message="项目只绑定服务，不保存平台 Token"
-              description="Vercel / Railway Token 和同步出来的服务在“设置 / 服务中心”维护；这里只选择哪些服务属于当前项目。"
+              message="先配置连接，再绑定平台项目"
+              description="Vercel / Railway Token 在服务中心维护；同步后可以把多个 Vercel 或 Railway 项目逐个绑定到当前项目，项目设置这里只管理实际归属关系。"
             />
           ) : (
             <>
@@ -9096,7 +9409,7 @@ function GitCommitModal({
     })
   }, [initialRepositoryId, open, repositories])
 
-  async function refreshWorkspaceStatus(): Promise<void> {
+  async function refreshWorkspaceStatus(selectAll = false): Promise<void> {
     if (!selectedRepository || !window.forgeDesk) {
       return
     }
@@ -9106,7 +9419,7 @@ function GitCommitModal({
     try {
       const nextStatus = await window.forgeDesk.getRepositoryWorkspaceStatus(selectedRepository.id)
       setStatus(nextStatus)
-      setSelectedPaths((paths) => paths.filter((path) => nextStatus.files.some((file) => file.path === path)))
+      setSelectedPaths((paths) => selectAll ? nextStatus.files.map((file) => file.path) : paths.filter((path) => nextStatus.files.some((file) => file.path === path)))
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
@@ -9233,7 +9546,7 @@ function GitCommitModal({
     setSelectedPaths([])
     setCommitMessage('')
     setTagRecommendation(null)
-    refreshWorkspaceStatus()
+    refreshWorkspaceStatus(true)
     refreshReleaseTagRecommendation()
   }, [open, selectedRepository?.id])
 
@@ -9387,7 +9700,7 @@ function GitCommitModal({
         <Button key="cancel" onClick={onClose}>
           取消
         </Button>,
-        <Button key="refresh" icon={<ReloadOutlined />} loading={loadingStatus} onClick={refreshWorkspaceStatus}>
+        <Button key="refresh" icon={<ReloadOutlined />} loading={loadingStatus} onClick={() => refreshWorkspaceStatus()}>
           刷新改动
         </Button>,
         <Button key="stage" loading={working} disabled={selectedPaths.length === 0} onClick={stageOnly}>
@@ -9514,6 +9827,14 @@ function getReleaseScriptLabel(scriptName: string): string {
     return '本地打包 macOS 应用'
   }
 
+  if (scriptName === 'package:android') {
+    return '构建 Android 应用'
+  }
+
+  if (scriptName === 'build:android') {
+    return '运行 Android build'
+  }
+
   if (scriptName === 'build') {
     return '运行项目 build'
   }
@@ -9539,6 +9860,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const [codemagicTeams, setCodemagicTeams] = useState<CodemagicTeam[]>([])
   const [codemagicApps, setCodemagicApps] = useState<CodemagicApp[]>([])
   const [codemagicBinding, setCodemagicBinding] = useState<CodemagicRepositoryBinding | null>(null)
+  const [firebaseSettings, setFirebaseSettings] = useState<ProjectFirebaseReleaseSettings | null>(null)
   const [selectedCodemagicTokenId, setSelectedCodemagicTokenId] = useState('')
   const [selectedCodemagicTeamId, setSelectedCodemagicTeamId] = useState('')
   const [codemagicAppId, setCodemagicAppId] = useState('')
@@ -9575,6 +9897,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   const selectedGithubToken = githubTokens.find((token) => token.id === selectedGithubTokenId) ?? null
   const selectedCodemagicToken = codemagicTokens.find((token) => token.id === selectedCodemagicTokenId) ?? null
   const codemagicReady = Boolean(selectedCodemagicTokenId && codemagicAppId.trim() && codemagicWorkflowId.trim())
+  const firebaseReady = Boolean(firebaseSettings?.active)
   const nextjsPm2Ready = Boolean(nextjsPm2SshHost.trim() && nextjsPm2RemotePath.trim() && nextjsPm2AppName.trim())
   const releaseView = useMemo(
     () => createReleasePublishViewModel({
@@ -9582,14 +9905,15 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
       githubToken: selectedGithubTokenId || githubToken,
       provider: releaseProvider,
       codemagicReady,
+      firebaseReady,
       nextjsPm2Ready,
       selectedActions: selectedReleaseActions
     }),
-    [codemagicReady, githubToken, nextjsPm2Ready, preparation, releaseProvider, selectedGithubTokenId, selectedReleaseActions]
+    [codemagicReady, firebaseReady, githubToken, nextjsPm2Ready, preparation, releaseProvider, selectedGithubTokenId, selectedReleaseActions]
   )
   const releasePlatformOptions = useMemo(
-    () => createReleasePlatformOptions({ plan: preparation?.plan ?? null, codemagicBound: Boolean(codemagicBinding) }),
-    [codemagicBinding, preparation]
+    () => createReleasePlatformOptions({ plan: preparation?.plan ?? null, codemagicBound: Boolean(codemagicBinding), firebaseReady }),
+    [codemagicBinding, firebaseReady, preparation]
   )
   const activePublishTaskView = useMemo(
     () => createReleasePublishTaskView({ task: activePublishTask }),
@@ -9791,6 +10115,20 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     }
   }
 
+  async function refreshReleaseFirebaseSettings(): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) {
+      setFirebaseSettings(null)
+      return
+    }
+
+    try {
+      setFirebaseSettings(await window.forgeDesk.getProjectFirebaseReleaseSettings(selectedRepository.projectId))
+    } catch (error) {
+      setFirebaseSettings(null)
+      message.error(getErrorMessage(error))
+    }
+  }
+
   async function refreshReleaseCodemagicTeams(tokenId = selectedCodemagicTokenId): Promise<void> {
     if (!window.forgeDesk || !tokenId) {
       setCodemagicTeams([])
@@ -9839,6 +10177,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     setCodemagicTeams([])
     setCodemagicApps([])
     setCodemagicBinding(null)
+    setFirebaseSettings(null)
     setSelectedCodemagicTokenId('')
     setSelectedCodemagicTeamId('')
     setCodemagicAppId('')
@@ -9863,6 +10202,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
     refreshReleaseCodemagicBinding()
       .then((binding) => refreshReleaseCodemagicTokens(binding))
       .catch((error) => message.error(getErrorMessage(error)))
+    refreshReleaseFirebaseSettings()
   }, [open, selectedRepository?.id])
 
   useEffect(() => {
@@ -10072,6 +10412,11 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
       return
     }
 
+    if (releaseProvider === 'firebase' && !firebaseReady) {
+      message.warning('请先在当前项目的设置 / 发布设置里启用并完成 Firebase 配置')
+      return
+    }
+
     if (releaseProvider === 'nextjs-pm2' && !nextjsPm2Ready) {
       message.warning('请填写 SSH 目标、部署目录和 PM2 应用名')
       return
@@ -10146,6 +10491,8 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
           <Typography.Text>
             {releaseProvider === 'codemagic'
               ? `将触发 Codemagic workflow：${codemagicWorkflowName || codemagicWorkflowId || '未命名 workflow'}。`
+              : releaseProvider === 'firebase'
+                ? `将构建 ${firebaseSettings?.artifactPath || '项目产物'} 并分发到 Firebase App Distribution：${firebaseSettings?.appId || '未配置 App ID'}。`
               : releaseProvider === 'nextjs-pm2'
                 ? `将本地构建并打包 Next.js，然后部署到 ${nextjsPm2SshHost || '未填写 SSH 目标'}:${nextjsPm2RemotePath || '未填写部署目录'}，PM2 应用：${nextjsPm2AppName || '未命名'}。`
                 : `将按当前仓库 package.json 中的 ${preparation?.plan.selectedScript || '发布'} 脚本执行。`}
@@ -10170,7 +10517,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
           <Typography.Text type="secondary">执行过程会进入后台任务，可以关闭窗口继续操作，并随时查看发布日志和构建包。</Typography.Text>
         </Space>
       ),
-      okText: releaseProvider === 'codemagic' ? '开始构建' : releaseProvider === 'nextjs-pm2' ? '开始部署' : '开始发布',
+      okText: releaseProvider === 'codemagic' ? '开始构建' : releaseProvider === 'firebase' ? '开始分发' : releaseProvider === 'nextjs-pm2' ? '开始部署' : '开始发布',
       cancelText: '取消',
       onOk: () => {
         void publishReleaseAfterConfirm()
@@ -10200,7 +10547,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
           AI 填写
         </Button>,
         <Button key="publish" type="primary" icon={<UploadOutlined />} loading={publishing} disabled={releaseView.primaryDisabled || publishing || activePublishTaskRunning} onClick={confirmPublishRelease}>
-          {activePublishTaskRunning ? '发布中' : releaseView.primaryLabel}
+          {activePublishTaskRunning ? (activePublishTask?.provider === 'firebase' ? '分发中' : '发布中') : releaseView.primaryLabel}
         </Button>
       ]}
     >
@@ -10226,6 +10573,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
               options={[
                 { label: 'GitHub Releases', value: 'github' },
                 { label: 'Codemagic', value: 'codemagic' },
+                { label: 'Firebase', value: 'firebase', disabled: !firebaseReady },
                 { label: 'Next.js PM2', value: 'nextjs-pm2' }
               ]}
               onChange={(value) => setReleaseProvider(value as ReleasePublishProvider)}
@@ -10242,15 +10590,21 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
                   platform.disabled ? 'release-platform-card-disabled' : 'release-platform-card-active',
                   releaseProvider === platform.key ? 'release-platform-card-selected' : ''
                 ].join(' ')}
-                onClick={() => setReleaseProvider(platform.key)}
+                onClick={() => {
+                  if (!platform.disabled) {
+                    setReleaseProvider(platform.key)
+                  }
+                }}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
-                    setReleaseProvider(platform.key)
+                    if (!platform.disabled) {
+                      setReleaseProvider(platform.key)
+                    }
                   }
                 }}
               >
                 <span className="release-platform-icon">
-                  {platform.key === 'github' ? <GithubOutlined /> : platform.key === 'nextjs-pm2' ? <CodeOutlined /> : <UploadOutlined />}
+                  {platform.key === 'github' ? <GithubOutlined /> : platform.key === 'nextjs-pm2' ? <CodeOutlined /> : platform.key === 'firebase' ? <CloudOutlined /> : <UploadOutlined />}
                 </span>
                 <span className="release-platform-body">
                   <span className="release-platform-title-row">
@@ -10348,6 +10702,18 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
                   onChange={(event) => setGithubToken(event.target.value)}
                 />
               </Space>
+            </Col>
+          ) : null}
+          {releaseProvider === 'firebase' ? (
+            <Col xs={24}>
+              <Alert
+                type={firebaseReady ? 'success' : 'warning'}
+                showIcon
+                message={firebaseReady ? 'Firebase App Distribution 已就绪' : '请先完成项目级 Firebase 发布设置'}
+                description={firebaseReady
+                  ? `将上传 ${firebaseSettings?.artifactPath} 到 App ${firebaseSettings?.appId}；测试组和测试者沿用项目设置。`
+                  : '打开当前项目的设置 → 发布设置，勾选 Firebase、填写 App ID 和产物路径，并配置 Service Account JSON key。'}
+              />
             </Col>
           ) : null}
           {releaseProvider === 'codemagic' ? (
@@ -10569,7 +10935,10 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
   )
 }
 
-function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChanged }: GitActionModalProps & { initialRepositoryId?: string }): JSX.Element {
+function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChanged, onStartTask }: GitActionModalProps & {
+  initialRepositoryId?: string
+  onStartTask?: (input: { repository: Repository; remoteNames: string[]; branch: string }) => void
+}): JSX.Element {
   const { updateRepository } = useForgeDeskStore()
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
   const pushModalWasOpenRef = useRef(false)
@@ -10661,6 +11030,12 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
 
     if (remoteNames.length === 0 || !branch) {
       message.warning('请选择远端并填写分支')
+      return
+    }
+
+    if (onStartTask) {
+      onStartTask({ repository: selectedRepository, remoteNames, branch })
+      onClose()
       return
     }
 
@@ -11674,6 +12049,10 @@ function getReleaseTaskPlatformLabel(provider: ReleasePublishProvider): string {
     return 'Codemagic'
   }
 
+  if (provider === 'firebase') {
+    return 'Firebase App Distribution'
+  }
+
   if (provider === 'nextjs-pm2') {
     return 'Next.js PM2'
   }
@@ -11686,6 +12065,10 @@ function getReleaseTaskDetailLabel(provider: ReleasePublishProvider): string {
     return 'Workflow'
   }
 
+  if (provider === 'firebase') {
+    return 'Firebase App'
+  }
+
   if (provider === 'nextjs-pm2') {
     return 'PM2 应用'
   }
@@ -11694,7 +12077,7 @@ function getReleaseTaskDetailLabel(provider: ReleasePublishProvider): string {
 }
 
 function getReleaseTaskDetailValue(task: RepositoryReleasePublishTask): string {
-  if (task.provider === 'codemagic' || task.provider === 'nextjs-pm2') {
+  if (task.provider === 'codemagic' || task.provider === 'firebase' || task.provider === 'nextjs-pm2') {
     return task.externalWorkflow || '-'
   }
 
@@ -11704,6 +12087,10 @@ function getReleaseTaskDetailValue(task: RepositoryReleasePublishTask): string {
 function getReleaseTaskCancelDescription(task: RepositoryReleasePublishTask): string {
   if (task.provider === 'codemagic') {
     return '可能已经创建 Tag 或远程构建产物，重试前需要检查 Codemagic。'
+  }
+
+  if (task.provider === 'firebase') {
+    return '可能已经创建 Tag 或上传了 Firebase 版本，重试前请检查 Firebase App Distribution。'
   }
 
   if (task.provider === 'nextjs-pm2') {
@@ -12054,19 +12441,24 @@ function ProjectSettingsPanel({
   repositories,
   contributors,
   onSummaryChanged,
-  onBranchTagsChanged
+  onBranchTagsChanged,
+  initialModule,
+  initialGitTab
 }: {
   project: Project
   repositories: Repository[]
   contributors: ContributorSummary[]
   onSummaryChanged: () => void | Promise<void>
   onBranchTagsChanged: () => void
+  initialModule?: ProjectSettingsModuleKey
+  initialGitTab?: 'repositories' | 'remotes' | 'commands'
 }): JSX.Element {
   const { updateProject } = useForgeDeskStore()
   const [form] = Form.useForm<ProjectSettingsForm>()
   const [savingProject, setSavingProject] = useState(false)
   const [branchTagRefreshToken, setBranchTagRefreshToken] = useState(0)
-  const [settingsView, setSettingsView] = useState(createInitialProjectSettingsView)
+  const [settingsView, setSettingsView] = useState(() => initialModule ? openProjectSettingsModule(initialModule) : createInitialProjectSettingsView())
+  const [gitSettingsTab, setGitSettingsTab] = useState<'repositories' | 'remotes' | 'commands'>(initialGitTab ?? 'repositories')
 
   function notifyBranchTagsChanged(): void {
     setBranchTagRefreshToken((current) => current + 1)
@@ -12081,6 +12473,11 @@ function ProjectSettingsPanel({
       owner: project.owner
     })
   }, [form, project.description, project.id, project.name, project.owner, project.workspacePath])
+
+  useEffect(() => {
+    setSettingsView(initialModule ? openProjectSettingsModule(initialModule) : createInitialProjectSettingsView())
+    setGitSettingsTab(initialGitTab ?? 'repositories')
+  }, [initialGitTab, initialModule])
 
   async function saveProjectSettings(): Promise<void> {
     const values = await form.validateFields()
@@ -12108,6 +12505,7 @@ function ProjectSettingsPanel({
     branches: <BranchesOutlined />,
     git: <GithubOutlined />,
     services: <ThunderboltOutlined />,
+    release: <UploadOutlined />,
     cloudflare: <CloudOutlined />,
     plane: <LinkOutlined />
   }
@@ -12159,6 +12557,8 @@ function ProjectSettingsPanel({
         return (
           <Tabs
             className="project-git-settings-tabs"
+            activeKey={gitSettingsTab}
+            onChange={(key) => setGitSettingsTab(key as 'repositories' | 'remotes' | 'commands')}
             items={[
               {
                 key: 'repositories',
@@ -12187,6 +12587,8 @@ function ProjectSettingsPanel({
         )
       case 'services':
         return <ProjectServiceSettings project={project} repositories={repositories} />
+      case 'release':
+        return <ProjectReleaseSettings project={project} />
       case 'cloudflare':
         return <ProjectCloudflareSettings project={project} />
       case 'plane':
@@ -12225,6 +12627,207 @@ function ProjectSettingsPanel({
       </div>
       <div className="project-settings-section">{renderSettingsModuleContent(activeModule.key)}</div>
     </Space>
+  )
+}
+
+function ProjectReleaseSettings({ project }: { project: Project }): JSX.Element {
+  const [form] = Form.useForm<FirebaseReleaseSettingsForm>()
+  const [settings, setSettings] = useState<ProjectFirebaseReleaseSettings | null>(null)
+  const [keyFilePath, setKeyFilePath] = useState('')
+  const [loadingSettings, setLoadingSettings] = useState(false)
+  const [savingSettings, setSavingSettings] = useState(false)
+  const [deletingSettings, setDeletingSettings] = useState(false)
+
+  async function refreshSettings(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setLoadingSettings(true)
+
+    try {
+      const nextSettings = await window.forgeDesk.getProjectFirebaseReleaseSettings(project.id)
+      setSettings(nextSettings)
+      setKeyFilePath('')
+      form.setFieldsValue({
+        enabled: nextSettings?.enabled ?? false,
+        appId: nextSettings?.appId ?? '',
+        artifactPath: nextSettings?.artifactPath ?? '',
+        buildScript: nextSettings?.buildScript ?? 'package:android',
+        groups: nextSettings?.groups.join(', ') ?? '',
+        testers: nextSettings?.testers.join(', ') ?? '',
+        serviceAccountKey: ''
+      })
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setLoadingSettings(false)
+    }
+  }
+
+  async function chooseKeyFile(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const path = await window.forgeDesk.selectFile()
+
+    if (path) {
+      setKeyFilePath(path)
+      form.setFieldValue('serviceAccountKey', '')
+    }
+  }
+
+  async function saveSettings(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const values = await form.validateFields()
+    const appId = values.appId.trim()
+    const artifactPath = values.artifactPath.trim()
+
+    if (values.enabled && (!appId || !artifactPath) && !settings?.active) {
+      message.warning('启用 Firebase 发布前，请填写 Firebase App ID 和构建产物路径')
+      return
+    }
+
+    setSavingSettings(true)
+
+    try {
+      const nextSettings = await window.forgeDesk.saveProjectFirebaseReleaseSettings({
+        projectId: project.id,
+        enabled: values.enabled,
+        appId,
+        artifactPath,
+        buildScript: values.buildScript.trim(),
+        groups: values.groups ?? '',
+        testers: values.testers ?? '',
+        serviceAccountKey: values.serviceAccountKey?.trim() || undefined,
+        serviceAccountKeyFilePath: keyFilePath || undefined
+      })
+      setSettings(nextSettings)
+      setKeyFilePath('')
+      form.setFieldValue('serviceAccountKey', '')
+      message.success('Firebase 发布设置已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingSettings(false)
+    }
+  }
+
+  function confirmDeleteSettings(): void {
+    Modal.confirm({
+      title: '删除 Firebase 发布配置？',
+      content: '只会删除当前项目在 ForgeDesk 中保存的 App ID、发布规则和 Service Account key，不会删除 Firebase 上的 App 或历史版本。',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      async onOk() {
+        if (!window.forgeDesk) {
+          return
+        }
+
+        setDeletingSettings(true)
+
+        try {
+          await window.forgeDesk.deleteProjectFirebaseReleaseSettings(project.id)
+          setSettings(null)
+          setKeyFilePath('')
+          form.resetFields()
+          message.success('Firebase 发布配置已删除')
+        } catch (error) {
+          message.error(getErrorMessage(error))
+        } finally {
+          setDeletingSettings(false)
+        }
+      }
+    })
+  }
+
+  useEffect(() => {
+    refreshSettings()
+  }, [project.id])
+
+  const active = Boolean(settings?.active)
+  const keyDescription = keyFilePath
+    ? `待保存文件：${keyFilePath}`
+    : settings?.serviceAccountKeyConfigured
+      ? `已保存：${settings.serviceAccountEmail || settings.serviceAccountProjectId || 'Service Account key'}（界面不回显私钥）`
+      : '支持粘贴 Service Account JSON，或从本机选择 .json key 文件。'
+
+  return (
+    <div className="panel project-release-settings">
+      <div className="panel-title">
+        <Space direction="vertical" size={2}>
+          <Typography.Title level={4}>Firebase App Distribution</Typography.Title>
+          <Typography.Text type="secondary">为当前项目单独配置 Firebase App Distribution。配置激活后，版本发布页才会出现 Firebase 流程。</Typography.Text>
+        </Space>
+        <Space wrap>
+          <Button icon={<ReloadOutlined />} loading={loadingSettings} onClick={refreshSettings}>
+            重新读取
+          </Button>
+          <Button danger icon={<DeleteOutlined />} disabled={!settings} loading={deletingSettings} onClick={confirmDeleteSettings}>
+            删除配置
+          </Button>
+          <Button type="primary" icon={<SaveOutlined />} loading={savingSettings} onClick={saveSettings}>
+            保存设置
+          </Button>
+        </Space>
+      </div>
+
+      <Alert
+        type={active ? 'success' : 'warning'}
+        showIcon
+        message={active ? 'Firebase 发布流程已激活' : 'Firebase 发布流程未激活'}
+        description={active ? `发布目标：${settings?.appId}；产物：${settings?.artifactPath}` : '需要同时勾选启用、填写 Firebase App ID 和构建产物路径，并配置 Service Account key。发布时还需要本机已安装 firebase-tools。'}
+      />
+
+      <Form form={form} layout="vertical" className="project-settings-form">
+        <Form.Item name="enabled" valuePropName="checked">
+          <Checkbox>启用 Firebase App Distribution 发布平台</Checkbox>
+        </Form.Item>
+        <Row gutter={[16, 0]}>
+          <Col xs={24} md={12}>
+            <Form.Item name="appId" label="Firebase App ID" extra="从 Firebase Console 的项目设置 / 应用中复制，例如 1:1234567890:android:abc123。">
+              <Input placeholder="1:1234567890:android:abcdef" />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={12}>
+            <Form.Item name="artifactPath" label="构建产物路径" extra="相对于当前项目目录，支持 APK、AAB 或 IPA；也可以填写绝对路径。">
+              <Input placeholder="android/app/build/outputs/apk/debug/app-debug.apk" />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={12}>
+            <Form.Item name="buildScript" label="构建脚本（可选）" extra="例如 package:android；留空表示直接上传已有产物。">
+              <Input placeholder="package:android" />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={12}>
+            <Form.Item name="groups" label="测试组（可选）" extra="多个组用逗号分隔，例如 qa-team, trusted-testers。">
+              <Input placeholder="qa-team" />
+            </Form.Item>
+          </Col>
+          <Col xs={24}>
+            <Form.Item name="testers" label="测试者邮箱（可选）" extra="多个邮箱用逗号分隔；填写后 Firebase 会邀请这些测试者。">
+              <Input placeholder="qa@example.com, owner@example.com" />
+            </Form.Item>
+          </Col>
+          <Col xs={24}>
+            <Form.Item name="serviceAccountKey" label={settings?.serviceAccountKeyConfigured ? 'Service Account JSON key（留空不修改）' : 'Service Account JSON key'}>
+              <Input.TextArea rows={6} placeholder="粘贴从 Google Cloud 下载的 service-account.json 内容" />
+            </Form.Item>
+            <Space wrap>
+              <Button icon={<FolderOpenOutlined />} onClick={chooseKeyFile}>
+                选择 JSON key 文件
+              </Button>
+              <Typography.Text type="secondary">{keyDescription}</Typography.Text>
+            </Space>
+          </Col>
+        </Row>
+      </Form>
+    </div>
   )
 }
 
@@ -12943,168 +13546,6 @@ function ProjectCard({
   )
 }
 
-function SimpleProjectDetailModal({
-  project,
-  repositories,
-  summary,
-  open,
-  onClose,
-  onOpenProjectManagement
-}: {
-  project: Project | null
-  repositories: Repository[]
-  summary: ProjectGitSummary | null
-  open: boolean
-  onClose: () => void
-  onOpenProjectManagement: () => void
-}): JSX.Element {
-  if (!project) {
-    return <></>
-  }
-
-  const repositoryStats = getProjectRepositoryStats(repositories)
-  const remoteCount = repositories.reduce((sum, repository) => sum + getRepositoryRemoteCount(repository), 0)
-  const changedRepositories = repositories.filter((repository) => repository.hasChanges).length
-  const aheadRepositories = repositories.filter((repository) => repository.ahead > 0).length
-  const remoteAlignmentStats = getProjectRemoteAlignmentStats(repositories)
-  const statusMeta = project.status === 'warning'
-    ? { label: '需要关注', color: 'orange' }
-    : project.status === 'needs-setup'
-      ? { label: '待设置', color: 'gold' }
-      : { label: '正常', color: 'green' }
-  const repositoryRows = sortRepositoriesHierarchically(repositories)
-  const repositoryColumns: ColumnsType<RepositoryHierarchyItem<Repository>> = [
-    {
-      title: '仓库',
-      key: 'repository',
-      render: (_, item) => (
-        <Space direction="vertical" size={2}>
-          <Typography.Text strong>{getRepositoryDisplayLabel(item.repository, item.depth)}</Typography.Text>
-          <Typography.Text type="secondary" className="table-text" ellipsis={{ tooltip: item.repository.localPath }}>
-            {item.repository.relativePath || item.repository.localPath}
-          </Typography.Text>
-        </Space>
-      )
-    },
-    {
-      title: '分支',
-      key: 'branch',
-      width: 150,
-      render: (_, item) => item.repository.available ? (item.repository.isDetached ? 'Detached HEAD' : item.repository.currentBranch || '未识别') : '不可用'
-    },
-    {
-      title: '工作区',
-      key: 'workspace',
-      width: 130,
-      render: (_, item) => (
-        <Space size={4} wrap>
-          <Tag color={item.repository.hasChanges ? 'orange' : 'green'}>{item.repository.hasChanges ? '有改动' : '干净'}</Tag>
-          {item.repository.ahead > 0 ? <Tag color="blue">未推送 {item.repository.ahead}</Tag> : null}
-        </Space>
-      )
-    },
-    {
-      title: '远端',
-      key: 'remote',
-      width: 180,
-      render: (_, item) => (
-        <Space direction="vertical" size={2}>
-          <Typography.Text>{getRepositoryRemoteCount(item.repository)} 个远端</Typography.Text>
-          <RemoteAlignmentBadge alignment={item.repository.remoteAlignment} />
-        </Space>
-      )
-    },
-    {
-      title: '状态',
-      key: 'status',
-      width: 110,
-      render: (_, item) => {
-        const state = getRepositoryStateMeta(item.repository)
-        return <Tag color={state.color}>{state.label}</Tag>
-      }
-    }
-  ]
-
-  return (
-    <Modal
-      className="simple-project-detail-modal"
-      title={
-        <Space size={8} wrap>
-          <span>项目详情</span>
-          <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
-        </Space>
-      }
-      open={open}
-      width="min(920px, calc(100vw - 32px))"
-      footer={
-        <Space>
-          <Button onClick={onClose}>关闭</Button>
-          <Button type="primary" icon={<ArrowRightOutlined />} onClick={onOpenProjectManagement}>
-            进入项目管理
-          </Button>
-        </Space>
-      }
-      onCancel={onClose}
-    >
-      <div className="simple-project-detail-heading">
-        <div>
-          <Typography.Title level={4}>{project.name}</Typography.Title>
-          <Typography.Text className="simple-project-detail-path" type="secondary" copyable={{ text: project.workspacePath }}>
-            {project.workspacePath}
-          </Typography.Text>
-        </div>
-        {project.owner ? <Tag>{project.owner}</Tag> : null}
-      </div>
-
-      {project.description ? <Typography.Paragraph type="secondary">{project.description}</Typography.Paragraph> : null}
-
-      <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
-        <Descriptions.Item label="仓库结构">
-          {repositoryStats.roots} 主仓库 · {repositoryStats.subprojects} 子项目 · {repositoryStats.submodules} 子模块
-        </Descriptions.Item>
-        <Descriptions.Item label="远端对齐">
-          已对齐 {remoteAlignmentStats.aligned} · 未对齐 {remoteAlignmentStats.notAligned} · 缺配置 {remoteAlignmentStats.missing}
-        </Descriptions.Item>
-        <Descriptions.Item label="Git 分析">
-          {summary?.lastAnalyzedAt ? formatDateTime(summary.lastAnalyzedAt) : '尚未分析'}
-        </Descriptions.Item>
-        <Descriptions.Item label="项目创建">
-          {formatDateTime(project.createdAt)}
-        </Descriptions.Item>
-      </Descriptions>
-
-      <Row gutter={[12, 12]} className="simple-project-detail-stats">
-        <Col xs={12} sm={6}><div className="metric-tile"><Statistic title="仓库" value={repositoryStats.total} /></div></Col>
-        <Col xs={12} sm={6}><div className="metric-tile"><Statistic title="远端" value={remoteCount} /></div></Col>
-        <Col xs={12} sm={6}><div className="metric-tile"><Statistic title="有改动" value={changedRepositories} /></div></Col>
-        <Col xs={12} sm={6}><div className="metric-tile"><Statistic title="未推送" value={aheadRepositories} /></div></Col>
-      </Row>
-
-      {summary?.status === 'failed' && summary.errorMessage ? <Alert type="warning" showIcon message="Git 分析失败" description={summary.errorMessage} /> : null}
-      {summary?.status === 'ready' ? (
-        <Descriptions className="simple-project-detail-analysis" bordered size="small" column={{ xs: 1, sm: 2 }}>
-          <Descriptions.Item label="提交数">{formatNumber(summary.totalCommits)}</Descriptions.Item>
-          <Descriptions.Item label="参与人数">{formatNumber(summary.contributorCount)}</Descriptions.Item>
-          <Descriptions.Item label="新增 / 删除">{formatNumber(summary.totalAdditions)} / {formatNumber(summary.totalDeletions)}</Descriptions.Item>
-          <Descriptions.Item label="活跃天数">{formatNumber(summary.activeDays)}</Descriptions.Item>
-        </Descriptions>
-      ) : null}
-
-      <Typography.Title level={5} className="simple-project-detail-section-title">仓库明细</Typography.Title>
-      <Table<RepositoryHierarchyItem<Repository>>
-        className="simple-project-detail-table"
-        rowKey={(item) => item.repository.id}
-        size="small"
-        columns={repositoryColumns}
-        dataSource={repositoryRows}
-        pagination={false}
-        scroll={{ x: 760 }}
-        locale={{ emptyText: '这个项目下还没有仓库' }}
-      />
-    </Modal>
-  )
-}
-
 type ProjectGitListAction = 'fetch' | 'push' | 'merge'
 type ProjectGitTaskStatus = 'running' | 'success' | 'failed' | 'skipped' | 'cancelled'
 
@@ -13127,6 +13568,12 @@ type ProjectGitTaskLog = {
   finishedAt?: string
   summary: string
   repositoryResults: ProjectGitRepositoryTaskResult[]
+}
+
+type ProjectGitPushRequest = {
+  repositoryId: string
+  remoteNames: string[]
+  branch: string
 }
 
 function getProjectGitTaskKey(projectId: string, action: ProjectGitListAction): string {
@@ -13207,7 +13654,10 @@ function ProjectLogTreePanel({
   refreshToken,
   branchTagRefreshToken,
   onCommitCountChange,
-  onRepositoryChange
+  onRepositoryChange,
+  initializingProjectRepository,
+  onInitializeProjectRepository,
+  onOpenProjectRemoteSettings
 }: {
   repositories: Repository[]
   repositoryId: string
@@ -13216,6 +13666,9 @@ function ProjectLogTreePanel({
   branchTagRefreshToken: number
   onCommitCountChange: (repositoryId: string, commitCount: number) => void
   onRepositoryChange: (repositoryId: string) => void
+  initializingProjectRepository: boolean
+  onInitializeProjectRepository: () => void
+  onOpenProjectRemoteSettings: () => void
 }): JSX.Element {
   const orderedRepositories = sortRepositoriesHierarchically(repositories).map((item) => item.repository)
   const selectedRepository = orderedRepositories.find((repository) => repository.id === repositoryId) ?? orderedRepositories[0] ?? null
@@ -13224,8 +13677,43 @@ function ProjectLogTreePanel({
 
   if (repositories.length === 0) {
     return (
-      <div className="panel empty-project-panel">
-        <Empty description="这个项目下还没有仓库，创建项目时扫描到的 Git 仓库会显示在这里" />
+      <div className="panel empty-project-panel project-repository-setup">
+        <div className="project-repository-setup-icon">
+          <GithubOutlined />
+        </div>
+        <Typography.Title level={4}>先初始化本地 Git 仓库</Typography.Title>
+        <Typography.Paragraph type="secondary" className="project-repository-setup-description">
+          当前项目目录还不是 Git 仓库。先初始化本地仓库，ForgeDesk 才能读取提交、分支和工作区状态；完成后再添加远端地址。
+        </Typography.Paragraph>
+        <div className="project-repository-setup-steps">
+          <div className="project-repository-setup-step is-current">
+            <span className="project-repository-setup-step-index">1</span>
+            <span className="project-repository-setup-step-copy">
+              <Typography.Text strong>初始化本地仓库</Typography.Text>
+              <Typography.Text type="secondary">在项目目录执行 git init</Typography.Text>
+            </span>
+            <Tag color="blue">当前步骤</Tag>
+          </div>
+          <div className="project-repository-setup-step">
+            <span className="project-repository-setup-step-index">2</span>
+            <span className="project-repository-setup-step-copy">
+              <Typography.Text strong>完善远端仓库</Typography.Text>
+              <Typography.Text type="secondary">添加远端地址并设置主推送目标</Typography.Text>
+            </span>
+            <Tag>下一步</Tag>
+          </div>
+        </div>
+        <Space wrap className="project-repository-setup-actions">
+          <Button type="primary" icon={<BranchesOutlined />} loading={initializingProjectRepository} onClick={onInitializeProjectRepository}>
+            初始化本地仓库
+          </Button>
+          <Button icon={<CloudOutlined />} disabled onClick={onOpenProjectRemoteSettings}>
+            完善远端仓库
+          </Button>
+        </Space>
+        <Typography.Text type="secondary" className="project-repository-setup-note">
+          只会创建 .git 目录，不会修改或删除项目文件。
+        </Typography.Text>
       </div>
     )
   }
@@ -14090,6 +14578,7 @@ function ProjectOverview({
     selectedProjectId,
     summaries,
     deleteProject,
+    initializeProjectRepository,
     rescanProjectRepositories,
     setProjectFavorite,
     setProjectSummary,
@@ -14098,8 +14587,6 @@ function ProjectOverview({
   } = useForgeDeskStore()
   const isSimpleMode = mode === 'simple'
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null)
-  const [simpleDetailProjectId, setSimpleDetailProjectId] = useState<string | null>(null)
-  const [simpleProjectManagementOpen, setSimpleProjectManagementOpen] = useState(false)
   const [projectDetailTab, setProjectDetailTab] = useState<ProjectDetailTabKey>(DEFAULT_PROJECT_DETAIL_TAB)
   const [terminalOpenRequest, setTerminalOpenRequest] = useState<TerminalOpenRequest | null>(null)
   const [analysisGitError, setAnalysisGitError] = useState<GitErrorGuidance | null>(null)
@@ -14111,6 +14598,9 @@ function ProjectOverview({
   const [projectDeploymentDrawerOpen, setProjectDeploymentDrawerOpen] = useState(false)
   const [projectSettingsDrawerOpen, setProjectSettingsDrawerOpen] = useState(false)
   const [rescanningProjectId, setRescanningProjectId] = useState<string | null>(null)
+  const [initializingProjectId, setInitializingProjectId] = useState<string | null>(null)
+  const [projectSettingsInitialModule, setProjectSettingsInitialModule] = useState<ProjectSettingsModuleKey | undefined>(undefined)
+  const [projectSettingsInitialGitTab, setProjectSettingsInitialGitTab] = useState<'repositories' | 'remotes' | 'commands' | undefined>(undefined)
   const [projectGitRepositoryId, setProjectGitRepositoryId] = useState('')
   const [syncingProjectRepositoryId, setSyncingProjectRepositoryId] = useState<string | null>(null)
   const [switchingProjectRepositoryId, setSwitchingProjectRepositoryId] = useState<string | null>(null)
@@ -14136,9 +14626,7 @@ function ProjectOverview({
   const projectRepositoriesRef = useRef<Repository[]>([])
   const sortedProjects = useMemo(() => sortProjectsForDisplay(projects), [projects])
   const favoriteProjectCount = projects.filter((project) => project.isFavorite).length
-  const selectedProject = (!isSimpleMode || simpleProjectManagementOpen) ? projects.find((project) => project.id === detailProjectId) ?? null : null
-  const simpleDetailProject = projects.find((project) => project.id === simpleDetailProjectId) ?? null
-  const simpleDetailProjectRepositories = simpleDetailProject ? getProjectRepositories(simpleDetailProject) : []
+  const selectedProject = projects.find((project) => project.id === detailProjectId) ?? null
   const selectedProjectRows = projects.filter((project) => selectedProjectRowIds.includes(project.id))
   const listCommitProject = projects.find((project) => project.id === listCommitProjectId) ?? null
   const listCommitProjectRepositories = listCommitProject ? getProjectRepositories(listCommitProject) : []
@@ -14181,6 +14669,21 @@ function ProjectOverview({
   const dailyDates = summary?.dailyMetrics.map((metric) => metric.date) ?? []
   const hasGitData = Boolean(summary && summary.totalCommits > 0)
   const selectedProjectTerminalRequest = selectedProject ? createProjectTerminalOpenRequest(selectedProject) : null
+
+  function openProjectRepositoryCommit(repository: Repository): void {
+    setProjectGitRepositoryId(repository.id)
+    setCommitModalOpen(true)
+  }
+
+  function openProjectRepositoryPush(repository: Repository): void {
+    setProjectGitRepositoryId(repository.id)
+    setPushModalOpen(true)
+  }
+
+  function openProjectRepositoryMerge(repository: Repository): void {
+    setProjectGitRepositoryId(repository.id)
+    setMergeModalOpen(true)
+  }
 
   function queueTerminalOpen(request: Omit<TerminalOpenRequest, 'requestId'>): void {
     terminalRequestSeqRef.current += 1
@@ -14278,16 +14781,25 @@ function ProjectOverview({
     )
   }
 
-  async function pushProjectRepositories(project: Project, projectRepositories: Repository[], taskId: string): Promise<ProjectGitRepositoryTaskResult[]> {
+  async function pushProjectRepositories(
+    project: Project,
+    projectRepositories: Repository[],
+    taskId: string,
+    request?: ProjectGitPushRequest
+  ): Promise<ProjectGitRepositoryTaskResult[]> {
     if (!window.forgeDesk) {
       return []
     }
 
-    const pushableRepositories = projectRepositories.filter((repository) => groupPushTargetsByBranch(repository.pushTargets).length > 0)
+    const pushableRepositories = projectRepositories.filter((repository) =>
+      repository.available && (request ? repository.id === request.repositoryId : groupPushTargetsByBranch(repository.pushTargets).length > 0)
+    )
 
     return Promise.all(
       pushableRepositories.map(async (repository) => {
-        const branchGroups = groupPushTargetsByBranch(repository.pushTargets)
+        const branchGroups = request
+          ? [{ branch: request.branch, remotes: request.remoteNames }]
+          : groupPushTargetsByBranch(repository.pushTargets)
         const outputs: string[] = []
         const errors: string[] = []
 
@@ -14326,7 +14838,7 @@ function ProjectOverview({
     )
   }
 
-  async function runProjectGitTask(project: Project, action: 'fetch' | 'push'): Promise<void> {
+  async function runProjectGitTask(project: Project, action: 'fetch' | 'push', pushRequest?: ProjectGitPushRequest): Promise<void> {
     if (!window.forgeDesk) {
       message.warning('请在 ForgeDesk 桌面应用中执行 Git 操作')
       return
@@ -14358,7 +14870,7 @@ function ProjectOverview({
           ? []
           : action === 'fetch'
             ? await fetchProjectRepositories(project, projectRepositories, taskId)
-            : await pushProjectRepositories(project, projectRepositories, taskId)
+            : await pushProjectRepositories(project, projectRepositories, taskId, pushRequest)
 
       if (isProjectGitTaskCancelled(taskId)) {
         return
@@ -14664,12 +15176,6 @@ function ProjectOverview({
   }, [focusProjectId, isSimpleMode, projects, setSelectedProjectId])
 
   useEffect(() => {
-    if (!isSimpleMode) {
-      setSimpleDetailProjectId(null)
-    }
-  }, [isSimpleMode])
-
-  useEffect(() => {
     const nextTab = resolveProjectDetailTab(projectDetailTab, projectDetailTabAvailability)
 
     if (isSimpleMode) {
@@ -14763,6 +15269,34 @@ function ProjectOverview({
     }
   }
 
+  function openProjectRemoteSettings(): void {
+    setProjectSettingsInitialModule('git')
+    setProjectSettingsInitialGitTab('remotes')
+    setProjectSettingsDrawerOpen(true)
+  }
+
+  async function initializeSelectedProjectRepository(project: Project): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中初始化本地仓库')
+      return
+    }
+
+    setInitializingProjectId(project.id)
+
+    try {
+      await initializeProjectRepository(project.id)
+      setProjectGitRepositoryId('')
+      setProjectGitRefreshToken((current) => current + 1)
+      await refreshSummary(project.id)
+      message.success('本地 Git 仓库已初始化，下一步请完善远端仓库')
+      openProjectRemoteSettings()
+    } catch (error) {
+      message.error(getErrorMessage(error, '初始化本地仓库失败'))
+    } finally {
+      setInitializingProjectId(null)
+    }
+  }
+
   async function switchProjectRepositoryBranch(targetRepository: Repository, input: GitBranchSwitchInput): Promise<void> {
     if (!window.forgeDesk) {
       message.warning('请在 ForgeDesk 桌面应用中切换分支')
@@ -14789,25 +15323,9 @@ function ProjectOverview({
 
   function openProjectDetail(project: Project): void {
     setSelectedProjectId(project.id)
+    setProjectSettingsInitialModule(undefined)
+    setProjectSettingsInitialGitTab(undefined)
 
-    if (isSimpleMode) {
-      setSimpleProjectManagementOpen(false)
-      setSimpleDetailProjectId(project.id)
-      setDetailProjectId(null)
-      return
-    }
-
-    setSimpleProjectManagementOpen(false)
-    setDetailProjectId(project.id)
-    setSimpleDetailProjectId(null)
-    setProjectDetailTab(DEFAULT_PROJECT_DETAIL_TAB)
-    setProjectSettingsDrawerOpen(false)
-  }
-
-  function openSimpleProjectManagement(project: Project): void {
-    setSelectedProjectId(project.id)
-    setSimpleDetailProjectId(null)
-    setSimpleProjectManagementOpen(true)
     setDetailProjectId(project.id)
     setProjectDetailTab(DEFAULT_PROJECT_DETAIL_TAB)
     setProjectSettingsDrawerOpen(false)
@@ -14845,13 +15363,8 @@ function ProjectOverview({
 
     if (detailProjectId === projectId) {
       setDetailProjectId(null)
-      setSimpleProjectManagementOpen(false)
       setProjectGitRepositoryId('')
       setAnalysisGitError(null)
-    }
-
-    if (simpleDetailProjectId === projectId) {
-      setSimpleDetailProjectId(null)
     }
 
     if (listCommitProjectId === projectId) {
@@ -15159,24 +15672,26 @@ function ProjectOverview({
 
   return (
     <section className="workspace-section project-workspace">
-      <div className="section-heading">
-        <div>
-          <Typography.Title level={2}>项目</Typography.Title>
-          <Typography.Text type="secondary">
-            {isSimpleMode ? '项目、仓库和发布状态集中管理。' : '一行一个项目，直接管理 Fetch、提交、合并和推送任务。'}
-          </Typography.Text>
-        </div>
-        <Space wrap>
-          {!isSimpleMode ? (
-            <Button icon={<FileTextOutlined />} onClick={() => setProjectGitTaskDrawerOpen(true)}>
-              任务日志{runningProjectTaskCount > 0 ? `（${runningProjectTaskCount}）` : ''}
+      {!selectedProject ? (
+        <div className="section-heading">
+          <div>
+            <Typography.Title level={2}>项目</Typography.Title>
+            <Typography.Text type="secondary">
+              {isSimpleMode ? '项目、仓库和发布状态集中管理。' : '一行一个项目，直接管理 Fetch、提交、合并和推送任务。'}
+            </Typography.Text>
+          </div>
+          <Space wrap>
+            {!isSimpleMode ? (
+              <Button icon={<FileTextOutlined />} onClick={() => setProjectGitTaskDrawerOpen(true)}>
+                任务日志{runningProjectTaskCount > 0 ? `（${runningProjectTaskCount}）` : ''}
+              </Button>
+            ) : null}
+            <Button type="primary" icon={<PlusOutlined />} onClick={onCreateProject}>
+              创建项目
             </Button>
-          ) : null}
-          <Button type="primary" icon={<PlusOutlined />} onClick={onCreateProject}>
-            创建项目
-          </Button>
-        </Space>
-      </div>
+          </Space>
+        </div>
+      ) : null}
 
       {projects.length === 0 ? (
         <div className="panel empty-project-panel">
@@ -15196,7 +15711,7 @@ function ProjectOverview({
                 <Typography.Title level={4}>项目列表</Typography.Title>
                 <Space size={8} wrap>
                   <Typography.Text type="secondary">
-                    {isSimpleMode ? '点击项目进入工作台，更多操作收在项目菜单中。' : '选中多个项目后，可以并发 Fetch 或推送。'}
+                    {isSimpleMode ? '点击项目直接进入工作台，更多操作收在项目菜单中。' : '选中多个项目后，可以并发 Fetch 或推送。'}
                   </Typography.Text>
                   {favoriteProjectCount > 0 ? <Tag color="gold">已收藏 {favoriteProjectCount}</Tag> : null}
                 </Space>
@@ -15270,7 +15785,6 @@ function ProjectOverview({
               label="返回项目列表"
               onClick={() => {
                 setDetailProjectId(null)
-                setSimpleProjectManagementOpen(false)
               }}
             />
           </div>
@@ -15280,6 +15794,9 @@ function ProjectOverview({
                 <div className="project-title-content">
                   <Space size={8} align="center" className="project-title-row">
                     <Typography.Title level={3}>{selectedProject.name}</Typography.Title>
+                    <Tag color={selectedProject.status === 'warning' ? 'orange' : selectedProject.status === 'needs-setup' ? 'gold' : 'green'}>
+                      {selectedProject.status === 'warning' ? '需要关注' : selectedProject.status === 'needs-setup' ? '待设置' : '正常'}
+                    </Tag>
                     <Button
                       type="text"
                       className={`project-favorite-button project-detail-favorite-button${selectedProject.isFavorite ? ' is-active' : ''}`}
@@ -15297,7 +15814,17 @@ function ProjectOverview({
                   <Typography.Text type="secondary">
                     {getProjectRepositoryStats(projectRepositories).roots} 个主仓库 · {getProjectRepositoryStats(projectRepositories).subprojects} 个子项目 · {getProjectRepositoryStats(projectRepositories).submodules} 个子模块
                   </Typography.Text>
-                  {summary?.lastAnalyzedAt && <Typography.Text type="secondary">上次分析：{new Date(summary.lastAnalyzedAt).toLocaleString()}</Typography.Text>}
+                  <div className="project-detail-overview" aria-label="项目概况">
+                    {selectedProject.owner ? <Tag>{selectedProject.owner}</Tag> : null}
+                    <span className="project-detail-overview-item"><span>仓库</span><strong>{projectRepositories.length}</strong></span>
+                    <span className="project-detail-overview-item"><span>远端</span><strong>{remoteCount}</strong></span>
+                    <span className="project-detail-overview-item"><span>对齐</span><strong>{remoteAlignmentStats.aligned}/{remoteAlignmentStats.aligned + remoteAlignmentStats.notAligned + remoteAlignmentStats.missing + remoteAlignmentStats.unknown}</strong></span>
+                    <span className="project-detail-overview-item"><span>有改动</span><strong>{changedRepositories}</strong></span>
+                    <span className="project-detail-overview-item"><span>未推送</span><strong>{aheadRepositories}</strong></span>
+                    <span className="project-detail-overview-item"><span>创建于</span><strong>{formatDateTime(selectedProject.createdAt)}</strong></span>
+                    <span className="project-detail-overview-item"><span>分析</span><strong>{summary?.lastAnalyzedAt ? formatDateTime(summary.lastAnalyzedAt) : '尚未分析'}</strong></span>
+                  </div>
+                  {selectedProject.description ? <Typography.Text type="secondary" className="project-detail-description" title={selectedProject.description}>{selectedProject.description}</Typography.Text> : null}
                 </div>
               </div>
               <Space wrap className="project-detail-actions">
@@ -15313,7 +15840,14 @@ function ProjectOverview({
                     删除项目
                   </Button>
                 ) : null}
-                <Button icon={<SettingOutlined />} onClick={() => setProjectSettingsDrawerOpen(true)}>
+                <Button
+                  icon={<SettingOutlined />}
+                  onClick={() => {
+                    setProjectSettingsInitialModule(undefined)
+                    setProjectSettingsInitialGitTab(undefined)
+                    setProjectSettingsDrawerOpen(true)
+                  }}
+                >
                   设置
                 </Button>
                 <Button icon={<SaveOutlined />} disabled={!projectHasCommittableChanges} onClick={() => setCommitModalOpen(true)}>
@@ -15327,7 +15861,12 @@ function ProjectOverview({
                 <Button icon={<CloudOutlined />} disabled={projectRepositories.length === 0} onClick={() => setProjectDeploymentDrawerOpen(true)}>
                   {isSimpleMode ? '部署' : '项目发布'}
                 </Button>
-                <Button icon={<UploadOutlined />} disabled={!projectHasPushableTargets} onClick={() => setPushModalOpen(true)}>
+                <Button
+                  icon={<UploadOutlined />}
+                  loading={selectedProject ? isProjectGitTaskRunning(selectedProject.id, 'push') : false}
+                  disabled={!projectHasPushableTargets || (selectedProject ? isProjectGitTaskRunning(selectedProject.id, 'push') : false)}
+                  onClick={() => setPushModalOpen(true)}
+                >
                   推送
                 </Button>
                 <Button icon={<BranchesOutlined />} disabled={projectRepositories.length === 0} onClick={() => setMergeModalOpen(true)}>
@@ -15362,6 +15901,11 @@ function ProjectOverview({
               repositories={projectRepositories}
               initialRepositoryId={selectedProjectGitRepository?.id}
               onClose={() => setPushModalOpen(false)}
+              onStartTask={({ repository, remoteNames, branch }) => {
+                if (selectedProject) {
+                  void runProjectGitTask(selectedProject, 'push', { repositoryId: repository.id, remoteNames, branch })
+                }
+              }}
               onChanged={(repository) => selectedProject && refreshProjectGitData(selectedProject.id, repository)}
             />
             <GitMergeModal
@@ -15392,10 +15936,12 @@ function ProjectOverview({
               onClose={() => setProjectSettingsDrawerOpen(false)}
             >
               <ProjectSettingsPanel
-                key={`${selectedProject.id}:${projectSettingsDrawerOpen ? 'open' : 'closed'}`}
+                key={`${selectedProject.id}:${projectSettingsDrawerOpen ? 'open' : 'closed'}:${projectSettingsInitialModule ?? 'list'}:${projectSettingsInitialGitTab ?? 'repositories'}`}
                 project={selectedProject}
                 repositories={projectRepositories}
                 contributors={summary?.contributors ?? []}
+                initialModule={projectSettingsInitialModule}
+                initialGitTab={projectSettingsInitialGitTab}
                 onSummaryChanged={() => refreshSummary(selectedProject.id)}
                 onBranchTagsChanged={() => setBranchTagRefreshToken((current) => current + 1)}
               />
@@ -15423,8 +15969,13 @@ function ProjectOverview({
                 selectedRepositoryId={selectedProjectGitRepository.id}
                 commitCount={selectedProjectGitCommitCount}
                 switchingRepositoryId={switchingProjectRepositoryId}
+                fetchingRepositoryId={syncingProjectRepositoryId}
                 onRepositoryChange={setProjectGitRepositoryId}
                 onSwitchBranch={switchProjectRepositoryBranch}
+                onCommitRepository={openProjectRepositoryCommit}
+                onPushRepository={openProjectRepositoryPush}
+                onFetchRepository={syncProjectRepository}
+                onMergeRepository={openProjectRepositoryMerge}
               />
             )}
 
@@ -15529,6 +16080,9 @@ function ProjectOverview({
                       branchTagRefreshToken={branchTagRefreshToken}
                       onCommitCountChange={recordProjectRepositoryCommitCount}
                       onRepositoryChange={setProjectGitRepositoryId}
+                      initializingProjectRepository={initializingProjectId === selectedProject.id}
+                      onInitializeProjectRepository={() => void initializeSelectedProjectRepository(selectedProject)}
+                      onOpenProjectRemoteSettings={openProjectRemoteSettings}
                     />
                   )
                 },
@@ -15544,6 +16098,9 @@ function ProjectOverview({
                       branchTagRefreshToken={branchTagRefreshToken}
                       onCommitCountChange={recordProjectRepositoryCommitCount}
                       onRepositoryChange={setProjectGitRepositoryId}
+                      initializingProjectRepository={initializingProjectId === selectedProject.id}
+                      onInitializeProjectRepository={() => void initializeSelectedProjectRepository(selectedProject)}
+                      onOpenProjectRemoteSettings={openProjectRemoteSettings}
                     />
                   )
                 },
@@ -15587,18 +16144,6 @@ function ProjectOverview({
           </div>
         </div>
       )}
-      <SimpleProjectDetailModal
-        project={isSimpleMode ? simpleDetailProject : null}
-        repositories={simpleDetailProjectRepositories}
-        summary={simpleDetailProject ? summaries[simpleDetailProject.id] ?? null : null}
-        open={isSimpleMode && Boolean(simpleDetailProject)}
-        onClose={() => setSimpleDetailProjectId(null)}
-        onOpenProjectManagement={() => {
-          if (simpleDetailProject) {
-            openSimpleProjectManagement(simpleDetailProject)
-          }
-        }}
-      />
       <GitMergeModal
         open={Boolean(listMergeProject)}
         repositories={listMergeProjectRepositories}
@@ -16826,14 +17371,24 @@ function ProjectSubprojectSummary({
   repositories,
   selectedRepositoryId,
   switchingRepositoryId,
+  fetchingRepositoryId,
   onRepositoryChange,
-  onSwitchBranch
+  onSwitchBranch,
+  onCommitRepository,
+  onPushRepository,
+  onFetchRepository,
+  onMergeRepository
 }: {
   repositories: Repository[]
   selectedRepositoryId?: string
   switchingRepositoryId?: string | null
+  fetchingRepositoryId?: string | null
   onRepositoryChange: (repositoryId: string) => void
   onSwitchBranch?: (repository: Repository, input: GitBranchSwitchInput) => Promise<void>
+  onCommitRepository?: (repository: Repository) => void
+  onPushRepository?: (repository: Repository) => void
+  onFetchRepository?: (repository: Repository) => void | Promise<void>
+  onMergeRepository?: (repository: Repository) => void
 }): JSX.Element | null {
   const subprojects = getNestedProjectRepositories(repositories)
 
@@ -16854,6 +17409,10 @@ function ProjectSubprojectSummary({
         {subprojects.map(({ repository, depth }) => {
           const state = getRepositoryStateMeta(repository)
           const selected = selectedRepositoryId === repository.id
+          const canCommitRepository = repository.available && repository.hasChanges
+          const canPushRepository = repository.available && getPushableTargets(repository.pushTargets).length > 0
+          const canFetchRepository = repository.available
+          const canMergeRepository = repository.available
           const statusTags = [
             !repository.available ? <Tag key="availability" color={state.color}>{state.label}</Tag> : null,
             repository.available && repository.isDetached ? <Tag key="detached" color="cyan">Detached HEAD</Tag> : null,
@@ -16908,6 +17467,55 @@ function ProjectSubprojectSummary({
               <div className="project-subproject-status">
                 {statusTags}
               </div>
+              {(onCommitRepository || onPushRepository || onFetchRepository || onMergeRepository) && (
+                <div className="project-subproject-actions">
+                  <Button
+                    size="small"
+                    icon={<SaveOutlined />}
+                    disabled={!canCommitRepository || !onCommitRepository}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onCommitRepository?.(repository)
+                    }}
+                  >
+                    提交
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<UploadOutlined />}
+                    disabled={!canPushRepository || !onPushRepository}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onPushRepository?.(repository)
+                    }}
+                  >
+                    推送
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    loading={fetchingRepositoryId === repository.id}
+                    disabled={!canFetchRepository || !onFetchRepository}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void onFetchRepository?.(repository)
+                    }}
+                  >
+                    Fetch
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<BranchesOutlined />}
+                    disabled={!canMergeRepository || !onMergeRepository}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onMergeRepository?.(repository)
+                    }}
+                  >
+                    合并
+                  </Button>
+                </div>
+              )}
             </div>
           )
         })}
@@ -16922,16 +17530,26 @@ function RepositorySummaryStrip({
   selectedRepositoryId,
   commitCount,
   switchingRepositoryId,
+  fetchingRepositoryId,
   onRepositoryChange,
-  onSwitchBranch
+  onSwitchBranch,
+  onCommitRepository,
+  onPushRepository,
+  onFetchRepository,
+  onMergeRepository
 }: {
   activeRepository: Repository
   repositories: Repository[]
   selectedRepositoryId?: string
   commitCount: number
   switchingRepositoryId?: string | null
+  fetchingRepositoryId?: string | null
   onRepositoryChange?: (repositoryId: string) => void
   onSwitchBranch?: (repository: Repository, input: GitBranchSwitchInput) => Promise<void>
+  onCommitRepository?: (repository: Repository) => void
+  onPushRepository?: (repository: Repository) => void
+  onFetchRepository?: (repository: Repository) => void | Promise<void>
+  onMergeRepository?: (repository: Repository) => void
 }): JSX.Element {
   const fields = createRepositorySummaryFields(activeRepository, commitCount)
   const hasSubprojects = getNestedProjectRepositories(repositories).length > 0
@@ -16978,8 +17596,13 @@ function RepositorySummaryStrip({
         repositories={repositories}
         selectedRepositoryId={selectedRepositoryId}
         switchingRepositoryId={switchingRepositoryId}
+        fetchingRepositoryId={fetchingRepositoryId}
         onRepositoryChange={onRepositoryChange ?? (() => undefined)}
         onSwitchBranch={onSwitchBranch}
+        onCommitRepository={onCommitRepository}
+        onPushRepository={onPushRepository}
+        onFetchRepository={onFetchRepository}
+        onMergeRepository={onMergeRepository}
       />
     </div>
   )
@@ -17087,6 +17710,7 @@ function RepositoryLogTree({
   const visibleGraphRows = useMemo(() => coloredGraphRows.slice(0, visibleCommitCount), [coloredGraphRows, visibleCommitCount])
   const graphColumnWidth = useMemo(() => getGitGraphColumnWidth(visibleGraphRows), [visibleGraphRows])
   const hasMoreCommits = visibleCommitCount < graphRows.length
+  const isEmptyRepositoryHistory = activeRepositoryForLog?.latestCommit.trim() === 'No commits yet' && commits.length === 0 && (workspaceStatus?.files.length ?? 0) === 0
   const authorOptions = useMemo(
     () =>
       Array.from(new Set(commits.map((commit) => getCommitAuthorFilterValue(commit))))
@@ -17591,7 +18215,19 @@ function RepositoryLogTree({
             }}
             pagination={false}
             scroll={{ x: graphColumnWidth + 864 }}
-            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前范围没有提交" /> }}
+            locale={{
+              emptyText: isEmptyRepositoryHistory ? (
+                <div className="empty-git-history">
+                  <span className="empty-git-history-graph" aria-hidden="true">
+                    <span className="empty-git-history-dot" />
+                  </span>
+                  <Typography.Text>当前仓库还没有提交</Typography.Text>
+                  <Typography.Text type="secondary">完成首次提交后，Log 树会显示提交图谱</Typography.Text>
+                </div>
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前范围没有提交" />
+              )
+            }}
           />
           {graphRows.length > 0 && (
             <div ref={commitLoadMoreRef} className="commit-load-more">
@@ -18109,6 +18745,7 @@ function formatRsaPrivateKeyTime(value: string): string {
 
 function ToolsPanel(): JSX.Element {
   const [activeTool, setActiveTool] = useState<ToolKey | null>(null)
+  const [activeCategory, setActiveCategory] = useState<'all' | 'security' | 'development' | 'data'>('all')
 
   if (activeTool === 'password') {
     return <PasswordGeneratorTool onBack={() => setActiveTool(null)} />
@@ -18130,61 +18767,135 @@ function ToolsPanel(): JSX.Element {
     return <CliEnvironmentTool onBack={() => setActiveTool(null)} />
   }
 
+  const toolEntries: Array<{
+    key: ToolKey
+    title: string
+    description: string
+    category: 'security' | 'development' | 'data'
+    categoryLabel: string
+    icon: React.ReactNode
+    accent: 'blue' | 'violet' | 'green' | 'orange'
+    featured?: boolean
+  }> = [
+    {
+      key: 'password',
+      title: '密码工具',
+      description: '生成 API Key、Secret 和管理员密码，减少重复配置和临时拼接。',
+      category: 'security',
+      categoryLabel: '安全与凭证',
+      icon: <KeyOutlined />,
+      accent: 'blue',
+      featured: true
+    },
+    {
+      key: 'file',
+      title: '环境变量对比',
+      description: '对照两份配置，快速找到缺失、增加或值不同的变量。',
+      category: 'development',
+      categoryLabel: '开发效率',
+      icon: <DiffOutlined />,
+      accent: 'violet'
+    },
+    {
+      key: 'rsa',
+      title: 'RSA 私钥',
+      description: '生成并管理本地私钥记录，方便为不同服务保留清晰备注。',
+      category: 'security',
+      categoryLabel: '安全与凭证',
+      icon: <KeyOutlined />,
+      accent: 'green'
+    },
+    {
+      key: 'excel',
+      title: 'Excel 工具',
+      description: '结合项目数据和 AI 口径整理数据，生成可继续编辑的工作簿。',
+      category: 'data',
+      categoryLabel: '数据处理',
+      icon: <FileExcelOutlined />,
+      accent: 'orange'
+    },
+    {
+      key: 'cli-environment',
+      title: '命令行环境',
+      description: '检查 profile、PATH、Git 提示符和新终端的启动链。',
+      category: 'development',
+      categoryLabel: '开发效率',
+      icon: <CodeOutlined />,
+      accent: 'blue'
+    }
+  ]
+  const visibleToolEntries = activeCategory === 'all' ? toolEntries : toolEntries.filter((entry) => entry.category === activeCategory)
+  const categoryFilters: Array<{ key: 'all' | 'security' | 'development' | 'data'; label: string }> = [
+    { key: 'all', label: '全部工具' },
+    { key: 'security', label: '安全与凭证' },
+    { key: 'development', label: '开发效率' },
+    { key: 'data', label: '数据处理' }
+  ]
+
   return (
     <section className="workspace-section tools-workspace">
-      <div className="section-heading">
-        <div>
+      <div className="tools-page-header">
+        <div className="tools-page-title">
+          <Typography.Text className="tools-eyebrow"><ToolOutlined /> 效率工具箱</Typography.Text>
           <Typography.Title level={2}>工具</Typography.Title>
-          <Typography.Text type="secondary">处理日常小事务。</Typography.Text>
+          <Typography.Text className="tools-page-subtitle" type="secondary">把安全、开发与数据处理工具放在一个工作台。</Typography.Text>
+        </div>
+        <div className="tools-page-summary" aria-label="工具数量">
+          <span className="tools-page-summary-value">{toolEntries.length.toString().padStart(2, '0')}</span>
+          <span className="tools-page-summary-label">个本地工具</span>
+        </div>
+      </div>
+
+      <div className="tools-local-note">
+        <span className="tools-local-note-icon"><CheckCircleOutlined /></span>
+        <span className="tools-local-note-copy">
+          <Typography.Text strong>本地优先，随手可用</Typography.Text>
+          <Typography.Text type="secondary">工具默认在本机处理内容，适合日常开发中的临时任务。</Typography.Text>
+        </span>
+        <Typography.Text className="tools-local-note-status">本机处理</Typography.Text>
+      </div>
+
+      <div className="tools-section-bar">
+        <div>
+          <Typography.Title level={4}>全部工具</Typography.Title>
+          <Typography.Text type="secondary">选择一个工具开始</Typography.Text>
+        </div>
+        <div className="tools-category-filter" role="tablist" aria-label="工具分类">
+          {categoryFilters.map((filter) => (
+            <button
+              className={`tools-category-filter-button${activeCategory === filter.key ? ' is-active' : ''}`}
+              key={filter.key}
+              type="button"
+              role="tab"
+              aria-selected={activeCategory === filter.key}
+              onClick={() => setActiveCategory(filter.key)}
+            >
+              {filter.label}
+            </button>
+          ))}
         </div>
       </div>
 
       <div className="tool-entry-grid">
-        <button className="tool-entry-card" type="button" onClick={() => setActiveTool('password')}>
-          <span className="password-tool-icon">
-            <KeyOutlined />
-          </span>
-          <span className="tool-entry-copy">
-            <Typography.Text strong>密码工具</Typography.Text>
-            <Typography.Text type="secondary">API Key、Secret、管理员密码。</Typography.Text>
-          </span>
-        </button>
-        <button className="tool-entry-card" type="button" onClick={() => setActiveTool('file')}>
-          <span className="password-tool-icon">
-            <DiffOutlined />
-          </span>
-          <span className="tool-entry-copy">
-            <Typography.Text strong>环境变量对比</Typography.Text>
-            <Typography.Text type="secondary">粘贴文本或导入文件，找出 B 缺少的变量。</Typography.Text>
-          </span>
-        </button>
-        <button className="tool-entry-card" type="button" onClick={() => setActiveTool('rsa')}>
-          <span className="password-tool-icon">
-            <KeyOutlined />
-          </span>
-          <span className="tool-entry-copy">
-            <Typography.Text strong>RSA 私钥</Typography.Text>
-            <Typography.Text type="secondary">生成并管理本地私钥记录。</Typography.Text>
-          </span>
-        </button>
-        <button className="tool-entry-card" type="button" onClick={() => setActiveTool('excel')}>
-          <span className="password-tool-icon">
-            <FileExcelOutlined />
-          </span>
-          <span className="tool-entry-copy">
-            <Typography.Text strong>Excel 工具</Typography.Text>
-            <Typography.Text type="secondary">用 AI 整理数据并生成工作簿。</Typography.Text>
-          </span>
-        </button>
-        <button className="tool-entry-card" type="button" onClick={() => setActiveTool('cli-environment')}>
-          <span className="password-tool-icon">
-            <CodeOutlined />
-          </span>
-          <span className="tool-entry-copy">
-            <Typography.Text strong>命令行环境</Typography.Text>
-            <Typography.Text type="secondary">检测 profile、PATH、Git 提示符。</Typography.Text>
-          </span>
-        </button>
+        {visibleToolEntries.map((entry) => (
+          <button
+            className={`tool-entry-card tool-entry-card-${entry.accent}${entry.featured ? ' is-featured' : ''}`}
+            key={entry.key}
+            type="button"
+            onClick={() => setActiveTool(entry.key)}
+          >
+            <span className="tool-entry-card-head">
+              <span className="tool-entry-icon">{entry.icon}</span>
+              <span className="tool-entry-arrow" aria-hidden="true"><ArrowRightOutlined /></span>
+            </span>
+            <span className="tool-entry-copy">
+              <span className="tool-entry-category">{entry.categoryLabel}</span>
+              <Typography.Text strong>{entry.title}</Typography.Text>
+              <Typography.Text type="secondary">{entry.description}</Typography.Text>
+            </span>
+            <span className="tool-entry-action">打开工具 <ArrowRightOutlined /></span>
+          </button>
+        ))}
       </div>
     </section>
   )
@@ -20206,6 +20917,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
   const navigationIcons: Record<AppNavigationKey, JSX.Element> = {
     overview: <DashboardOutlined />,
+    'market-news': <LineChartOutlined />,
     tasks: <CheckSquareOutlined />,
     docs: <FileTextOutlined />,
     projects: <FolderOpenOutlined />,
@@ -20425,6 +21137,29 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     setSystemLogFilter('all')
   }
 
+  const systemLogDrawer = (
+    <SystemLogDrawer
+      open={systemLogDrawerOpen}
+      logs={systemLogs}
+      filter={systemLogFilter}
+      onFilterChange={setSystemLogFilter}
+      onClose={() => setSystemLogDrawerOpen(false)}
+      onClear={clearSystemLogs}
+    />
+  )
+  const appStatusBar = (
+    <AppStatusBar
+      summary={systemLogSummary}
+      refreshing={deploymentRefreshActive}
+      showQuickBuildButton={showQuickBuildButton}
+      quickBuildState={quickBuildState}
+      quickBuildTooltip={quickBuildTooltip}
+      versionLabel={appVersionLabel}
+      onQuickBuild={() => startQuickBuild().catch((error) => message.error(getErrorMessage(error, '快速构建启动失败')))}
+      onOpenLogs={() => setSystemLogDrawerOpen(true)}
+    />
+  )
+
   if (activeKey === 'ai-chat') {
     return (
       <>
@@ -20435,6 +21170,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           onBack={() => setActiveKey('overview')}
           onOpenAiSettings={() => openSettingsModule('ai')}
         />
+        {systemLogDrawer}
+        {appStatusBar}
       </>
     )
   }
@@ -20445,6 +21182,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
         <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenSystemMonitor={() => setActiveKey('system-monitor')} />
         {appModeSwitcherFallback}
         <CodexSessionManagerPanel usesCustomTitleBar={usesCustomTitleBar} onBack={() => setActiveKey('overview')} />
+        {systemLogDrawer}
+        {appStatusBar}
       </>
     )
   }
@@ -20472,6 +21211,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           </div>
           <ReleasePublishTaskDock />
         </Layout>
+        {systemLogDrawer}
+        {appStatusBar}
       </>
     )
   }
@@ -20523,10 +21264,6 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
                 onSystemLog={appendSystemLog}
                 onDeploymentRefreshActiveChange={setDeploymentRefreshActive}
                 onOpenSystemLog={() => setSystemLogDrawerOpen(true)}
-                onCreateProject={() => {
-                  setActiveKey('projects')
-                  setCreatingProject(true)
-                }}
               />
             )}
             {!loadingWorkspace && activeKey === 'services' && (
@@ -20553,6 +21290,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
                 onOpenAiSettings={() => openSettingsModule('ai')}
               />
             )}
+            {!loadingWorkspace && activeKey === 'market-news' && <MarketNewsDashboard />}
             {!loadingWorkspace && activeKey === 'projects' && (
               <ProjectOverview
                 mode={appMode}
@@ -20565,24 +21303,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('projects')} />
           </Layout.Content>
         </Layout>
-        <SystemLogDrawer
-          open={systemLogDrawerOpen}
-          logs={systemLogs}
-          filter={systemLogFilter}
-          onFilterChange={setSystemLogFilter}
-          onClose={() => setSystemLogDrawerOpen(false)}
-          onClear={clearSystemLogs}
-        />
-        <AppStatusBar
-          summary={systemLogSummary}
-          refreshing={deploymentRefreshActive}
-          showQuickBuildButton={showQuickBuildButton}
-          quickBuildState={quickBuildState}
-          quickBuildTooltip={quickBuildTooltip}
-          versionLabel={appVersionLabel}
-          onQuickBuild={() => startQuickBuild().catch((error) => message.error(getErrorMessage(error, '快速构建启动失败')))}
-          onOpenLogs={() => setSystemLogDrawerOpen(true)}
-        />
+        {systemLogDrawer}
+        {appStatusBar}
         <ReleasePublishTaskDock />
       </Layout>
     </>

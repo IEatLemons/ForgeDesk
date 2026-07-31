@@ -1,6 +1,6 @@
 export type ReleaseVersionBump = 'patch' | 'minor' | 'major'
-export type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
-export type ReleasePublishProvider = 'github' | 'codemagic' | 'nextjs-pm2'
+export type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'package:android' | 'build:android' | 'build' | ''
+export type ReleasePublishProvider = 'github' | 'codemagic' | 'firebase' | 'nextjs-pm2'
 export type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
 
 export type PackageScripts = Record<string, string>
@@ -159,6 +159,18 @@ function selectReleaseScriptForProvider(provider: ReleasePublishProvider, script
     return scripts.build ? 'build' : ''
   }
 
+  if (provider === 'firebase') {
+    if (scripts['package:android']) {
+      return 'package:android'
+    }
+
+    if (scripts['build:android']) {
+      return 'build:android'
+    }
+
+    return scripts.build ? 'build' : ''
+  }
+
   return selectReleaseScript(scripts)
 }
 
@@ -202,6 +214,12 @@ export function createReleasePlan(input: ReleasePlanInput): ReleasePlan {
     warnings.push(`将使用 ${selectedScript} 脚本打包；如果要上传 GitHub Releases，建议配置 publish:mac`)
   } else if (provider === 'codemagic') {
     warnings.push('将触发 Codemagic 远程构建，不会执行本地发布脚本')
+  } else if (provider === 'firebase') {
+    if (!selectedScript) {
+      warnings.push('未配置本地构建脚本，将直接上传项目设置中已有的构建产物')
+    } else {
+      warnings.push(`将执行 ${selectedScript} 构建后上传到 Firebase App Distribution`)
+    }
   } else if (provider === 'nextjs-pm2') {
     if (!selectedScript) {
       issues.push('Next.js PM2 发布需要在 package.json scripts 中配置 build')

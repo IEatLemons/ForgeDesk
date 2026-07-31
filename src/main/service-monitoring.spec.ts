@@ -938,6 +938,48 @@ describe('service monitoring storage', () => {
     assert.equal(listProjectServices(db, 'project-b').length, 0)
   })
 
+  it('allows one project to bind multiple Vercel and Railway services', () => {
+    const db = createDatabase()
+    const vercelConnection = saveServiceConnection(db, {
+      provider: 'vercel',
+      name: 'Vercel Team',
+      token: 'vercel-secret'
+    })
+    const railwayConnection = saveServiceConnection(db, {
+      provider: 'railway',
+      name: 'Railway Workspace',
+      token: 'railway-secret',
+      railwayTokenType: 'workspace'
+    })
+    const vercelOne = saveProjectService(db, {
+      provider: 'vercel',
+      connectionId: vercelConnection.id,
+      name: 'web-production',
+      externalProjectId: 'vercel-project-1'
+    })
+    const vercelTwo = saveProjectService(db, {
+      provider: 'vercel',
+      connectionId: vercelConnection.id,
+      name: 'web-preview',
+      externalProjectId: 'vercel-project-2'
+    })
+    const railway = saveProjectService(db, {
+      provider: 'railway',
+      connectionId: railwayConnection.id,
+      name: 'api',
+      externalProjectId: 'railway-project-1'
+    })
+
+    bindProjectService(db, { projectId: 'project-a', serviceId: vercelOne.id })
+    bindProjectService(db, { projectId: 'project-a', serviceId: vercelTwo.id })
+    bindProjectService(db, { projectId: 'project-a', serviceId: railway.id })
+
+    assert.deepEqual(
+      listProjectServices(db, 'project-a').map((service) => service.id).sort(),
+      [railway.id, vercelOne.id, vercelTwo.id].sort()
+    )
+  })
+
   it('deletes provider connections together with services synced from that connection', () => {
     const db = createDatabase()
     const vercel = saveServiceConnection(db, {

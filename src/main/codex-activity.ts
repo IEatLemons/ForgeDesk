@@ -104,6 +104,19 @@ function normalizeTitle(value: string): string {
   return value.replace(/\s+/g, ' ').trim().slice(0, 120)
 }
 
+function extractSessionMessage(value: string): string {
+  const normalized = value.replace(/\r\n/g, '\n')
+  const requestMarker = normalized.match(/(?:^|\n)##\s*My request for Codex:\s*\n?([\s\S]*)$/i)
+  const candidate = requestMarker?.[1] ?? normalized
+
+  return candidate
+    .replace(/<(recommended_plugins|environment_context)>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<image\b[^>]*>[\s\S]*?<\/image>/gi, ' ')
+    .replace(/<image\b[^>]*\/?>/gi, ' ')
+    .replace(/<\/image>/gi, ' ')
+    .trim()
+}
+
 function sessionFallbackTitle(filePath: string, cwd: string, id: string): string {
   return basename(cwd) || id || basename(filePath, '.jsonl') || 'Codex 会话'
 }
@@ -148,7 +161,7 @@ async function inspectSessionFile(filePath: string, fallbackUpdatedAt: string): 
       if (recordType === 'response_item') {
         const role = stringValue(payload?.role)
         if (role === 'user') {
-          const message = normalizeTitle(extractText(payload?.content ?? payload?.message ?? payload?.text))
+          const message = normalizeTitle(extractSessionMessage(extractText(payload?.content ?? payload?.message ?? payload?.text)))
           if (message && !inspection.title) inspection.title = message
           if (message) inspection.lastMessage = message
         }
@@ -171,7 +184,7 @@ async function inspectSessionFile(filePath: string, fallbackUpdatedAt: string): 
       } else if (isTaskActivity(eventType)) {
         lastTaskActivity = sequence
         if (eventType === 'task_started' || inspection.tasks === 0) inspection.tasks += 1
-        const message = normalizeTitle(extractText(payload?.message ?? payload?.content ?? payload?.text))
+        const message = normalizeTitle(extractSessionMessage(extractText(payload?.message ?? payload?.content ?? payload?.text)))
         if (message) {
           inspection.title ||= message
           inspection.lastMessage = message

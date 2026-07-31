@@ -93,6 +93,34 @@ describe('project deployment context and persistence', () => {
     const validation = validateProjectDeploymentConfig(invalid, inspection)
     assert.ok(validation.issues.some((issue) => issue.includes('仓库内')))
     assert.ok(validation.issues.some((issue) => issue.includes('Railway')))
+
+    const boundTarget = {
+      id: 'target-1',
+      projectId: 'project-1',
+      repositoryId: 'repo-1',
+      provider: 'vercel' as const,
+      connectionId: 'connection-1',
+      serviceId: 'service-1',
+      externalProjectId: 'project-1',
+      externalProjectName: 'web',
+      externalServiceId: '',
+      externalServiceName: 'web',
+      externalEnvironmentId: '',
+      externalEnvironmentName: 'production',
+      displayName: 'Vercel · web',
+      status: 'ready' as const,
+      latestDeploymentId: '',
+      latestDeploymentUrl: '',
+      lastStatus: '',
+      lastError: '',
+      createdAt: '',
+      updatedAt: '',
+      config
+    }
+    const unboundValidation = validateProjectDeploymentConfig({ ...config, provider: 'vercel' }, inspection)
+    assert.ok(unboundValidation.issues.some((issue) => issue.includes('绑定已有 Vercel 服务')))
+    const boundValidation = validateProjectDeploymentConfig({ ...config, provider: 'vercel' }, inspection, boundTarget)
+    assert.equal(boundValidation.issues.some((issue) => issue.includes('绑定已有 Vercel 服务')), false)
   })
 
   it('does not invent npm commands for a Python or otherwise package-less repository', async () => {

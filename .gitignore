@@ -14,3 +14,5 @@ android/app/src/main/assets/renderer
 *.log
 *.sqlite
 *.sqlite3
+/sites-source-export-*.zip
+/exports/sites-source-*.zip

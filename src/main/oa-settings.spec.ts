@@ -47,14 +47,14 @@ describe('oa settings', () => {
 
       assert.equal(raw.larkAppSecret, 'app-secret')
       assert.equal(saved.larkAppId, 'cli_aabbcc')
-      assert.equal(saved.docsHomeUrl, 'https://docs.feishu.cn/wiki/space')
+      assert.equal(saved.docsHomeUrl, 'https://docs.feishu.cn/wiki/space?from=test')
       assert.deepEqual(getRedactedOaSettings(saved), {
         enabled: true,
         provider: 'lark',
         larkAppId: 'cli_aabbcc',
         larkAppSecret: '',
         larkAppSecretConfigured: true,
-        docsHomeUrl: 'https://docs.feishu.cn/wiki/space',
+        docsHomeUrl: 'https://docs.feishu.cn/wiki/space?from=test',
         larkBotUrl: 'http://127.0.0.1:8000',
         larkBotAdminToken: '',
         larkBotAdminTokenConfigured: true,

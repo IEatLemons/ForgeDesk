@@ -513,10 +513,11 @@ type ResourceProcess = {
   identityKey: string; instanceKey: string; pid: number; parentPid: number; appName: string; processName: string; user: string
   cpuPercent: number; memoryBytes: number; privateMemoryBytes: number; virtualMemoryBytes: number; threadCount: number; portCount: number
   pageIns: number; state: string; elapsedSeconds: number; executablePath: string; bundlePath: string; command: string
+  networkReceivedBytes: number; networkSentBytes: number
 }
-type ResourceHistoryPoint = { capturedAt: string; cpuPercent: number; memoryUsagePercent: number; memoryUsedBytes: number; swapUsedBytes: number; storageUsagePercent: number }
-type ProcessHistoryPoint = { capturedAt: string; cpuAverage: number; cpuPeak: number; memoryAverageBytes: number; memoryPeakBytes: number; sampleCount: number }
-type ProcessAnalysis = { identityKey: string; appName: string; processName: string; executablePath: string; averageCpuPercent: number; peakCpuPercent: number; averageMemoryBytes: number; peakMemoryBytes: number; sampleCount: number; aboveThresholdSeconds: number; firstSeenAt: string; lastSeenAt: string }
+type ResourceHistoryPoint = { capturedAt: string; cpuPercent: number; memoryUsagePercent: number; memoryUsedBytes: number; swapUsedBytes: number; storageUsagePercent: number; networkInBytes?: number; networkOutBytes?: number }
+type ProcessHistoryPoint = { capturedAt: string; cpuAverage: number; cpuPeak: number; memoryAverageBytes: number; memoryPeakBytes: number; sampleCount: number; networkInBytes: number; networkOutBytes: number }
+type ProcessAnalysis = { identityKey: string; appName: string; processName: string; executablePath: string; averageCpuPercent: number; peakCpuPercent: number; averageMemoryBytes: number; peakMemoryBytes: number; sampleCount: number; aboveThresholdSeconds: number; firstSeenAt: string; lastSeenAt: string; networkReceivedBytes: number; networkSentBytes: number }
 type ResourceRetentionStatus = { rawDays: number; fiveMinuteDays: number; sampleIntervalSeconds: number; rawSampleCount: number; rollupSampleCount: number; oldestRawAt: string; databaseBytesEstimate: number }
 type CleanupRisk = 'low' | 'confirm' | 'high' | 'protected'
 type CleanupCategory = 'large-file' | 'stale-file' | 'duplicate-candidate' | 'download' | 'cache' | 'log' | 'development' | 'docker' | 'trash' | 'protected'
@@ -605,8 +606,8 @@ type CommitMessageSuggestion = {
   message: string
 }
 
-type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'build' | ''
-type ReleasePublishProvider = 'github' | 'codemagic' | 'nextjs-pm2'
+type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'package:android' | 'build:android' | 'build' | ''
+type ReleasePublishProvider = 'github' | 'codemagic' | 'firebase' | 'nextjs-pm2'
 type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
 
 type ReleasePublishAction = {
@@ -1585,6 +1586,96 @@ type CodexSessionRecord = {
   lastMessage: string
 }
 
+type CodexConversationItemKind = 'user' | 'assistant' | 'tool-call' | 'tool-output' | 'status'
+
+type CodexConversationItem = {
+  id: string
+  timestamp: string
+  kind: CodexConversationItemKind
+  text: string
+  images: string[]
+  eventType: string
+  toolName: string
+  callId: string
+  input: string
+  output: string
+}
+
+type CodexSessionSummary = {
+  id: string
+  title: string
+  cwd: string
+  projectKey: string
+  projectName: string
+  filePath: string
+  status: CodexSessionStatus
+  archived: boolean
+  pinned: boolean
+  createdAt: string
+  updatedAt: string
+  preview: string
+  lastEvent: string
+}
+
+type CodexSessionDetail = CodexSessionSummary & {
+  items: CodexConversationItem[]
+}
+
+type CodexProjectRecord = {
+  key: string
+  name: string
+  cwd: string
+  updatedAt: string
+  sessionCount: number
+  runningCount: number
+}
+
+type CodexSessionsSnapshot = {
+  available: boolean
+  checkedAt: string
+  source: string
+  error: string
+  running: number
+  completed: number
+  aborted: number
+  projects: CodexProjectRecord[]
+  sessions: CodexSessionSummary[]
+}
+
+type CodexSessionEventType = 'item' | 'running' | 'updated' | 'completed' | 'failed' | 'cancelled'
+
+type CodexSessionEvent = {
+  type: CodexSessionEventType
+  sessionId: string
+  item?: CodexConversationItem
+  session?: CodexSessionSummary
+  error?: string
+}
+
+type CodexSessionMessageInput = {
+  sessionId: string
+  content: string
+  images?: string[]
+  model?: string
+}
+
+type CodexSiteStatus = 'draft' | 'building' | 'ready' | 'previewing' | 'published' | 'error'
+type CodexSite = {
+  id: string
+  name: string
+  prompt: string
+  workspacePath: string
+  linkedSessionId: string
+  previewUrl: string
+  publishedUrl: string
+  status: CodexSiteStatus
+  lastError: string
+  createdAt: string
+  updatedAt: string
+}
+type CodexSiteCreateInput = { name: string; prompt: string; workspacePath: string; linkedSessionId?: string }
+type CodexSiteUpdateInput = { id: string; name?: string; prompt?: string; workspacePath?: string; linkedSessionId?: string; status?: CodexSiteStatus; previewUrl?: string; publishedUrl?: string; lastError?: string }
+
 type OpenRouterModel = {
   id: string
   name: string
@@ -1656,6 +1747,7 @@ type OaDocumentTaskList = {
 }
 
 type OaBitableTable = { id: string; name: string; revision: number }
+type OaBitableView = { id: string; name: string; type: string }
 type OaBitableField = { id: string; name: string; type: number; uiType: string; isPrimary: boolean; property: Record<string, unknown> }
 type OaBitableRecord = { id: string; fields: Record<string, unknown>; createdAt: string; updatedAt: string }
 type OaBitableSnapshot = {
@@ -1663,7 +1755,10 @@ type OaBitableSnapshot = {
   sourceUrl: string
   appToken: string
   selectedTableId: string
+  selectedViewId: string
+  selectedViewType: string
   tables: OaBitableTable[]
+  views: OaBitableView[]
   fields: OaBitableField[]
   records: OaBitableRecord[]
   unsupportedReason: string
@@ -2044,6 +2139,34 @@ type ProjectCloudflareSettings = {
   updatedAt: string
 }
 
+type ProjectFirebaseReleaseSettingsInput = {
+  projectId: string
+  enabled?: boolean
+  appId?: string
+  artifactPath?: string
+  buildScript?: string
+  groups?: string[] | string
+  testers?: string[] | string
+  serviceAccountKey?: string
+  serviceAccountKeyFilePath?: string
+}
+
+type ProjectFirebaseReleaseSettings = {
+  projectId: string
+  enabled: boolean
+  active: boolean
+  appId: string
+  artifactPath: string
+  buildScript: string
+  groups: string[]
+  testers: string[]
+  serviceAccountProjectId: string
+  serviceAccountEmail: string
+  serviceAccountKeyConfigured: boolean
+  createdAt: string
+  updatedAt: string
+}
+
 type CloudflareConnectionTestResult = {
   ok: boolean
   message: string
@@ -2235,6 +2358,37 @@ type OverviewNewsReport = { date: string; headline: string; digest: string; item
 type OverviewProjectItem = { projectId: string; projectName: string; status: 'healthy' | 'attention' | 'error' | 'empty'; summary: string; highlights: string[]; repositoryCount: number; changedRepositories: number; aheadRepositories: number; fetchFailures: string[] }
 type OverviewProjectReport = { summary: string; projects: OverviewProjectItem[]; generatedAt: string }
 type OverviewSnapshot = { newsHistory: OverviewNewsReport[]; projectReport: OverviewProjectReport | null }
+type MarketPeriod = '1D' | '1W' | '1M' | '1Y'
+type MarketKey = 'cn' | 'us' | 'europe' | 'asia'
+type MacroKey = 'dxy' | 'us10y' | 'brent' | 'gold' | 'vix'
+type MarketDataKey = MarketKey | MacroKey
+type MarketSeriesPoint = { timestamp: number; value: number }
+type MarketQuote = {
+  key: MarketDataKey
+  name: string
+  symbol: string
+  value: number
+  change: number
+  changePercent: number
+  previousClose: number | null
+  currency: string | null
+  volume: number | null
+  marketState: string | null
+  fetchedAt: string
+}
+type MarketHistoryRow = { date: string; values: Partial<Record<MarketDataKey, number>> }
+type MarketDataSnapshot = {
+  period: MarketPeriod
+  fetchedAt: string
+  source: 'Yahoo Finance chart'
+  sourceUrl: string
+  delayed: true
+  quotes: Record<MarketKey, MarketQuote | null>
+  macro: Record<MacroKey, MarketQuote | null>
+  series: Record<MarketKey, MarketSeriesPoint[]>
+  historical: MarketHistoryRow[]
+  failures: Array<{ key: MarketDataKey; name: string; message: string }>
+}
 
 interface Window {
   forgeDesk: {
@@ -2245,6 +2399,7 @@ interface Window {
     setProjectFavorite: (input: { id: string; isFavorite: boolean }) => Promise<WorkspaceSnapshot>
     deleteProject: (projectId: string) => Promise<WorkspaceSnapshot>
     rescanProjectRepositories: (projectId: string) => Promise<WorkspaceSnapshot>
+    initializeProjectRepository: (projectId: string) => Promise<WorkspaceSnapshot>
     listRepositories: (projectId?: string) => Promise<RepositoryRecord[]>
     getRepositoryDetail: (repositoryId: string) => Promise<RepositoryRecord>
     listRepositoryCommits: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) => Promise<GitCommitRecord[]>
@@ -2309,6 +2464,9 @@ interface Window {
     listProjectCloudflareDnsRecords: (projectId: string) => Promise<CloudflareDnsRecord[]>
     saveProjectCloudflareDnsRecord: (projectId: string, input: CloudflareDnsRecordInput) => Promise<CloudflareDnsRecord[]>
     deleteProjectCloudflareDnsRecord: (projectId: string, recordId: string) => Promise<CloudflareDnsRecord[]>
+    getProjectFirebaseReleaseSettings: (projectId: string) => Promise<ProjectFirebaseReleaseSettings | null>
+    saveProjectFirebaseReleaseSettings: (input: ProjectFirebaseReleaseSettingsInput) => Promise<ProjectFirebaseReleaseSettings>
+    deleteProjectFirebaseReleaseSettings: (projectId: string) => Promise<void>
     listDataSourceConnections: () => Promise<DataSourceConnection[]>
     saveDataSourceConnection: (input: DataSourceConnectionInput) => Promise<DataSourceConnection>
     deleteDataSourceConnection: (connectionId: string) => Promise<DataSourceConnection[]>
@@ -2377,6 +2535,8 @@ interface Window {
     selectDirectory: () => Promise<string | null>
     selectFile: () => Promise<string | null>
     selectImage: () => Promise<string | null>
+    readClipboardImage: () => Promise<string | null>
+    readImageData: (imagePath: string) => Promise<string | null>
     getGitSetupStatus: () => Promise<GitSetupStatus>
     configureGitIdentity: (identity: { userName: string; userEmail: string }) => Promise<GitSetupStatus>
     installGpg: () => Promise<{ status: GitSetupStatus; requiresManualInstall: boolean }>
@@ -2387,6 +2547,18 @@ interface Window {
     getAiRuntimeStatus: (verify?: boolean) => Promise<AiRuntimeStatus>
     getCodexRuntimeStatus: (verify?: boolean) => Promise<AiRuntimeStatus>
     getCodexActivitySnapshot: () => Promise<CodexActivitySnapshot>
+    listCodexSessions: () => Promise<CodexSessionsSnapshot>
+    getCodexSession: (sessionId: string) => Promise<CodexSessionDetail>
+    toggleCodexSessionPin: (sessionId: string) => Promise<CodexSessionSummary>
+    sendCodexSessionMessage: (input: CodexSessionMessageInput) => Promise<CodexSessionDetail>
+    cancelCodexSession: (sessionId: string) => Promise<CodexSessionDetail>
+    onCodexSessionEvent: (listener: (event: CodexSessionEvent) => void) => () => void
+    listCodexSites: () => Promise<CodexSite[]>
+    createCodexSite: (input: CodexSiteCreateInput) => Promise<CodexSite>
+    updateCodexSite: (input: CodexSiteUpdateInput) => Promise<CodexSite>
+    deleteCodexSite: (siteId: string) => Promise<CodexSite[]>
+    startCodexSitePreview: (siteId: string) => Promise<CodexSite>
+    stopCodexSitePreview: (siteId: string) => Promise<CodexSite | null>
     listCodexTasks: () => Promise<CodexTaskRecord[]>
     createCodexTask: (input?: CodexTaskCreateInput) => Promise<CodexTaskRecord>
     renameCodexTask: (input: CodexTaskRenameInput) => Promise<CodexTaskRecord>
@@ -2398,6 +2570,7 @@ interface Window {
     listOpenRouterModels: () => Promise<OpenRouterModel[]>
     saveAiSettings: (input: AiSettingsInput) => Promise<AiSettingsView>
     getOverviewSnapshot: () => Promise<OverviewSnapshot>
+    getMarketDataSnapshot: (period?: MarketPeriod) => Promise<MarketDataSnapshot>
     refreshOverviewNews: () => Promise<OverviewNewsReport>
     refreshOverviewProjects: () => Promise<OverviewProjectReport>
     getSystemMonitorSnapshot: () => Promise<SystemMonitorSnapshot>
@@ -2432,7 +2605,7 @@ interface Window {
     openOaDocs: () => Promise<void>
     listOaDocuments: () => Promise<OaDocumentList>
     getOaDocumentTasks: (document: OaDocumentRecord) => Promise<OaDocumentTaskList>
-    getOaBitable: (tableId?: string) => Promise<OaBitableSnapshot>
+    getOaBitable: (tableId?: string, viewId?: string) => Promise<OaBitableSnapshot>
     saveOaBitableRecord: (input: { tableId: string; recordId?: string; fields: Record<string, unknown> }) => Promise<OaBitableRecord>
     deleteOaBitableRecord: (input: { tableId: string; recordId: string }) => Promise<void>
     getLarkBotDashboard: () => Promise<LarkBotDashboard>
