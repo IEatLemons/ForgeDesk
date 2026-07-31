@@ -34,6 +34,26 @@ npm install
 npm run dev
 ```
 
+## 下载与安装
+
+macOS 用户可以前往 [GitHub Releases](https://github.com/IEatLemons/ForgeDesk/releases) 下载最新安装包。目前发布的是 Apple Silicon（`arm64`）版本，下载 `.dmg` 后将 `ForgeDesk.app` 拖入“应用程序”目录即可。
+
+### macOS 提示“应用已损坏，无法打开”？
+
+这是 macOS Gatekeeper 对非 App Store 应用的安全提示。当前开源发布流程尚未接入 Apple Developer ID 签名和公证，部分 macOS 版本可能因此拦截应用。请确认安装包来自可信的 ForgeDesk Release 后，再按以下方式处理：
+
+1. 打开“终端”，执行：
+
+   ```bash
+   sudo xattr -rd com.apple.quarantine "/Applications/ForgeDesk.app"
+   ```
+
+   如果应用没有放在“应用程序”目录，请将命令中的路径改成实际位置。
+
+2. 再次启动应用。如果仍被拦截，请打开“系统设置 → 隐私与安全性”，点击“仍要打开”。
+
+> 注意：上述命令会移除下载文件的 quarantine 属性，降低 macOS 对该应用的拦截保护。请勿对来源不明的应用执行。
+
 ## Android APK
 
 The Android build is a WebView shell around the renderer bundle. It is intended for mobile viewing and keeps the existing Electron desktop build unchanged. Build it with:

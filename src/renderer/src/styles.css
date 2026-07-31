@@ -4633,6 +4633,12 @@ button.app-status-bar-item:hover {
   border-radius: 8px;
 }
 
+.project-git-task-entry-running,
+.project-git-task-entry-success,
+.project-git-task-entry-skipped {
+  border-left-color: var(--primary);
+}
+
 .project-git-task-entry-failed {
   border-left-color: var(--danger-border);
 }
