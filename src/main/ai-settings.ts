@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-export type AiProvider = 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli'
+export type AiProvider = 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli' | 'codex-local-api'
 
 type AiProviderDefaults = {
   baseUrl: string
@@ -37,6 +37,10 @@ const providerDefaults: Record<AiProvider, AiProviderDefaults> = {
   'cursor-cli': {
     baseUrl: '',
     model: ''
+  },
+  'codex-local-api': {
+    baseUrl: 'http://127.0.0.1:55914/v1',
+    model: 'gpt-5.3-codex'
   }
 }
 
@@ -55,17 +59,21 @@ function getAiSettingsPath(userDataPath: string): string {
 
 export function normalizeAiSettings(input: Partial<AiSettings>): AiSettings {
   const provider: AiProvider =
-    input.provider === 'openrouter' || input.provider === 'codex-cli' || input.provider === 'cursor-cli'
+    input.provider === 'openrouter' || input.provider === 'codex-cli' || input.provider === 'cursor-cli' || input.provider === 'codex-local-api'
       ? input.provider
       : 'openai-compatible'
   const defaults = providerDefaults[provider]
+  const inputBaseUrl = (input.baseUrl || defaults.baseUrl).trim().replace(/\/+$/, '')
+  const baseUrl = provider === 'codex-local-api'
+    ? inputBaseUrl.replace(/^http:\/\/(?:localhost|\[::1\])(?=[:/]|$)/i, 'http://127.0.0.1')
+    : inputBaseUrl
 
   return {
     ...defaultAiSettings,
     ...input,
     provider,
     enabled: Boolean(input.enabled),
-    baseUrl: (input.baseUrl || defaults.baseUrl).trim().replace(/\/+$/, ''),
+    baseUrl,
     apiKey: (input.apiKey || '').trim(),
     model: (input.model || defaults.model).trim(),
     temperature: Math.min(1, Math.max(0, Number(input.temperature ?? defaultAiSettings.temperature)))

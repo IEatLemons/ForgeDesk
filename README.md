@@ -54,6 +54,12 @@ macOS 用户可以前往 [GitHub Releases](https://github.com/IEatLemons/ForgeDe
 
 > 注意：上述命令会移除下载文件的 quarantine 属性，降低 macOS 对该应用的拦截保护。请勿对来源不明的应用执行。
 
+### 应用自动更新
+
+已安装的 ForgeDesk 会在启动后自动检查 GitHub Releases，并每小时轮询一次。新版会在后台下载，下载完成后在应用内提示“重启安装”。开发模式不会连接更新源；请使用打包后的 `.app` 测试更新流程。
+
+发布新版本时，先把 `package.json` 的版本号改为目标版本并提交，再推送对应的 `v<version>` tag。GitHub Actions 会构建并发布 macOS arm64 的 `.dmg`、`.zip`、blockmap 和 `latest-mac.yml`，其中 `latest-mac.yml` 是 Electron 更新器必须的版本清单。
+
 ## Android APK
 
 The Android build is a WebView shell around the renderer bundle. It is intended for mobile viewing and keeps the existing Electron desktop build unchanged. Build it with:

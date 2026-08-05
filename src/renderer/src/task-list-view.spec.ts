@@ -11,6 +11,8 @@ import {
   groupTasksByStatus,
   normalizeTaskList,
   readStoredTaskItems,
+  updateTaskSubtaskCompletionTime,
+  updateTaskSubtaskDone,
   taskListStorageKey,
   writeStoredTaskItems,
   type TaskItem,
@@ -99,6 +101,64 @@ describe('task list view model', () => {
 
     assert.ok(storage.values.get(taskListStorageKey))
     assert.deepEqual(readStoredTaskItems(storage), [task])
+  })
+
+  it('keeps each subtask completion timestamp independent and does not invent legacy timestamps', () => {
+    const tasks = normalizeTaskList([
+      {
+        id: 'task-1',
+        title: 'Prepare release',
+        status: 'done',
+        completedAt: '2026-07-08T03:00:00.000Z',
+        subtasks: [
+          { id: 'subtask-1', title: 'Build', done: true, completedAt: '2026-07-08T01:00:00.000Z' },
+          { id: 'subtask-2', title: 'Publish', done: true }
+        ]
+      }
+    ])
+
+    assert.deepEqual(
+      tasks[0].subtasks.map((subtask) => subtask.completedAt),
+      ['2026-07-08T01:00:00.000Z', null]
+    )
+  })
+
+  it('records subtask completion and reopening independently', () => {
+    const task = createFixtureTask({
+      id: 'task-1',
+      status: 'todo',
+      subtasks: [
+        { id: 'subtask-1', title: 'Build', done: false, createdAt: '2026-07-08T00:00:00.000Z', completedAt: null },
+        { id: 'subtask-2', title: 'Publish', done: false, createdAt: '2026-07-08T00:00:00.000Z', completedAt: null }
+      ]
+    })
+
+    const firstCompleted = updateTaskSubtaskDone(task, 'subtask-1', true, new Date('2026-07-08T01:00:00.000Z'))
+    const allCompleted = updateTaskSubtaskDone(firstCompleted, 'subtask-2', true, new Date('2026-07-08T02:00:00.000Z'))
+    const reopened = updateTaskSubtaskDone(allCompleted, 'subtask-1', false, new Date('2026-07-08T03:00:00.000Z'))
+
+    assert.equal(firstCompleted.status, 'doing')
+    assert.deepEqual(firstCompleted.subtasks.map((subtask) => subtask.completedAt), ['2026-07-08T01:00:00.000Z', null])
+    assert.equal(allCompleted.status, 'done')
+    assert.deepEqual(allCompleted.subtasks.map((subtask) => subtask.completedAt), ['2026-07-08T01:00:00.000Z', '2026-07-08T02:00:00.000Z'])
+    assert.equal(reopened.status, 'doing')
+    assert.deepEqual(reopened.subtasks.map((subtask) => subtask.completedAt), [null, '2026-07-08T02:00:00.000Z'])
+  })
+
+  it('allows a subtask completion time to be edited independently', () => {
+    const task = createFixtureTask({
+      id: 'task-1',
+      status: 'todo',
+      subtasks: [{ id: 'subtask-1', title: 'Build', done: false, createdAt: '2026-07-08T00:00:00.000Z', completedAt: null }]
+    })
+
+    const manuallyCompleted = updateTaskSubtaskCompletionTime(task, 'subtask-1', '2026-07-07T18:30:00.000Z', new Date('2026-07-08T03:00:00.000Z'))
+    const cleared = updateTaskSubtaskCompletionTime(manuallyCompleted, 'subtask-1', null, new Date('2026-07-08T04:00:00.000Z'))
+
+    assert.equal(manuallyCompleted.subtasks[0].done, true)
+    assert.equal(manuallyCompleted.subtasks[0].completedAt, '2026-07-07T18:30:00.000Z')
+    assert.equal(cleared.subtasks[0].done, false)
+    assert.equal(cleared.subtasks[0].completedAt, null)
   })
 
   it('filters by search, status, priority, project, due date, and tags', () => {

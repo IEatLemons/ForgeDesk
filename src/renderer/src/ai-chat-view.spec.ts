@@ -13,6 +13,7 @@ import type { CodexTaskRecord, Project } from './data.js'
 function createTask(patch: Partial<CodexTaskRecord> = {}): CodexTaskRecord {
   return {
     additions: 0,
+    accountId: '',
     branch: '',
     createdAt: '2026-07-21T08:00:00.000Z',
     cwd: '/Users/stone/develop/stone/ForgeDesk',

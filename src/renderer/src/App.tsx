@@ -92,6 +92,9 @@ import { AI_CODING_ASSISTANT_NAME } from './ai-coding-assistant'
 import type {
   AppRuntimeInfo,
   AiSettingsView,
+  AiRuntimeStatus,
+  CodexAccountRegistryView,
+  CodexApiServiceView,
   AiConflictSuggestion,
   CliEnvironmentIssue,
   CliEnvironmentRepairResult,
@@ -609,7 +612,7 @@ function getResolvedThemeLabel(theme: ResolvedTheme): string {
 
 type AiSettingsForm = {
   enabled: boolean
-  provider: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli'
+  provider: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli' | 'codex-local-api'
   baseUrl: string
   apiKey?: string
   model: string
@@ -686,6 +689,12 @@ const AI_PROVIDER_PRESETS: Record<AiSettingsForm['provider'], { label: string; b
     baseUrl: '',
     model: '',
     apiKeyPlaceholder: ''
+  },
+  'codex-local-api': {
+    label: 'Codex API 服务（本机）',
+    baseUrl: 'http://127.0.0.1:55914/v1',
+    model: 'gpt-5.3-codex',
+    apiKeyPlaceholder: 'agt_codex_...'
   }
 }
 
@@ -715,7 +724,8 @@ const AI_MODEL_OPTIONS: Record<AiSettingsForm['provider'], string[]> = {
     'qwen/qwen3-235b-a22b'
   ],
   'codex-cli': [],
-  'cursor-cli': []
+  'cursor-cli': [],
+  'codex-local-api': ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5-codex']
 }
 
 const projectWorkspaceStatusRefreshIntervalMs = 5000
@@ -1387,6 +1397,54 @@ function AppStatusBar({
   )
 }
 
+function AppUpdateBanner({
+  state,
+  busy,
+  onInstall,
+  onOpenReleases
+}: {
+  state: AppUpdateState
+  busy: boolean
+  onInstall: () => void
+  onOpenReleases: () => void
+}): JSX.Element | null {
+  if (state.status !== 'available' && state.status !== 'downloading' && state.status !== 'downloaded') {
+    return null
+  }
+
+  const view = createAppUpdateViewModel(state)
+  const action = state.status === 'downloaded' ? (
+    <Button type="primary" size="small" loading={busy} onClick={onInstall}>
+      {view.primaryLabel}
+    </Button>
+  ) : (
+    <Button size="small" onClick={onOpenReleases}>
+      查看发布说明
+    </Button>
+  )
+
+  return (
+    <Alert
+      className="app-update-banner"
+      type={state.status === 'downloaded' ? 'success' : 'info'}
+      showIcon
+      message={view.title}
+      description={
+        <Space direction="vertical" size={4}>
+          <span>{view.description}</span>
+          {state.status === 'downloading' ? <Progress percent={Math.round(state.percent ?? 0)} size="small" showInfo={false} /> : null}
+          {state.releaseNotes ? (
+            <Typography.Paragraph className="app-update-notes" type="secondary" ellipsis={{ rows: 3, expandable: true, symbol: '展开' }}>
+              {state.releaseNotes}
+            </Typography.Paragraph>
+          ) : null}
+        </Space>
+      }
+      action={action}
+    />
+  )
+}
+
 function getRemoteAlignmentDetail(alignment: RemoteAlignmentSummary): string {
   if (alignment.errorMessage) {
     return alignment.errorMessage
@@ -1945,6 +2003,10 @@ function isAiSettingsReady(settings: AiSettingsView | null): boolean {
   return Boolean(settings?.enabled && ((settings.provider === 'codex-cli' || settings.provider === 'cursor-cli') || (settings.apiKeyConfigured && settings.model)))
 }
 
+function isLocalCodexAutoCommitEnabled(settings: AiSettingsView | null): boolean {
+  return Boolean(settings?.enabled && (settings.provider === 'codex-cli' || settings.provider === 'codex-local-api'))
+}
+
 function populateAiSettingsForm(form: FormInstance<AiSettingsForm>, settings: AiSettingsView): void {
   form.setFieldsValue({
     enabled: settings.enabled,
@@ -2013,6 +2075,15 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
   const [openRouterModels, setOpenRouterModels] = useState<OpenRouterModel[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelLoadError, setModelLoadError] = useState('')
+  const [codexApiService, setCodexApiService] = useState<CodexApiServiceView | null>(null)
+  const [loadingCodexApiService, setLoadingCodexApiService] = useState(false)
+  const [codexApiAction, setCodexApiAction] = useState<'start' | 'stop' | 'rotate' | ''>('')
+  const [codexAccounts, setCodexAccounts] = useState<CodexAccountRegistryView | null>(null)
+  const [loadingCodexAccounts, setLoadingCodexAccounts] = useState(false)
+  const [codexAccountAction, setCodexAccountAction] = useState('')
+  const [importAccountOpen, setImportAccountOpen] = useState(false)
+  const [importAccountName, setImportAccountName] = useState('')
+  const [importAccountPath, setImportAccountPath] = useState('')
   const localProvider = provider === 'codex-cli' || provider === 'cursor-cli'
   const verified = status?.provider === provider && status.usable === true
   const statusFailed = status?.provider === provider && (status.available === false || status.usable === false)
@@ -2044,6 +2115,189 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
       void refreshOpenRouterModels(false)
     }
   }, [provider])
+
+  async function refreshCodexApiService(): Promise<void> {
+    if (!window.forgeDesk) return
+    setLoadingCodexApiService(true)
+    try {
+      setCodexApiService(await window.forgeDesk.getCodexApiService())
+    } catch (error) {
+      message.warning(`读取 Codex 账号/API 服务失败：${getErrorMessage(error)}`)
+    } finally {
+      setLoadingCodexApiService(false)
+    }
+  }
+
+  async function refreshCodexAccounts(): Promise<void> {
+    if (!window.forgeDesk) return
+    setLoadingCodexAccounts(true)
+    try {
+      setCodexAccounts(await window.forgeDesk.listCodexAccounts())
+    } catch (error) {
+      message.warning(`读取 Codex 账户失败：${getErrorMessage(error)}`)
+    } finally {
+      setLoadingCodexAccounts(false)
+    }
+  }
+
+  useEffect(() => {
+    void refreshCodexApiService()
+    void refreshCodexAccounts()
+  }, [])
+
+  async function chooseCodexAccountFile(): Promise<void> {
+    if (!window.forgeDesk) return
+    const selectedPath = await window.forgeDesk.selectFile()
+    if (selectedPath) setImportAccountPath(selectedPath)
+  }
+
+  async function importAccount(): Promise<void> {
+    if (!window.forgeDesk) return
+    if (!importAccountPath.trim()) {
+      message.warning('请选择 Codex auth.json 或 profile 目录')
+      return
+    }
+    setCodexAccountAction('import')
+    try {
+      setCodexAccounts(await window.forgeDesk.importCodexAccount({ name: importAccountName.trim() || undefined, sourcePath: importAccountPath.trim() }))
+      setImportAccountOpen(false)
+      setImportAccountName('')
+      setImportAccountPath('')
+      message.success('Codex 账户已安全导入')
+    } catch (error) {
+      message.error(`导入 Codex 账户失败：${getErrorMessage(error)}`)
+    } finally {
+      setCodexAccountAction('')
+    }
+  }
+
+  async function activateAccount(accountId: string): Promise<void> {
+    if (!window.forgeDesk) return
+    setCodexAccountAction(`activate:${accountId}`)
+    try {
+      setCodexAccounts(await window.forgeDesk.activateCodexAccount(accountId))
+      await refreshCodexApiService()
+      message.success('Codex 当前账户已切换，后续 AI 调用会使用该账户')
+    } catch (error) {
+      message.error(`切换 Codex 账户失败：${getErrorMessage(error)}`)
+    } finally {
+      setCodexAccountAction('')
+    }
+  }
+
+  async function verifyAccount(accountId: string, accountName: string): Promise<void> {
+    if (!window.forgeDesk) return
+    setCodexAccountAction(`verify:${accountId}`)
+    try {
+      const status = await window.forgeDesk.verifyCodexAccount(accountId)
+      if (status.usable) message.success(`${accountName} 可用，Codex CLI 已成功返回`)
+      else message.error(`${accountName} 不可用：${status.message}`)
+      await refreshCodexAccounts()
+    } catch (error) {
+      message.error(`检测 Codex 账户失败：${getErrorMessage(error)}`)
+    } finally {
+      setCodexAccountAction('')
+    }
+  }
+
+  async function removeAccount(accountId: string): Promise<void> {
+    if (!window.forgeDesk) return
+    setCodexAccountAction(`remove:${accountId}`)
+    try {
+      setCodexAccounts(await window.forgeDesk.removeCodexAccount(accountId))
+      await refreshCodexApiService()
+      message.success('Codex 账户已从 ForgeDesk 移除')
+    } catch (error) {
+      message.error(`移除 Codex 账户失败：${getErrorMessage(error)}`)
+    } finally {
+      setCodexAccountAction('')
+    }
+  }
+
+  async function createAndLoginAccount(): Promise<void> {
+    if (!window.forgeDesk) return
+    setCodexAccountAction('create')
+    try {
+      const previousIds = new Set(codexAccounts?.accounts.map((item) => item.id) ?? [])
+      const registry = await window.forgeDesk.createCodexAccount()
+      const account = registry.accounts.find((item) => !previousIds.has(item.id))
+      setCodexAccounts(registry)
+      if (!account) throw new Error('新 Codex 账户 profile 创建失败')
+      await window.forgeDesk.openCodexAccountLogin(account.id)
+      message.success(`已为「${account.name}」打开 Codex 登录终端，请完成登录后点击“刷新账户”`)
+    } catch (error) {
+      message.error(`创建 Codex 登录 profile 失败：${getErrorMessage(error)}`)
+    } finally {
+      setCodexAccountAction('')
+    }
+  }
+
+  async function openAccountLogin(accountId: string, accountName: string): Promise<void> {
+    if (!window.forgeDesk) return
+    setCodexAccountAction(`login:${accountId}`)
+    try {
+      await window.forgeDesk.openCodexAccountLogin(accountId)
+      message.success(`已为「${accountName}」打开 Codex 登录终端，请完成登录后点击“刷新账户”`)
+    } catch (error) {
+      message.error(`打开 Codex 登录终端失败：${getErrorMessage(error)}`)
+    } finally {
+      setCodexAccountAction('')
+    }
+  }
+
+  async function connectCodexApiService(): Promise<void> {
+    if (!window.forgeDesk) return
+    setCodexApiAction('start')
+    try {
+      const service = await window.forgeDesk.startCodexApiService()
+      setCodexApiService(service)
+      form.setFieldsValue({
+        enabled: true,
+        provider: 'codex-local-api',
+        baseUrl: service.baseUrl,
+        apiKey: service.apiKey,
+        model: service.model,
+        temperature: form.getFieldValue('temperature') ?? 0.2
+      })
+      await onSave()
+      message.success('Codex API 服务已创建，并已接入 ForgeDesk AI')
+    } catch (error) {
+      message.error(`创建 Codex API 服务失败：${getErrorMessage(error)}`)
+    } finally {
+      setCodexApiAction('')
+    }
+  }
+
+  async function stopCodexApiService(): Promise<void> {
+    if (!window.forgeDesk) return
+    setCodexApiAction('stop')
+    try {
+      setCodexApiService(await window.forgeDesk.stopCodexApiService())
+      message.success('Codex API 服务已停止')
+    } catch (error) {
+      message.error(`停止 Codex API 服务失败：${getErrorMessage(error)}`)
+    } finally {
+      setCodexApiAction('')
+    }
+  }
+
+  async function rotateCodexApiKey(): Promise<void> {
+    if (!window.forgeDesk) return
+    setCodexApiAction('rotate')
+    try {
+      const service = await window.forgeDesk.rotateCodexApiKey()
+      setCodexApiService(service)
+      if (provider === 'codex-local-api') {
+        form.setFieldsValue({ apiKey: service.apiKey, baseUrl: service.baseUrl, model: service.model })
+        await onSave()
+      }
+      message.success('Codex API Key 已重置')
+    } catch (error) {
+      message.error(`重置 Codex API Key 失败：${getErrorMessage(error)}`)
+    } finally {
+      setCodexApiAction('')
+    }
+  }
 
   const modelOptions = useMemo(() => {
     if (provider !== 'openrouter') {
@@ -2107,7 +2361,8 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
                 { label: AI_PROVIDER_PRESETS['openai-compatible'].label, value: 'openai-compatible' },
                 { label: AI_PROVIDER_PRESETS.openrouter.label, value: 'openrouter' },
                 { label: AI_PROVIDER_PRESETS['codex-cli'].label, value: 'codex-cli' },
-                { label: AI_PROVIDER_PRESETS['cursor-cli'].label, value: 'cursor-cli' }
+                { label: AI_PROVIDER_PRESETS['cursor-cli'].label, value: 'cursor-cli' },
+                { label: AI_PROVIDER_PRESETS['codex-local-api'].label, value: 'codex-local-api' }
               ]}
               onChange={(value: AiSettingsForm['provider']) => {
                 const preset = AI_PROVIDER_PRESETS[value]
@@ -2187,6 +2442,109 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
           保存 AI 设置
         </Button>
       </Form>
+      <div className="codex-api-service-card">
+        <div className="codex-api-service-header">
+          <Space direction="vertical" size={2}>
+            <Typography.Title level={4}>Codex 账号与本地 API 服务</Typography.Title>
+            <Typography.Text type="secondary">读取本机 ~/.codex/auth.json 的安全元数据，并创建供 ForgeDesk 或其他本机客户端使用的 OpenAI-compatible 接口。</Typography.Text>
+          </Space>
+          <Button icon={<ReloadOutlined />} loading={loadingCodexApiService} onClick={() => void refreshCodexApiService()}>
+            刷新
+          </Button>
+        </div>
+        <Descriptions size="small" column={2} bordered>
+          <Descriptions.Item label="Codex 账号">{codexApiService?.account.email || '未读取到邮箱'}</Descriptions.Item>
+          <Descriptions.Item label="套餐">{codexApiService?.account.planType || '未识别'}</Descriptions.Item>
+          <Descriptions.Item label="登录方式">{codexApiService?.account.authMode || '未登录'}</Descriptions.Item>
+          <Descriptions.Item label="账号 ID">{codexApiService?.account.accountIdSuffix || '未识别'}</Descriptions.Item>
+          <Descriptions.Item label="API 状态">{codexApiService?.running ? '运行中' : codexApiService?.enabled ? '已配置，未运行' : '未启用'}</Descriptions.Item>
+          <Descriptions.Item label="访问地址">{codexApiService?.baseUrl || '—'}</Descriptions.Item>
+        </Descriptions>
+        {codexApiService?.apiKeyConfigured ? (
+          <div className="codex-api-service-credentials">
+            <Typography.Text type="secondary">客户端 API Key</Typography.Text>
+            <Typography.Text code copyable={{ text: codexApiService.apiKey }}>{codexApiService.apiKeyMasked}</Typography.Text>
+          </div>
+        ) : null}
+        {!codexApiService?.account.available ? <Alert type="warning" showIcon message="尚未检测到可用的 Codex 登录态" description={codexApiService?.account.message || '请先在 Codex CLI 或 ChatGPT Codex 中完成登录。'} /> : null}
+        <Space wrap>
+          <Button type="primary" icon={<LinkOutlined />} loading={codexApiAction === 'start'} onClick={() => void connectCodexApiService()}>
+            创建并接入 ForgeDesk
+          </Button>
+          {codexApiService?.running ? <Button icon={<StopOutlined />} loading={codexApiAction === 'stop'} onClick={() => void stopCodexApiService()}>停止服务</Button> : null}
+          {codexApiService?.apiKeyConfigured ? <Button icon={<KeyOutlined />} loading={codexApiAction === 'rotate'} onClick={() => void rotateCodexApiKey()}>重置 API Key</Button> : null}
+        </Space>
+        <Typography.Text type="secondary">服务只监听 127.0.0.1，不会把 Codex access token/refresh token 提供给前端或 API 客户端。</Typography.Text>
+      </div>
+      <div className="codex-account-manager-card">
+        <div className="codex-api-service-header">
+          <Space direction="vertical" size={2}>
+            <Typography.Title level={4}>Codex 账户管理</Typography.Title>
+            <Typography.Text type="secondary">导入多个本机 Codex profile，在 ForgeDesk 内切换当前账户并直接验证调用。账户凭据只留在主进程和 profile 文件中。</Typography.Text>
+          </Space>
+          <Space wrap>
+            <Button icon={<ReloadOutlined />} loading={loadingCodexAccounts} onClick={() => void refreshCodexAccounts()}>刷新账户</Button>
+            <Button icon={<PlusOutlined />} loading={codexAccountAction === 'create'} onClick={() => void createAndLoginAccount()}>新建并登录</Button>
+            <Button type="primary" icon={<UserAddOutlined />} onClick={() => setImportAccountOpen(true)}>导入账户</Button>
+          </Space>
+        </div>
+        {codexAccounts?.accounts.length ? (
+          <div className="codex-account-list">
+            {codexAccounts.accounts.map((account) => (
+              <div className={`codex-account-row${account.active ? ' is-active' : ''}`} key={account.id}>
+                <div className="codex-account-row-heading">
+                  <Space size="small" wrap>
+                    <Typography.Text strong>{account.name}</Typography.Text>
+                    {account.active ? <Tag color="blue">当前账户</Tag> : null}
+                    {account.source === 'local' ? <Tag>本机 profile</Tag> : <Tag color="purple">已导入</Tag>}
+                  </Space>
+                  <Space size="small">
+                    <Button size="small" loading={codexAccountAction === `verify:${account.id}`} onClick={() => void verifyAccount(account.id, account.name)}>检测调用</Button>
+                    {!account.available ? <Button size="small" loading={codexAccountAction === `login:${account.id}`} onClick={() => void openAccountLogin(account.id, account.name)}>打开登录终端</Button> : null}
+                    {!account.active ? <Button size="small" type="primary" loading={codexAccountAction === `activate:${account.id}`} onClick={() => void activateAccount(account.id)}>设为当前</Button> : null}
+                    {account.source === 'imported' ? (
+                      <Popconfirm title="移除这个 Codex 账户？" description="只会移除 ForgeDesk 保存的 profile 副本，不会修改来源文件。" okText="移除" cancelText="取消" onConfirm={() => void removeAccount(account.id)}>
+                        <Button size="small" danger loading={codexAccountAction === `remove:${account.id}`} icon={<DeleteOutlined />}>移除</Button>
+                      </Popconfirm>
+                    ) : null}
+                  </Space>
+                </div>
+                <div className="codex-account-row-meta">
+                  <span>{account.email || '未读取到邮箱'}</span>
+                  <span>{account.planType || '套餐未识别'}</span>
+                  <span>{account.authMode || '未登录'}</span>
+                  <Typography.Text code>{account.accountIdSuffix || '账号 ID 未识别'}</Typography.Text>
+                </div>
+                <Typography.Text type="secondary" ellipsis={{ tooltip: account.authFilePath }}>{account.authFilePath}</Typography.Text>
+                {!account.available ? <Alert type="warning" showIcon message="没有检测到可用登录态" description={account.message} /> : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未读取 Codex 账户" />
+        )}
+        <Typography.Text type="secondary">当前账户会同时用于 ForgeDesk 的 Codex 对话、项目任务、AI 辅助功能和本地 API 服务；切换后新发起的调用立即生效。</Typography.Text>
+      </div>
+      <Modal
+        title="导入 Codex 账户"
+        open={importAccountOpen}
+        okText="导入"
+        cancelText="取消"
+        confirmLoading={codexAccountAction === 'import'}
+        onCancel={() => setImportAccountOpen(false)}
+        onOk={() => void importAccount()}
+      >
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Input placeholder="账户名称（可选，例如：个人 Pro）" value={importAccountName} onChange={(event) => setImportAccountName(event.target.value)} />
+          <Input
+            readOnly
+            placeholder="选择 auth.json 或 Codex profile 目录"
+            value={importAccountPath}
+            addonAfter={<Button type="link" onClick={() => void chooseCodexAccountFile()}>选择文件</Button>}
+          />
+          <Typography.Text type="secondary">ForgeDesk 会复制 auth.json 到自己的受保护 profile 目录，不会把 token 返回给页面或第三方客户端。</Typography.Text>
+        </Space>
+      </Modal>
     </div>
   )
 }
@@ -9375,7 +9733,8 @@ function GitCommitModal({
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
   const files = status?.files ?? []
   const currentBranch = getCurrentBranchName(selectedRepository, status)
-  const commitReady = canCommitSelection(files, selectedPaths, commitMessage)
+  const commitReady = canCommitSelection(files, selectedPaths, commitMessage) ||
+    (isLocalCodexAutoCommitEnabled(aiSettings) && files.length > 0 && selectedPaths.length > 0)
 
   useEffect(() => {
     const wasOpen = commitModalWasOpenRef.current
@@ -9501,30 +9860,31 @@ function GitCommitModal({
     }
   }
 
-  async function fillCommitMessageWithAi(): Promise<void> {
+  async function generateCommitMessageWithAi(settings?: AiSettingsView | null): Promise<string> {
     if (!selectedRepository || !window.forgeDesk) {
-      return
+      return ''
     }
 
-    const settings = await refreshCommitAiSettings()
+    const resolvedSettings = settings ?? await refreshCommitAiSettings()
 
-    if (!isAiSettingsReady(settings)) {
+    if (!isAiSettingsReady(resolvedSettings)) {
       message.info('请先填写并启用 AI API Key')
       setAiSettingsModalOpen(true)
-      return
+      return ''
     }
 
     if (selectedPaths.length === 0) {
       message.warning('请选择要生成提交信息的文件')
-      return
+      return ''
     }
 
     setGeneratingCommitMessage(true)
 
     try {
       const suggestion = await window.forgeDesk.suggestCommitMessage(selectedRepository.id, { paths: selectedPaths })
-      setCommitMessage(suggestion.message)
-      message.success('已填写提交信息')
+      const generatedMessage = suggestion.message.trim()
+      setCommitMessage(generatedMessage)
+      return generatedMessage
     } catch (error) {
       const errorMessage = getErrorMessage(error)
       message.error(errorMessage)
@@ -9532,8 +9892,17 @@ function GitCommitModal({
       if (isAiCredentialErrorMessage(errorMessage)) {
         setAiSettingsModalOpen(true)
       }
+      return ''
     } finally {
       setGeneratingCommitMessage(false)
+    }
+  }
+
+  async function fillCommitMessageWithAi(): Promise<void> {
+    const generatedMessage = await generateCommitMessageWithAi()
+
+    if (generatedMessage) {
+      message.success('已填写提交信息')
     }
   }
 
@@ -9546,6 +9915,7 @@ function GitCommitModal({
     setSelectedPaths([])
     setCommitMessage('')
     setTagRecommendation(null)
+    void refreshCommitAiSettings()
     refreshWorkspaceStatus(true)
     refreshReleaseTagRecommendation()
   }, [open, selectedRepository?.id])
@@ -9624,8 +9994,18 @@ function GitCommitModal({
       return
     }
 
-    const trimmedMessage = commitMessage.trim()
+    let trimmedMessage = commitMessage.trim()
     const trimmedTag = commitTag.trim()
+
+    if (!trimmedMessage) {
+      const settings = aiSettings ?? await refreshCommitAiSettings()
+
+      if (isLocalCodexAutoCommitEnabled(settings)) {
+        message.loading({ content: '正在由本地 Codex 生成提交信息…', key: 'commit-message-generation' })
+        trimmedMessage = await generateCommitMessageWithAi(settings)
+        message.destroy('commit-message-generation')
+      }
+    }
 
     if (!trimmedMessage) {
       message.warning('请输入提交信息')
@@ -9709,7 +10089,7 @@ function GitCommitModal({
         <Button key="release" icon={<UploadOutlined />} disabled={!selectedRepository} onClick={() => setReleaseModalOpen(true)}>
           发布版本
         </Button>,
-        <Button key="commit" type="primary" loading={working} disabled={!commitReady} onClick={commitSelectedFiles}>
+        <Button key="commit" type="primary" loading={working || generatingCommitMessage} disabled={!commitReady} onClick={commitSelectedFiles}>
           提交选中文件
         </Button>
       ]}
@@ -9734,7 +10114,7 @@ function GitCommitModal({
 
         <Input
           value={commitMessage}
-          placeholder="提交信息，例如 feat: update workspace"
+          placeholder={isLocalCodexAutoCommitEnabled(aiSettings) ? '留空后点击提交，由本地 Codex 自动生成' : '提交信息，例如 feat: update workspace'}
           suffix={
             <Button
               className="commit-message-ai-button"
@@ -11576,6 +11956,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
   const [pushBranch, setPushBranch] = useState('')
   const [mergeSource, setMergeSource] = useState('')
   const [working, setWorking] = useState(false)
+  const [generatingCommitMessage, setGeneratingCommitMessage] = useState(false)
   const [loadingStatus, setLoadingStatus] = useState(false)
   const [loadingTagRecommendation, setLoadingTagRecommendation] = useState(false)
   const [loadingAiSettings, setLoadingAiSettings] = useState(false)
@@ -11705,6 +12086,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
     setPushBranch(target.branch)
 
     if (selectedRepository) {
+      void refreshWorkspaceAiSettings()
       refreshWorkspaceStatus()
       refreshReleaseTagRecommendation()
     }
@@ -11843,8 +12225,59 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
   const pushTargets = status?.pushTargets ?? selectedRepository?.pushTargets ?? []
   const remoteOptions = createPushRemoteOptions(selectedRepository?.remotes ?? [], pushTargets)
   const currentBranch = getCurrentBranchName(selectedRepository, status)
-  const commitReady = canCommitSelection(files, files.map((file) => file.path), commitMessage)
+  const commitReady = canCommitSelection(files, files.map((file) => file.path), commitMessage) ||
+    (isLocalCodexAutoCommitEnabled(aiSettings) && files.length > 0)
   const pushReady = Boolean(selectedRepository && pushBranch.trim() && canPushSelection(pushRemote, pushTargets))
+
+  async function commitWorkspaceChanges(): Promise<void> {
+    if (!selectedRepository || !window.forgeDesk) {
+      return
+    }
+
+    let messageToCommit = commitMessage.trim()
+
+    if (!messageToCommit) {
+      const settings = aiSettings ?? await refreshWorkspaceAiSettings()
+
+      if (isLocalCodexAutoCommitEnabled(settings)) {
+        if (!isAiSettingsReady(settings)) {
+          message.info('请先启用并配置本地 Codex')
+          setAiSettingsModalOpen(true)
+          return
+        }
+
+        setGeneratingCommitMessage(true)
+
+        try {
+          const suggestion = await window.forgeDesk.suggestCommitMessage(selectedRepository.id, { paths: files.map((file) => file.path) })
+          messageToCommit = suggestion.message.trim()
+          setCommitMessage(messageToCommit)
+        } catch (error) {
+          const errorMessage = getErrorMessage(error)
+          message.error(errorMessage)
+
+          if (isAiCredentialErrorMessage(errorMessage)) {
+            setAiSettingsModalOpen(true)
+          }
+
+          return
+        } finally {
+          setGeneratingCommitMessage(false)
+        }
+      }
+    }
+
+    if (!messageToCommit) {
+      message.warning('请输入提交信息')
+      return
+    }
+
+    const tagName = commitTag.trim()
+    await runGitWrite(
+      () => window.forgeDesk.gitCommit(selectedRepository.id, { message: messageToCommit, tagName: tagName || undefined }),
+      tagName ? `提交已创建，Tag ${tagName} 已设置` : '提交已创建'
+    )
+  }
 
   return (
     <div className="git-workspace-panel">
@@ -11896,21 +12329,16 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
               <Space direction="vertical" size={8} className="git-operation-commit-form">
                 <Tag color={currentBranch ? 'blue' : 'default'}>当前分支：{currentBranch || '未检测'}</Tag>
                 <Space.Compact className="git-operation-compact">
-                  <Input value={commitMessage} placeholder="feat: update workspace" onChange={(event) => setCommitMessage(event.target.value)} />
+                  <Input
+                    value={commitMessage}
+                    placeholder={isLocalCodexAutoCommitEnabled(aiSettings) ? '留空后点击提交，由本地 Codex 自动生成' : 'feat: update workspace'}
+                    onChange={(event) => setCommitMessage(event.target.value)}
+                  />
                   <Button
                     type="primary"
-                    loading={working}
+                    loading={working || generatingCommitMessage}
                     disabled={!selectedRepository || !commitReady}
-                    onClick={() => {
-                      const tagName = commitTag.trim()
-                      return (
-                        selectedRepository &&
-                        runGitWrite(
-                          () => window.forgeDesk.gitCommit(selectedRepository.id, { message: commitMessage, tagName: tagName || undefined }),
-                          tagName ? `提交已创建，Tag ${tagName} 已设置` : '提交已创建'
-                        )
-                      )
-                    }}
+                    onClick={commitWorkspaceChanges}
                   >
                     提交
                   </Button>
@@ -14564,13 +14992,15 @@ function ProjectOverview({
   focusProjectId,
   onCreateProject,
   onOpenSettings,
-  onOpenTerminalRequest
+  onOpenTerminalRequest,
+  resolvedTheme
 }: {
   mode: AppMode
   focusProjectId: string | null
   onCreateProject: () => void
   onOpenSettings: () => void
   onOpenTerminalRequest: (request: Omit<TerminalOpenRequest, 'requestId'>) => void
+  resolvedTheme: ResolvedTheme
 }): JSX.Element {
   const {
     projects,
@@ -16130,6 +16560,7 @@ function ProjectOverview({
                       defaultTitle={selectedProjectTerminalRequest?.title ?? selectedProject.name}
                       openRequest={terminalOpenRequest}
                       projectId={selectedProject.id}
+                      resolvedTheme={resolvedTheme}
                     />
                   )
                 }
@@ -17492,6 +17923,7 @@ function ProjectSubprojectSummary({
                     推送
                   </Button>
                   <Button
+                    type="primary"
                     size="small"
                     icon={<DownloadOutlined />}
                     loading={fetchingRepositoryId === repository.id}
@@ -20724,6 +21156,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const [settingsInitialModule, setSettingsInitialModule] = useState<SettingsModuleKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
   const [terminalOpenRequest, setTerminalOpenRequest] = useState<TerminalOpenRequest | null>(null)
+  const [terminalRemoteDrawerOpen, setTerminalRemoteDrawerOpen] = useState(false)
   const [systemLogs, setSystemLogs] = useState<SystemLogEntry[]>([])
   const [systemLogDrawerOpen, setSystemLogDrawerOpen] = useState(false)
   const [systemLogFilter, setSystemLogFilter] = useState<SystemLogFilter>('all')
@@ -20732,6 +21165,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     status: 'idle',
     currentVersion: ''
   })
+  const [appUpdateActionBusy, setAppUpdateActionBusy] = useState(false)
   const [appRuntimeInfo, setAppRuntimeInfo] = useState<AppRuntimeInfo | null>(null)
   const [quickBuildState, setQuickBuildState] = useState<QuickBuildState>(() => createInitialQuickBuildState())
   const terminalOpenRequestIdRef = useRef(0)
@@ -21022,6 +21456,53 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     setActiveKey('terminal')
   }
 
+  async function handleGlobalAppUpdateCheck(): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中检查更新')
+      return
+    }
+
+    setAppUpdateActionBusy(true)
+
+    try {
+      const state = await window.forgeDesk.checkAppUpdate()
+      setAppUpdateState(state)
+      if (state.status === 'error') {
+        message.error(state.error || '更新检查失败')
+      }
+    } finally {
+      setAppUpdateActionBusy(false)
+    }
+  }
+
+  async function handleGlobalAppUpdateInstall(): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中安装更新')
+      return
+    }
+
+    setAppUpdateActionBusy(true)
+
+    try {
+      const state = await window.forgeDesk.installAppUpdate()
+      setAppUpdateState(state)
+      if (state.status === 'error') {
+        message.error(state.error || '新版还没有下载完成')
+      }
+    } finally {
+      setAppUpdateActionBusy(false)
+    }
+  }
+
+  async function handleGlobalOpenAppReleases(): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中打开发布页')
+      return
+    }
+
+    await window.forgeDesk.openAppReleases()
+  }
+
   async function startQuickBuild(): Promise<void> {
     if (!window.forgeDesk) {
       message.warning('请在 ForgeDesk 桌面应用中启动快速构建')
@@ -21159,11 +21640,20 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       onOpenLogs={() => setSystemLogDrawerOpen(true)}
     />
   )
+  const appUpdateBanner = (
+    <AppUpdateBanner
+      state={appUpdateState}
+      busy={appUpdateActionBusy}
+      onInstall={() => void handleGlobalAppUpdateInstall()}
+      onOpenReleases={() => void handleGlobalOpenAppReleases()}
+    />
+  )
 
   if (activeKey === 'ai-chat') {
     return (
       <>
         <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenSystemMonitor={() => setActiveKey('system-monitor')} />
+        {appUpdateBanner}
         {appModeSwitcherFallback}
         <AiChatPanel
           usesCustomTitleBar={usesCustomTitleBar}
@@ -21180,6 +21670,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     return (
       <>
         <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenSystemMonitor={() => setActiveKey('system-monitor')} />
+        {appUpdateBanner}
         {appModeSwitcherFallback}
         <CodexSessionManagerPanel usesCustomTitleBar={usesCustomTitleBar} onBack={() => setActiveKey('overview')} />
         {systemLogDrawer}
@@ -21192,6 +21683,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     return (
       <>
         <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenSystemMonitor={() => setActiveKey('system-monitor')} />
+        {appUpdateBanner}
         {appModeSwitcherFallback}
         <Layout className={`terminal-mode-shell${usesCustomTitleBar ? ' terminal-mode-shell-with-titlebar' : ''}`}>
           <div className="terminal-mode-header">
@@ -21202,15 +21694,36 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
                 <Typography.Text type="secondary">命令行工具</Typography.Text>
               </Space>
             </div>
+            <Button
+              className="terminal-remote-trigger"
+              icon={<BranchesOutlined />}
+              onClick={() => setTerminalRemoteDrawerOpen(true)}
+            >
+              远程管理
+            </Button>
           </div>
-          <div className="terminal-mode-body terminal-mode-body-with-remotes">
-            <TerminalRemoteShortcuts onOpenTerminalRequest={openTerminalRequest} />
+          <div className="terminal-mode-body">
             <div className="terminal-mode-terminal">
-              <TerminalWorkspace defaultTitle="ForgeDesk CLI" openRequest={terminalOpenRequest} />
+              <TerminalWorkspace defaultTitle="ForgeDesk CLI" openRequest={terminalOpenRequest} resolvedTheme={resolvedTheme} />
             </div>
           </div>
           <ReleasePublishTaskDock />
         </Layout>
+        <Drawer
+          className="terminal-remote-drawer"
+          title="远程管理"
+          placement="right"
+          width={380}
+          open={terminalRemoteDrawerOpen}
+          onClose={() => setTerminalRemoteDrawerOpen(false)}
+        >
+          <TerminalRemoteShortcuts
+            onOpenTerminalRequest={(request) => {
+              setTerminalRemoteDrawerOpen(false)
+              openTerminalRequest(request)
+            }}
+          />
+        </Drawer>
         {systemLogDrawer}
         {appStatusBar}
       </>
@@ -21220,6 +21733,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   return (
     <>
       <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenSystemMonitor={() => setActiveKey('system-monitor')} />
+      {appUpdateBanner}
       <Layout className={`app-shell${usesCustomTitleBar ? ' app-shell-with-titlebar' : ''}${isSimpleMode ? ' app-shell-simple' : ''}`}>
         {appModeSwitcherFallback}
         <Layout.Sider width={236} theme={resolvedTheme} className="sidebar">
@@ -21298,6 +21812,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
                 onCreateProject={() => setCreatingProject(true)}
                 onOpenSettings={() => openSettingsModule('overview')}
                 onOpenTerminalRequest={openTerminalRequest}
+                resolvedTheme={resolvedTheme}
               />
             )}
             <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('projects')} />

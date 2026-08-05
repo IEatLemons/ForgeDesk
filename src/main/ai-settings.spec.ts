@@ -74,6 +74,18 @@ describe('ai settings', () => {
     assert.equal(settings.apiKey, '')
   })
 
+  it('normalizes localhost for the loopback Codex API service', () => {
+    const settings = normalizeAiSettings({
+      enabled: true,
+      provider: 'codex-local-api',
+      baseUrl: 'http://localhost:55914/v1/',
+      apiKey: 'agt_codex_key',
+      model: 'gpt-5.3-codex'
+    })
+
+    assert.equal(settings.baseUrl, 'http://127.0.0.1:55914/v1')
+  })
+
   it('adds OpenRouter attribution headers for chat requests', () => {
     const headers = buildAiRequestHeaders({
       enabled: true,

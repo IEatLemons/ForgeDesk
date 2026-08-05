@@ -6,6 +6,7 @@ import {
   Form,
   Input,
   Modal,
+  Popover,
   Popconfirm,
   Progress,
   Segmented,
@@ -46,7 +47,10 @@ import {
   groupTasksByStatus,
   isTaskOverdue,
   readStoredTaskItems,
+  reconcileTaskStatusWithSubtasks,
   unassignedTaskProjectFilterValue,
+  updateTaskSubtaskDone,
+  updateTaskSubtaskCompletionTime,
   writeStoredTaskItems,
   type TaskFilterState,
   type TaskGanttRange,
@@ -143,9 +147,37 @@ function formatTaskDate(value: string | null): string {
   return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
 }
 
-function formatTaskTimestamp(value: string): string {
+function formatTaskTimestamp(value: string | null): string {
+  if (!value) {
+    return '时间未记录'
+  }
+
   const timestamp = new Date(value)
   return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function formatTaskDateTimeInput(value: string | null): string {
+  if (!value) {
+    return ''
+  }
+
+  const timestamp = new Date(value)
+
+  if (Number.isNaN(timestamp.getTime())) {
+    return ''
+  }
+
+  const pad = (part: number): string => `${part}`.padStart(2, '0')
+  return `${timestamp.getFullYear()}-${pad(timestamp.getMonth() + 1)}-${pad(timestamp.getDate())}T${pad(timestamp.getHours())}:${pad(timestamp.getMinutes())}`
+}
+
+function parseTaskDateTimeInput(value: string): string | null {
+  if (!value) {
+    return null
+  }
+
+  const timestamp = new Date(value)
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString()
 }
 
 function getProjectName(projects: Project[], projectId: string | null): string {
@@ -210,34 +242,72 @@ function getTaskSubtaskProgress(task: TaskItem): { done: number; total: number; 
   }
 }
 
-function reconcileTaskStatusWithSubtasks(status: TaskStatus, subtasks: TaskSubtask[]): TaskStatus {
-  if (subtasks.length === 0) {
-    return status
+function TaskSubtaskCompletionControl({
+  subtask,
+  onChange
+}: {
+  subtask: TaskSubtask
+  onChange: (completedAt: string | null) => void
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState(() => formatTaskDateTimeInput(subtask.completedAt))
+  const label = subtask.completedAt ? formatTaskTimestamp(subtask.completedAt) : subtask.done ? '补记时间' : '记录时间'
+
+  function handleOpenChange(nextOpen: boolean): void {
+    setOpen(nextOpen)
+
+    if (nextOpen) {
+      setDraft(formatTaskDateTimeInput(subtask.completedAt))
+    }
   }
 
-  const doneCount = subtasks.filter((subtask) => subtask.done).length
+  function save(): void {
+    const completedAt = parseTaskDateTimeInput(draft)
 
-  if (doneCount === subtasks.length) {
-    return 'done'
+    if (!completedAt) {
+      return
+    }
+
+    onChange(completedAt)
+    setOpen(false)
   }
 
-  if (status === 'done') {
-    return doneCount > 0 ? 'doing' : 'todo'
+  function clear(): void {
+    onChange(null)
+    setDraft('')
+    setOpen(false)
   }
 
-  if (status === 'todo' && doneCount > 0) {
-    return 'doing'
-  }
-
-  return status
+  return (
+    <Popover
+      title="子任务完成时间"
+      trigger="click"
+      open={open}
+      onOpenChange={handleOpenChange}
+      content={(
+        <div className="task-subtask-time-editor">
+          <Typography.Text type="secondary">可单独设置该子任务的完成时间</Typography.Text>
+          <Input type="datetime-local" value={draft} onChange={(event) => setDraft(event.target.value)} />
+          <Space size={6}>
+            <Button type="primary" size="small" disabled={!draft} onClick={save}>保存</Button>
+            <Button size="small" onClick={clear} disabled={!subtask.done && !draft}>清除</Button>
+          </Space>
+        </div>
+      )}
+    >
+      <Button size="small" type={subtask.completedAt ? 'text' : 'dashed'} icon={<ClockCircleOutlined />}>{label}</Button>
+    </Popover>
+  )
 }
 
 function TaskSubtaskChecklist({
   task,
-  onToggleSubtask
+  onToggleSubtask,
+  onSetSubtaskCompletion
 }: {
   task: TaskItem
   onToggleSubtask: (taskId: string, subtaskId: string) => void
+  onSetSubtaskCompletion: (taskId: string, subtaskId: string, completedAt: string | null) => void
 }): JSX.Element | null {
   const progress = getTaskSubtaskProgress(task)
 
@@ -255,9 +325,15 @@ function TaskSubtaskChecklist({
       </div>
       <div className="task-subtask-list">
         {task.subtasks.map((subtask) => (
-          <Checkbox key={subtask.id} checked={subtask.done} onChange={() => onToggleSubtask(task.id, subtask.id)}>
-            <Typography.Text delete={subtask.done}>{subtask.title}</Typography.Text>
-          </Checkbox>
+          <div className="task-subtask-row" key={subtask.id}>
+            <Checkbox checked={subtask.done} onChange={() => onToggleSubtask(task.id, subtask.id)}>
+              <span className="task-subtask-copy">
+                <Typography.Text delete={subtask.done}>{subtask.title}</Typography.Text>
+                {subtask.done ? <Typography.Text type="secondary">完成于 {formatTaskTimestamp(subtask.completedAt)}</Typography.Text> : null}
+              </span>
+            </Checkbox>
+            <TaskSubtaskCompletionControl subtask={subtask} onChange={(completedAt) => onSetSubtaskCompletion(task.id, subtask.id, completedAt)} />
+          </div>
         ))}
       </div>
     </div>
@@ -271,7 +347,8 @@ function TaskCard({
   onDelete,
   onStatusChange,
   onToggleDone,
-  onToggleSubtask
+  onToggleSubtask,
+  onSetSubtaskCompletion
 }: {
   task: TaskItem
   projects: Project[]
@@ -280,6 +357,7 @@ function TaskCard({
   onStatusChange: (taskId: string, status: TaskStatus) => void
   onToggleDone: (taskId: string) => void
   onToggleSubtask: (taskId: string, subtaskId: string) => void
+  onSetSubtaskCompletion: (taskId: string, subtaskId: string, completedAt: string | null) => void
 }): JSX.Element {
   const nextStatus = createNextTaskStatus(task.status)
 
@@ -319,7 +397,7 @@ function TaskCard({
           ))}
         </div>
       ) : null}
-      <TaskSubtaskChecklist task={task} onToggleSubtask={onToggleSubtask} />
+      <TaskSubtaskChecklist task={task} onToggleSubtask={onToggleSubtask} onSetSubtaskCompletion={onSetSubtaskCompletion} />
     </article>
   )
 }
@@ -331,7 +409,8 @@ function TaskGanttView({
   onDelete,
   onStatusChange,
   onToggleDone,
-  onToggleSubtask
+  onToggleSubtask,
+  onSetSubtaskCompletion
 }: {
   range: TaskGanttRange
   projects: Project[]
@@ -340,6 +419,7 @@ function TaskGanttView({
   onStatusChange: (taskId: string, status: TaskStatus) => void
   onToggleDone: (taskId: string) => void
   onToggleSubtask: (taskId: string, subtaskId: string) => void
+  onSetSubtaskCompletion: (taskId: string, subtaskId: string, completedAt: string | null) => void
 }): JSX.Element {
   if (range.rows.length === 0) {
     return (
@@ -383,7 +463,7 @@ function TaskGanttView({
                     <TaskStatusTag status={row.task.status} />
                     <TaskPriorityTag priority={row.task.priority} />
                   </div>
-                  <TaskSubtaskChecklist task={row.task} onToggleSubtask={onToggleSubtask} />
+                  <TaskSubtaskChecklist task={row.task} onToggleSubtask={onToggleSubtask} onSetSubtaskCompletion={onSetSubtaskCompletion} />
                 </div>
               </div>
               <div className="task-gantt-track">
@@ -483,11 +563,14 @@ export function TaskListPanel(): JSX.Element {
     form.resetFields()
   }
 
-  function getDraftSubtasksForSave(): TaskSubtask[] {
+  function getDraftSubtasksForSave(now: Date): TaskSubtask[] {
+    const timestamp = now.toISOString()
+
     return draftSubtasks
       .map((subtask) => ({
         ...subtask,
-        title: subtask.title.trim()
+        title: subtask.title.trim(),
+        completedAt: subtask.done ? subtask.completedAt ?? timestamp : null
       }))
       .filter((subtask) => subtask.title)
   }
@@ -533,7 +616,7 @@ export function TaskListPanel(): JSX.Element {
     const projectId = values.projectId && values.projectId !== unassignedTaskProjectValue ? values.projectId : null
     const startDate = values.startDate || null
     const dueDate = values.dueDate || null
-    const subtasks = getDraftSubtasksForSave()
+    const subtasks = getDraftSubtasksForSave(now)
     const status = reconcileTaskStatusWithSubtasks(values.status, subtasks)
 
     commitTasks((currentTasks) => {
@@ -632,7 +715,7 @@ export function TaskListPanel(): JSX.Element {
   }
 
   function toggleSubtaskDone(taskId: string, subtaskId: string): void {
-    const now = new Date().toISOString()
+    const now = new Date()
 
     commitTasks((currentTasks) =>
       currentTasks.map((task) => {
@@ -640,25 +723,31 @@ export function TaskListPanel(): JSX.Element {
           return task
         }
 
-        const subtasks = task.subtasks.map((subtask) =>
-          subtask.id === subtaskId
-            ? {
-                ...subtask,
-                done: !subtask.done,
-                completedAt: subtask.done ? null : now
-              }
-            : subtask
-        )
-        const status = reconcileTaskStatusWithSubtasks(task.status, subtasks)
-
-        return {
-          ...task,
-          status,
-          subtasks,
-          updatedAt: now,
-          completedAt: status === 'done' ? task.completedAt ?? now : null
-        }
+        const subtask = task.subtasks.find((item) => item.id === subtaskId)
+        return subtask ? updateTaskSubtaskDone(task, subtaskId, !subtask.done, now) : task
       })
+    )
+  }
+
+  function setSubtaskCompletionTime(taskId: string, subtaskId: string, completedAt: string | null): void {
+    const now = new Date()
+
+    commitTasks((currentTasks) =>
+      currentTasks.map((task) => (task.id === taskId ? updateTaskSubtaskCompletionTime(task, subtaskId, completedAt, now) : task))
+    )
+  }
+
+  function setDraftSubtaskCompletionTime(subtaskId: string, completedAt: string | null): void {
+    setDraftSubtasks((current) =>
+      current.map((subtask) =>
+        subtask.id === subtaskId
+          ? {
+              ...subtask,
+              done: Boolean(completedAt),
+              completedAt
+            }
+          : subtask
+      )
     )
   }
 
@@ -685,7 +774,7 @@ export function TaskListPanel(): JSX.Element {
                 ))}
               </div>
             ) : null}
-            <TaskSubtaskChecklist task={task} onToggleSubtask={toggleSubtaskDone} />
+            <TaskSubtaskChecklist task={task} onToggleSubtask={toggleSubtaskDone} onSetSubtaskCompletion={setSubtaskCompletionTime} />
           </div>
         </div>
       )
@@ -872,6 +961,7 @@ export function TaskListPanel(): JSX.Element {
                       onStatusChange={updateTaskStatus}
                       onToggleDone={toggleTaskDone}
                       onToggleSubtask={toggleSubtaskDone}
+                      onSetSubtaskCompletion={setSubtaskCompletionTime}
                     />
                   ))
                 ) : (
@@ -892,6 +982,7 @@ export function TaskListPanel(): JSX.Element {
           onStatusChange={updateTaskStatus}
           onToggleDone={toggleTaskDone}
           onToggleSubtask={toggleSubtaskDone}
+          onSetSubtaskCompletion={setSubtaskCompletionTime}
         />
       ) : null}
 
@@ -959,7 +1050,10 @@ export function TaskListPanel(): JSX.Element {
                   {draftSubtasks.map((subtask) => (
                     <div className="task-subtask-editor-row" key={subtask.id}>
                       <Checkbox checked={subtask.done} onChange={() => toggleDraftSubtaskDone(subtask.id)} />
-                      <Input value={subtask.title} onChange={(event) => updateDraftSubtaskTitle(subtask.id, event.target.value)} />
+                      <div className="task-subtask-editor-copy">
+                        <Input value={subtask.title} onChange={(event) => updateDraftSubtaskTitle(subtask.id, event.target.value)} />
+                        <TaskSubtaskCompletionControl subtask={subtask} onChange={(completedAt) => setDraftSubtaskCompletionTime(subtask.id, completedAt)} />
+                      </div>
                       <Tooltip title="删除子任务">
                         <Button danger icon={<DeleteOutlined />} onClick={() => deleteDraftSubtask(subtask.id)} />
                       </Tooltip>

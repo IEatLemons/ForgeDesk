@@ -27,6 +27,19 @@
   --terminal-panel-header-bg: #f8fafc;
   --terminal-panel-border: #dce3ec;
   --terminal-tab-active-bg: #eff6ff;
+  --terminal-mode-bg: #f6f7f9;
+  --terminal-mode-header-bg: #ffffff;
+  --terminal-mode-border: #dce3ec;
+  --terminal-viewport-bg: #fbfcfe;
+  --terminal-remote-bg: #ffffff;
+  --terminal-remote-control-bg: #fbfcfe;
+  --terminal-remote-card-bg: #f8fafc;
+  --terminal-remote-card-hover-bg: #eff6ff;
+  --terminal-remote-card-border: #e1e7ef;
+  --terminal-remote-text: #172033;
+  --terminal-remote-muted: #667085;
+  --terminal-remote-accent: #2563eb;
+  --terminal-remote-accent-soft: rgba(37, 99, 235, 0.1);
   --table-bg: #ffffff;
   --table-header-bg: #fbfcfe;
   --table-row-muted-bg: #f6f7f9;
@@ -1984,6 +1997,19 @@
   --terminal-panel-header-bg: #111820;
   --terminal-panel-border: #263244;
   --terminal-tab-active-bg: #172236;
+  --terminal-mode-bg: #0d1117;
+  --terminal-mode-header-bg: #12161d;
+  --terminal-mode-border: #2a3038;
+  --terminal-viewport-bg: #101318;
+  --terminal-remote-bg: #0f141b;
+  --terminal-remote-control-bg: #111923;
+  --terminal-remote-card-bg: #131b25;
+  --terminal-remote-card-hover-bg: #172236;
+  --terminal-remote-card-border: #1f2937;
+  --terminal-remote-text: #e5edf6;
+  --terminal-remote-muted: #8b98a8;
+  --terminal-remote-accent: #60a5fa;
+  --terminal-remote-accent-soft: rgba(59, 130, 246, 0.14);
   --table-bg: #101721;
   --table-header-bg: #111923;
   --table-row-muted-bg: #151c25;
@@ -2961,6 +2987,21 @@ body {
   padding: 28px 28px calc(52px + var(--app-status-bar-height));
   position: relative;
   min-width: 0;
+}
+
+.app-update-banner {
+  position: relative;
+  z-index: 1101;
+  margin: 10px 16px 0;
+}
+
+.app-update-banner .ant-alert-description {
+  max-width: 720px;
+}
+
+.app-update-notes {
+  margin-bottom: 0 !important;
+  white-space: pre-wrap;
 }
 
 .app-status-bar {
@@ -7147,6 +7188,14 @@ button.app-status-bar-item:hover {
   min-width: 0;
 }
 
+.task-subtask-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+}
+
 .task-subtask-list .ant-checkbox-wrapper {
   align-items: flex-start;
   margin-inline-start: 0;
@@ -7159,9 +7208,32 @@ button.app-status-bar-item:hover {
   min-width: 0;
 }
 
+.task-subtask-copy,
+.task-subtask-editor-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
 .task-subtask-list .ant-typography {
   font-size: 13px;
   line-height: 1.45;
+}
+
+.task-subtask-copy .ant-typography-secondary,
+.task-subtask-editor-copy .ant-typography-secondary {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.task-subtask-time-editor {
+  display: grid;
+  gap: 8px;
+  width: 250px;
+}
+
+.task-subtask-time-editor .ant-typography {
+  font-size: 12px;
 }
 
 .task-subtask-editor,
@@ -8672,6 +8744,83 @@ button.app-status-bar-item:hover {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   grid-column: 1 / -1;
+}
+
+.codex-api-service-card {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 10px;
+  background: var(--subtle-bg);
+}
+
+.codex-api-service-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.codex-api-service-header .ant-typography {
+  margin: 0;
+}
+
+.codex-api-service-credentials {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--card-bg);
+}
+
+.codex-account-manager-card {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 10px;
+  background: var(--subtle-bg);
+}
+
+.codex-account-list {
+  display: grid;
+  gap: 10px;
+}
+
+.codex-account-row {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--card-bg);
+}
+
+.codex-account-row.is-active {
+  border-color: rgba(24, 144, 255, 0.6);
+  box-shadow: 0 0 0 1px rgba(24, 144, 255, 0.16);
+}
+
+.codex-account-row-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.codex-account-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .oa-settings-form {
@@ -11309,6 +11458,339 @@ button.app-status-bar-item:hover {
 
 .terminal-empty .ant-empty-description {
   color: var(--app-muted);
+}
+
+/* Terminal mode uses the shared application theme instead of a fixed dark palette. */
+.terminal-mode-shell {
+  background: var(--terminal-mode-bg);
+}
+
+.terminal-mode-header {
+  border-color: var(--terminal-mode-border);
+  background: var(--terminal-mode-header-bg);
+}
+
+.terminal-mode-header .ant-typography {
+  color: var(--app-text);
+}
+
+.terminal-mode-header .ant-typography-secondary {
+  color: var(--app-muted) !important;
+}
+
+.terminal-mode-header .ant-btn {
+  color: var(--app-text);
+  border-color: var(--app-border);
+  background: var(--card-bg);
+  box-shadow: none;
+}
+
+.terminal-mode-header .ant-btn:hover,
+.terminal-mode-header .ant-btn:focus-visible,
+.terminal-remote-trigger:hover,
+.terminal-remote-trigger:focus-visible {
+  color: var(--primary) !important;
+  border-color: var(--primary) !important;
+  background: var(--primary-soft) !important;
+}
+
+.terminal-mode-body,
+.terminal-mode-body-with-remotes,
+.terminal-mode-body .terminal-workspace,
+.terminal-mode-body .terminal-workspace-body,
+.terminal-mode-body .terminal-empty,
+.terminal-pane-stack {
+  background: var(--terminal-mode-bg);
+}
+
+.terminal-mode-body-with-remotes {
+  display: block;
+}
+
+.terminal-mode-terminal {
+  width: 100%;
+}
+
+.terminal-mode-body .terminal-workspace-header {
+  border-color: var(--terminal-mode-border);
+  background: var(--terminal-mode-header-bg);
+}
+
+.terminal-mode-body .terminal-workspace-title,
+.terminal-mode-body .terminal-tab-main {
+  color: var(--app-text);
+}
+
+.terminal-mode-body .terminal-tab {
+  border-color: var(--terminal-panel-border);
+  background: var(--card-bg);
+}
+
+.terminal-mode-body .terminal-tab.is-active {
+  border-color: var(--primary);
+  background: var(--terminal-tab-active-bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+.terminal-mode-body .terminal-tab-close {
+  color: var(--app-muted);
+}
+
+.terminal-mode-body .terminal-tab-close:hover,
+.terminal-mode-body .terminal-tab-main:hover {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.terminal-mode-body .terminal-workspace-actions .ant-btn {
+  color: var(--app-muted);
+}
+
+.terminal-mode-body .terminal-workspace-actions .ant-btn:hover,
+.terminal-mode-body .terminal-workspace-actions .ant-btn:focus-visible {
+  color: var(--primary) !important;
+  background: var(--primary-soft) !important;
+}
+
+.terminal-workspace-body,
+.terminal-pane,
+.terminal-pane-stack {
+  background: var(--terminal-viewport-bg);
+}
+
+.terminal-command-sidebar {
+  color: var(--app-text);
+  border-color: var(--terminal-mode-border);
+  background: var(--terminal-mode-header-bg);
+}
+
+.terminal-command-sidebar-header {
+  border-color: var(--terminal-mode-border);
+}
+
+.terminal-command-sidebar-title,
+.terminal-command-shortcut-name {
+  color: var(--app-text);
+}
+
+.terminal-command-shortcut {
+  border-color: var(--terminal-panel-border);
+  background: var(--card-bg);
+  box-shadow: var(--app-shadow-soft);
+}
+
+.terminal-command-shortcut:hover,
+.terminal-command-shortcut:focus-visible {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.terminal-command-shortcut-text {
+  color: var(--app-muted);
+}
+
+.terminal-remote-drawer .ant-drawer-content,
+.terminal-remote-drawer .ant-drawer-header,
+.terminal-remote-drawer .ant-drawer-body {
+  color: var(--app-text);
+  border-color: var(--app-border);
+  background: var(--terminal-remote-bg);
+}
+
+.terminal-remote-drawer .ant-drawer-header {
+  border-bottom: 1px solid var(--app-border);
+}
+
+.terminal-remote-drawer .ant-drawer-title,
+.terminal-remote-drawer .ant-drawer-close {
+  color: var(--app-text);
+}
+
+.terminal-remote-drawer .ant-drawer-close:hover {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.terminal-remote-drawer .ant-drawer-body {
+  padding: 0;
+}
+
+.terminal-remote-sidebar {
+  height: 100%;
+  padding: 16px;
+  color: var(--terminal-remote-text);
+  border: 0;
+  background: var(--terminal-remote-bg);
+}
+
+.terminal-remote-sidebar .ant-typography {
+  color: var(--terminal-remote-text);
+}
+
+.terminal-remote-sidebar .ant-typography-secondary,
+.terminal-remote-sidebar .ant-empty-description {
+  color: var(--terminal-remote-muted) !important;
+}
+
+.terminal-remote-heading .ant-btn,
+.terminal-remote-sidebar .terminal-remote-group-header .ant-btn,
+.terminal-remote-host-actions .ant-btn {
+  color: var(--terminal-remote-muted);
+}
+
+.terminal-remote-heading .ant-btn:hover,
+.terminal-remote-heading .ant-btn:focus-visible,
+.terminal-remote-sidebar .terminal-remote-group-header .ant-btn:hover,
+.terminal-remote-sidebar .terminal-remote-group-header .ant-btn:focus-visible,
+.terminal-remote-host-actions .ant-btn:hover,
+.terminal-remote-host-actions .ant-btn:focus-visible {
+  color: var(--primary) !important;
+  background: var(--primary-soft) !important;
+}
+
+.terminal-remote-heading .ant-btn-primary {
+  color: #ffffff;
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.terminal-remote-search.ant-input-affix-wrapper {
+  color: var(--terminal-remote-text);
+  border-color: var(--terminal-panel-border);
+  background: var(--terminal-remote-control-bg);
+}
+
+.terminal-remote-search.ant-input-affix-wrapper:hover,
+.terminal-remote-search.ant-input-affix-wrapper-focused {
+  border-color: var(--primary);
+  background: var(--primary-surface);
+}
+
+.terminal-remote-search .ant-input,
+.terminal-remote-search .ant-input-prefix,
+.terminal-remote-search .ant-input-clear-icon {
+  color: var(--terminal-remote-muted);
+  background: transparent;
+}
+
+.terminal-remote-search .ant-input::placeholder {
+  color: var(--terminal-remote-muted);
+}
+
+.terminal-remote-group-title {
+  color: var(--terminal-remote-accent);
+}
+
+.terminal-remote-group-title .ant-typography {
+  color: var(--terminal-remote-text);
+}
+
+.terminal-remote-group-title span:last-child {
+  color: var(--terminal-remote-muted);
+  border-color: var(--terminal-panel-border);
+  background: var(--terminal-remote-control-bg);
+}
+
+.terminal-remote-host {
+  color: var(--terminal-remote-text);
+  border-color: var(--terminal-remote-card-border);
+  background: var(--terminal-remote-card-bg);
+}
+
+.terminal-remote-host:hover,
+.terminal-remote-host:focus-visible {
+  color: var(--terminal-remote-text);
+  border-color: var(--primary);
+  background: var(--terminal-remote-card-hover-bg);
+}
+
+.terminal-remote-host-icon {
+  color: var(--terminal-remote-accent);
+  background: var(--terminal-remote-accent-soft);
+}
+
+.terminal-remote-host-name {
+  color: var(--terminal-remote-text);
+}
+
+.terminal-remote-host-target,
+.terminal-remote-empty-group {
+  color: var(--terminal-remote-muted);
+}
+
+.terminal-remote-host-key {
+  color: var(--terminal-remote-accent);
+}
+
+.terminal-remote-empty-group {
+  border-color: var(--terminal-panel-border);
+}
+
+.terminal-remote-modal .ant-modal-content,
+.terminal-remote-modal .ant-modal-header,
+.terminal-remote-modal .ant-modal-footer {
+  color: var(--app-text);
+  background: var(--panel-bg);
+}
+
+.terminal-remote-modal .ant-modal-content {
+  border-color: var(--app-border);
+  box-shadow: var(--app-shadow);
+}
+
+.terminal-remote-modal .ant-modal-title,
+.terminal-remote-modal .ant-form-item-label > label {
+  color: var(--app-text);
+}
+
+.terminal-remote-modal .ant-modal-close,
+.terminal-remote-modal .ant-form-item .ant-form-item-extra,
+.terminal-remote-modal .ant-form-item .ant-form-item-explain {
+  color: var(--app-muted);
+}
+
+.terminal-remote-modal .ant-input,
+.terminal-remote-modal .ant-input-number,
+.terminal-remote-modal .ant-select-selector {
+  color: var(--app-text) !important;
+  border-color: var(--app-border) !important;
+  background: var(--subtle-bg) !important;
+}
+
+.terminal-remote-modal .ant-input::placeholder,
+.terminal-remote-modal .ant-input-number-input::placeholder,
+.terminal-remote-modal .ant-select-selection-placeholder {
+  color: var(--app-muted) !important;
+}
+
+.terminal-remote-modal .ant-input-number-input,
+.terminal-remote-modal .ant-select-selection-item,
+.terminal-remote-modal .ant-select-arrow,
+.terminal-remote-modal .ant-select-clear {
+  color: var(--app-text) !important;
+}
+
+.terminal-remote-select-popup.ant-select-dropdown,
+.terminal-remote-popconfirm .ant-popover-inner {
+  color: var(--app-text);
+  border-color: var(--app-border);
+  background: var(--panel-bg);
+}
+
+.terminal-remote-select-popup .ant-select-item,
+.terminal-remote-popconfirm .ant-popover-title,
+.terminal-remote-popconfirm .ant-popover-inner-content {
+  color: var(--app-text);
+}
+
+.terminal-remote-select-popup .ant-select-item-option-active:not(.ant-select-item-option-disabled),
+.terminal-remote-select-popup .ant-select-item-option-selected:not(.ant-select-item-option-disabled) {
+  color: var(--app-text);
+  background: var(--primary-soft);
+}
+
+.terminal-remote-popconfirm .ant-popover-arrow::before {
+  background: var(--panel-bg);
 }
 
 /* The Codex workbench has its own dense three-pane layout. Keep its dark

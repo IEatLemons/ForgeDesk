@@ -44,6 +44,7 @@ export type TerminalCreateInput = {
   rows?: number
   directCommand?: TerminalDirectCommand
   startupCommand?: string
+  env?: NodeJS.ProcessEnv
 }
 
 export type TerminalSession = {
@@ -241,8 +242,9 @@ export class TerminalService {
       this.sessions.delete(existingSessionId)
     }
 
+    const terminalEnv = { ...this.env, ...input.env }
     const directCommand = normalizeDirectCommand(input.directCommand)
-    const shell = directCommand?.file ?? resolveTerminalShell({ env: this.env, platform: this.platform })
+    const shell = directCommand?.file ?? resolveTerminalShell({ env: terminalEnv, platform: this.platform })
     const shellArgs = directCommand ? directCommand.args : getTerminalShellArgs(this.platform)
     const id = this.idFactory()
     const cols = normalizeDimension(input.cols, 80)
@@ -253,7 +255,7 @@ export class TerminalService {
       pty = this.ptyFactory(shell, shellArgs, {
         cols,
         cwd,
-        env: this.env,
+        env: terminalEnv,
         name: 'xterm-256color',
         rows
       })

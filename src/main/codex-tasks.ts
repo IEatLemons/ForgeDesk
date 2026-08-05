@@ -35,6 +35,7 @@ export type CodexTaskRecord = {
   projectId: string
   cwd: string
   status: CodexTaskRunStatus
+  accountId: string
   model: string
   branch: string
   additions: number
@@ -53,6 +54,7 @@ export type CodexTaskCreateInput = {
   title?: string
   projectId?: string
   cwd?: string
+  accountId?: string
   model?: string
 }
 
@@ -89,6 +91,7 @@ type CodexTaskRow = {
   project_id?: unknown
   cwd?: unknown
   status?: unknown
+  account_id?: unknown
   model?: unknown
   branch?: unknown
   additions?: unknown
@@ -118,7 +121,8 @@ export type CodexTaskServiceOptions = {
   db: () => DatabaseLike
   emit?: (event: CodexTaskEvent) => void
   execFileText?: ExecFileText
-  findCodexCommand?: () => Promise<string>
+  findCodexCommand?: (env?: NodeJS.ProcessEnv) => Promise<string>
+  resolveCodexHome?: (accountId?: string) => Promise<string>
   now?: () => Date
   spawnCodex?: SpawnCodex
 }
@@ -203,6 +207,7 @@ function mapTaskRow(db: DatabaseLike, row: CodexTaskRow): CodexTaskRecord {
   const messages = (db.prepare('SELECT * FROM codex_task_messages WHERE task_id = ? ORDER BY created_at ASC, id ASC').all(id) as CodexTaskMessageRow[]).map(mapTaskMessageRow)
 
   return {
+    accountId: text(row.account_id),
     additions: numberValue(row.additions),
     branch: text(row.branch),
     createdAt: text(row.created_at),
@@ -299,6 +304,7 @@ export function migrateCodexTaskTables(db: DatabaseLike): void {
       project_id TEXT NOT NULL DEFAULT '',
       cwd TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'idle',
+      account_id TEXT NOT NULL DEFAULT '',
       model TEXT NOT NULL DEFAULT '',
       branch TEXT NOT NULL DEFAULT '',
       additions INTEGER NOT NULL DEFAULT 0,
@@ -326,6 +332,10 @@ export function migrateCodexTaskTables(db: DatabaseLike): void {
   const columns = db.prepare('PRAGMA table_info(codex_task_messages)').all() as Array<{ name?: unknown }>
   if (!columns.some((column) => column.name === 'attachments')) {
     db.exec("ALTER TABLE codex_task_messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
+  }
+  const taskColumns = db.prepare('PRAGMA table_info(codex_tasks)').all() as Array<{ name?: unknown }>
+  if (!taskColumns.some((column) => column.name === 'account_id')) {
+    db.exec("ALTER TABLE codex_tasks ADD COLUMN account_id TEXT NOT NULL DEFAULT ''")
   }
 }
 
@@ -364,7 +374,8 @@ export class CodexTaskService {
   private readonly db: () => DatabaseLike
   private readonly emit?: (event: CodexTaskEvent) => void
   private readonly execFileText: ExecFileText
-  private readonly findCodexCommand: () => Promise<string>
+  private readonly findCodexCommand: (env?: NodeJS.ProcessEnv) => Promise<string>
+  private readonly resolveCodexHome: (accountId?: string) => Promise<string>
   private readonly now: () => Date
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>()
   private readonly spawnCodex: SpawnCodex
@@ -373,7 +384,8 @@ export class CodexTaskService {
     this.db = options.db
     this.emit = options.emit
     this.execFileText = options.execFileText ?? execFileAsync
-    this.findCodexCommand = options.findCodexCommand ?? (() => findLocalAiCommand('codex-cli'))
+    this.findCodexCommand = options.findCodexCommand ?? ((env) => findLocalAiCommand('codex-cli', { env }))
+    this.resolveCodexHome = options.resolveCodexHome ?? (async () => process.env.CODEX_HOME?.trim() || '')
     this.now = options.now ?? (() => new Date())
     this.spawnCodex = options.spawnCodex ?? ((file, args, spawnOptions) => spawn(file, args, spawnOptions))
   }
@@ -398,10 +410,10 @@ export class CodexTaskService {
 
     db.prepare(`
       INSERT INTO codex_tasks (
-        id, title, project_id, cwd, status, model, branch, additions, deletions, files_changed, error_message, run_log, created_at, updated_at, finished_at
+        id, title, project_id, cwd, status, account_id, model, branch, additions, deletions, files_changed, error_message, run_log, created_at, updated_at, finished_at
       )
-      VALUES (?, ?, ?, ?, 'idle', ?, '', 0, 0, 0, '', '', ?, ?, '')
-    `).run(id, title, input.projectId?.trim() || '', cwd, input.model?.trim() || '', timestamp, timestamp)
+      VALUES (?, ?, ?, ?, 'idle', ?, ?, '', 0, 0, 0, '', '', ?, ?, '')
+    `).run(id, title, input.projectId?.trim() || '', cwd, input.accountId?.trim() || '', input.model?.trim() || '', timestamp, timestamp)
 
     return this.requireTask(id)
   }
@@ -459,9 +471,15 @@ export class CodexTaskService {
 
   private async startRun(taskId: string, prompt: string, images: string[] = []): Promise<void> {
     const task = this.requireTask(taskId)
+    const codexHome = await this.resolveCodexHome(task.accountId)
+    const environment = {
+      ...process.env,
+      ...(codexHome ? { CODEX_HOME: codexHome } : {}),
+      NO_COLOR: '1'
+    }
     let command = ''
     try {
-      command = await this.findCodexCommand()
+      command = await this.findCodexCommand(environment)
       if (!command) throw new Error('未检测到 AI 编程助手运行环境')
     } catch (error) {
       this.finishTask(task.id, 'failed', error instanceof Error ? error.message : String(error))
@@ -477,7 +495,7 @@ export class CodexTaskService {
     const args = ['exec', '--json', '-C', task.cwd, '--skip-git-repo-check', ...(task.model ? ['--model', task.model] : []), ...imageArgs, prompt]
     let child: ChildProcessWithoutNullStreams
     try {
-      child = this.spawnCodex(command, args, { cwd: task.cwd, env: { ...process.env, NO_COLOR: '1' } })
+      child = this.spawnCodex(command, args, { cwd: task.cwd, env: environment })
     } catch (error) {
       this.finishTask(task.id, 'failed', error instanceof Error ? error.message : String(error))
       return

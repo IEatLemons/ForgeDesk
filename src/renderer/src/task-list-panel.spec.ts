@@ -16,4 +16,13 @@ describe('task list panel', () => {
     assert.match(source, /projects\.map\(\(project\) => \(\{ label: project\.name, value: project\.id \}\)\)/)
     assert.doesNotMatch(source, /selectedProjectId/)
   })
+
+  it('provides a dedicated completion-time control for every subtask', () => {
+    const source = getTaskListPanelSource()
+
+    assert.match(source, /TaskSubtaskCompletionControl/)
+    assert.match(source, /type="datetime-local"/)
+    assert.match(source, /可单独设置该子任务的完成时间/)
+    assert.match(source, /updateTaskSubtaskCompletionTime/)
+  })
 })

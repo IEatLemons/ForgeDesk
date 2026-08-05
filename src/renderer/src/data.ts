@@ -1770,7 +1770,7 @@ export type ProjectGitSummary = {
 
 export type AiSettingsInput = {
   enabled: boolean
-  provider?: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli'
+  provider?: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli' | 'codex-local-api'
   baseUrl: string
   apiKey?: string
   model: string
@@ -1779,12 +1779,61 @@ export type AiSettingsInput = {
 
 export type AiSettingsView = {
   enabled: boolean
-  provider: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli'
+  provider: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli' | 'codex-local-api'
   baseUrl: string
   apiKey: string
   apiKeyConfigured: boolean
   model: string
   temperature: number
+}
+
+export type CodexAccountInfo = {
+  available: boolean
+  authFilePath: string
+  authMode: string
+  email: string
+  planType: string
+  accountId: string
+  accountIdSuffix: string
+  accessTokenConfigured: boolean
+  refreshTokenConfigured: boolean
+  updatedAt: string
+  message: string
+}
+
+export type CodexManagedAccount = CodexAccountInfo & {
+  id: string
+  name: string
+  source: 'local' | 'imported'
+  codexHome: string
+  active: boolean
+  createdAt: string
+  lastUsedAt: string
+}
+
+export type CodexAccountRegistryView = {
+  activeAccountId: string
+  accounts: CodexManagedAccount[]
+  message: string
+}
+
+export type CodexAccountImportInput = {
+  name?: string
+  sourcePath: string
+}
+
+export type CodexApiServiceView = {
+  enabled: boolean
+  running: boolean
+  host: '127.0.0.1'
+  port: number
+  baseUrl: string
+  apiKey: string
+  apiKeyMasked: string
+  apiKeyConfigured: boolean
+  model: string
+  account: CodexAccountInfo
+  message: string
 }
 
 export type AiRuntimeStatus = {
@@ -1828,6 +1877,7 @@ export type CodexTaskRecord = {
   projectId: string
   cwd: string
   status: CodexTaskRunStatus
+  accountId: string
   model: string
   branch: string
   additions: number
@@ -1846,6 +1896,7 @@ export type CodexTaskCreateInput = {
   title?: string
   projectId?: string
   cwd?: string
+  accountId?: string
   model?: string
 }
 
@@ -1975,6 +2026,7 @@ export type CodexSessionMessageInput = {
   content: string
   images?: string[]
   model?: string
+  accountId?: string
 }
 
 export type CodexSiteStatus = 'draft' | 'building' | 'ready' | 'previewing' | 'published' | 'error'

@@ -93,6 +93,7 @@ export type CodexSessionMessageInput = {
   content: string
   images?: string[]
   model?: string
+  accountId?: string
 }
 
 export type CodexSessionStateThread = {
@@ -118,7 +119,8 @@ export type CodexSessionServiceOptions = {
   stateDatabasePath?: string
   sessionsDirectory?: string
   now?: () => Date
-  findCodexCommand?: () => Promise<string>
+  findCodexCommand?: (env?: NodeJS.ProcessEnv) => Promise<string>
+  resolveCodexHome?: (accountId?: string) => Promise<string>
   spawnCodex?: SpawnCodex
   emit?: (event: CodexSessionEvent) => void
   readStateRows?: () => Promise<CodexSessionStateThread[]>
@@ -566,7 +568,8 @@ export class CodexSessionService {
   private readonly stateDatabasePath?: string
   private readonly sessionsDirectory: string
   private readonly now: () => Date
-  private readonly findCodexCommand: () => Promise<string>
+  private readonly findCodexCommand: (env?: NodeJS.ProcessEnv) => Promise<string>
+  private readonly resolveCodexHome: (accountId?: string) => Promise<string>
   private readonly spawnCodex: SpawnCodex
   private readonly emit?: (event: CodexSessionEvent) => void
   private readonly readStateRowsOverride?: () => Promise<CodexSessionStateThread[]>
@@ -580,7 +583,8 @@ export class CodexSessionService {
     this.stateDatabasePath = options.stateDatabasePath
     this.sessionsDirectory = options.sessionsDirectory ?? join(this.codexHome, 'sessions')
     this.now = options.now ?? (() => new Date())
-    this.findCodexCommand = options.findCodexCommand ?? (() => findLocalAiCommand('codex-cli'))
+    this.findCodexCommand = options.findCodexCommand ?? ((env) => findLocalAiCommand('codex-cli', { env }))
+    this.resolveCodexHome = options.resolveCodexHome ?? (async () => this.codexHome)
     this.spawnCodex = options.spawnCodex ?? ((file, args, spawnOptions) => spawn(file, args, spawnOptions))
     this.emit = options.emit
     this.readStateRowsOverride = options.readStateRows
@@ -589,7 +593,7 @@ export class CodexSessionService {
   async list(): Promise<CodexSessionsSnapshot> {
     const checkedAt = this.now().toISOString()
     try {
-      const summaries = await this.readSummaries()
+      const summaries = await this.readSummaries(await this.resolveCodexHome())
       const projects = new Map<string, CodexProjectRecord>()
       for (const session of summaries) {
         const current = projects.get(session.projectKey)
@@ -639,7 +643,7 @@ export class CodexSessionService {
   }
 
   async get(sessionId: string): Promise<CodexSessionDetail> {
-    const summaries = await this.readSummaries()
+    const summaries = await this.readSummaries(await this.resolveCodexHome())
     const summary = summaries.find((session) => session.id === sessionId)
     if (!summary) throw new Error('Codex 会话不存在')
     const fileStat = await stat(summary.filePath)
@@ -657,7 +661,7 @@ export class CodexSessionService {
   async togglePin(sessionId: string): Promise<CodexSessionSummary> {
     const session = await this.get(sessionId)
     const pinned = !session.pinned
-    await setCodexSessionPinned(this.codexHome, sessionId, pinned)
+    await setCodexSessionPinned(await this.resolveCodexHome(), sessionId, pinned)
     const nextSession = { ...session, pinned }
     const cached = this.cache.get(sessionId)
     if (cached) this.cache.set(sessionId, { ...cached, detail: { ...cached.detail, pinned } })
@@ -671,7 +675,9 @@ export class CodexSessionService {
     if (this.processes.has(input.sessionId)) throw new Error('该 Codex 会话正在运行')
     const session = await this.get(input.sessionId)
     if (session.archived) throw new Error('已归档的 Codex 会话不能继续对话')
-    const command = await this.findCodexCommand()
+    const codexHome = await this.resolveCodexHome(input.accountId)
+    const environment = { ...process.env, CODEX_HOME: codexHome, NO_COLOR: '1' }
+    const command = await this.findCodexCommand(environment)
     if (!command) throw new Error('未检测到 Codex CLI')
 
     const images = [...new Set((input.images ?? []).map((image) => image.trim()).filter(Boolean))]
@@ -679,7 +685,7 @@ export class CodexSessionService {
     const args = ['exec', 'resume', '--json', '--skip-git-repo-check', ...(model ? ['--model', model] : []), ...images.flatMap((image) => ['--image', image]), input.sessionId, content]
     let child: ChildProcessWithoutNullStreams
     try {
-      child = this.spawnCodex(command, args, { cwd: session.cwd || process.cwd(), env: { ...process.env, NO_COLOR: '1' } })
+      child = this.spawnCodex(command, args, { cwd: session.cwd || process.cwd(), env: environment })
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : String(error))
     }
@@ -758,9 +764,9 @@ export class CodexSessionService {
     return this.get(sessionId)
   }
 
-  private async readSummaries(): Promise<CodexSessionSummary[]> {
-    const rows = await this.readStateRows()
-    const pinnedSessionIds = await readCodexPinnedSessionIds(this.codexHome)
+  private async readSummaries(codexHome = this.codexHome): Promise<CodexSessionSummary[]> {
+    const rows = await this.readStateRows(codexHome)
+    const pinnedSessionIds = await readCodexPinnedSessionIds(codexHome)
     if (rows.length > 0) {
       const summaries: CodexSessionSummary[] = []
       for (const row of rows) {
@@ -806,7 +812,7 @@ export class CodexSessionService {
       return summaries
     }
 
-    const files = await listSessionFiles(this.sessionsDirectory)
+    const files = await listSessionFiles(join(codexHome, 'sessions'))
     const summaries: CodexSessionSummary[] = []
     for (const filePath of files) {
       const fileStat = await stat(filePath)
@@ -834,10 +840,10 @@ export class CodexSessionService {
     return summaries
   }
 
-  private async readStateRows(): Promise<CodexSessionStateThread[]> {
+  private async readStateRows(codexHome = this.codexHome): Promise<CodexSessionStateThread[]> {
     if (this.readStateRowsOverride) return this.readStateRowsOverride()
     try {
-      const databasePath = this.stateDatabasePath ?? await this.findStateDatabasePath()
+      const databasePath = this.stateDatabasePath ?? await this.findStateDatabasePath(codexHome)
       if (!databasePath) return []
       const database = new Database(databasePath, { readonly: true, fileMustExist: true })
       try {
@@ -850,12 +856,12 @@ export class CodexSessionService {
     }
   }
 
-  private async findStateDatabasePath(): Promise<string> {
-    const entries = await readdir(this.codexHome, { withFileTypes: true })
+  private async findStateDatabasePath(codexHome = this.codexHome): Promise<string> {
+    const entries = await readdir(codexHome, { withFileTypes: true })
     const candidates = entries
       .filter((entry) => entry.isFile() && /^state_\d+\.sqlite$/.test(entry.name))
       .map((entry) => entry.name)
       .sort((left, right) => Number(right.match(/\d+/)?.[0] ?? 0) - Number(left.match(/\d+/)?.[0] ?? 0))
-    return candidates[0] ? join(this.codexHome, candidates[0]) : ''
+    return candidates[0] ? join(codexHome, candidates[0]) : ''
   }
 }

@@ -142,6 +142,15 @@ function normalizeIsoDate(value: unknown, fallback: string): string {
   return Number.isNaN(timestamp.getTime()) ? fallback : value
 }
 
+function normalizeOptionalIsoDate(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const timestamp = new Date(value)
+  return Number.isNaN(timestamp.getTime()) ? null : value
+}
+
 export function formatTaskLocalDate(date: Date): string {
   const year = date.getFullYear()
   const month = `${date.getMonth() + 1}`.padStart(2, '0')
@@ -199,7 +208,7 @@ function normalizeTags(input: unknown): string[] {
   return tags
 }
 
-function normalizeSubtasks(input: unknown, now: Date): TaskSubtask[] {
+function normalizeSubtasks(input: unknown, now: Date, fillMissingCompletionTime = true): TaskSubtask[] {
   if (!Array.isArray(input)) {
     return []
   }
@@ -225,7 +234,7 @@ function normalizeSubtasks(input: unknown, now: Date): TaskSubtask[] {
         title,
         done,
         createdAt: normalizeIsoDate(rawSubtask.createdAt, timestamp),
-        completedAt: done ? normalizeIsoDate(rawSubtask.completedAt, timestamp) : null
+        completedAt: done ? normalizeOptionalIsoDate(rawSubtask.completedAt) ?? (fillMissingCompletionTime ? timestamp : null) : null
       }
     ]
   })
@@ -286,7 +295,7 @@ export function getTaskScheduleRange(task: TaskItem): { startDate: string; endDa
   return endDate < startDate ? { startDate: endDate, endDate: startDate } : { startDate, endDate }
 }
 
-export function createTask(input: TaskCreateInput = {}, now = new Date()): TaskItem {
+function createTaskItem(input: TaskCreateInput = {}, now = new Date(), fillMissingSubtaskCompletionTimes = true): TaskItem {
   const timestamp = now.toISOString()
   const status = isTaskStatus(input.status) ? input.status : 'todo'
   const completedAt = status === 'done' ? normalizeIsoDate(input.completedAt, timestamp) : null
@@ -300,12 +309,16 @@ export function createTask(input: TaskCreateInput = {}, now = new Date()): TaskI
     projectId: normalizeOptionalTextValue(input.projectId),
     startDate: normalizeDueDate(input.startDate),
     dueDate: normalizeDueDate(input.dueDate),
-    subtasks: normalizeSubtasks(input.subtasks, now),
+    subtasks: normalizeSubtasks(input.subtasks, now, fillMissingSubtaskCompletionTimes),
     tags: normalizeTags(input.tags),
     createdAt: normalizeIsoDate(input.createdAt, timestamp),
     updatedAt: normalizeIsoDate(input.updatedAt, timestamp),
     completedAt
   }
+}
+
+export function createTask(input: TaskCreateInput = {}, now = new Date()): TaskItem {
+  return createTaskItem(input, now)
 }
 
 export function createTaskSubtask(input: Partial<TaskSubtask> = {}, now = new Date()): TaskSubtask {
@@ -327,6 +340,8 @@ export function normalizeTaskList(input: unknown): TaskItem[] {
     return []
   }
 
+  const normalizationTime = new Date()
+
   return input
     .flatMap((item) => {
       if (!item || typeof item !== 'object') {
@@ -341,7 +356,7 @@ export function normalizeTaskList(input: unknown): TaskItem[] {
       }
 
       return [
-        createTask({
+        createTaskItem({
           id,
           title: normalizeTextValue(rawTask.title),
           notes: normalizeTextValue(rawTask.notes),
@@ -355,10 +370,73 @@ export function normalizeTaskList(input: unknown): TaskItem[] {
           createdAt: normalizeTextValue(rawTask.createdAt),
           updatedAt: normalizeTextValue(rawTask.updatedAt),
           completedAt: normalizeTextValue(rawTask.completedAt)
-        })
+        }, normalizationTime, false)
       ]
     })
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+}
+
+export function reconcileTaskStatusWithSubtasks(status: TaskStatus, subtasks: TaskSubtask[]): TaskStatus {
+  if (subtasks.length === 0) {
+    return status
+  }
+
+  const doneCount = subtasks.filter((subtask) => subtask.done).length
+
+  if (doneCount === subtasks.length) {
+    return 'done'
+  }
+
+  if (status === 'done') {
+    return doneCount > 0 ? 'doing' : 'todo'
+  }
+
+  if (status === 'todo' && doneCount > 0) {
+    return 'doing'
+  }
+
+  return status
+}
+
+export function updateTaskSubtaskDone(task: TaskItem, subtaskId: string, done: boolean, now = new Date()): TaskItem {
+  const subtask = task.subtasks.find((item) => item.id === subtaskId)
+
+  if (!subtask) {
+    return task
+  }
+
+  return updateTaskSubtaskCompletionTime(task, subtaskId, done ? subtask.completedAt ?? now.toISOString() : null, now)
+}
+
+export function updateTaskSubtaskCompletionTime(task: TaskItem, subtaskId: string, completedAt: string | null, now = new Date()): TaskItem {
+  const timestamp = now.toISOString()
+  let changed = false
+  const subtasks = task.subtasks.map((subtask) => {
+    if (subtask.id !== subtaskId) {
+      return subtask
+    }
+
+    changed = true
+    return {
+      ...subtask,
+      done: Boolean(completedAt),
+      completedAt
+    }
+  })
+
+  if (!changed) {
+    return task
+  }
+
+  const status = reconcileTaskStatusWithSubtasks(task.status, subtasks)
+
+  return {
+    ...task,
+    status,
+    subtasks,
+    updatedAt: timestamp,
+    completedAt: status === 'done' ? task.completedAt ?? timestamp : null
+  }
 }
 
 export function readStoredTaskItems(storage: TaskListStorage | null = getTaskListStorage()): TaskItem[] {

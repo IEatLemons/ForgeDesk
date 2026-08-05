@@ -11,7 +11,29 @@ import { requestCommitMessageSuggestion, type CommitMessageSuggestion } from './
 import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion } from './ai-conflict-assistant'
 import { requestReleaseSuggestion, type ReleaseSuggestion } from './ai-release-assistant'
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
-import { inspectAiRuntime, inspectCodexRuntime, type AiRuntimeStatus } from './ai-runtime'
+import { findLocalAiCommand, inspectAiRuntime, inspectCodexRuntime, type AiRuntimeStatus } from './ai-runtime'
+import {
+  activateCodexAccount,
+  createCodexAccount,
+  getActiveCodexAccountInfo,
+  importCodexAccount,
+  listCodexAccounts,
+  removeCodexAccount,
+  resolveCodexHome,
+  syncActiveCodexHome,
+  type CodexAccountImportInput,
+  type CodexAccountCreateInput,
+  type CodexAccountInfo,
+  type CodexAccountRegistryView
+} from './codex-accounts'
+import {
+  getCodexApiService,
+  rotateCodexApiKey,
+  startCodexApiService,
+  stopCodexApiService,
+  type CodexApiServiceSettings,
+  type CodexApiServiceView
+} from './codex-api-service'
 import { CodexActivityService, type CodexActivitySnapshot } from './codex-activity'
 import {
   CodexSessionService,
@@ -104,7 +126,7 @@ import {
 } from './lark-bot-service'
 import { MenuBarManagerService } from './menu-bar-manager'
 import { collectCloseGuardActivities, createCloseGuardPrompt, type CloseGuardAction, type CloseGuardActivity } from './app-close-guard'
-import { registerAppUpdateIpc } from './app-updates'
+import { isAppUpdateQuitRequested, registerAppUpdateIpc } from './app-updates'
 import { inspectCliEnvironment, repairCliEnvironment, type CliEnvironmentRepairResult, type CliEnvironmentSnapshot } from './cli-environment'
 import {
   cancelCodemagicBuild,
@@ -333,7 +355,7 @@ import {
   type ProjectDeploymentTaskSnapshot
 } from './project-deployment'
 import { registerTerminalIpc } from './terminal-ipc'
-import { TerminalService, type TerminalDataEvent, type TerminalExitEvent } from './terminal-service'
+import { TerminalService, type TerminalDataEvent, type TerminalExitEvent, type TerminalSession } from './terminal-service'
 import { createEmptyRemoteAlignment, parseRemoteAlignment, summarizeRemoteAlignment, type GitRemote, type RemoteAlignmentSummary } from './remote-alignment'
 import {
   createReleasePlan,
@@ -843,12 +865,14 @@ const terminalService = new TerminalService({
 })
 const codexTaskService = new CodexTaskService({
   db: () => getDatabase(),
-  emit: (event) => sendCodexTaskEvent(event)
+  emit: (event) => sendCodexTaskEvent(event),
+  resolveCodexHome: (accountId) => resolveCodexHome(app.getPath('userData'), accountId)
 })
 const codexActivityService = new CodexActivityService()
 const codexSiteService = new CodexSiteService({ db: () => getDatabase() })
 const codexSessionService = new CodexSessionService({
-  emit: (event) => sendCodexSessionEvent(event)
+  emit: (event) => sendCodexSessionEvent(event),
+  resolveCodexHome: (accountId) => resolveCodexHome(app.getPath('userData'), accountId)
 })
 const releasePublishTasks = new Map<string, RepositoryReleasePublishTaskSnapshot>()
 const releasePublishTaskProcesses = new Map<string, ChildProcessWithoutNullStreams>()
@@ -7134,11 +7158,53 @@ ipcMain.handle('gpg:configure-git-signing', async (_event, fingerprint: string):
 
 ipcMain.handle('settings:ai:get', async (): Promise<RedactedAiSettings> => getRedactedAiSettings(await readAiSettingsFile(app.getPath('userData'))))
 
+ipcMain.handle('codex:account:get', async (): Promise<CodexAccountInfo> => getActiveCodexAccountInfo(app.getPath('userData')))
+
+ipcMain.handle('codex:accounts:list', async (): Promise<CodexAccountRegistryView> => listCodexAccounts(app.getPath('userData')))
+
+ipcMain.handle('codex:accounts:import', async (_event, input: CodexAccountImportInput): Promise<CodexAccountRegistryView> =>
+  importCodexAccount(app.getPath('userData'), input))
+
+ipcMain.handle('codex:accounts:create', async (_event, input?: CodexAccountCreateInput): Promise<CodexAccountRegistryView> =>
+  createCodexAccount(app.getPath('userData'), input))
+
+ipcMain.handle('codex:accounts:activate', async (_event, accountId: string): Promise<CodexAccountRegistryView> =>
+  activateCodexAccount(app.getPath('userData'), accountId))
+
+ipcMain.handle('codex:accounts:remove', async (_event, accountId: string): Promise<CodexAccountRegistryView> =>
+  removeCodexAccount(app.getPath('userData'), accountId))
+
+ipcMain.handle('codex:api-service:get', async (): Promise<CodexApiServiceView> => getCodexApiService(app.getPath('userData')))
+
+ipcMain.handle('codex:api-service:start', async (_event, input?: Partial<CodexApiServiceSettings>): Promise<CodexApiServiceView> =>
+  startCodexApiService(app.getPath('userData'), input))
+
+ipcMain.handle('codex:api-service:stop', async (): Promise<CodexApiServiceView> => stopCodexApiService(app.getPath('userData')))
+
+ipcMain.handle('codex:api-service:rotate-key', async (): Promise<CodexApiServiceView> => rotateCodexApiKey(app.getPath('userData')))
+
 ipcMain.handle('settings:ai:status', async (_event, verify = false): Promise<AiRuntimeStatus> =>
   inspectAiRuntime(await readAiSettingsFile(app.getPath('userData')), Boolean(verify)))
 
+ipcMain.handle('codex:accounts:verify', async (_event, accountId: string): Promise<AiRuntimeStatus> =>
+  inspectCodexRuntime(true, await resolveCodexHome(app.getPath('userData'), accountId)))
+
+ipcMain.handle('codex:accounts:login-terminal', async (_event, accountId: string): Promise<TerminalSession> => {
+  const codexHome = await resolveCodexHome(app.getPath('userData'), accountId)
+  const environment = { ...process.env, CODEX_HOME: codexHome, NO_COLOR: '1' }
+  const command = await findLocalAiCommand('codex-cli', { env: environment })
+  if (!command) throw new Error('未检测到 Codex CLI，请先安装或打开 ChatGPT 桌面应用')
+  return terminalService.create({
+    cwd: codexHome,
+    directCommand: { args: ['login'], file: command },
+    env: environment,
+    reuseKey: `codex-login:${accountId}`,
+    title: `Codex 登录 · ${accountId}`
+  })
+})
+
 ipcMain.handle('codex:runtime:status', async (_event, verify = false): Promise<AiRuntimeStatus> =>
-  inspectCodexRuntime(Boolean(verify)))
+  inspectCodexRuntime(Boolean(verify), await resolveCodexHome(app.getPath('userData'))))
 
 ipcMain.handle('codex:activity:snapshot', async (): Promise<CodexActivitySnapshot> => codexActivityService.snapshot())
 
@@ -7748,6 +7814,8 @@ function startStorageGovernanceScheduler(): void {
 }
 
 app.whenReady().then(async () => {
+  await syncActiveCodexHome(app.getPath('userData')).catch((error) => console.warn('Failed to sync active Codex account', error))
+
   if (process.platform === 'darwin' && existsSync(appIconPath)) {
     app.dock?.setIcon(appIconPath)
   }
@@ -7761,6 +7829,11 @@ app.whenReady().then(async () => {
     shell
   })
   await menuBarManagerService.initialize().catch((error) => console.warn('Failed to initialize menu bar manager', error))
+
+  const codexApiService = await getCodexApiService(app.getPath('userData'))
+  if (codexApiService.enabled) {
+    await startCodexApiService(app.getPath('userData')).catch((error) => console.warn('Failed to start Codex API service', error))
+  }
 
   installApplicationMenu()
   const openedAsHidden = app.isPackaged && app.getLoginItemSettings().wasOpenedAsHidden
@@ -7779,7 +7852,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', (event) => {
-  if (forceQuitRequested) {
+  if (forceQuitRequested || isAppUpdateQuitRequested()) {
     return
   }
 
@@ -7791,6 +7864,7 @@ app.on('will-quit', () => {
   void menuBarManagerService?.shutdown().catch((error) => console.warn('Failed to stop menu bar helper', error))
   resourceMonitorService.stop()
   if (storageGovernanceTimer) clearInterval(storageGovernanceTimer)
+  void stopCodexApiService(app.getPath('userData'), false).catch((error) => console.warn('Failed to stop Codex API service', error))
   runResourceRetention(getDatabase())
 })
 

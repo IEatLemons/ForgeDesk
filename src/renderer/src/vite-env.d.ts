@@ -1461,7 +1461,7 @@ type SshConfigFile = {
 
 type AiSettingsInput = {
   enabled: boolean
-  provider?: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli'
+  provider?: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli' | 'codex-local-api'
   baseUrl: string
   apiKey?: string
   model: string
@@ -1470,12 +1470,61 @@ type AiSettingsInput = {
 
 type AiSettingsView = {
   enabled: boolean
-  provider: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli'
+  provider: 'openai-compatible' | 'openrouter' | 'codex-cli' | 'cursor-cli' | 'codex-local-api'
   baseUrl: string
   apiKey: string
   apiKeyConfigured: boolean
   model: string
   temperature: number
+}
+
+type CodexAccountInfo = {
+  available: boolean
+  authFilePath: string
+  authMode: string
+  email: string
+  planType: string
+  accountId: string
+  accountIdSuffix: string
+  accessTokenConfigured: boolean
+  refreshTokenConfigured: boolean
+  updatedAt: string
+  message: string
+}
+
+type CodexManagedAccount = CodexAccountInfo & {
+  id: string
+  name: string
+  source: 'local' | 'imported'
+  codexHome: string
+  active: boolean
+  createdAt: string
+  lastUsedAt: string
+}
+
+type CodexAccountRegistryView = {
+  activeAccountId: string
+  accounts: CodexManagedAccount[]
+  message: string
+}
+
+type CodexAccountImportInput = {
+  name?: string
+  sourcePath: string
+}
+
+type CodexApiServiceView = {
+  enabled: boolean
+  running: boolean
+  host: '127.0.0.1'
+  port: number
+  baseUrl: string
+  apiKey: string
+  apiKeyMasked: string
+  apiKeyConfigured: boolean
+  model: string
+  account: CodexAccountInfo
+  message: string
 }
 
 type AiRuntimeStatus = {
@@ -1519,6 +1568,7 @@ type CodexTaskRecord = {
   projectId: string
   cwd: string
   status: CodexTaskRunStatus
+  accountId: string
   model: string
   branch: string
   additions: number
@@ -1537,6 +1587,7 @@ type CodexTaskCreateInput = {
   title?: string
   projectId?: string
   cwd?: string
+  accountId?: string
   model?: string
 }
 
@@ -1657,6 +1708,7 @@ type CodexSessionMessageInput = {
   content: string
   images?: string[]
   model?: string
+  accountId?: string
 }
 
 type CodexSiteStatus = 'draft' | 'building' | 'ready' | 'previewing' | 'published' | 'error'
@@ -2011,6 +2063,8 @@ type AppUpdateState = {
   availableVersion?: string
   percent?: number
   error?: string
+  releaseNotes?: string
+  lastCheckedAt?: string
 }
 
 type PlaneSettingsInput = {
@@ -2544,6 +2598,18 @@ interface Window {
     copyGpgPublicKey: (fingerprint: string) => Promise<void>
     configureGitGpgSigning: (fingerprint: string) => Promise<GitSetupStatus>
     getAiSettings: () => Promise<AiSettingsView>
+    getCodexAccount: () => Promise<CodexAccountInfo>
+    listCodexAccounts: () => Promise<CodexAccountRegistryView>
+    importCodexAccount: (input: CodexAccountImportInput) => Promise<CodexAccountRegistryView>
+    createCodexAccount: (input?: { name?: string }) => Promise<CodexAccountRegistryView>
+    activateCodexAccount: (accountId: string) => Promise<CodexAccountRegistryView>
+    removeCodexAccount: (accountId: string) => Promise<CodexAccountRegistryView>
+    verifyCodexAccount: (accountId: string) => Promise<AiRuntimeStatus>
+    openCodexAccountLogin: (accountId: string) => Promise<TerminalSession>
+    getCodexApiService: () => Promise<CodexApiServiceView>
+    startCodexApiService: (input?: { port?: number; model?: string }) => Promise<CodexApiServiceView>
+    stopCodexApiService: () => Promise<CodexApiServiceView>
+    rotateCodexApiKey: () => Promise<CodexApiServiceView>
     getAiRuntimeStatus: (verify?: boolean) => Promise<AiRuntimeStatus>
     getCodexRuntimeStatus: (verify?: boolean) => Promise<AiRuntimeStatus>
     getCodexActivitySnapshot: () => Promise<CodexActivitySnapshot>

@@ -17,6 +17,7 @@ type LocalCommandLookupOptions = {
 
 type AiRuntimeInspectionOptions = LocalCommandLookupOptions & {
   execFileText?: ExecFileText
+  fetchImpl?: typeof fetch
 }
 
 export type AiRuntimeStatus = {
@@ -32,6 +33,35 @@ export type AiRuntimeStatus = {
 }
 
 type AiMessage = { role: 'system' | 'user' | 'assistant'; content: string }
+type ProcessFailure = Error & {
+  stderr?: string | Buffer
+  stdout?: string | Buffer
+  code?: string | number
+}
+
+function outputText(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (Buffer.isBuffer(value)) return value.toString('utf8').trim()
+  return ''
+}
+
+export function formatLocalAiFailure(error: unknown): string {
+  const processFailure = error && typeof error === 'object' ? error as ProcessFailure : null
+  const output = [outputText(processFailure?.stderr), outputText(processFailure?.stdout)].filter(Boolean).join('\n')
+  const rawDetail = output || (error instanceof Error ? error.message : String(error))
+  const detail = rawDetail.replace(/\s+/g, ' ').trim()
+
+  if (/readonly database|read-only database|operation not permitted|permission denied/i.test(detail)) {
+    return `Codex CLI 无法写入本机状态目录：${detail}。请检查 ChatGPT/ForgeDesk 的磁盘访问权限后重启应用。`
+  }
+
+  if (/^Command failed:/i.test(detail)) {
+    const code = processFailure?.code === undefined ? '' : `（退出码 ${processFailure.code}）`
+    return `Codex CLI 执行失败${code}，没有返回具体错误信息。`
+  }
+
+  return detail || 'Codex CLI 执行失败，未返回错误信息。'
+}
 
 export function getLocalProviderCommandCandidates(provider: LocalAiProvider, env: NodeJS.ProcessEnv = process.env): string[] {
   if (provider === 'codex-cli') {
@@ -80,14 +110,16 @@ function promptFromMessages(messages: AiMessage[]): string {
   ].join('\n\n')
 }
 
-async function runLocalAi(settings: AiSettings, messages: AiMessage[]): Promise<string> {
+async function runLocalAi(settings: AiSettings, messages: AiMessage[], localEnvironment?: NodeJS.ProcessEnv): Promise<string> {
   const provider = settings.provider as LocalAiProvider
-  const command = await findLocalAiCommand(provider)
+  const command = await findLocalAiCommand(provider, { env: localEnvironment })
   if (!command) throw new Error(provider === 'codex-cli' ? '未检测到 AI 编程助手运行环境，请先安装或打开 ChatGPT 桌面应用。' : '未检测到 Cursor Agent CLI，请先安装 cursor-agent。')
 
   const prompt = promptFromMessages(messages)
   const args = provider === 'codex-cli'
-    ? ['exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '--color', 'never', ...(settings.model ? ['--model', settings.model] : []), prompt]
+    // The working directory is disposable, so workspace-write keeps the model isolated
+    // while allowing Codex CLI to initialize its own runtime state.
+    ? ['exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'workspace-write', '--color', 'never', ...(settings.model ? ['--model', settings.model] : []), prompt]
     : ['--print', '--output-format', 'json', ...(settings.model ? ['--model', settings.model] : []), prompt]
 
   const isolatedDirectory = await mkdtemp(join(tmpdir(), 'forgedesk-local-ai-'))
@@ -96,7 +128,7 @@ async function runLocalAi(settings: AiSettings, messages: AiMessage[]): Promise<
       cwd: isolatedDirectory,
       timeout: 120_000,
       maxBuffer: 8 * 1024 * 1024,
-      env: { ...process.env, NO_COLOR: '1' }
+      env: { ...process.env, ...localEnvironment, NO_COLOR: '1' }
     })
     if (provider === 'cursor-cli') {
       const payload = JSON.parse(stdout) as { result?: string }
@@ -105,8 +137,7 @@ async function runLocalAi(settings: AiSettings, messages: AiMessage[]): Promise<
     if (stdout.trim()) return stdout.trim()
     throw new Error('本地 AI 没有返回内容')
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
-    throw new Error(`本地 AI 调用失败：${detail}`)
+    throw new Error(`本地 AI 调用失败：${formatLocalAiFailure(error)}`)
   } finally {
     await rm(isolatedDirectory, { recursive: true, force: true })
   }
@@ -117,11 +148,12 @@ export async function requestAiText(input: {
   messages: AiMessage[]
   fetchImpl?: typeof fetch
   webSearch?: boolean
+  localEnvironment?: NodeJS.ProcessEnv
 }): Promise<string> {
   if (!isAiSettingsConfigured(input.settings)) {
     throw new Error(isLocalAiProvider(input.settings.provider) ? '请先启用本地 AI' : '请先在公共设置里启用 AI 并填写 API Key')
   }
-  if (isLocalAiProvider(input.settings.provider)) return runLocalAi(input.settings, input.messages)
+  if (isLocalAiProvider(input.settings.provider)) return runLocalAi(input.settings, input.messages, input.localEnvironment)
 
   const fetchImpl = input.fetchImpl ?? fetch
   const officialOpenAi = /^https:\/\/api\.openai\.com\/v1$/i.test(input.settings.baseUrl)
@@ -140,6 +172,9 @@ export async function requestAiText(input: {
   try {
     response = await fetchImpl(url, { method: 'POST', headers: buildAiRequestHeaders(input.settings), body: JSON.stringify(body) })
   } catch (error) {
+    if (input.settings.provider === 'codex-local-api') {
+      throw new Error(`本地 Codex API 服务未运行，请先点击“创建并接入 ForgeDesk”。服务地址：${input.settings.baseUrl}`)
+    }
     throw createAiNetworkError(error)
   }
   if (!response.ok) throw await createAiRequestError(response)
@@ -155,7 +190,7 @@ export async function inspectAiRuntime(settings: AiSettings, verify = false): Pr
   return inspectAiRuntimeWithOptions(settings, verify)
 }
 
-export async function inspectCodexRuntime(verify = false): Promise<AiRuntimeStatus> {
+export async function inspectCodexRuntime(verify = false, codexHome?: string): Promise<AiRuntimeStatus> {
   return inspectAiRuntimeWithOptions({
     apiKey: '',
     baseUrl: '',
@@ -163,7 +198,7 @@ export async function inspectCodexRuntime(verify = false): Promise<AiRuntimeStat
     model: '',
     provider: 'codex-cli',
     temperature: 0.2
-  }, verify)
+  }, verify, codexHome ? { env: { ...process.env, CODEX_HOME: codexHome } } : {})
 }
 
 export async function inspectAiRuntimeWithOptions(
@@ -175,10 +210,11 @@ export async function inspectAiRuntimeWithOptions(
   if (!isLocalAiProvider(settings.provider)) {
     if (!verify) return { provider: settings.provider, configured: isAiSettingsConfigured(settings), available: true, usable: null, label: settings.provider === 'openrouter' ? 'OpenRouter' : 'OpenAI-compatible', command: '', version: '', message: '已保存配置，尚未验证连接', checkedAt }
     try {
-      await requestAiText({ settings, messages: [{ role: 'user', content: 'Reply with exactly: OK' }] })
+      await requestAiText({ settings, fetchImpl: options.fetchImpl, messages: [{ role: 'user', content: 'Reply with exactly: OK' }], localEnvironment: options.env })
       return { provider: settings.provider, configured: true, available: true, usable: true, label: settings.provider === 'openrouter' ? 'OpenRouter' : 'OpenAI-compatible', command: '', version: '', message: '连接正常，模型可用', checkedAt }
     } catch (error) {
-      return { provider: settings.provider, configured: isAiSettingsConfigured(settings), available: true, usable: false, label: settings.provider === 'openrouter' ? 'OpenRouter' : 'OpenAI-compatible', command: '', version: '', message: error instanceof Error ? error.message : String(error), checkedAt }
+      const message = error instanceof Error ? error.message : String(error)
+      return { provider: settings.provider, configured: isAiSettingsConfigured(settings), available: settings.provider === 'codex-local-api' ? !message.includes('本地 Codex API 服务未运行') : true, usable: false, label: settings.provider === 'openrouter' ? 'OpenRouter' : 'OpenAI-compatible', command: '', version: '', message, checkedAt }
     }
   }
 
@@ -194,7 +230,7 @@ export async function inspectAiRuntimeWithOptions(
   }
   if (!verify) return { provider: localProvider, configured: isAiSettingsConfigured(settings), available: true, usable: null, label, command, version, message: '已检测到本地 CLI，尚未验证登录状态', checkedAt }
   try {
-    await requestAiText({ settings: { ...settings, enabled: true }, messages: [{ role: 'user', content: 'Reply with exactly: OK' }] })
+    await requestAiText({ settings: { ...settings, enabled: true }, messages: [{ role: 'user', content: 'Reply with exactly: OK' }], localEnvironment: options.env })
     return { provider: localProvider, configured: true, available: true, usable: true, label, command, version, message: '本地 CLI 已登录且可用', checkedAt }
   } catch (error) {
     return { provider: localProvider, configured: true, available: true, usable: false, label, command, version, message: error instanceof Error ? error.message : String(error), checkedAt }

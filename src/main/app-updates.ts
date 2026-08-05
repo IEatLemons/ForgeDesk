@@ -11,10 +11,13 @@ type AppUpdateSnapshot = {
   availableVersion?: string
   percent?: number
   error?: string
+  releaseNotes?: string
+  lastCheckedAt?: string
 }
 
 type UpdateInfoLike = {
   version?: string
+  releaseNotes?: string | Array<{ version?: string; note?: string | null }> | null
 }
 
 type ProgressInfoLike = {
@@ -22,6 +25,9 @@ type ProgressInfoLike = {
 }
 
 let registered = false
+let scheduled = false
+let checkInFlight: Promise<AppUpdateSnapshot> | null = null
+let updateQuitRequested = false
 let snapshot: AppUpdateSnapshot = {
   status: 'idle',
   currentVersion: app.getVersion()
@@ -29,6 +35,29 @@ let snapshot: AppUpdateSnapshot = {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '更新检查失败'
+}
+
+function normalizeReleaseNotes(releaseNotes: UpdateInfoLike['releaseNotes']): string | undefined {
+  if (typeof releaseNotes === 'string') {
+    return releaseNotes.trim() || undefined
+  }
+
+  if (!Array.isArray(releaseNotes)) {
+    return undefined
+  }
+
+  const notes = releaseNotes
+    .map((item) => {
+      const note = item?.note?.trim()
+      if (!note) {
+        return ''
+      }
+
+      return item.version?.trim() ? `### ${item.version.trim()}\n${note}` : note
+    })
+    .filter(Boolean)
+
+  return notes.length > 0 ? notes.join('\n\n') : undefined
 }
 
 function publishSnapshot(patch: Partial<AppUpdateSnapshot>): AppUpdateSnapshot {
@@ -45,6 +74,71 @@ function publishSnapshot(patch: Partial<AppUpdateSnapshot>): AppUpdateSnapshot {
   return snapshot
 }
 
+async function checkForUpdates(): Promise<AppUpdateSnapshot> {
+  if (checkInFlight) {
+    return checkInFlight
+  }
+
+  if (snapshot.status === 'downloading' || snapshot.status === 'downloaded') {
+    return snapshot
+  }
+
+  checkInFlight = (async () => {
+    if (!app.isPackaged && process.env.FORGEDESK_ALLOW_DEV_UPDATES !== '1') {
+      return publishSnapshot({
+        status: 'error',
+        availableVersion: undefined,
+        releaseNotes: undefined,
+        error: '开发模式不能直接检查更新，请打包安装后再试。',
+        percent: undefined,
+        lastCheckedAt: new Date().toISOString()
+      })
+    }
+
+    try {
+      await autoUpdater.checkForUpdates()
+    } catch (error) {
+      return publishSnapshot({
+        status: 'error',
+        availableVersion: undefined,
+        releaseNotes: undefined,
+        error: getErrorMessage(error),
+        percent: undefined,
+        lastCheckedAt: new Date().toISOString()
+      })
+    }
+
+    return publishSnapshot({ lastCheckedAt: new Date().toISOString() })
+  })()
+
+  try {
+    return await checkInFlight
+  } finally {
+    checkInFlight = null
+  }
+}
+
+function scheduleAutomaticChecks(): void {
+  if (scheduled) {
+    return
+  }
+
+  scheduled = true
+  const initialDelay = setTimeout(() => {
+    void checkForUpdates()
+  }, 5_000)
+  initialDelay.unref?.()
+
+  const interval = setInterval(() => {
+    void checkForUpdates()
+  }, 60 * 60 * 1000)
+  interval.unref?.()
+}
+
+export function isAppUpdateQuitRequested(): boolean {
+  return updateQuitRequested
+}
+
 export function registerAppUpdateIpc(): void {
   if (registered) {
     return
@@ -52,24 +146,31 @@ export function registerAppUpdateIpc(): void {
 
   registered = true
   autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.allowPrerelease = false
 
   autoUpdater.on('checking-for-update', () => {
-    publishSnapshot({ status: 'checking', availableVersion: undefined, error: undefined, percent: undefined })
+    publishSnapshot({
+      status: 'checking',
+      availableVersion: undefined,
+      releaseNotes: undefined,
+      error: undefined,
+      percent: undefined
+    })
   })
 
   autoUpdater.on('update-available', (info: UpdateInfoLike) => {
     publishSnapshot({
       status: 'available',
       availableVersion: info.version,
+      releaseNotes: normalizeReleaseNotes(info.releaseNotes),
       error: undefined,
       percent: undefined
     })
   })
 
   autoUpdater.on('update-not-available', () => {
-    publishSnapshot({ status: 'not-available', availableVersion: undefined, error: undefined, percent: undefined })
+    publishSnapshot({ status: 'not-available', availableVersion: undefined, releaseNotes: undefined, error: undefined, percent: undefined })
   })
 
   autoUpdater.on('download-progress', (progress: ProgressInfoLike) => {
@@ -80,35 +181,23 @@ export function registerAppUpdateIpc(): void {
     publishSnapshot({
       status: 'downloaded',
       availableVersion: info.version ?? snapshot.availableVersion,
+      releaseNotes: normalizeReleaseNotes(info.releaseNotes) ?? snapshot.releaseNotes,
       percent: 100,
       error: undefined
     })
   })
 
+  autoUpdater.on('update-cancelled', () => {
+    publishSnapshot({ status: 'available', error: undefined, percent: undefined })
+  })
+
   autoUpdater.on('error', (error: Error) => {
-    publishSnapshot({ status: 'error', availableVersion: undefined, error: getErrorMessage(error), percent: undefined })
+    publishSnapshot({ status: 'error', availableVersion: undefined, releaseNotes: undefined, error: getErrorMessage(error), percent: undefined })
   })
 
   ipcMain.handle('app:update:get-state', () => snapshot)
 
-  ipcMain.handle('app:update:check', async () => {
-    if (!app.isPackaged && process.env.FORGEDESK_ALLOW_DEV_UPDATES !== '1') {
-      return publishSnapshot({
-        status: 'error',
-        availableVersion: undefined,
-        error: '开发模式不能直接检查更新，请打包安装后再试。',
-        percent: undefined
-      })
-    }
-
-    try {
-      await autoUpdater.checkForUpdates()
-    } catch (error) {
-      return publishSnapshot({ status: 'error', availableVersion: undefined, error: getErrorMessage(error), percent: undefined })
-    }
-
-    return snapshot
-  })
+  ipcMain.handle('app:update:check', () => checkForUpdates())
 
   ipcMain.handle('app:update:install', () => {
     if (snapshot.status !== 'downloaded') {
@@ -120,7 +209,12 @@ export function registerAppUpdateIpc(): void {
       })
     }
 
+    updateQuitRequested = true
     autoUpdater.quitAndInstall(false, true)
     return snapshot
+  })
+
+  app.whenReady().then(scheduleAutomaticChecks).catch((error) => {
+    publishSnapshot({ status: 'error', error: getErrorMessage(error) })
   })
 }
