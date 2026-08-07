@@ -13,6 +13,16 @@ import { requestReleaseSuggestion, type ReleaseSuggestion } from './ai-release-a
 import { getRedactedAiSettings, readAiSettingsFile, writeAiSettingsFile, type AiSettings, type RedactedAiSettings } from './ai-settings'
 import { findLocalAiCommand, inspectAiRuntime, inspectCodexRuntime, type AiRuntimeStatus } from './ai-runtime'
 import {
+  codexInstallUrl,
+  detectCodexProvider,
+  getAiProviderAdapter,
+  getInitializationSnapshot,
+  listAiProviderRuntimeSnapshots,
+  type AiProviderRuntimeSnapshot,
+  type InitializationSnapshot,
+  type QuotaSnapshot
+} from './ai-providers'
+import {
   activateCodexAccount,
   createCodexAccount,
   getActiveCodexAccountInfo,
@@ -31,9 +41,17 @@ import {
   rotateCodexApiKey,
   startCodexApiService,
   stopCodexApiService,
+  getCodexApiServiceIntegrationSettings,
   type CodexApiServiceSettings,
   type CodexApiServiceView
 } from './codex-api-service'
+import {
+  getProjectAiBinding,
+  migrateProjectAiBindingTable,
+  saveProjectAiBinding,
+  type ProjectAiBinding,
+  type ProjectAiBindingInput
+} from './project-ai-bindings'
 import { CodexActivityService, type CodexActivitySnapshot } from './codex-activity'
 import {
   CodexSessionService,
@@ -2151,6 +2169,7 @@ function migrateDatabase(db: Database.Database): void {
   migrateResourceGovernanceTables(db)
   migrateCodexTaskTables(db)
   migrateCodexSiteTables(db)
+  migrateProjectAiBindingTable(db)
 
   addColumnIfMissing(db, 'repositories', 'remotes_json', "TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(db, 'repositories', 'repository_kind', "TEXT NOT NULL DEFAULT 'root'")
@@ -6378,6 +6397,62 @@ ipcMain.handle(
 )
 
 ipcMain.handle(
+  'projects:create-empty',
+  async (_event, input: { name: string; parentPath: string }): Promise<WorkspaceSnapshot> => {
+    const name = String(input.name || '').trim()
+    const parentPathInput = String(input.parentPath || '').trim()
+
+    if (!name) {
+      throw new Error('请输入项目名称')
+    }
+
+    if (name === '.' || name === '..' || /[\\/]/.test(name)) {
+      throw new Error('项目名称不能包含路径分隔符')
+    }
+
+    if (!parentPathInput) {
+      throw new Error('请选择项目父目录')
+    }
+
+    const parentPath = resolve(expandHomePath(parentPathInput))
+    const parentStats = await stat(parentPath).catch(() => null)
+    if (!parentStats?.isDirectory()) {
+      throw new Error('项目父目录不存在或不是文件夹')
+    }
+
+    const workspacePath = resolve(join(parentPath, name))
+    if (await pathExists(workspacePath)) {
+      throw new Error(`目标目录已存在：${workspacePath}`)
+    }
+
+    let createdDirectory = false
+    try {
+      await mkdir(workspacePath)
+      createdDirectory = true
+
+      const now = new Date().toISOString()
+      const projectId = createProjectId(name)
+      getDatabase().prepare(
+        `
+        INSERT INTO projects (id, name, description, status, owner, workspace_path, created_at, updated_at)
+        VALUES (?, ?, '', 'ready', '', ?, ?, ?)
+      `
+      ).run(projectId, name, workspacePath, now, now)
+
+      return getWorkspaceSnapshot()
+    } catch (error) {
+      if (createdDirectory) {
+        const contents = await readdir(workspacePath).catch(() => [])
+        if (contents.length === 0) {
+          await rm(workspacePath, { recursive: true, force: true })
+        }
+      }
+      throw error
+    }
+  }
+)
+
+ipcMain.handle(
   'projects:create-from-remote',
   async (_event, input: RemoteProjectCreateInput): Promise<WorkspaceSnapshot> => {
     const name = input.name.trim()
@@ -7158,6 +7233,101 @@ ipcMain.handle('gpg:configure-git-signing', async (_event, fingerprint: string):
 
 ipcMain.handle('settings:ai:get', async (): Promise<RedactedAiSettings> => getRedactedAiSettings(await readAiSettingsFile(app.getPath('userData'))))
 
+ipcMain.handle('settings:ai:connect-codex-api', async (): Promise<RedactedAiSettings> => {
+  const service = await getCodexApiServiceIntegrationSettings(app.getPath('userData'))
+  const current = await readAiSettingsFile(app.getPath('userData'))
+  const settings = await writeAiSettingsFile(app.getPath('userData'), {
+    ...current,
+    enabled: true,
+    provider: 'codex-local-api',
+    baseUrl: service.baseUrl,
+    apiKey: service.apiKey,
+    model: service.model
+  })
+  return getRedactedAiSettings(settings)
+})
+
+ipcMain.handle('settings:ai:sync-codex-api', async (): Promise<RedactedAiSettings> => {
+  const service = await getCodexApiServiceIntegrationSettings(app.getPath('userData'))
+  const current = await readAiSettingsFile(app.getPath('userData'))
+  const settings = await writeAiSettingsFile(app.getPath('userData'), {
+    ...current,
+    provider: 'codex-local-api',
+    baseUrl: service.baseUrl,
+    apiKey: service.apiKey,
+    model: service.model
+  })
+  return getRedactedAiSettings(settings)
+})
+
+ipcMain.handle('initialization:get', async (): Promise<InitializationSnapshot> => {
+  const projects = listProjects().map((project) => ({
+    id: project.id,
+    name: project.name,
+    workspacePath: project.workspacePath
+  }))
+  return getInitializationSnapshot(app.getPath('userData'), projects)
+})
+
+ipcMain.handle('ai-providers:list', async (): Promise<AiProviderRuntimeSnapshot[]> => listAiProviderRuntimeSnapshots(app.getPath('userData')))
+
+ipcMain.handle(
+  'ai-providers:open',
+  async (_event, input: { providerId: 'codex'; projectPath?: string }): Promise<{
+    mode: 'app' | 'cli' | 'download'
+    runtime: AiProviderRuntimeSnapshot
+    session?: TerminalSession
+  }> => {
+    getAiProviderAdapter(input.providerId)
+
+    const runtime = await detectCodexProvider(app.getPath('userData'))
+    if (runtime.appPath) {
+      const error = await shell.openPath(runtime.appPath)
+      if (error) throw new Error(error)
+      return { mode: 'app', runtime }
+    }
+
+    if (runtime.command) {
+      const projectPath = resolve(expandHomePath(String(input.projectPath || '').trim() || homedir()))
+      const projectStats = await stat(projectPath).catch(() => null)
+      if (!projectStats?.isDirectory()) {
+        throw new Error('当前项目目录不存在，无法启动 Codex CLI')
+      }
+
+      const codexHome = await resolveCodexHome(app.getPath('userData'))
+      const session = terminalService.create({
+        cwd: projectPath,
+        directCommand: { args: [], file: runtime.command },
+        env: { ...process.env, CODEX_HOME: codexHome, NO_COLOR: '1' },
+        reuseKey: `codex-project:${projectPath}`,
+        title: `Codex · ${basename(projectPath)}`
+      })
+      return { mode: 'cli', runtime, session }
+    }
+
+    await shell.openExternal(codexInstallUrl)
+    return { mode: 'download', runtime }
+  }
+)
+
+ipcMain.handle(
+  'ai-providers:quota',
+  async (_event, input: { providerId: 'codex'; accountId?: string }): Promise<QuotaSnapshot> => {
+    return getAiProviderAdapter(input.providerId).getQuota(app.getPath('userData'), input.accountId)
+  }
+)
+
+ipcMain.handle(
+  'project-ai-bindings:get',
+  async (_event, input: { projectId: string; providerId: string }): Promise<ProjectAiBinding | null> =>
+    getProjectAiBinding(getDatabase(), String(input.projectId || ''), String(input.providerId || 'codex'))
+)
+
+ipcMain.handle(
+  'project-ai-bindings:save',
+  async (_event, input: ProjectAiBindingInput): Promise<ProjectAiBinding> => saveProjectAiBinding(getDatabase(), input)
+)
+
 ipcMain.handle('codex:account:get', async (): Promise<CodexAccountInfo> => getActiveCodexAccountInfo(app.getPath('userData')))
 
 ipcMain.handle('codex:accounts:list', async (): Promise<CodexAccountRegistryView> => listCodexAccounts(app.getPath('userData')))
@@ -7182,6 +7352,25 @@ ipcMain.handle('codex:api-service:start', async (_event, input?: Partial<CodexAp
 ipcMain.handle('codex:api-service:stop', async (): Promise<CodexApiServiceView> => stopCodexApiService(app.getPath('userData')))
 
 ipcMain.handle('codex:api-service:rotate-key', async (): Promise<CodexApiServiceView> => rotateCodexApiKey(app.getPath('userData')))
+
+ipcMain.handle('codex:api-service:health', async (): Promise<{ ok: boolean; message: string }> => {
+  const service = await getCodexApiService(app.getPath('userData'))
+  if (!service.running) {
+    return { ok: false, message: '本地 Codex API 服务未运行' }
+  }
+
+  try {
+    const integration = await getCodexApiServiceIntegrationSettings(app.getPath('userData'))
+    const response = await fetch(`${service.baseUrl.replace(/\/$/, '')}/models`, {
+      headers: integration.apiKey ? { Authorization: `Bearer ${integration.apiKey}` } : undefined
+    })
+    return response.ok
+      ? { ok: true, message: `API 服务正常（HTTP ${response.status}）` }
+      : { ok: false, message: `API 服务返回 HTTP ${response.status}` }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'API 健康检查失败' }
+  }
+})
 
 ipcMain.handle('settings:ai:status', async (_event, verify = false): Promise<AiRuntimeStatus> =>
   inspectAiRuntime(await readAiSettingsFile(app.getPath('userData')), Boolean(verify)))

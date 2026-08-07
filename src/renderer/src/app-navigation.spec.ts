@@ -12,7 +12,7 @@ describe('app navigation', () => {
   it('organizes the workspace around life, study, work, and computer areas', () => {
     assert.deepEqual(
       APP_NAVIGATION_ITEMS.map((item) => item.key),
-      ['overview', 'market-news', 'settings', 'tasks', 'docs', 'projects', 'services', 'data-sources', 'docker', 'tools', 'system-monitor', 'system-info', 'codex-sessions', 'ai-chat', 'terminal']
+      ['overview', 'market-news', 'settings', 'tasks', 'docs', 'projects', 'ai-tools', 'services', 'data-sources', 'docker', 'tools', 'system-monitor', 'system-info', 'codex-sessions', 'ai-chat', 'terminal']
     )
     assert.deepEqual(
       APP_NAVIGATION_SECTIONS.filter((section) => section.placement === 'main').map((section) => section.key),
@@ -35,10 +35,11 @@ describe('app navigation', () => {
     )
   })
 
-  it('exposes only projects in simple mode', () => {
-    assert.deepEqual(getNavigationItemsForMode('simple').map((item) => item.key), ['projects'])
+  it('exposes projects and AI tools in simple mode', () => {
+    assert.deepEqual(getNavigationItemsForMode('simple').map((item) => item.key), ['projects', 'ai-tools'])
     assert.deepEqual(getNavigationSectionsForMode('simple').map((section) => section.key), ['work'])
     assert.equal(isNavigationKeyVisible('simple', 'projects'), true)
+    assert.equal(isNavigationKeyVisible('simple', 'ai-tools'), true)
     assert.equal(isNavigationKeyVisible('simple', 'settings'), false)
   })
 

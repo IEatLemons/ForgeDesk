@@ -1828,7 +1828,6 @@ export type CodexApiServiceView = {
   host: '127.0.0.1'
   port: number
   baseUrl: string
-  apiKey: string
   apiKeyMasked: string
   apiKeyConfigured: boolean
   model: string

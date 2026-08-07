@@ -6,6 +6,7 @@ export type AppNavigationKey =
   | 'tasks'
   | 'docs'
   | 'projects'
+  | 'ai-tools'
   | 'services'
   | 'data-sources'
   | 'docker'
@@ -47,6 +48,7 @@ export const APP_NAVIGATION_ITEMS: AppNavigationItem[] = [
   { key: 'tasks', label: '待办与安排', section: 'life' },
   { key: 'docs', label: '资料与文档', section: 'study' },
   { key: 'projects', label: '项目', section: 'work' },
+  { key: 'ai-tools', label: 'AI 工具', section: 'work' },
   { key: 'services', label: '服务', section: 'work' },
   { key: 'data-sources', label: '数据源', section: 'work' },
   { key: 'docker', label: 'Docker', section: 'work' },
@@ -60,7 +62,7 @@ export const APP_NAVIGATION_ITEMS: AppNavigationItem[] = [
 
 export function getNavigationItemsForMode(mode: AppMode): AppNavigationItem[] {
   if (mode === 'simple') {
-    return APP_NAVIGATION_ITEMS.filter((item) => item.key === 'projects')
+    return APP_NAVIGATION_ITEMS.filter((item) => item.key === 'projects' || item.key === 'ai-tools')
   }
 
   return APP_NAVIGATION_ITEMS

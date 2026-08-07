@@ -28,6 +28,7 @@ type ForgeDeskState = {
   rescanProjectRepositories: (projectId: string) => Promise<void>
   initializeProjectRepository: (projectId: string) => Promise<void>
   createProject: (projectName: string, workspacePath: string, scanned: ScannedRepository[]) => Promise<void>
+  createEmptyProject: (projectName: string, parentPath: string) => Promise<void>
   createProjectFromRemote: (projectName: string, remoteUrl: string, parentPath: string) => Promise<void>
   updateProject: (input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }) => Promise<void>
   setProjectFavorite: (input: { id: string; isFavorite: boolean }) => Promise<void>
@@ -90,6 +91,22 @@ export const useForgeDeskStore = create<ForgeDeskState>((set) => ({
       name: projectName,
       workspacePath,
       repositories: scanned
+    })
+    const newestProject = snapshot.projects[0]
+    set({
+      projects: snapshot.projects,
+      repositories: snapshot.repositories,
+      selectedProjectId: newestProject?.id ?? null
+    })
+  },
+  createEmptyProject: async (projectName, parentPath) => {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const snapshot = await window.forgeDesk.createEmptyProject({
+      name: projectName,
+      parentPath
     })
     const newestProject = snapshot.projects[0]
     set({

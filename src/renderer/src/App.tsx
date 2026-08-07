@@ -4,6 +4,7 @@ import {
   Avatar,
   Badge,
   Button,
+  Card,
   Checkbox,
   Col,
   Collapse,
@@ -188,6 +189,7 @@ import {
   type AppNavigationKey
 } from './app-navigation'
 import { AiChatPanel } from './ai-chat-panel'
+import { AiToolsPanel } from './ai-tools-panel'
 import { CodexSessionManagerPanel } from './codex-session-manager-panel'
 import { DataSourcePanel } from './data-source-panel'
 import { DockerPanel } from './docker-panel'
@@ -199,6 +201,7 @@ import {
   type LarkBitableScheduleFieldMap
 } from './lark-bitable-view'
 import { ProjectDeploymentPanel } from './project-deployment-panel'
+import { InitializationWizard } from './initialization-wizard'
 import { createAppUpdateViewModel } from './app-update-view'
 import { createDiffResultLines, createSourceDiffLines, type DiffDisplayLine } from './diff-view'
 import {
@@ -310,8 +313,11 @@ import { createQuickBuildCompletionPrompt } from './quick-build-view'
 import {
   closeProjectSettingsModule,
   createInitialProjectSettingsView,
+  getProjectSettingsModulesForCategory,
   openProjectSettingsModule,
+  PROJECT_SETTINGS_CATEGORIES,
   PROJECT_SETTINGS_MODULES,
+  type ProjectSettingsCategoryKey,
   type ProjectSettingsModuleKey
 } from './project-settings-view'
 import {
@@ -2255,11 +2261,11 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
         enabled: true,
         provider: 'codex-local-api',
         baseUrl: service.baseUrl,
-        apiKey: service.apiKey,
         model: service.model,
         temperature: form.getFieldValue('temperature') ?? 0.2
       })
-      await onSave()
+      await window.forgeDesk.connectCodexApiServiceToAi()
+      await onRefresh()
       message.success('Codex API 服务已创建，并已接入 ForgeDesk AI')
     } catch (error) {
       message.error(`创建 Codex API 服务失败：${getErrorMessage(error)}`)
@@ -2288,8 +2294,9 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
       const service = await window.forgeDesk.rotateCodexApiKey()
       setCodexApiService(service)
       if (provider === 'codex-local-api') {
-        form.setFieldsValue({ apiKey: service.apiKey, baseUrl: service.baseUrl, model: service.model })
-        await onSave()
+        form.setFieldsValue({ baseUrl: service.baseUrl, model: service.model })
+        await window.forgeDesk.syncCodexApiServiceToAi()
+        await onRefresh()
       }
       message.success('Codex API Key 已重置')
     } catch (error) {
@@ -2463,7 +2470,7 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
         {codexApiService?.apiKeyConfigured ? (
           <div className="codex-api-service-credentials">
             <Typography.Text type="secondary">客户端 API Key</Typography.Text>
-            <Typography.Text code copyable={{ text: codexApiService.apiKey }}>{codexApiService.apiKeyMasked}</Typography.Text>
+            <Typography.Text code>{codexApiService.apiKeyMasked}</Typography.Text>
           </div>
         ) : null}
         {!codexApiService?.account.available ? <Alert type="warning" showIcon message="尚未检测到可用的 Codex 登录态" description={codexApiService?.account.message || '请先在 Codex CLI 或 ChatGPT Codex 中完成登录。'} /> : null}
@@ -12937,6 +12944,12 @@ function ProjectSettingsPanel({
     cloudflare: <CloudOutlined />,
     plane: <LinkOutlined />
   }
+  const categoryIcons: Record<ProjectSettingsCategoryKey, JSX.Element> = {
+    project: <SettingOutlined />,
+    git: <CodeOutlined />,
+    delivery: <CloudOutlined />,
+    collaboration: <LinkOutlined />
+  }
   const activeModule = PROJECT_SETTINGS_MODULES.find((module) => module.key === settingsView.activeModuleKey) ?? PROJECT_SETTINGS_MODULES[0]
 
   function renderSettingsModuleContent(moduleKey: ProjectSettingsModuleKey): JSX.Element {
@@ -13026,16 +13039,38 @@ function ProjectSettingsPanel({
 
   if (settingsView.mode === 'list') {
     return (
-      <div className="project-settings-module-list">
-        {PROJECT_SETTINGS_MODULES.map((module) => (
-          <button className="project-settings-entry-card" key={module.key} type="button" onClick={() => setSettingsView(openProjectSettingsModule(module.key))}>
-            <span className="project-settings-entry-icon">{moduleIcons[module.key]}</span>
-            <span className="project-settings-entry-copy">
-              <Typography.Text strong>{module.title}</Typography.Text>
-              <Typography.Text type="secondary">{module.description}</Typography.Text>
-            </span>
-          </button>
-        ))}
+      <div className="project-settings-module-groups">
+        {PROJECT_SETTINGS_CATEGORIES.map((category) => {
+          const modules = getProjectSettingsModulesForCategory(category.key)
+
+          return (
+            <section className="project-settings-module-group" key={category.key} aria-labelledby={`project-settings-group-${category.key}`}>
+              <div className="project-settings-group-heading">
+                <div className="project-settings-group-heading-copy">
+                  <span className="project-settings-group-icon">{categoryIcons[category.key]}</span>
+                  <div className="project-settings-group-text">
+                    <Typography.Title level={5} id={`project-settings-group-${category.key}`}>
+                      {category.title}
+                    </Typography.Title>
+                    <Typography.Text type="secondary">{category.description}</Typography.Text>
+                  </div>
+                </div>
+                <Tag className="project-settings-group-count">{modules.length} 项设置</Tag>
+              </div>
+              <div className="project-settings-module-list">
+                {modules.map((module) => (
+                  <button className="project-settings-entry-card" key={module.key} type="button" onClick={() => setSettingsView(openProjectSettingsModule(module.key))}>
+                    <span className="project-settings-entry-icon">{moduleIcons[module.key]}</span>
+                    <span className="project-settings-entry-copy">
+                      <Typography.Text strong>{module.title}</Typography.Text>
+                      <Typography.Text type="secondary">{module.description}</Typography.Text>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )
+        })}
       </div>
     )
   }
@@ -14992,6 +15027,7 @@ function ProjectOverview({
   focusProjectId,
   onCreateProject,
   onOpenSettings,
+  onOpenAiTools,
   onOpenTerminalRequest,
   resolvedTheme
 }: {
@@ -14999,6 +15035,7 @@ function ProjectOverview({
   focusProjectId: string | null
   onCreateProject: () => void
   onOpenSettings: () => void
+  onOpenAiTools: () => void
   onOpenTerminalRequest: (request: Omit<TerminalOpenRequest, 'requestId'>) => void
   resolvedTheme: ResolvedTheme
 }): JSX.Element {
@@ -15045,6 +15082,9 @@ function ProjectOverview({
   const [runningProjectGitTaskKeys, setRunningProjectGitTaskKeys] = useState<string[]>([])
   const [projectGitTaskLogs, setProjectGitTaskLogs] = useState<ProjectGitTaskLog[]>([])
   const [projectGitTaskDrawerOpen, setProjectGitTaskDrawerOpen] = useState(false)
+  const [projectAiBinding, setProjectAiBinding] = useState<ProjectAiBinding | null>(null)
+  const [projectAiProvider, setProjectAiProvider] = useState<AiProviderRuntimeSnapshot | null>(null)
+  const [projectAiStatusLoading, setProjectAiStatusLoading] = useState(false)
   const cancelledProjectGitTaskIdsRef = useRef(new Set<string>())
   const focusProjectAppliedRef = useRef(false)
   const [listCommitProjectId, setListCommitProjectId] = useState<string | null>(null)
@@ -15099,6 +15139,36 @@ function ProjectOverview({
   const dailyDates = summary?.dailyMetrics.map((metric) => metric.date) ?? []
   const hasGitData = Boolean(summary && summary.totalCommits > 0)
   const selectedProjectTerminalRequest = selectedProject ? createProjectTerminalOpenRequest(selectedProject) : null
+
+  useEffect(() => {
+    if (!window.forgeDesk || !selectedProject) {
+      setProjectAiBinding(null)
+      setProjectAiProvider(null)
+      return undefined
+    }
+
+    let mounted = true
+    setProjectAiStatusLoading(true)
+    Promise.all([
+      window.forgeDesk.getProjectAiBinding({ projectId: selectedProject.id, providerId: 'codex' }),
+      window.forgeDesk.listAiProviders()
+    ])
+      .then(([nextBinding, providers]) => {
+        if (!mounted) return
+        setProjectAiBinding(nextBinding)
+        setProjectAiProvider(providers.find((provider) => provider.id === 'codex') ?? null)
+      })
+      .catch((error) => {
+        if (mounted) message.warning(`读取 AI 工具状态失败：${getErrorMessage(error)}`)
+      })
+      .finally(() => {
+        if (mounted) setProjectAiStatusLoading(false)
+      })
+
+    return () => {
+      mounted = false
+    }
+  }, [selectedProject?.id])
 
   function openProjectRepositoryCommit(repository: Repository): void {
     setProjectGitRepositoryId(repository.id)
@@ -16254,6 +16324,19 @@ function ProjectOverview({
                     <span className="project-detail-overview-item"><span>创建于</span><strong>{formatDateTime(selectedProject.createdAt)}</strong></span>
                     <span className="project-detail-overview-item"><span>分析</span><strong>{summary?.lastAnalyzedAt ? formatDateTime(summary.lastAnalyzedAt) : '尚未分析'}</strong></span>
                   </div>
+                  <Card size="small" className="project-ai-summary-card" loading={projectAiStatusLoading}>
+                    <div className="project-ai-summary-content">
+                      <Space wrap>
+                        <Typography.Text strong>AI 工具</Typography.Text>
+                        <Tag color={projectAiProvider?.installed ? 'green' : 'default'}>{projectAiProvider?.installed ? 'Codex 已检测到' : 'Codex 未安装'}</Tag>
+                        <Tag color={projectAiBinding ? 'blue' : 'default'}>{projectAiBinding ? '项目已绑定' : '尚未绑定'}</Tag>
+                      </Space>
+                      <Typography.Text type="secondary">
+                        {projectAiProvider?.message || '可以在 AI 工具模块中检测 Codex、管理账户和本机 API。'}
+                      </Typography.Text>
+                      <Button size="small" icon={<RobotOutlined />} onClick={onOpenAiTools}>管理 AI 工具</Button>
+                    </div>
+                  </Card>
                   {selectedProject.description ? <Typography.Text type="secondary" className="project-detail-description" title={selectedProject.description}>{selectedProject.description}</Typography.Text> : null}
                 </div>
               </div>
@@ -21149,12 +21232,14 @@ function PasswordGeneratorTool({ onBack }: { onBack: () => void }): JSX.Element 
 }
 
 function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppProps): JSX.Element {
-  const { loadingWorkspace, loadWorkspace, selectedProjectId } = useForgeDeskStore()
+  const { loadingWorkspace, loadWorkspace, selectedProjectId, projects } = useForgeDeskStore()
   const [appMode, setAppMode] = useState<AppMode>(() => readStoredAppMode())
   const [activeKey, setActiveKey] = useState<AppActiveKey>(() => (readStoredAppMode() === 'simple' ? 'projects' : 'overview'))
   const usesCustomTitleBar = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
   const [settingsInitialModule, setSettingsInitialModule] = useState<SettingsModuleKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
+  const [initialization, setInitialization] = useState<InitializationSnapshot | null>(null)
+  const [initializationLoading, setInitializationLoading] = useState(true)
   const [terminalOpenRequest, setTerminalOpenRequest] = useState<TerminalOpenRequest | null>(null)
   const [terminalRemoteDrawerOpen, setTerminalRemoteDrawerOpen] = useState(false)
   const [systemLogs, setSystemLogs] = useState<SystemLogEntry[]>([])
@@ -21201,10 +21286,20 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
       if (!cancelled) {
         await loadWorkspace()
+        if (window.forgeDesk) {
+          const snapshot = await window.forgeDesk.getInitializationSnapshot()
+          if (!cancelled) setInitialization(snapshot)
+        }
+        if (!cancelled) setInitializationLoading(false)
       }
     }
 
-    loadWhenReady().catch((error) => message.error(getErrorMessage(error)))
+    loadWhenReady().catch((error) => {
+      if (!cancelled) {
+        setInitializationLoading(false)
+        message.error(getErrorMessage(error))
+      }
+    })
 
     return () => {
       cancelled = true
@@ -21355,6 +21450,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     tasks: <CheckSquareOutlined />,
     docs: <FileTextOutlined />,
     projects: <FolderOpenOutlined />,
+    'ai-tools': <RobotOutlined />,
     services: <ThunderboltOutlined />,
     'data-sources': <DatabaseOutlined />,
     docker: <DockerOutlined />,
@@ -21440,10 +21536,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   }
 
   function openCodex(): void {
-    if (!isFullAppMode(appMode)) {
-      setAppMode(writeStoredAppMode('full'))
-    }
-    setActiveKey('codex-sessions')
+    setActiveKey('ai-tools')
   }
 
   function openSettingsModule(module: SettingsModuleKey): void {
@@ -21649,6 +21742,18 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     />
   )
 
+  if (!initializationLoading && initialization?.requiresProject) {
+    return (
+      <InitializationWizard
+        onComplete={(projectId) => {
+          setInitialization((current) => current ? { ...current, requiresProject: false, currentProject: current.currentProject } : current)
+          setActiveKey('projects')
+          useForgeDeskStore.getState().setSelectedProjectId(projectId)
+        }}
+      />
+    )
+  }
+
   if (activeKey === 'ai-chat') {
     return (
       <>
@@ -21811,8 +21916,16 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
                 focusProjectId={selectedProjectId}
                 onCreateProject={() => setCreatingProject(true)}
                 onOpenSettings={() => openSettingsModule('overview')}
+                onOpenAiTools={() => setActiveKey('ai-tools')}
                 onOpenTerminalRequest={openTerminalRequest}
                 resolvedTheme={resolvedTheme}
+              />
+            )}
+            {!loadingWorkspace && activeKey === 'ai-tools' && (
+              <AiToolsPanel
+                projectId={selectedProjectId}
+                projectPath={projects.find((project) => project.id === selectedProjectId)?.workspacePath ?? ''}
+                onOpenTerminal={() => setActiveKey('terminal')}
               />
             )}
             <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} onCreated={() => setActiveKey('projects')} />

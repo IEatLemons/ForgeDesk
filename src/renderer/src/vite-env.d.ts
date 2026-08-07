@@ -1391,6 +1391,78 @@ type WorkspaceSnapshot = {
   repositories: RepositoryRecord[]
 }
 
+type AiProviderRuntimeSnapshot = {
+  id: 'codex'
+  label: string
+  installed: boolean
+  authenticated: boolean
+  command: string
+  appPath: string
+  version: string
+  openMode: 'app' | 'cli' | 'none'
+  installUrl: string
+  message: string
+  checkedAt: string
+}
+
+type QuotaWindow = {
+  label: 'hourly' | 'weekly'
+  used: number | null
+  limit: number | null
+  remaining: number | null
+  resetAt: string
+}
+
+type QuotaSnapshot = {
+  providerId: 'codex'
+  accountId: string
+  planType: string
+  hourly: QuotaWindow | null
+  weekly: QuotaWindow | null
+  checkedAt: string
+  source: 'cache' | 'provider' | 'unavailable'
+  status: 'available' | 'unknown' | 'error'
+  message: string
+}
+
+type InitializationProjectSummary = {
+  id: string
+  name: string
+  workspacePath: string
+}
+
+type InitializationSnapshot = {
+  requiresProject: boolean
+  projectCount: number
+  currentProject: InitializationProjectSummary | null
+  codex: AiProviderRuntimeSnapshot
+}
+
+type ProjectAiBinding = {
+  projectId: string
+  providerId: string
+  workspacePath: string
+  createdAt: string
+  updatedAt: string
+}
+
+type ProjectAiBindingInput = {
+  projectId: string
+  providerId: string
+  workspacePath: string
+}
+
+type AiProviderOpenResult = {
+  mode: 'app' | 'cli' | 'download'
+  runtime: AiProviderRuntimeSnapshot
+  session?: TerminalSession
+}
+
+type CodexApiHealth = {
+  ok: boolean
+  message: string
+}
+
 type GitSetupStatus = {
   gitAvailable: boolean
   gitVersion: string
@@ -1519,7 +1591,6 @@ type CodexApiServiceView = {
   host: '127.0.0.1'
   port: number
   baseUrl: string
-  apiKey: string
   apiKeyMasked: string
   apiKeyConfigured: boolean
   model: string
@@ -2448,6 +2519,7 @@ interface Window {
   forgeDesk: {
     listProjects: () => Promise<WorkspaceSnapshot>
     createProject: (input: { name: string; workspacePath: string; repositories: ScannedRepository[] }) => Promise<WorkspaceSnapshot>
+    createEmptyProject: (input: { name: string; parentPath: string }) => Promise<WorkspaceSnapshot>
     createProjectFromRemote: (input: { name: string; remoteUrl: string; parentPath: string }) => Promise<WorkspaceSnapshot>
     updateProject: (input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }) => Promise<WorkspaceSnapshot>
     setProjectFavorite: (input: { id: string; isFavorite: boolean }) => Promise<WorkspaceSnapshot>
@@ -2598,6 +2670,14 @@ interface Window {
     copyGpgPublicKey: (fingerprint: string) => Promise<void>
     configureGitGpgSigning: (fingerprint: string) => Promise<GitSetupStatus>
     getAiSettings: () => Promise<AiSettingsView>
+    connectCodexApiServiceToAi: () => Promise<AiSettingsView>
+    syncCodexApiServiceToAi: () => Promise<AiSettingsView>
+    getInitializationSnapshot: () => Promise<InitializationSnapshot>
+    listAiProviders: () => Promise<AiProviderRuntimeSnapshot[]>
+    openAiProvider: (input: { providerId: 'codex'; projectPath?: string }) => Promise<AiProviderOpenResult>
+    getAiProviderQuota: (input: { providerId: 'codex'; accountId?: string }) => Promise<QuotaSnapshot>
+    getProjectAiBinding: (input: { projectId: string; providerId: string }) => Promise<ProjectAiBinding | null>
+    saveProjectAiBinding: (input: ProjectAiBindingInput) => Promise<ProjectAiBinding>
     getCodexAccount: () => Promise<CodexAccountInfo>
     listCodexAccounts: () => Promise<CodexAccountRegistryView>
     importCodexAccount: (input: CodexAccountImportInput) => Promise<CodexAccountRegistryView>
@@ -2610,6 +2690,7 @@ interface Window {
     startCodexApiService: (input?: { port?: number; model?: string }) => Promise<CodexApiServiceView>
     stopCodexApiService: () => Promise<CodexApiServiceView>
     rotateCodexApiKey: () => Promise<CodexApiServiceView>
+    checkCodexApiService: () => Promise<CodexApiHealth>
     getAiRuntimeStatus: (verify?: boolean) => Promise<AiRuntimeStatus>
     getCodexRuntimeStatus: (verify?: boolean) => Promise<AiRuntimeStatus>
     getCodexActivitySnapshot: () => Promise<CodexActivitySnapshot>

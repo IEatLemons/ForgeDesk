@@ -1089,6 +1089,10 @@ describe('service monitoring storage', () => {
 
   it('classifies checks and prunes monitoring history beyond retention', () => {
     const db = createDatabase()
+    const now = Date.now()
+    const recentCheckAt = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString()
+    const oldCheckAt = new Date(now - 60 * 24 * 60 * 60 * 1000).toISOString()
+    const retentionCutoff = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString()
     const service = saveProjectService(db, {
       projectId: 'project-a',
       provider: 'vercel',
@@ -1105,7 +1109,7 @@ describe('service monitoring storage', () => {
       status: 'online',
       statusCode: 204,
       responseMs: 42,
-      checkedAt: '2026-06-23T00:00:00.000Z',
+      checkedAt: recentCheckAt,
       errorMessage: ''
     })
     recordServiceMonitorCheck(db, {
@@ -1115,7 +1119,7 @@ describe('service monitoring storage', () => {
       status: 'offline',
       statusCode: 0,
       responseMs: 0,
-      checkedAt: '2026-05-01T00:00:00.000Z',
+      checkedAt: oldCheckAt,
       errorMessage: 'timeout'
     })
 
@@ -1124,7 +1128,7 @@ describe('service monitoring storage', () => {
     assert.equal(classifyServiceMonitorStatus(0, 'timeout'), 'offline')
     assert.equal(buildServiceHealthUrl('web.example.com', '/ready'), 'https://web.example.com/ready')
 
-    deleteOldServiceMonitorHistory(db, '2026-05-24T00:00:00.000Z')
+    deleteOldServiceMonitorHistory(db, retentionCutoff)
 
     const history = listServiceMonitorHistory(db, 'project-a')
     assert.equal(history.length, 1)

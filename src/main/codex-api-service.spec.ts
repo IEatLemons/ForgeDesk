@@ -3,7 +3,7 @@ import { describe, it } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createCodexApiKey, getCodexApiService, maskCodexApiKey, normalizeCodexApiServiceSettings, startCodexApiService, stopCodexApiService, toCodexMessages } from './codex-api-service.js'
+import { createCodexApiKey, getCodexApiService, getCodexApiServiceIntegrationSettings, maskCodexApiKey, normalizeCodexApiServiceSettings, startCodexApiService, stopCodexApiService, toCodexMessages } from './codex-api-service.js'
 
 describe('codex api service', () => {
   it('creates the local client key format used by the API service', () => {
@@ -52,7 +52,8 @@ describe('codex api service', () => {
       const unauthorized = await fetch(`${service.baseUrl}/models`)
       assert.equal(unauthorized.status, 401)
 
-      const models = await fetch(`${service.baseUrl}/models`, { headers: { authorization: `Bearer ${service.apiKey}` } })
+      const integration = await getCodexApiServiceIntegrationSettings(userDataPath)
+      const models = await fetch(`${service.baseUrl}/models`, { headers: { authorization: `Bearer ${integration.apiKey}` } })
       assert.equal(models.status, 200)
       assert.equal((await models.json() as { data: Array<{ id: string }> }).data[0].id, service.model)
 

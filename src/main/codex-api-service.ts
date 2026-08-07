@@ -23,12 +23,17 @@ export type CodexApiServiceView = {
   host: '127.0.0.1'
   port: number
   baseUrl: string
-  apiKey: string
   apiKeyMasked: string
   apiKeyConfigured: boolean
   model: string
   account: CodexAccountInfo
   message: string
+}
+
+export type CodexApiServiceIntegrationSettings = {
+  baseUrl: string
+  apiKey: string
+  model: string
 }
 
 type JsonObject = Record<string, unknown>
@@ -112,12 +117,21 @@ function buildView(settings: CodexApiServiceSettings, account: CodexAccountInfo)
     host: '127.0.0.1',
     port: running ? activePort : settings.port,
     baseUrl: `http://127.0.0.1:${running ? activePort : settings.port}/v1`,
-    apiKey: settings.apiKey,
     apiKeyMasked: maskCodexApiKey(settings.apiKey),
     apiKeyConfigured: Boolean(settings.apiKey),
     model: settings.model,
     account,
     message: running ? 'Codex API 服务正在运行，仅接受本机连接。' : settings.enabled ? 'Codex API 服务已配置，尚未启动。' : 'Codex API 服务未启用。'
+  }
+}
+
+export async function getCodexApiServiceIntegrationSettings(userDataPath: string): Promise<CodexApiServiceIntegrationSettings> {
+  const settings = await readSettings(userDataPath)
+  const port = activeServer && activeUserDataPath === userDataPath && activePort ? activePort : settings.port
+  return {
+    baseUrl: `http://127.0.0.1:${port}/v1`,
+    apiKey: settings.apiKey,
+    model: settings.model
   }
 }
 
