@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import {
   findLocalAiCommand,
   formatLocalAiFailure,
@@ -22,7 +24,13 @@ describe('ai runtime', () => {
   it('checks the PATH codex command before the ChatGPT app bundled binary', () => {
     assert.deepEqual(
       getLocalProviderCommandCandidates('codex-cli'),
-      ['codex', '/Applications/ChatGPT.app/Contents/Resources/codex']
+      [
+        'codex',
+        '/Applications/Codex.app/Contents/Resources/codex',
+        '/Applications/ChatGPT.app/Contents/Resources/codex',
+        join(homedir(), 'Applications/Codex.app/Contents/Resources/codex'),
+        join(homedir(), 'Applications/ChatGPT.app/Contents/Resources/codex')
+      ]
     )
   })
 
@@ -36,7 +44,7 @@ describe('ai runtime', () => {
     })
 
     assert.equal(command, '/Applications/ChatGPT.app/Contents/Resources/codex')
-    assert.deepEqual(checkedCommands, ['codex', '/Applications/ChatGPT.app/Contents/Resources/codex'])
+    assert.deepEqual(checkedCommands, ['codex', '/Applications/Codex.app/Contents/Resources/codex', '/Applications/ChatGPT.app/Contents/Resources/codex'])
   })
 
   it('reports a missing AI coding assistant runtime without verification', async () => {

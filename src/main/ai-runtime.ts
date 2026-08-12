@@ -65,7 +65,13 @@ export function formatLocalAiFailure(error: unknown): string {
 
 export function getLocalProviderCommandCandidates(provider: LocalAiProvider, env: NodeJS.ProcessEnv = process.env): string[] {
   if (provider === 'codex-cli') {
-    return ['codex', '/Applications/ChatGPT.app/Contents/Resources/codex']
+    return [
+      'codex',
+      '/Applications/Codex.app/Contents/Resources/codex',
+      '/Applications/ChatGPT.app/Contents/Resources/codex',
+      join(env.HOME || '', 'Applications/Codex.app/Contents/Resources/codex'),
+      join(env.HOME || '', 'Applications/ChatGPT.app/Contents/Resources/codex')
+    ]
   }
 
   return ['cursor-agent', 'agent', join(env.HOME || '', '.local/bin/cursor-agent')]

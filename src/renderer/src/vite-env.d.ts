@@ -1405,24 +1405,100 @@ type AiProviderRuntimeSnapshot = {
   checkedAt: string
 }
 
+type QuotaSource = 'app-server' | 'session' | 'cache' | 'auth' | 'unavailable'
+type QuotaStatus = 'available' | 'stale' | 'unknown' | 'error' | 'reauth-required'
+
 type QuotaWindow = {
-  label: 'hourly' | 'weekly'
+  label: 'primary' | 'secondary' | 'hourly' | 'weekly'
   used: number | null
   limit: number | null
   remaining: number | null
+  usedPercent: number | null
+  remainingPercent: number | null
+  windowDurationMins: number | null
+  resetsAt: number | null
   resetAt: string
+  source: QuotaSource
+}
+
+type QuotaCredits = {
+  hasCredits: boolean | null
+  unlimited: boolean | null
+  balance: string | null
+  availableCount: number | null
+  credits: Array<{
+    id: string
+    resetType: string
+    status: string
+    grantedAt: string
+    expiresAt: string
+    title: string
+    description: string
+  }> | null
+}
+
+type QuotaLimitBucket = {
+  id: string
+  name: string
+  planType: string
+  primary: QuotaWindow | null
+  secondary: QuotaWindow | null
+  credits: QuotaCredits | null
+  rateLimitReachedType: string
+}
+
+type DailyUsageSnapshot = {
+  summary: {
+    lifetimeTokens: string | null
+    peakDailyTokens: string | null
+    longestRunningTurnSec: string | null
+    currentStreakDays: string | null
+    longestStreakDays: string | null
+  } | null
+  dailyUsageBuckets: Array<{ startDate: string; tokens: string }> | null
 }
 
 type QuotaSnapshot = {
   providerId: 'codex'
   accountId: string
+  email: string
+  authMode: string
+  requiresOpenaiAuth: boolean | null
   planType: string
+  primary: QuotaWindow | null
+  secondary: QuotaWindow | null
+  limitBuckets: QuotaLimitBucket[]
   hourly: QuotaWindow | null
   weekly: QuotaWindow | null
+  credits: QuotaCredits | null
+  monthlyLimit: {
+    limit: string
+    used: string
+    remainingPercent: number | null
+    resetsAt: string
+  } | null
+  rateLimitReachedType: string
+  usage: DailyUsageSnapshot | null
   checkedAt: string
-  source: 'cache' | 'provider' | 'unavailable'
-  status: 'available' | 'unknown' | 'error'
+  source: QuotaSource
+  status: QuotaStatus
+  stale: boolean
+  errorCode: string
   message: string
+}
+
+type CodexAccountLiveSnapshot = {
+  accountId: string
+  email: string
+  authMode: string
+  planType: string
+  quota: QuotaSnapshot
+  usage: DailyUsageSnapshot | null
+}
+
+type AiProviderAccountSnapshot = {
+  account: CodexManagedAccount
+  live: CodexAccountLiveSnapshot
 }
 
 type InitializationProjectSummary = {
@@ -2675,7 +2751,8 @@ interface Window {
     getInitializationSnapshot: () => Promise<InitializationSnapshot>
     listAiProviders: () => Promise<AiProviderRuntimeSnapshot[]>
     openAiProvider: (input: { providerId: 'codex'; projectPath?: string }) => Promise<AiProviderOpenResult>
-    getAiProviderQuota: (input: { providerId: 'codex'; accountId?: string }) => Promise<QuotaSnapshot>
+    getAiProviderQuota: (input: { providerId: 'codex'; accountId?: string; refresh?: boolean }) => Promise<QuotaSnapshot>
+    listAiProviderAccountSnapshots: (input: { providerId: 'codex'; refresh?: boolean }) => Promise<AiProviderAccountSnapshot[]>
     getProjectAiBinding: (input: { projectId: string; providerId: string }) => Promise<ProjectAiBinding | null>
     saveProjectAiBinding: (input: ProjectAiBindingInput) => Promise<ProjectAiBinding>
     getCodexAccount: () => Promise<CodexAccountInfo>

@@ -10,10 +10,10 @@ import {
   List,
   Modal,
   Popconfirm,
+  Progress,
   Row,
   Space,
   Spin,
-  Statistic,
   Tag,
   Typography,
   message
@@ -49,8 +49,92 @@ function formatDate(value: string): string {
   return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : value
 }
 
-function quotaText(value: number | null): string {
-  return value === null ? '未知' : `${value}`
+function windowLabel(window: QuotaWindow): string {
+  const duration = window.windowDurationMins
+  if (duration === null) return window.label === 'primary' ? 'Primary' : window.label === 'secondary' ? 'Secondary' : window.label
+  if (duration >= 60 * 24 * 3) return `${window.label === 'primary' ? 'Primary' : 'Secondary'} · ${Math.round(duration / (60 * 24))} 天窗口`
+  if (duration >= 60) return `${window.label === 'primary' ? 'Primary' : 'Secondary'} · ${Math.round(duration / 60)} 小时窗口`
+  return `${window.label === 'primary' ? 'Primary' : 'Secondary'} · ${duration} 分钟窗口`
+}
+
+function formatTokenCount(value: string | null | undefined): string {
+  if (!value) return '未知'
+  const number = Number(value)
+  return Number.isSafeInteger(number) ? number.toLocaleString() : value
+}
+
+function quotaSourceLabel(snapshot: QuotaSnapshot | null | undefined): string {
+  if (!snapshot) return '不可用'
+  if (snapshot.source === 'app-server') return snapshot.status === 'unknown' ? '官方未提供' : '实时 · Codex App Server'
+  if (snapshot.source === 'session') return '本地 Codex 记录'
+  if (snapshot.source === 'cache') return 'ForgeDesk 缓存'
+  if (snapshot.source === 'auth') return '本地登录信息'
+  return '不可用'
+}
+
+function quotaSourceColor(snapshot: QuotaSnapshot | null | undefined): string | undefined {
+  if (!snapshot) return undefined
+  if (snapshot.status === 'reauth-required') return 'orange'
+  if (snapshot.source === 'app-server' && snapshot.status === 'available') return 'green'
+  if (snapshot.source === 'session') return 'blue'
+  if (snapshot.source === 'cache') return 'gold'
+  if (snapshot.status === 'error') return 'red'
+  return undefined
+}
+
+function quotaProgressColor(remainingPercent: number): string {
+  if (remainingPercent <= 10) return '#ff4d4f'
+  if (remainingPercent <= 30) return '#faad14'
+  return '#3867f2'
+}
+
+function quotaResetLabel(window: QuotaWindow): string {
+  return window.resetAt ? `重置：${formatDate(window.resetAt)}` : '重置时间未知'
+}
+
+function QuotaWindowProgress({ window, compact = false }: { window: QuotaWindow; compact?: boolean }): JSX.Element {
+  const remainingPercent = window.remainingPercent
+  return (
+    <div className={`ai-quota-window${compact ? ' is-compact' : ''}`}>
+      <div className="ai-quota-window-heading">
+        <span>{windowLabel(window)}</span>
+        <strong>{remainingPercent === null ? '未知' : `${remainingPercent}%`}</strong>
+      </div>
+      {remainingPercent === null ? (
+        <div className="ai-quota-progress ai-quota-progress-unknown" aria-label="配额未知" />
+      ) : (
+        <Progress
+          className="ai-quota-progress"
+          percent={remainingPercent}
+          showInfo={false}
+          size={compact ? 'small' : 'default'}
+          strokeColor={quotaProgressColor(remainingPercent)}
+        />
+      )}
+      <div className="ai-quota-window-meta">
+        <span>{window.usedPercent === null ? '已用未知' : `已用 ${window.usedPercent}%`}</span>
+        <span>{quotaResetLabel(window)}</span>
+      </div>
+    </div>
+  )
+}
+
+function AccountUsageSummary({ quota, compact = false }: { quota: QuotaSnapshot | null | undefined; compact?: boolean }): JSX.Element {
+  const windows = [quota?.primary, quota?.secondary].filter((window): window is QuotaWindow => Boolean(window))
+  if (windows.length === 0) {
+    return (
+      <div className={`ai-account-usage-summary is-empty${compact ? ' is-compact' : ''}`}>
+        <span>剩余配额</span>
+        <strong>未知</strong>
+        <Typography.Text type="secondary">{quota?.message || '等待 Codex 返回真实配额数据'}</Typography.Text>
+      </div>
+    )
+  }
+  return (
+    <div className={`ai-account-usage-summary${compact ? ' is-compact' : ''}`}>
+      {windows.map((window) => <QuotaWindowProgress key={`${window.label}-${window.windowDurationMins ?? 'unknown'}`} window={window} compact={compact} />)}
+    </div>
+  )
 }
 
 export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiToolsPanelProps): JSX.Element {
@@ -81,9 +165,20 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
     setProvider(providers.find((item) => item.id === 'codex') ?? null)
   }
 
-  async function refreshAccounts(): Promise<void> {
+  async function refreshAccounts(forceRefresh = false): Promise<void> {
     if (!window.forgeDesk) return
-    setAccounts(await window.forgeDesk.listCodexAccounts())
+    const registry = await window.forgeDesk.listCodexAccounts()
+    setAccounts(registry)
+    const snapshots = await window.forgeDesk.listAiProviderAccountSnapshots({ providerId: 'codex', refresh: forceRefresh })
+    const liveByAccountId = new Map(snapshots.map((snapshot) => [snapshot.account.id, snapshot.live]))
+    setAccounts((current) => current ? {
+      ...current,
+      accounts: current.accounts.map((account) => {
+        const live = liveByAccountId.get(account.id)
+        return live ? { ...account, email: live.email || account.email, planType: live.planType || account.planType } : account
+      })
+    } : registry)
+    setQuotaByAccountId(Object.fromEntries(snapshots.map((snapshot) => [snapshot.account.id, snapshot.live.quota])))
   }
 
   async function refreshApiService(): Promise<void> {
@@ -91,12 +186,12 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
     setApiService(await window.forgeDesk.getCodexApiService())
   }
 
-  async function refreshQuota(nextAccountId?: string, showError = false): Promise<void> {
+  async function refreshQuota(nextAccountId?: string, showError = false, forceRefresh = false): Promise<void> {
     if (!window.forgeDesk) return
     const accountId = nextAccountId || activeAccount?.id
     if (!accountId) return
     try {
-      const next = await window.forgeDesk.getAiProviderQuota({ providerId: 'codex', accountId })
+      const next = await window.forgeDesk.getAiProviderQuota({ providerId: 'codex', accountId, refresh: forceRefresh })
       setQuotaByAccountId((current) => ({ ...current, [accountId]: next }))
     } catch (error) {
       setQuotaByAccountId((current) => ({ ...current, [accountId]: null }))
@@ -108,7 +203,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
     if (!window.forgeDesk) return
     setRefreshing(true)
     try {
-      await Promise.all([refreshProvider(), refreshAccounts(), refreshApiService()])
+      await Promise.all([refreshProvider(), refreshAccounts(showMessage), refreshApiService()])
       if (projectId) {
         setBinding(await window.forgeDesk.getProjectAiBinding({ projectId, providerId: 'codex' }))
       } else {
@@ -126,14 +221,6 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
   useEffect(() => {
     void refreshAll()
   }, [projectId])
-
-  useEffect(() => {
-    if (!accounts?.accounts.length) {
-      setQuotaByAccountId({})
-      return
-    }
-    void Promise.all(accounts.accounts.map((account) => refreshQuota(account.id)))
-  }, [accounts])
 
   async function openCodex(): Promise<void> {
     if (!window.forgeDesk) return
@@ -186,6 +273,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
       setImportName('')
       setImportPath('')
       message.success('Codex 账户已导入')
+      await refreshAccounts(true)
       await refreshApiService()
     } catch (error) {
       message.error(`导入 Codex 账户失败：${getErrorMessage(error)}`)
@@ -202,6 +290,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
       const registry = await window.forgeDesk.createCodexAccount()
       const account = registry.accounts.find((item) => !previous.has(item.id))
       setAccounts(registry)
+      await refreshAccounts(false)
       if (!account) throw new Error('新 Codex 账户 profile 创建失败')
       await window.forgeDesk.openCodexAccountLogin(account.id)
       message.success(`已为「${account.name}」打开登录终端`)
@@ -231,7 +320,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
     try {
       setAccounts(await window.forgeDesk.activateCodexAccount(account.id))
       await refreshApiService()
-      await refreshQuota(account.id, true)
+      await refreshQuota(account.id, true, true)
       message.success(`已切换到「${account.name}」`)
     } catch (error) {
       message.error(`切换账户失败：${getErrorMessage(error)}`)
@@ -247,7 +336,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
       const status = await window.forgeDesk.verifyCodexAccount(account.id)
       if (status.usable) message.success(`${account.name} 验证成功`)
       else message.warning(`${account.name} 暂不可用：${status.message}`)
-      await refreshAccounts()
+      await refreshAccounts(true)
     } catch (error) {
       message.error(`验证账户失败：${getErrorMessage(error)}`)
     } finally {
@@ -260,6 +349,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
     setAccountAction(`remove:${account.id}`)
     try {
       setAccounts(await window.forgeDesk.removeCodexAccount(account.id))
+      await refreshAccounts(false)
       await refreshApiService()
       message.success('账户已从 ForgeDesk 移除')
     } catch (error) {
@@ -303,10 +393,6 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
 
   if (loading) {
     return <div className="loading-panel"><Spin /></div>
-  }
-
-  function quotaSourceLabel(snapshot: QuotaSnapshot | null | undefined): string {
-    return snapshot?.source === 'cache' ? '缓存' : snapshot?.source === 'provider' ? 'Provider' : '不可用'
   }
 
   const activeQuota = activeAccount ? quotaByAccountId[activeAccount.id] : null
@@ -403,12 +489,16 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
                   <Typography.Title level={3} style={{ margin: 0 }}>{activeAccount.name}</Typography.Title>
                   <Tag color={activeAccount.available ? 'green' : 'default'}>{activeAccount.available ? '可用' : '待验证'}</Tag>
                 </Space>
-                <Typography.Text type="secondary">{activeAccount.email || activeAccount.accountIdSuffix || '未读取邮箱'}</Typography.Text>
-                <Descriptions size="small" column={1}>
-                  <Descriptions.Item label="套餐">{activeAccount.planType || '未知'}</Descriptions.Item>
-                  <Descriptions.Item label="最近使用">{formatDate(activeAccount.lastUsedAt)}</Descriptions.Item>
-                  <Descriptions.Item label="配额状态">{quotaSourceLabel(activeQuota)}{activeQuota?.checkedAt ? ` · ${formatDate(activeQuota.checkedAt)}` : ''}</Descriptions.Item>
-                </Descriptions>
+                <Typography.Text type="secondary">{activeQuota?.email || activeAccount.email || activeAccount.accountIdSuffix || '未读取邮箱'}</Typography.Text>
+                <div className="ai-active-account-facts">
+                  <div><span>账户等级</span><strong>{activeQuota?.planType || activeAccount.planType || '未知'}</strong></div>
+                  <div><span>最近使用</span><strong>{formatDate(activeAccount.lastUsedAt)}</strong></div>
+                  <div><span>数据状态</span><Tag color={quotaSourceColor(activeQuota)}>{quotaSourceLabel(activeQuota)}</Tag></div>
+                </div>
+                <AccountUsageSummary quota={activeQuota} compact />
+                <Typography.Text type="secondary">
+                  {activeQuota?.checkedAt ? `最近检查：${formatDate(activeQuota.checkedAt)}` : '点击右上角刷新状态读取最新数据'}
+                </Typography.Text>
                 <Button onClick={() => document.getElementById('codex-account-management')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>管理账户</Button>
               </Space>
             ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有当前 Codex 账户" />}
@@ -423,7 +513,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
           <Space wrap>
             <Button icon={<DownloadOutlined />} onClick={() => setImportOpen(true)}>导入账户</Button>
             <Button icon={<UserAddOutlined />} loading={accountAction === 'create'} onClick={() => void createAccount()}>创建并登录</Button>
-            <Button icon={<ReloadOutlined />} onClick={() => void refreshAccounts()}>刷新账户</Button>
+            <Button icon={<ReloadOutlined />} onClick={() => void refreshAccounts(true)}>刷新账户</Button>
           </Space>
         }
       >
@@ -431,26 +521,37 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
           <List
             grid={{ gutter: 16, xs: 1, sm: 1, md: 2, lg: 2, xl: 3 }}
             dataSource={accounts.accounts}
-            renderItem={(account) => (
+            renderItem={(account) => {
+              const quota = quotaByAccountId[account.id]
+              const additionalBuckets = quota?.limitBuckets?.filter((bucket) => bucket.id !== 'codex') || []
+              return (
               <List.Item>
                 <Card className={`ai-account-card${account.active ? ' active' : ''}`} size="small">
                   <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                    <Space wrap>
-                      <Typography.Text strong>{account.name}</Typography.Text>
-                      {account.active ? <Tag color="blue">当前</Tag> : null}
-                      <Tag color={account.available ? 'green' : 'default'}>{account.available ? '可用' : '待验证'}</Tag>
-                    </Space>
-                    <Typography.Text type="secondary">{account.email || account.accountIdSuffix || '未读取邮箱'}</Typography.Text>
-                    <Typography.Text type="secondary">套餐：{account.planType || '未知'} · 最近使用：{formatDate(account.lastUsedAt)}</Typography.Text>
-                    <div className="ai-account-quota">
-                      <Space wrap size={18}>
-                        <Statistic title="Hourly 剩余" value={quotaText(quotaByAccountId[account.id]?.hourly?.remaining ?? null)} />
-                        <Statistic title="Weekly 剩余" value={quotaText(quotaByAccountId[account.id]?.weekly?.remaining ?? null)} />
-                        <Tag>{quotaSourceLabel(quotaByAccountId[account.id])}</Tag>
+                    <div className="ai-account-card-heading">
+                      <Space wrap>
+                        <Typography.Text strong>{account.name}</Typography.Text>
+                        {account.active ? <Tag color="blue">当前</Tag> : null}
+                        <Tag color={account.available ? 'green' : 'default'}>{account.available ? '可用' : '待验证'}</Tag>
                       </Space>
-                      <Typography.Text type="secondary">
-                        {quotaByAccountId[account.id]?.message || '配额按 best-effort 读取，无法获取时显示未知。'}
-                      </Typography.Text>
+                      <Tag color={quotaSourceColor(quota)}>{quotaSourceLabel(quota)}</Tag>
+                    </div>
+                    <Typography.Text type="secondary">{account.email || account.accountIdSuffix || '未读取邮箱'}</Typography.Text>
+                    <div className="ai-account-card-facts">
+                      <div><span>账户等级</span><strong>{quota?.planType || account.planType || '未知'}</strong></div>
+                      <div><span>最近使用</span><strong>{formatDate(account.lastUsedAt)}</strong></div>
+                    </div>
+                    <div className="ai-account-quota">
+                      <div className="ai-account-quota-heading">
+                        <span>剩余配额</span>
+                        <Typography.Text type="secondary">{quota?.checkedAt ? `更新于 ${formatDate(quota.checkedAt)}` : '尚未读取'}</Typography.Text>
+                      </div>
+                      <AccountUsageSummary quota={quota} />
+                      {quota?.credits ? <Typography.Text type="secondary">Credits：{quota.credits.balance || (quota.credits.unlimited ? '无限' : quota.credits.hasCredits === false ? '无' : '未知')}{quota.credits.availableCount !== null ? ` · 可用重置 ${quota.credits.availableCount}` : ''}</Typography.Text> : null}
+                      {quota?.usage?.summary ? <div className="ai-account-usage-stats"><span>累计 Token <strong>{formatTokenCount(quota.usage.summary.lifetimeTokens)}</strong></span><span>连续使用 <strong>{quota.usage.summary.currentStreakDays || '未知'} 天</strong></span></div> : null}
+                      {additionalBuckets.length ? <div className="ai-account-additional-limits">{additionalBuckets.map((bucket) => <div key={bucket.id}><span>{bucket.name || bucket.id}</span>{bucket.primary ? <QuotaWindowProgress window={bucket.primary} compact /> : <Typography.Text type="secondary">官方未提供窗口</Typography.Text>}</div>)}</div> : null}
+                      <Typography.Text type="secondary">{quota?.message || '等待 Codex 返回真实配额数据。'}</Typography.Text>
+                      {quota?.status === 'reauth-required' ? <Button size="small" icon={<LinkOutlined />} loading={accountAction === `login:${account.id}`} onClick={() => void accountLogin(account)}>重新登录并刷新</Button> : null}
                     </div>
                     <Card size="small" className="ai-account-api-card" title="本机 Codex API 服务" extra={<Tag color={account.active && apiService?.running ? 'green' : 'default'}>{account.active && apiService?.running ? '运行中' : account.active ? '未运行' : '切换后管理'}</Tag>}>
                       {account.active ? (
@@ -481,7 +582,8 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
                   </Space>
                 </Card>
               </List.Item>
-            )}
+              )
+            }}
           />
         ) : (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={accounts?.message || '还没有 Codex 账户'} />
@@ -506,13 +608,19 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
             <Descriptions.Item label="名称">{accountDrawer.name}</Descriptions.Item>
             <Descriptions.Item label="来源">{accountDrawer.source === 'local' ? '本机账户' : '导入账户'}</Descriptions.Item>
             <Descriptions.Item label="邮箱">{accountDrawer.email || '未读取'}</Descriptions.Item>
-            <Descriptions.Item label="套餐">{accountDrawer.planType || '未知'}</Descriptions.Item>
+            <Descriptions.Item label="套餐">{quotaByAccountId[accountDrawer.id]?.planType || accountDrawer.planType || '未知'}</Descriptions.Item>
             <Descriptions.Item label="账户 ID">{accountDrawer.accountId || '未读取'}</Descriptions.Item>
             <Descriptions.Item label="Profile 目录">{accountDrawer.codexHome}</Descriptions.Item>
             <Descriptions.Item label="认证方式">{accountDrawer.authMode || '未知'}</Descriptions.Item>
             <Descriptions.Item label="最后更新">{formatDate(accountDrawer.updatedAt)}</Descriptions.Item>
             <Descriptions.Item label="Access Token">{accountDrawer.accessTokenConfigured ? '已配置（已隐藏）' : '未配置'}</Descriptions.Item>
             <Descriptions.Item label="Refresh Token">{accountDrawer.refreshTokenConfigured ? '已配置（已隐藏）' : '未配置'}</Descriptions.Item>
+            <Descriptions.Item label="数据来源">{quotaSourceLabel(quotaByAccountId[accountDrawer.id])}</Descriptions.Item>
+            <Descriptions.Item label="配额状态">{quotaByAccountId[accountDrawer.id]?.message || '尚未读取'}</Descriptions.Item>
+            <Descriptions.Item label="Primary">{quotaByAccountId[accountDrawer.id]?.primary ? `${quotaByAccountId[accountDrawer.id]?.primary?.usedPercent ?? '未知'}% 已使用，${quotaByAccountId[accountDrawer.id]?.primary?.resetAt ? `重置于 ${formatDate(quotaByAccountId[accountDrawer.id]?.primary?.resetAt || '')}` : '重置时间未知'}` : '官方未提供'}</Descriptions.Item>
+            <Descriptions.Item label="Secondary">{quotaByAccountId[accountDrawer.id]?.secondary ? `${quotaByAccountId[accountDrawer.id]?.secondary?.usedPercent ?? '未知'}% 已使用，${quotaByAccountId[accountDrawer.id]?.secondary?.resetAt ? `重置于 ${formatDate(quotaByAccountId[accountDrawer.id]?.secondary?.resetAt || '')}` : '重置时间未知'}` : '官方未提供'}</Descriptions.Item>
+            {(quotaByAccountId[accountDrawer.id]?.limitBuckets || []).filter((bucket) => bucket.id !== 'codex').map((bucket) => <Descriptions.Item key={bucket.id} label={bucket.name || bucket.id}>{bucket.primary ? `${bucket.primary.usedPercent ?? '未知'}% 已使用${bucket.primary.resetAt ? ` · ${formatDate(bucket.primary.resetAt)}` : ''}` : '官方未提供'}</Descriptions.Item>)}
+            <Descriptions.Item label="累计 Token">{formatTokenCount(quotaByAccountId[accountDrawer.id]?.usage?.summary?.lifetimeTokens)}</Descriptions.Item>
           </Descriptions>
         ) : null}
       </Drawer>

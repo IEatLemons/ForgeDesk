@@ -18,6 +18,7 @@ import {
   getAiProviderAdapter,
   getInitializationSnapshot,
   listAiProviderRuntimeSnapshots,
+  type AiProviderAccountSnapshot,
   type AiProviderRuntimeSnapshot,
   type InitializationSnapshot,
   type QuotaSnapshot
@@ -7312,9 +7313,15 @@ ipcMain.handle(
 
 ipcMain.handle(
   'ai-providers:quota',
-  async (_event, input: { providerId: 'codex'; accountId?: string }): Promise<QuotaSnapshot> => {
-    return getAiProviderAdapter(input.providerId).getQuota(app.getPath('userData'), input.accountId)
+  async (_event, input: { providerId: 'codex'; accountId?: string; refresh?: boolean }): Promise<QuotaSnapshot> => {
+    return getAiProviderAdapter(input.providerId).getQuota(app.getPath('userData'), input.accountId, { refresh: Boolean(input.refresh) })
   }
+)
+
+ipcMain.handle(
+  'ai-providers:account-snapshots',
+  async (_event, input: { providerId: 'codex'; refresh?: boolean }): Promise<AiProviderAccountSnapshot[]> =>
+    getAiProviderAdapter(input.providerId).getAccountSnapshots(app.getPath('userData'), { refresh: Boolean(input.refresh) })
 )
 
 ipcMain.handle(

@@ -1835,6 +1835,88 @@ export type CodexApiServiceView = {
   message: string
 }
 
+export type QuotaSource = 'app-server' | 'session' | 'cache' | 'auth' | 'unavailable'
+export type QuotaStatus = 'available' | 'stale' | 'unknown' | 'error' | 'reauth-required'
+
+export type QuotaWindow = {
+  label: 'primary' | 'secondary' | 'hourly' | 'weekly'
+  used: number | null
+  limit: number | null
+  remaining: number | null
+  usedPercent: number | null
+  remainingPercent: number | null
+  windowDurationMins: number | null
+  resetsAt: number | null
+  resetAt: string
+  source: QuotaSource
+}
+
+export type QuotaCredits = {
+  hasCredits: boolean | null
+  unlimited: boolean | null
+  balance: string | null
+  availableCount: number | null
+  credits: Array<{
+    id: string
+    resetType: string
+    status: string
+    grantedAt: string
+    expiresAt: string
+    title: string
+    description: string
+  }> | null
+}
+
+export type QuotaLimitBucket = {
+  id: string
+  name: string
+  planType: string
+  primary: QuotaWindow | null
+  secondary: QuotaWindow | null
+  credits: QuotaCredits | null
+  rateLimitReachedType: string
+}
+
+export type DailyUsageSnapshot = {
+  summary: {
+    lifetimeTokens: string | null
+    peakDailyTokens: string | null
+    longestRunningTurnSec: string | null
+    currentStreakDays: string | null
+    longestStreakDays: string | null
+  } | null
+  dailyUsageBuckets: Array<{ startDate: string; tokens: string }> | null
+}
+
+export type QuotaSnapshot = {
+  providerId: 'codex'
+  accountId: string
+  email: string
+  authMode: string
+  requiresOpenaiAuth: boolean | null
+  planType: string
+  primary: QuotaWindow | null
+  secondary: QuotaWindow | null
+  limitBuckets: QuotaLimitBucket[]
+  hourly: QuotaWindow | null
+  weekly: QuotaWindow | null
+  credits: QuotaCredits | null
+  monthlyLimit: {
+    limit: string
+    used: string
+    remainingPercent: number | null
+    resetsAt: string
+  } | null
+  rateLimitReachedType: string
+  usage: DailyUsageSnapshot | null
+  checkedAt: string
+  source: QuotaSource
+  status: QuotaStatus
+  stale: boolean
+  errorCode: string
+  message: string
+}
+
 export type AiRuntimeStatus = {
   provider: AiSettingsView['provider']
   configured: boolean

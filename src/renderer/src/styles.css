@@ -311,6 +311,46 @@
   display: block;
 }
 
+.ai-active-account-facts,
+.ai-account-card-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ai-account-card-facts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ai-active-account-facts > div,
+.ai-account-card-facts > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ai-active-account-facts span,
+.ai-account-card-facts span,
+.ai-account-usage-stats span {
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.ai-active-account-facts strong,
+.ai-account-card-facts strong {
+  overflow: hidden;
+  color: var(--app-text);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-active-account-facts .ant-tag {
+  width: fit-content;
+  margin-inline-end: 0;
+}
+
 .ai-account-quota {
   display: flex;
   flex-direction: column;
@@ -321,17 +361,184 @@
   background: var(--subtle-bg, #fafafa);
 }
 
-.ai-account-quota .ant-statistic {
-  min-width: 92px;
+.ai-account-card-heading,
+.ai-account-quota-heading,
+.ai-quota-window-heading,
+.ai-quota-window-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.ai-account-quota .ant-statistic-title {
-  margin-bottom: 2px;
+.ai-account-card-heading {
+  align-items: flex-start;
+}
+
+.ai-account-card-heading .ant-tag {
+  flex: 0 0 auto;
+  margin-inline-end: 0;
+}
+
+.ai-account-quota-heading {
+  color: var(--app-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ai-account-quota-heading .ant-typography {
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.ai-account-usage-summary {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-account-usage-summary.is-compact {
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--subtle-bg, #fafafa);
+}
+
+.ai-account-usage-summary.is-empty {
+  grid-template-columns: auto auto;
+  align-items: center;
+  column-gap: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--app-border-soft);
+  border-radius: 8px;
+}
+
+.ai-account-usage-summary.is-empty > span {
+  color: var(--app-muted);
   font-size: 12px;
 }
 
-.ai-account-quota .ant-statistic-content {
-  font-size: 20px;
+.ai-account-usage-summary.is-empty > strong {
+  font-size: 18px;
+}
+
+.ai-account-usage-summary.is-empty .ant-typography {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12px;
+}
+
+.ai-quota-window {
+  display: grid;
+  gap: 4px;
+}
+
+.ai-quota-window-heading {
+  color: var(--app-text);
+  font-size: 12px;
+}
+
+.ai-quota-window-heading strong {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.ai-quota-window.is-compact .ai-quota-window-heading strong {
+  font-size: 14px;
+}
+
+.ai-quota-progress {
+  margin: 0;
+  line-height: 1;
+}
+
+.ai-quota-progress .ant-progress-outer {
+  padding-inline-end: 0;
+}
+
+.ai-quota-progress-unknown {
+  height: 8px;
+  border-radius: 999px;
+  background: repeating-linear-gradient(135deg, #d9dee8 0, #d9dee8 6px, #eef1f5 6px, #eef1f5 12px);
+}
+
+.ai-quota-window-meta {
+  color: var(--app-muted);
+  font-size: 11px;
+}
+
+.ai-account-usage-stats {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.ai-account-usage-stats span {
+  display: inline-flex;
+  gap: 4px;
+  align-items: baseline;
+}
+
+.ai-account-usage-stats strong {
+  color: var(--app-text);
+  font-weight: 600;
+}
+
+.ai-account-additional-limits {
+  display: grid;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.ai-account-additional-limits > div {
+  display: grid;
+  gap: 4px;
+}
+
+.ai-account-additional-limits > div > span {
+  color: var(--app-muted);
+  font-size: 11px;
+}
+
+.ai-account-additional-limits .ai-quota-window-heading {
+  display: none;
+}
+
+.ai-account-additional-limits .ai-quota-window-meta {
+  justify-content: flex-end;
+}
+
+.ai-account-additional-limits .ai-quota-window-meta span:first-child {
+  display: none;
+}
+
+.ai-account-additional-limits .ai-quota-window {
+  gap: 2px;
+}
+
+.ai-account-additional-limits .ai-quota-progress-unknown {
+  height: 6px;
+}
+
+.ai-account-card .ai-account-quota > .ant-typography {
+  margin: 0;
+  font-size: 11px;
+}
+
+.ai-account-quota .ant-tag {
+  width: fit-content;
+  margin-inline-end: 0;
+}
+
+@media (max-width: 760px) {
+  .ai-active-account-facts,
+  .ai-account-card-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ai-active-account-facts > div:last-child {
+    grid-column: 1 / -1;
+  }
 }
 
 .ai-account-api-card {

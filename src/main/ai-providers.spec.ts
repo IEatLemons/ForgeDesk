@@ -36,7 +36,7 @@ describe('AI provider quota fallback', () => {
 
       const quota = await readCodexQuota(directory, 'account-1')
       assert.equal(quota.source, 'cache')
-      assert.equal(quota.status, 'available')
+      assert.equal(quota.status, 'stale')
       assert.equal(quota.hourly?.remaining, 8)
       assert.equal(quota.weekly?.remaining, 80)
       assert.equal((quota as unknown as Record<string, unknown>).token, undefined)
