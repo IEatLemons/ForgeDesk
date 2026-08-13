@@ -812,6 +812,28 @@ type GitPushTaskResult = {
   stderr: string
 }
 
+type ProjectGitTaskAction = 'fetch' | 'push' | 'merge'
+type ProjectGitTaskStatus = 'running' | 'success' | 'failed' | 'skipped' | 'cancelled' | 'interrupted'
+type ProjectGitRepositoryTaskResult = {
+  repositoryId: string
+  repositoryName: string
+  ok: boolean
+  message: string
+  stdout?: string
+  stderr?: string
+}
+type ProjectGitTaskLog = {
+  id: string
+  projectId: string
+  projectName: string
+  action: ProjectGitTaskAction
+  status: ProjectGitTaskStatus
+  startedAt: string
+  finishedAt?: string
+  summary: string
+  repositoryResults: ProjectGitRepositoryTaskResult[]
+}
+
 type GitMergeAnalysis = {
   repositoryId: string
   ok: boolean
@@ -1332,8 +1354,35 @@ type ProjectRecord = {
   status: 'ready' | 'needs-setup' | 'warning'
   owner: string
   workspacePath: string
+  groupId?: string | null
   createdAt: string
   isFavorite: boolean
+}
+
+type ProjectGroupRecord = {
+  id: string
+  name: string
+  sortOrder: number
+  projectCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+type ProjectGroupInput = {
+  id?: string
+  name: string
+}
+
+type CodexProjectLink = {
+  codexKey: string
+  cwd: string
+  projectId: string | null
+  updatedAt: string
+}
+
+type CodexProjectLinkInput = {
+  cwd: string
+  projectId: string | null
 }
 
 type RepositoryRecord = ScannedRepository & {
@@ -1844,6 +1893,89 @@ type CodexSessionsSnapshot = {
   completed: number
   aborted: number
   projects: CodexProjectRecord[]
+  sessions: CodexSessionSummary[]
+}
+
+type CodexGitWorkspaceState = {
+  cwd: string
+  repositoryRoot: string
+  branch: string
+  additions: number
+  deletions: number
+  filesChanged: number
+  hasChanges: boolean
+  repositoryAvailable: boolean
+  checkedAt: string
+}
+
+type CodexTaskMonitorSummary = {
+  id: string
+  title: string
+  projectId: string
+  cwd: string
+  status: CodexTaskRunStatus
+  branch: string
+  additions: number
+  deletions: number
+  filesChanged: number
+  errorMessage: string
+  createdAt: string
+  updatedAt: string
+  finishedAt: string
+}
+
+type CodexUncommittedAlert = {
+  id: string
+  sourceType: 'session' | 'task'
+  sourceId: string
+  completionMarker: string
+  codexKey: string
+  cwd: string
+  projectId: string | null
+  projectName: string
+  completedAt: string
+  detectedAt: string
+  branch: string
+  additions: number
+  deletions: number
+  filesChanged: number
+  status: 'open' | 'resolved'
+  resolvedAt: string | null
+  notifiedAt: string | null
+}
+
+type CodexProjectMonitorItem = {
+  key: string
+  cwd: string
+  forgeProjectId: string | null
+  forgeProjectName: string
+  groupId: string | null
+  groupName: string
+  linkSource: 'auto' | 'manual' | 'unlinked'
+  sessionCount: number
+  runningCount: number
+  completedCount: number
+  failedCount: number
+  sessions: CodexSessionSummary[]
+  tasks: CodexTaskMonitorSummary[]
+  git: CodexGitWorkspaceState
+  status: 'running' | 'attention' | 'completed' | 'clean' | 'unknown'
+  openAlert: CodexUncommittedAlert | null
+}
+
+type CodexProjectMonitorSnapshot = {
+  available: boolean
+  checkedAt: string
+  error: string
+  source: string
+  projects: CodexProjectMonitorItem[]
+  groups: ProjectGroupRecord[]
+  alerts: CodexUncommittedAlert[]
+  running: number
+  uncommitted: number
+  unlinked: number
+  completed: number
+  failed: number
   sessions: CodexSessionSummary[]
 }
 
@@ -2606,6 +2738,14 @@ interface Window {
     createProjectFromRemote: (input: { name: string; remoteUrl: string; parentPath: string }) => Promise<WorkspaceSnapshot>
     updateProject: (input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }) => Promise<WorkspaceSnapshot>
     setProjectFavorite: (input: { id: string; isFavorite: boolean }) => Promise<WorkspaceSnapshot>
+    listProjectGroups: () => Promise<ProjectGroupRecord[]>
+    saveProjectGroup: (input: ProjectGroupInput) => Promise<ProjectGroupRecord>
+    deleteProjectGroup: (groupId: string) => Promise<ProjectGroupRecord[]>
+    reorderProjectGroups: (groupIds: string[]) => Promise<ProjectGroupRecord[]>
+    setProjectGroup: (input: { projectId: string; groupId: string | null }) => Promise<WorkspaceSnapshot>
+    listCodexProjectLinks: () => Promise<CodexProjectLink[]>
+    saveCodexProjectLink: (input: CodexProjectLinkInput) => Promise<CodexProjectLink>
+    deleteCodexProjectLink: (cwd: string) => Promise<void>
     deleteProject: (projectId: string) => Promise<WorkspaceSnapshot>
     rescanProjectRepositories: (projectId: string) => Promise<WorkspaceSnapshot>
     initializeProjectRepository: (projectId: string) => Promise<WorkspaceSnapshot>
@@ -2623,7 +2763,14 @@ interface Window {
     gitAdd: (repositoryId: string, input: GitAddInput) => Promise<GitOperationResult>
     gitCommit: (repositoryId: string, input: GitCommitInput) => Promise<GitOperationResult>
     gitPush: (repositoryId: string, input: GitPushInput, operationId?: string) => Promise<GitOperationResult>
+    gitPushTask: (repositoryId: string, input: GitPushInput, operationId: string) => Promise<GitPushTaskResult>
     cancelRepositoryGitOperation: (operationId: string) => Promise<boolean>
+    listProjectGitTasks: (projectId?: string) => Promise<ProjectGitTaskLog[]>
+    getProjectGitTask: (taskId: string) => Promise<ProjectGitTaskLog | null>
+    saveProjectGitTask: (task: ProjectGitTaskLog) => Promise<ProjectGitTaskLog>
+    deleteProjectGitTask: (taskId: string) => Promise<void>
+    clearProjectGitTasks: () => Promise<void>
+    onProjectGitTaskUpdated: (listener: (task: ProjectGitTaskLog) => void) => () => void
     getRepositoryDeploymentApprovalConfig: (repositoryId: string) => Promise<DeploymentApprovalConfig | null>
     saveRepositoryDeploymentApprovalConfig: (input: DeploymentApprovalConfig) => Promise<DeploymentApprovalConfig>
     analyzeRepositoryDeploymentApproval: (repositoryId: string, input?: { manualBaselineSha?: string }) => Promise<DeploymentApprovalAnalysis>
@@ -2784,6 +2931,10 @@ interface Window {
     sendCodexSessionMessage: (input: CodexSessionMessageInput) => Promise<CodexSessionDetail>
     cancelCodexSession: (sessionId: string) => Promise<CodexSessionDetail>
     onCodexSessionEvent: (listener: (event: CodexSessionEvent) => void) => () => void
+    getCodexProjectMonitorSnapshot: () => Promise<CodexProjectMonitorSnapshot>
+    onCodexProjectMonitorUpdated: (listener: (snapshot: CodexProjectMonitorSnapshot) => void) => () => void
+    onCodexMonitorAlert: (listener: (alert: CodexUncommittedAlert) => void) => () => void
+    onCodexMonitorFocus: (listener: (alert: CodexUncommittedAlert) => void) => () => void
     listCodexSites: () => Promise<CodexSite[]>
     createCodexSite: (input: CodexSiteCreateInput) => Promise<CodexSite>
     updateCodexSite: (input: CodexSiteUpdateInput) => Promise<CodexSite>

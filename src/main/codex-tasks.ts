@@ -120,6 +120,7 @@ type SpawnCodex = (file: string, args: string[], options: { cwd: string; env: No
 export type CodexTaskServiceOptions = {
   db: () => DatabaseLike
   emit?: (event: CodexTaskEvent) => void
+  resolveProjectId?: (cwd: string) => string | undefined
   execFileText?: ExecFileText
   findCodexCommand?: (env?: NodeJS.ProcessEnv) => Promise<string>
   resolveCodexHome?: (accountId?: string) => Promise<string>
@@ -373,6 +374,7 @@ export async function collectCodexTaskEnvironment(cwd: string, execFileText: Exe
 export class CodexTaskService {
   private readonly db: () => DatabaseLike
   private readonly emit?: (event: CodexTaskEvent) => void
+  private readonly resolveProjectId?: (cwd: string) => string | undefined
   private readonly execFileText: ExecFileText
   private readonly findCodexCommand: (env?: NodeJS.ProcessEnv) => Promise<string>
   private readonly resolveCodexHome: (accountId?: string) => Promise<string>
@@ -383,6 +385,7 @@ export class CodexTaskService {
   constructor(options: CodexTaskServiceOptions) {
     this.db = options.db
     this.emit = options.emit
+    this.resolveProjectId = options.resolveProjectId
     this.execFileText = options.execFileText ?? execFileAsync
     this.findCodexCommand = options.findCodexCommand ?? ((env) => findLocalAiCommand('codex-cli', { env }))
     this.resolveCodexHome = options.resolveCodexHome ?? (async () => process.env.CODEX_HOME?.trim() || '')
@@ -407,13 +410,14 @@ export class CodexTaskService {
     const id = createTaskId()
     const title = input.title?.trim() || untitledCodexConversationTitle
     const cwd = input.cwd?.trim() || process.cwd()
+    const projectId = input.projectId?.trim() || this.resolveProjectId?.(cwd) || ''
 
     db.prepare(`
       INSERT INTO codex_tasks (
         id, title, project_id, cwd, status, account_id, model, branch, additions, deletions, files_changed, error_message, run_log, created_at, updated_at, finished_at
       )
       VALUES (?, ?, ?, ?, 'idle', ?, ?, '', 0, 0, 0, '', '', ?, ?, '')
-    `).run(id, title, input.projectId?.trim() || '', cwd, input.accountId?.trim() || '', input.model?.trim() || '', timestamp, timestamp)
+    `).run(id, title, projectId, cwd, input.accountId?.trim() || '', input.model?.trim() || '', timestamp, timestamp)
 
     return this.requireTask(id)
   }

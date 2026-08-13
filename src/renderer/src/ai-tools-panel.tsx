@@ -452,23 +452,23 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
         <div>
           <Button type="link" icon={<ArrowLeftOutlined />} onClick={() => setCodexDetailsOpen(false)}>返回 AI 工具</Button>
           <Typography.Title level={2}>Codex</Typography.Title>
-          <Typography.Paragraph type="secondary">软件信息和当前账号放在顶部；配额与本机 API 服务跟随账户卡片管理，项目绑定位于底部。</Typography.Paragraph>
+          <Typography.Paragraph type="secondary">账户与配额是主要信息；本机 API 服务集中在账户管理区，软件状态提供快捷入口，项目绑定位于底部。</Typography.Paragraph>
         </div>
         <Button icon={<ReloadOutlined />} loading={refreshing} onClick={() => void refreshAll(true)}>刷新状态</Button>
       </div>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={12}>
-          <Card title="Codex 软件信息" className="ai-top-card" extra={<Tag color={provider?.installed ? 'green' : 'default'}>{provider?.installed ? '已安装' : '未安装'}</Tag>}>
-            <Space align="start" size={14}>
+      <Row gutter={[16, 16]} className="ai-top-grid">
+        <Col xs={24} lg={8}>
+          <Card title="Codex 软件信息" className="ai-top-card ai-software-card" extra={<Tag color={provider?.installed ? 'green' : 'default'}>{provider?.installed ? '已安装' : '未安装'}</Tag>}>
+            <Space align="start" size={12} className="ai-software-card-content">
               <div className="ai-provider-icon"><SafetyCertificateOutlined /></div>
-              <div>
+              <div className="ai-software-card-copy">
                 <Space wrap>
                   <Typography.Title level={3} style={{ margin: 0 }}>Codex</Typography.Title>
                   {provider?.authenticated ? <Tag color="blue">已登录</Tag> : <Tag>登录状态未知</Tag>}
                 </Space>
-                <Typography.Paragraph type="secondary">{provider?.message || '正在检测本机 Codex 环境。'}</Typography.Paragraph>
-                <Typography.Text type="secondary">
+                <Typography.Paragraph type="secondary" className="ai-software-card-message">{provider?.message || '正在检测本机 Codex 环境。'}</Typography.Paragraph>
+                <Typography.Text type="secondary" className="ai-software-card-version">
                   {provider?.version ? `版本 ${provider.version}` : '版本未读取'}{provider?.command ? ` · ${provider.command}` : ''}
                 </Typography.Text>
                 <Space wrap className="ai-top-card-actions">
@@ -481,10 +481,10 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
             </Space>
           </Card>
         </Col>
-        <Col xs={24} lg={12}>
-          <Card title="Codex 账号信息" className="ai-top-card" extra={activeAccount ? <Tag color="blue">当前账号</Tag> : <Tag>未设置</Tag>}>
+        <Col xs={24} lg={16}>
+          <Card title="Codex 账号信息" className="ai-top-card ai-account-summary-card" extra={activeAccount ? <Tag color="blue">当前账号</Tag> : <Tag>未设置</Tag>}>
             {activeAccount ? (
-              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              <Space direction="vertical" size={8} className="ai-active-account-summary">
                 <Space wrap>
                   <Typography.Title level={3} style={{ margin: 0 }}>{activeAccount.name}</Typography.Title>
                   <Tag color={activeAccount.available ? 'green' : 'default'}>{activeAccount.available ? '可用' : '待验证'}</Tag>

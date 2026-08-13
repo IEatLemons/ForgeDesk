@@ -7,6 +7,14 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   createProjectFromRemote: (input: { name: string; remoteUrl: string; parentPath: string }) => ipcRenderer.invoke('projects:create-from-remote', input),
   updateProject: (input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }) => ipcRenderer.invoke('projects:update', input),
   setProjectFavorite: (input: { id: string; isFavorite: boolean }) => ipcRenderer.invoke('projects:favorite', input),
+  listProjectGroups: () => ipcRenderer.invoke('project-groups:list'),
+  saveProjectGroup: (input: ProjectGroupInput) => ipcRenderer.invoke('project-group:save', input),
+  deleteProjectGroup: (groupId: string) => ipcRenderer.invoke('project-group:delete', groupId),
+  reorderProjectGroups: (groupIds: string[]) => ipcRenderer.invoke('project-groups:reorder', groupIds),
+  setProjectGroup: (input: { projectId: string; groupId: string | null }) => ipcRenderer.invoke('project:group:set', input),
+  listCodexProjectLinks: () => ipcRenderer.invoke('codex-project-link:list'),
+  saveCodexProjectLink: (input: CodexProjectLinkInput) => ipcRenderer.invoke('codex-project-link:save', input),
+  deleteCodexProjectLink: (cwd: string) => ipcRenderer.invoke('codex-project-link:delete', cwd),
   deleteProject: (projectId: string) => ipcRenderer.invoke('projects:delete', projectId),
   rescanProjectRepositories: (projectId: string) => ipcRenderer.invoke('project:repositories:rescan', projectId),
   initializeProjectRepository: (projectId: string) => ipcRenderer.invoke('project:repository:init', projectId),
@@ -28,6 +36,16 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   gitPush: (repositoryId: string, input: GitPushInput, operationId?: string) => ipcRenderer.invoke('repository:git-push', repositoryId, input, operationId),
   gitPushTask: (repositoryId: string, input: GitPushInput, operationId: string) => ipcRenderer.invoke('repository:git-push-task', repositoryId, input, operationId),
   cancelRepositoryGitOperation: (operationId: string) => ipcRenderer.invoke('repository:git-operation:cancel', operationId),
+  listProjectGitTasks: (projectId?: string) => ipcRenderer.invoke('project:git-tasks:list', projectId),
+  getProjectGitTask: (taskId: string) => ipcRenderer.invoke('project:git-task:get', taskId),
+  saveProjectGitTask: (task: ProjectGitTaskLog) => ipcRenderer.invoke('project:git-task:save', task),
+  deleteProjectGitTask: (taskId: string) => ipcRenderer.invoke('project:git-task:delete', taskId),
+  clearProjectGitTasks: () => ipcRenderer.invoke('project:git-tasks:clear'),
+  onProjectGitTaskUpdated: (listener: (task: ProjectGitTaskLog) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, task: ProjectGitTaskLog): void => listener(task)
+    ipcRenderer.on('project-git-tasks:updated', wrapped)
+    return () => ipcRenderer.removeListener('project-git-tasks:updated', wrapped)
+  },
   getRepositoryDeploymentApprovalConfig: (repositoryId: string) => ipcRenderer.invoke('repository:deployment-approval:config:get', repositoryId),
   saveRepositoryDeploymentApprovalConfig: (input: DeploymentApprovalConfig) => ipcRenderer.invoke('repository:deployment-approval:config:save', input),
   analyzeRepositoryDeploymentApproval: (repositoryId: string, input?: { manualBaselineSha?: string }) =>
@@ -206,6 +224,22 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   toggleCodexSessionPin: (sessionId: string) => ipcRenderer.invoke('codex:sessions:pin', sessionId),
   sendCodexSessionMessage: (input: CodexSessionMessageInput) => ipcRenderer.invoke('codex:sessions:send', input),
   cancelCodexSession: (sessionId: string) => ipcRenderer.invoke('codex:sessions:cancel', sessionId),
+  getCodexProjectMonitorSnapshot: () => ipcRenderer.invoke('codex:project-monitor:snapshot'),
+  onCodexProjectMonitorUpdated: (listener: (snapshot: CodexProjectMonitorSnapshot) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, snapshot: CodexProjectMonitorSnapshot): void => listener(snapshot)
+    ipcRenderer.on('codex:project-monitor:updated', wrapped)
+    return () => ipcRenderer.removeListener('codex:project-monitor:updated', wrapped)
+  },
+  onCodexMonitorAlert: (listener: (alert: CodexUncommittedAlert) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, alert: CodexUncommittedAlert): void => listener(alert)
+    ipcRenderer.on('codex:project-monitor:alert', wrapped)
+    return () => ipcRenderer.removeListener('codex:project-monitor:alert', wrapped)
+  },
+  onCodexMonitorFocus: (listener: (alert: CodexUncommittedAlert) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, alert: CodexUncommittedAlert): void => listener(alert)
+    ipcRenderer.on('codex:project-monitor:focus', wrapped)
+    return () => ipcRenderer.removeListener('codex:project-monitor:focus', wrapped)
+  },
   onCodexSessionEvent: (listener: (event: CodexSessionEvent) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, event: CodexSessionEvent): void => listener(event)
     ipcRenderer.on('codex:sessions:event', wrapped)

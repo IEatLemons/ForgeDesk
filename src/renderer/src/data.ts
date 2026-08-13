@@ -7,8 +7,35 @@ export type Project = {
   status: ProjectStatus
   owner: string
   workspacePath: string
+  groupId?: string | null
   createdAt: string
   isFavorite: boolean
+}
+
+export type ProjectGroup = {
+  id: string
+  name: string
+  sortOrder: number
+  projectCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type ProjectGroupInput = {
+  id?: string
+  name: string
+}
+
+export type CodexProjectLink = {
+  codexKey: string
+  cwd: string
+  projectId: string | null
+  updatedAt: string
+}
+
+export type CodexProjectLinkInput = {
+  cwd: string
+  projectId: string | null
 }
 
 export type RsaPrivateKeySize = 2048 | 4096
@@ -2089,6 +2116,91 @@ export type CodexSessionsSnapshot = {
   completed: number
   aborted: number
   projects: CodexProjectRecord[]
+  sessions: CodexSessionSummary[]
+}
+
+export type CodexGitWorkspaceState = {
+  cwd: string
+  repositoryRoot: string
+  branch: string
+  additions: number
+  deletions: number
+  filesChanged: number
+  hasChanges: boolean
+  repositoryAvailable: boolean
+  checkedAt: string
+}
+
+export type CodexTaskMonitorSummary = {
+  id: string
+  title: string
+  projectId: string
+  cwd: string
+  status: CodexTaskRunStatus
+  branch: string
+  additions: number
+  deletions: number
+  filesChanged: number
+  errorMessage: string
+  createdAt: string
+  updatedAt: string
+  finishedAt: string
+}
+
+export type CodexUncommittedAlert = {
+  id: string
+  sourceType: 'session' | 'task'
+  sourceId: string
+  completionMarker: string
+  codexKey: string
+  cwd: string
+  projectId: string | null
+  projectName: string
+  completedAt: string
+  detectedAt: string
+  branch: string
+  additions: number
+  deletions: number
+  filesChanged: number
+  status: 'open' | 'resolved'
+  resolvedAt: string | null
+  notifiedAt: string | null
+}
+
+export type CodexProjectMonitorStatus = 'running' | 'attention' | 'completed' | 'clean' | 'unknown'
+
+export type CodexProjectMonitorItem = {
+  key: string
+  cwd: string
+  forgeProjectId: string | null
+  forgeProjectName: string
+  groupId: string | null
+  groupName: string
+  linkSource: 'auto' | 'manual' | 'unlinked'
+  sessionCount: number
+  runningCount: number
+  completedCount: number
+  failedCount: number
+  sessions: CodexSessionSummary[]
+  tasks: CodexTaskMonitorSummary[]
+  git: CodexGitWorkspaceState
+  status: CodexProjectMonitorStatus
+  openAlert: CodexUncommittedAlert | null
+}
+
+export type CodexProjectMonitorSnapshot = {
+  available: boolean
+  checkedAt: string
+  error: string
+  source: string
+  projects: CodexProjectMonitorItem[]
+  groups: ProjectGroup[]
+  alerts: CodexUncommittedAlert[]
+  running: number
+  uncommitted: number
+  unlinked: number
+  completed: number
+  failed: number
   sessions: CodexSessionSummary[]
 }
 

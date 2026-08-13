@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, powerMonitor, shell, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, Notification, powerMonitor, shell, type MenuItemConstructorOptions } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { execFile, spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
@@ -79,6 +79,30 @@ import {
   type CodexTaskRenameInput,
   type CodexTaskRecord
 } from './codex-tasks'
+import {
+  CodexProjectMonitorService,
+  codexProjectKey,
+  findAutomaticCodexProjectId,
+  migrateCodexProjectMonitorTables,
+  saveCodexProjectLink,
+  listCodexProjectLinks,
+  deleteCodexProjectLink,
+  type CodexProjectLink,
+  type CodexProjectLinkInput,
+  type CodexProjectMonitorSnapshot,
+  type MonitorProjectRecord,
+  type CodexUncommittedAlert
+} from './codex-project-monitor'
+import {
+  deleteProjectGroup,
+  listProjectGroups,
+  migrateProjectGroupTables,
+  reorderProjectGroups,
+  saveProjectGroup,
+  setProjectGroup,
+  type ProjectGroupInput,
+  type ProjectGroupRecord
+} from './project-groups'
 import { listOpenRouterModels, type OpenRouterModel } from './openrouter-models'
 import { getMarketDataSnapshot, type MarketPeriod } from './market-data'
 import {
@@ -290,6 +314,16 @@ import {
   type ProjectTerminalCommandInput,
   type ProjectTerminalCommandRecord
 } from './project-terminal-commands'
+import {
+  clearProjectGitTasks,
+  deleteProjectGitTask,
+  getProjectGitTask,
+  listProjectGitTasks,
+  migrateProjectGitTaskTable,
+  recoverProjectGitTasks,
+  saveProjectGitTask,
+  type ProjectGitTaskLog
+} from './project-git-task-logs'
 import {
   createRsaPrivateKeyRecord,
   deleteRsaPrivateKeyRecord,
@@ -686,6 +720,7 @@ type ProjectRecord = {
   status: 'ready' | 'needs-setup' | 'warning'
   owner: string
   workspacePath: string
+  groupId: string | null
   createdAt: string
   isFavorite: boolean
 }
@@ -892,6 +927,11 @@ const terminalService = new TerminalService({
 const codexTaskService = new CodexTaskService({
   db: () => getDatabase(),
   emit: (event) => sendCodexTaskEvent(event),
+  resolveProjectId: (cwd) => {
+    const manualLink = listCodexProjectLinks(getDatabase()).find((link) => link.codexKey === codexProjectKey(cwd))
+    if (manualLink) return manualLink.projectId ?? undefined
+    return findAutomaticCodexProjectId(cwd, listCodexMonitorProjects())
+  },
   resolveCodexHome: (accountId) => resolveCodexHome(app.getPath('userData'), accountId)
 })
 const codexActivityService = new CodexActivityService()
@@ -900,6 +940,28 @@ const codexSessionService = new CodexSessionService({
   emit: (event) => sendCodexSessionEvent(event),
   resolveCodexHome: (accountId) => resolveCodexHome(app.getPath('userData'), accountId)
 })
+const codexProjectMonitorService = new CodexProjectMonitorService({
+  db: () => getDatabase(),
+  listGroups: () => listProjectGroups(getDatabase()),
+  listProjects: () => listCodexMonitorProjects(),
+  listSessions: () => codexSessionService.list(),
+  listTasks: () => codexTaskService.list(),
+  onAlert: (alert) => sendCodexMonitorAlert(alert)
+})
+let codexMonitorRefreshPromise: Promise<CodexProjectMonitorSnapshot> | null = null
+
+async function refreshCodexProjectMonitor(emit = true): Promise<CodexProjectMonitorSnapshot> {
+  if (codexMonitorRefreshPromise) return codexMonitorRefreshPromise
+  codexMonitorRefreshPromise = codexProjectMonitorService.snapshot()
+    .then((snapshot) => {
+      if (emit) sendCodexProjectMonitorEvent(snapshot)
+      return snapshot
+    })
+    .finally(() => {
+      codexMonitorRefreshPromise = null
+    })
+  return codexMonitorRefreshPromise
+}
 const releasePublishTasks = new Map<string, RepositoryReleasePublishTaskSnapshot>()
 const releasePublishTaskProcesses = new Map<string, ChildProcessWithoutNullStreams>()
 const releasePublishTaskExternalCancelers = new Map<string, () => Promise<void>>()
@@ -1690,6 +1752,7 @@ function sendCodexTaskEvent(event: CodexTaskEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send('codex:tasks:event', event)
   }
+  if (event.type !== 'output' && event.type !== 'updated') void refreshCodexProjectMonitor()
 }
 
 function sendCodexSessionEvent(event: CodexSessionEvent): void {
@@ -1697,6 +1760,40 @@ function sendCodexSessionEvent(event: CodexSessionEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send('codex:sessions:event', event)
   }
+  if (event.type !== 'item' && event.type !== 'updated') void refreshCodexProjectMonitor()
+}
+
+function sendProjectGitTaskEvent(task: ProjectGitTaskLog): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('project-git-tasks:updated', task)
+  }
+}
+
+function sendCodexProjectMonitorEvent(snapshot: CodexProjectMonitorSnapshot): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('codex:project-monitor:updated', snapshot)
+  }
+}
+
+function sendCodexMonitorAlert(alert: CodexUncommittedAlert): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('codex:project-monitor:alert', alert)
+  }
+
+  if (!Notification.isSupported()) return
+
+  const notification = new Notification({
+    body: `${alert.projectName || '未关联项目'} · ${alert.filesChanged} 个文件仍有未提交改动`,
+    title: 'Codex 执行完成，但工作区未提交'
+  })
+  notification.on('click', () => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.show()
+      window.focus()
+      window.webContents.send('codex:project-monitor:focus', alert)
+    }
+  })
+  notification.show()
 }
 
 function expandHomePath(path: string): string {
@@ -2176,8 +2273,12 @@ function migrateDatabase(db: Database.Database): void {
   migrateMonthlyPerformanceTables(db)
   migrateResourceGovernanceTables(db)
   migrateCodexTaskTables(db)
+  migrateProjectGroupTables(db)
+  migrateCodexProjectMonitorTables(db)
   migrateCodexSiteTables(db)
   migrateProjectAiBindingTable(db)
+  migrateProjectGitTaskTable(db)
+  recoverProjectGitTasks(db)
 
   addColumnIfMissing(db, 'repositories', 'remotes_json', "TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(db, 'repositories', 'repository_kind', "TEXT NOT NULL DEFAULT 'root'")
@@ -2232,6 +2333,7 @@ function mapProjectRow(row: Record<string, unknown>): ProjectRecord {
   return {
     id: String(row.id),
     name: String(row.name),
+    groupId: String(row.group_id ?? '') || null,
     description: String(row.description ?? ''),
     status: (String(row.status) as ProjectRecord['status']) || 'ready',
     owner: String(row.owner ?? ''),
@@ -2309,6 +2411,16 @@ function listRepositories(projectId?: string): RepositoryRecord[] {
     : getDatabase().prepare('SELECT * FROM repositories WHERE active = 1 ORDER BY relative_path ASC, name ASC')
   const rows = projectId ? statement.all(projectId) : statement.all()
   return rows.map((row) => mapRepositoryRow(row as Record<string, unknown>))
+}
+
+function listCodexMonitorProjects(): MonitorProjectRecord[] {
+  return listProjects().map((project) => ({
+    groupId: project.groupId,
+    id: project.id,
+    name: project.name,
+    repositoryPaths: listRepositories(project.id).map((repository) => repository.localPath).filter(Boolean),
+    workspacePath: project.workspacePath
+  }))
 }
 
 function createId(prefix: string): string {
@@ -6369,6 +6481,32 @@ ipcMain.handle('repositories:scan-workspace', async (_event, rootPath: string) =
 
 ipcMain.handle('projects:list', async (): Promise<WorkspaceSnapshot> => getWorkspaceSnapshot())
 
+ipcMain.handle('project-groups:list', async (): Promise<ProjectGroupRecord[]> => listProjectGroups(getDatabase()))
+
+ipcMain.handle('project-group:save', async (_event, input: ProjectGroupInput): Promise<ProjectGroupRecord> => saveProjectGroup(getDatabase(), input))
+
+ipcMain.handle('project-group:delete', async (_event, groupId: string): Promise<ProjectGroupRecord[]> => deleteProjectGroup(getDatabase(), groupId))
+
+ipcMain.handle('project-groups:reorder', async (_event, groupIds: string[]): Promise<ProjectGroupRecord[]> => reorderProjectGroups(getDatabase(), groupIds))
+
+ipcMain.handle('project:group:set', async (_event, input: { projectId: string; groupId: string | null }): Promise<WorkspaceSnapshot> => {
+  setProjectGroup(getDatabase(), input.projectId, input.groupId)
+  return getWorkspaceSnapshot()
+})
+
+ipcMain.handle('codex-project-link:list', async (): Promise<CodexProjectLink[]> => listCodexProjectLinks(getDatabase()))
+
+ipcMain.handle('codex-project-link:save', async (_event, input: CodexProjectLinkInput): Promise<CodexProjectLink> => {
+  const saved = saveCodexProjectLink(getDatabase(), input)
+  await refreshCodexProjectMonitor()
+  return saved
+})
+
+ipcMain.handle('codex-project-link:delete', async (_event, cwd: string): Promise<void> => {
+  deleteCodexProjectLink(getDatabase(), cwd)
+  await refreshCodexProjectMonitor()
+})
+
 ipcMain.handle(
   'projects:create',
   async (_event, input: { name: string; workspacePath: string; repositories: RepositoryScanResult[] }): Promise<WorkspaceSnapshot> => {
@@ -6658,6 +6796,24 @@ ipcMain.handle('repository:git-push-task', async (_event, repositoryId: string, 
 })
 
 ipcMain.handle('repository:git-operation:cancel', async (_event, operationId: string): Promise<boolean> => cancelRepositoryGitOperation(operationId))
+
+ipcMain.handle('project:git-tasks:list', async (_event, projectId?: string): Promise<ProjectGitTaskLog[]> => listProjectGitTasks(getDatabase(), projectId))
+
+ipcMain.handle('project:git-task:get', async (_event, taskId: string): Promise<ProjectGitTaskLog | null> => getProjectGitTask(getDatabase(), taskId))
+
+ipcMain.handle('project:git-task:save', async (_event, task: ProjectGitTaskLog): Promise<ProjectGitTaskLog> => {
+  const saved = saveProjectGitTask(getDatabase(), task)
+  sendProjectGitTaskEvent(saved)
+  return saved
+})
+
+ipcMain.handle('project:git-task:delete', async (_event, taskId: string): Promise<void> => {
+  deleteProjectGitTask(getDatabase(), taskId)
+})
+
+ipcMain.handle('project:git-tasks:clear', async (): Promise<void> => {
+  clearProjectGitTasks(getDatabase())
+})
 
 ipcMain.handle('repository:deployment-approval:config:get', async (_event, repositoryId: string): Promise<DeploymentApprovalConfig | null> =>
   getRepositoryDeploymentApprovalConfig(repositoryId)
@@ -7431,6 +7587,8 @@ ipcMain.handle('codex:sessions:send', async (_event, input: CodexSessionMessageI
 
 ipcMain.handle('codex:sessions:cancel', async (_event, sessionId: string): Promise<CodexSessionDetail> => codexSessionService.cancel(sessionId))
 
+ipcMain.handle('codex:project-monitor:snapshot', async (): Promise<CodexProjectMonitorSnapshot> => refreshCodexProjectMonitor(false))
+
 ipcMain.handle('codex:sites:list', async (): Promise<CodexSite[]> => codexSiteService.list())
 
 ipcMain.handle('codex:sites:create', async (_event, input: CodexSiteCreateInput): Promise<CodexSite> => codexSiteService.create(input))
@@ -8051,6 +8209,7 @@ app.whenReady().then(async () => {
   installApplicationMenu()
   const openedAsHidden = app.isPackaged && app.getLoginItemSettings().wasOpenedAsHidden
   createWindow(!openedAsHidden)
+  void refreshCodexProjectMonitor(false).catch((error) => console.warn('Initial Codex project monitor check skipped', error))
   startServiceMonitorScheduler()
   resourceMonitorService.start()
   startStorageGovernanceScheduler()

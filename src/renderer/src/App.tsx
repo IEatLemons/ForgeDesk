@@ -96,6 +96,7 @@ import type {
   AiRuntimeStatus,
   CodexAccountRegistryView,
   CodexApiServiceView,
+  CodexUncommittedAlert,
   AiConflictSuggestion,
   CliEnvironmentIssue,
   CliEnvironmentRepairResult,
@@ -143,6 +144,7 @@ import type {
   OaSettingsView,
   Project,
   ProjectBranchTag,
+  ProjectGroup,
   ProjectCloudflareSettings,
   ProjectFirebaseReleaseSettings,
   ProjectGitSummary,
@@ -384,10 +386,11 @@ import { OverviewDashboard } from './overview-dashboard'
 import { MarketNewsDashboard } from './market-news-dashboard'
 import { SystemMonitorPanel } from './system-monitor-panel'
 import { SystemInfoPanel } from './system-info-panel'
-import { AppTitleBar } from './app-titlebar'
+import { AppSystemMonitorStatus, AppTitleBar } from './app-titlebar'
 import { appModeChangedEvent, isFullAppMode, readStoredAppMode, writeStoredAppMode, type AppMode } from './app-mode'
 import { AppModeSwitcher } from './app-mode-switcher'
 import { ModuleBackButton } from './module-navigation'
+import { countRunningProjectGitTaskLogs, filterProjectGitTaskLogs, getProjectGitTaskStatusMeta } from './project-git-task-log-view'
 import type { ResolvedTheme, ThemePreference } from './app-theme'
 
 type ImportForm = {
@@ -1350,16 +1353,24 @@ function SystemLogDrawer({
 }
 
 function AppStatusBar({
+  appMode,
   summary,
+  projectGitTaskCount,
+  projectGitTaskRunningCount,
   refreshing,
   showQuickBuildButton,
   quickBuildState,
   quickBuildTooltip,
   versionLabel,
   onQuickBuild,
-  onOpenLogs
+  onOpenLogs,
+  onOpenSystemMonitor,
+  onOpenProjectGitTasks
 }: {
+  appMode: AppMode
   summary: ReturnType<typeof createSystemLogSummary>
+  projectGitTaskCount: number
+  projectGitTaskRunningCount: number
   refreshing: boolean
   showQuickBuildButton: boolean
   quickBuildState: QuickBuildState
@@ -1367,6 +1378,8 @@ function AppStatusBar({
   versionLabel: string
   onQuickBuild: () => void
   onOpenLogs: () => void
+  onOpenSystemMonitor: () => void
+  onOpenProjectGitTasks: () => void
 }): JSX.Element {
   const latest = summary.latest
   const level = summary.error > 0 ? 'error' : summary.warning > 0 ? 'warning' : latest?.level ?? 'success'
@@ -1387,7 +1400,13 @@ function AppStatusBar({
       <button type="button" className="app-status-bar-item" onClick={onOpenLogs}>
         <span>{issueLabel}</span>
       </button>
+      <button type="button" className="app-status-bar-item" onClick={onOpenProjectGitTasks}>
+        <Badge status={projectGitTaskRunningCount > 0 ? 'processing' : 'default'} />
+        <BranchesOutlined />
+        <span>Git 任务 {projectGitTaskCount}{projectGitTaskRunningCount > 0 ? `（${projectGitTaskRunningCount} 执行中）` : ''}</span>
+      </button>
       <span className="app-status-bar-spacer" />
+      <AppSystemMonitorStatus appMode={appMode} onOpenSystemMonitor={onOpenSystemMonitor} />
       {showQuickBuildButton ? (
         <Tooltip title={quickBuildTooltip} placement="topRight">
           <button type="button" className={`app-status-bar-item app-status-bar-quick-build is-${quickBuildState.status}`} onClick={onQuickBuild}>
@@ -14010,7 +14029,7 @@ function ProjectCard({
 }
 
 type ProjectGitListAction = 'fetch' | 'push' | 'merge'
-type ProjectGitTaskStatus = 'running' | 'success' | 'failed' | 'skipped' | 'cancelled'
+type ProjectGitTaskStatus = 'running' | 'success' | 'failed' | 'skipped' | 'cancelled' | 'interrupted'
 
 type ProjectGitRepositoryTaskResult = {
   repositoryId: string
@@ -14055,26 +14074,6 @@ function getProjectGitActionLabel(action: ProjectGitListAction): string {
   return '合并'
 }
 
-function getProjectGitTaskStatusMeta(status: ProjectGitTaskStatus): { label: string; color: string; badgeStatus: 'success' | 'processing' | 'default' | 'error' | 'warning' } {
-  if (status === 'running') {
-    return { label: '执行中', color: 'blue', badgeStatus: 'processing' }
-  }
-
-  if (status === 'success') {
-    return { label: '成功', color: 'green', badgeStatus: 'success' }
-  }
-
-  if (status === 'skipped') {
-    return { label: '跳过', color: 'default', badgeStatus: 'default' }
-  }
-
-  if (status === 'cancelled') {
-    return { label: '已终止', color: 'orange', badgeStatus: 'warning' }
-  }
-
-  return { label: '失败', color: 'red', badgeStatus: 'error' }
-}
-
 function formatGitTaskOutput(value?: string): string {
   const text = value?.trim() ?? ''
 
@@ -14108,6 +14107,13 @@ function groupPushTargetsByBranch(pushTargets: Repository['pushTargets']): Array
 
 function createProjectGitTaskLogId(projectId: string, action: ProjectGitListAction): string {
   return `${projectId}-${action}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function upsertProjectGitTaskLogList(current: ProjectGitTaskLog[], log: ProjectGitTaskLog): ProjectGitTaskLog[] {
+  const next = current.filter((item) => item.id !== log.id)
+  next.push(log)
+  next.sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))
+  return next
 }
 
 function ProjectLogTreePanel({
@@ -15029,7 +15035,9 @@ function ProjectOverview({
   onOpenSettings,
   onOpenAiTools,
   onOpenTerminalRequest,
-  resolvedTheme
+  resolvedTheme,
+  onOpenProjectGitTasks,
+  onRefreshProjectGitTasks
 }: {
   mode: AppMode
   focusProjectId: string | null
@@ -15038,6 +15046,8 @@ function ProjectOverview({
   onOpenAiTools: () => void
   onOpenTerminalRequest: (request: Omit<TerminalOpenRequest, 'requestId'>) => void
   resolvedTheme: ResolvedTheme
+  onOpenProjectGitTasks: () => void
+  onRefreshProjectGitTasks: () => Promise<void>
 }): JSX.Element {
   const {
     projects,
@@ -15050,6 +15060,7 @@ function ProjectOverview({
     setProjectFavorite,
     setProjectSummary,
     setSelectedProjectId,
+    loadWorkspace,
     updateRepository
   } = useForgeDeskStore()
   const isSimpleMode = mode === 'simple'
@@ -15080,8 +15091,6 @@ function ProjectOverview({
   const [projectPlaneAvailability, setProjectPlaneAvailability] = useState<Record<string, boolean>>({})
   const [selectedProjectRowIds, setSelectedProjectRowIds] = useState<string[]>([])
   const [runningProjectGitTaskKeys, setRunningProjectGitTaskKeys] = useState<string[]>([])
-  const [projectGitTaskLogs, setProjectGitTaskLogs] = useState<ProjectGitTaskLog[]>([])
-  const [projectGitTaskDrawerOpen, setProjectGitTaskDrawerOpen] = useState(false)
   const [projectAiBinding, setProjectAiBinding] = useState<ProjectAiBinding | null>(null)
   const [projectAiProvider, setProjectAiProvider] = useState<AiProviderRuntimeSnapshot | null>(null)
   const [projectAiStatusLoading, setProjectAiStatusLoading] = useState(false)
@@ -15094,7 +15103,14 @@ function ProjectOverview({
   const terminalRequestSeqRef = useRef(0)
   const projectWorkspaceStatusRefreshRef = useRef(false)
   const projectRepositoriesRef = useRef<Repository[]>([])
-  const sortedProjects = useMemo(() => sortProjectsForDisplay(projects), [projects])
+  const [projectGroups, setProjectGroups] = useState<ProjectGroup[]>([])
+  const [projectGroupModalOpen, setProjectGroupModalOpen] = useState(false)
+  const [editingProjectGroupId, setEditingProjectGroupId] = useState<string | null>(null)
+  const [projectGroupName, setProjectGroupName] = useState('')
+  const sortedProjects = useMemo(() => {
+    const groupRanks = new Map(projectGroups.map((group, index) => [group.id, index]))
+    return sortProjectsForDisplay(projects).sort((left, right) => (groupRanks.get(left.groupId ?? '') ?? 9999) - (groupRanks.get(right.groupId ?? '') ?? 9999))
+  }, [projectGroups, projects])
   const favoriteProjectCount = projects.filter((project) => project.isFavorite).length
   const selectedProject = projects.find((project) => project.id === detailProjectId) ?? null
   const selectedProjectRows = projects.filter((project) => selectedProjectRowIds.includes(project.id))
@@ -15103,7 +15119,6 @@ function ProjectOverview({
   const listCommitInitialRepository = listCommitProjectRepositories.find((repository) => repository.hasChanges) ?? listCommitProjectRepositories[0] ?? null
   const listMergeProject = projects.find((project) => project.id === listMergeProjectId) ?? null
   const listMergeProjectRepositories = listMergeProject ? getProjectRepositories(listMergeProject) : []
-  const runningProjectTaskCount = runningProjectGitTaskKeys.length
   const projectRepositories = selectedProject ? getProjectRepositories(selectedProject) : []
   const projectRepositoryIds = projectRepositories.map((repository) => repository.id).join('|')
   const hasBoundProjectServices = selectedProject ? (projectServiceCounts[selectedProject.id] ?? 0) > 0 : false
@@ -15211,6 +15226,19 @@ function ProjectOverview({
     return cancelledProjectGitTaskIdsRef.current.has(taskId)
   }
 
+  async function isProjectGitTaskStopped(taskId: string): Promise<boolean> {
+    if (isProjectGitTaskCancelled(taskId)) {
+      return true
+    }
+
+    if (!window.forgeDesk) {
+      return true
+    }
+
+    const task = await window.forgeDesk.getProjectGitTask(taskId)
+    return !task || task.status !== 'running'
+  }
+
   function setProjectGitTaskRunning(projectId: string, action: ProjectGitListAction, running: boolean): void {
     const key = getProjectGitTaskKey(projectId, action)
 
@@ -15223,18 +15251,29 @@ function ProjectOverview({
     })
   }
 
-  function upsertProjectGitTaskLog(log: ProjectGitTaskLog): void {
-    setProjectGitTaskLogs((current) => {
-      const index = current.findIndex((item) => item.id === log.id)
+  useEffect(() => {
+    if (!window.forgeDesk) {
+      return undefined
+    }
 
-      if (index === -1) {
-        return [log, ...current].slice(0, 200)
+    return window.forgeDesk.onProjectGitTaskUpdated((task) => {
+      if (task.status === 'cancelled' || task.status === 'interrupted') {
+        cancelledProjectGitTaskIdsRef.current.add(task.id)
+        setProjectGitTaskRunning(task.projectId, task.action, false)
       }
-
-      const nextLogs = [...current]
-      nextLogs[index] = log
-      return nextLogs
     })
+  }, [])
+
+  async function persistProjectGitTaskLog(log: ProjectGitTaskLog): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    try {
+      await window.forgeDesk.saveProjectGitTask(log)
+    } catch (error) {
+      message.warning(getErrorMessage(error, '保存 Git 任务日志失败'))
+    }
   }
 
   async function refreshProjectAfterGitTask(projectId: string): Promise<void> {
@@ -15252,31 +15291,41 @@ function ProjectOverview({
     }
   }
 
-  async function fetchProjectRepositories(project: Project, projectRepositories: Repository[], taskId: string): Promise<ProjectGitRepositoryTaskResult[]> {
+  async function fetchProjectRepositories(
+    project: Project,
+    projectRepositories: Repository[],
+    taskId: string,
+    onRepositoryResult: (result: ProjectGitRepositoryTaskResult) => Promise<void>
+  ): Promise<ProjectGitRepositoryTaskResult[]> {
     if (!window.forgeDesk) {
       return []
     }
 
     return Promise.all(
       projectRepositories.filter((repository) => repository.available).map(async (repository) => {
+        let result: ProjectGitRepositoryTaskResult
+
         try {
           const syncedRepository = await window.forgeDesk.fetchRepositoryRemote(repository.id, undefined, taskId)
           updateRepository(syncedRepository)
 
-          return {
+          result = {
             repositoryId: repository.id,
             repositoryName: repository.name,
             ok: true,
             message: 'Fetch 完成'
           }
         } catch (error) {
-          return {
+          result = {
             repositoryId: repository.id,
             repositoryName: repository.name,
             ok: false,
-            message: getErrorMessage(error, `${project.name} / ${repository.name} Fetch 失败`)
+            message: formatGitTaskOutput(getErrorMessage(error, `${project.name} / ${repository.name} Fetch 失败`))
           }
         }
+
+        await onRepositoryResult(result)
+        return result
       })
     )
   }
@@ -15285,7 +15334,8 @@ function ProjectOverview({
     project: Project,
     projectRepositories: Repository[],
     taskId: string,
-    request?: ProjectGitPushRequest
+    request: ProjectGitPushRequest | undefined,
+    onRepositoryResult: (result: ProjectGitRepositoryTaskResult) => Promise<void>
   ): Promise<ProjectGitRepositoryTaskResult[]> {
     if (!window.forgeDesk) {
       return []
@@ -15304,7 +15354,7 @@ function ProjectOverview({
         const errors: string[] = []
 
         for (const group of branchGroups) {
-          if (isProjectGitTaskCancelled(taskId)) {
+          if (await isProjectGitTaskStopped(taskId)) {
             break
           }
 
@@ -15326,19 +15376,29 @@ function ProjectOverview({
 
         const ok = errors.length === 0
 
-        return {
+        const result = {
           repositoryId: repository.id,
           repositoryName: repository.name,
           ok,
-          message: ok ? `已推送 ${branchGroups.map((group) => `${group.branch} -> ${group.remotes.join(', ')}`).join('；')}` : errors.join('\n'),
+          message: ok
+            ? `已推送 ${branchGroups.map((group) => `${group.branch} -> ${group.remotes.join(', ')}`).join('；')}`
+            : formatGitTaskOutput(errors.join('\n')),
           stdout: formatGitTaskOutput(outputs.join('\n')),
           stderr: formatGitTaskOutput(errors.join('\n'))
         }
+
+        await onRepositoryResult(result)
+        return result
       })
     )
   }
 
-  async function runProjectGitTask(project: Project, action: 'fetch' | 'push', pushRequest?: ProjectGitPushRequest): Promise<void> {
+  async function runProjectGitTask(
+    project: Project,
+    action: 'fetch' | 'push',
+    pushRequest?: ProjectGitPushRequest,
+    fetchRepositoryId?: string
+  ): Promise<void> {
     if (!window.forgeDesk) {
       message.warning('请在 ForgeDesk 桌面应用中执行 Git 操作')
       return
@@ -15347,7 +15407,7 @@ function ProjectOverview({
     const taskId = createProjectGitTaskLogId(project.id, action)
     const startedAt = new Date().toISOString()
     const actionLabel = getProjectGitActionLabel(action)
-    const projectRepositories = getProjectRepositories(project)
+    const projectRepositories = getProjectRepositories(project).filter((repository) => !fetchRepositoryId || repository.id === fetchRepositoryId)
     const runningLog: ProjectGitTaskLog = {
       id: taskId,
       projectId: project.id,
@@ -15360,19 +15420,35 @@ function ProjectOverview({
     }
 
     cancelledProjectGitTaskIdsRef.current.delete(taskId)
-    upsertProjectGitTaskLog(runningLog)
-    setProjectGitTaskDrawerOpen(true)
+    await persistProjectGitTaskLog(runningLog)
+    onOpenProjectGitTasks()
     setProjectGitTaskRunning(project.id, action, true)
 
     try {
+      const completedRepositoryResults: ProjectGitRepositoryTaskResult[] = []
+      let progressWrite = Promise.resolve()
+      const persistRepositoryResult = async (result: ProjectGitRepositoryTaskResult): Promise<void> => {
+        completedRepositoryResults.push(result)
+        progressWrite = progressWrite.then(async () => {
+          if (await isProjectGitTaskStopped(taskId)) {
+            return
+          }
+
+          await persistProjectGitTaskLog({
+            ...runningLog,
+            repositoryResults: [...completedRepositoryResults]
+          })
+        })
+        await progressWrite
+      }
       const repositoryResults =
         projectRepositories.length === 0
           ? []
           : action === 'fetch'
-            ? await fetchProjectRepositories(project, projectRepositories, taskId)
-            : await pushProjectRepositories(project, projectRepositories, taskId, pushRequest)
+            ? await fetchProjectRepositories(project, projectRepositories, taskId, persistRepositoryResult)
+            : await pushProjectRepositories(project, projectRepositories, taskId, pushRequest, persistRepositoryResult)
 
-      if (isProjectGitTaskCancelled(taskId)) {
+      if (await isProjectGitTaskStopped(taskId)) {
         return
       }
 
@@ -15397,11 +15473,11 @@ function ProjectOverview({
         await refreshProjectAfterGitTask(project.id)
       }
 
-      if (isProjectGitTaskCancelled(taskId)) {
+      if (await isProjectGitTaskStopped(taskId)) {
         return
       }
 
-      upsertProjectGitTaskLog({
+      await persistProjectGitTaskLog({
         ...runningLog,
         status,
         finishedAt: new Date().toISOString(),
@@ -15417,69 +15493,22 @@ function ProjectOverview({
         message.warning(`${project.name} ${summary}`)
       }
     } catch (error) {
-      if (isProjectGitTaskCancelled(taskId)) {
+      if (await isProjectGitTaskStopped(taskId)) {
         return
       }
 
       const errorMessage = getErrorMessage(error, `${project.name} ${actionLabel} 失败`)
-      upsertProjectGitTaskLog({
+      await persistProjectGitTaskLog({
         ...runningLog,
         status: 'failed',
         finishedAt: new Date().toISOString(),
-        summary: errorMessage,
+        summary: formatGitTaskOutput(errorMessage),
         repositoryResults: []
       })
       message.error(errorMessage)
     } finally {
       setProjectGitTaskRunning(project.id, action, false)
     }
-  }
-
-  async function cancelProjectGitTask(taskId: string): Promise<void> {
-    const task = projectGitTaskLogs.find((item) => item.id === taskId)
-
-    if (!task || task.status !== 'running') {
-      return
-    }
-
-    cancelledProjectGitTaskIdsRef.current.add(taskId)
-    try {
-      await window.forgeDesk?.cancelRepositoryGitOperation(taskId)
-    } catch (error) {
-      message.warning(getErrorMessage(error, '终止 Git 任务时未能立即结束进程'))
-    }
-
-    upsertProjectGitTaskLog({
-      ...task,
-      finishedAt: new Date().toISOString(),
-      status: 'cancelled',
-      summary: `${getProjectGitActionLabel(task.action)} 已终止`
-    })
-    setProjectGitTaskRunning(task.projectId, task.action, false)
-  }
-
-  async function deleteProjectGitTask(taskId: string): Promise<void> {
-    const task = projectGitTaskLogs.find((item) => item.id === taskId)
-
-    if (!task) {
-      return
-    }
-
-    if (task.status === 'running') {
-      await cancelProjectGitTask(taskId)
-    }
-
-    setProjectGitTaskLogs((current) => current.filter((item) => item.id !== taskId))
-  }
-
-  function clearProjectGitTaskLogs(): void {
-    const runningTasks = projectGitTaskLogs.filter((task) => task.status === 'running')
-    runningTasks.forEach((task) => {
-      cancelledProjectGitTaskIdsRef.current.add(task.id)
-      void window.forgeDesk?.cancelRepositoryGitOperation(task.id)
-      setProjectGitTaskRunning(task.projectId, task.action, false)
-    })
-    setProjectGitTaskLogs([])
   }
 
   async function runSelectedProjectsGitTask(action: 'fetch' | 'push'): Promise<void> {
@@ -15491,12 +15520,14 @@ function ProjectOverview({
     await Promise.all(selectedProjectRows.map((project) => runProjectGitTask(project, action)))
   }
 
-  function logProjectMergeResult(project: Project, repository: Repository, result: GitOperationResult): void {
+  async function logProjectMergeResult(project: Project, repository: Repository, result: GitOperationResult): Promise<void> {
     const now = new Date().toISOString()
     const status: ProjectGitTaskStatus = result.ok ? 'success' : 'failed'
-    const summary = result.ok ? `已合并 ${repository.name}` : result.stderr || result.stdout || `${repository.name} 合并未完成`
+    const summary = result.ok
+      ? `已合并 ${repository.name}`
+      : formatGitTaskOutput(result.stderr || result.stdout || `${repository.name} 合并未完成`)
 
-    upsertProjectGitTaskLog({
+    await persistProjectGitTaskLog({
       id: createProjectGitTaskLogId(project.id, 'merge'),
       projectId: project.id,
       projectName: project.name,
@@ -15655,6 +15686,78 @@ function ProjectOverview({
   }, [projects])
 
   useEffect(() => {
+    let active = true
+    window.forgeDesk?.listProjectGroups().then((groups) => {
+      if (active) setProjectGroups(groups)
+    }).catch((error) => {
+      if (active) message.warning(`读取项目分组失败：${getErrorMessage(error)}`)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  function openProjectGroupEditor(group?: ProjectGroup): void {
+    setEditingProjectGroupId(group?.id ?? null)
+    setProjectGroupName(group?.name ?? '')
+    setProjectGroupModalOpen(true)
+  }
+
+  async function saveProjectGroupChanges(): Promise<void> {
+    if (!window.forgeDesk) return
+    try {
+      const saved = await window.forgeDesk.saveProjectGroup({ id: editingProjectGroupId ?? undefined, name: projectGroupName })
+      setProjectGroups((current) => {
+        const next = current.some((group) => group.id === saved.id) ? current.map((group) => group.id === saved.id ? saved : group) : [...current, saved]
+        return next.sort((left, right) => left.sortOrder - right.sortOrder)
+      })
+      setProjectGroupModalOpen(false)
+      setProjectGroupName('')
+      setEditingProjectGroupId(null)
+      message.success('项目分组已保存')
+    } catch (error) {
+      message.error(getErrorMessage(error, '保存项目分组失败'))
+    }
+  }
+
+  async function removeProjectGroup(group: ProjectGroup): Promise<void> {
+    if (!window.forgeDesk) return
+    try {
+      setProjectGroups(await window.forgeDesk.deleteProjectGroup(group.id))
+      await loadWorkspace()
+      message.success(`已删除分组“${group.name}”，项目已移到未分组`)
+    } catch (error) {
+      message.error(getErrorMessage(error, '删除项目分组失败'))
+    }
+  }
+
+  async function moveProjectGroup(group: ProjectGroup, offset: number): Promise<void> {
+    if (!window.forgeDesk) return
+    const index = projectGroups.findIndex((item) => item.id === group.id)
+    const targetIndex = index + offset
+    if (index < 0 || targetIndex < 0 || targetIndex >= projectGroups.length) return
+    const ids = projectGroups.map((item) => item.id)
+    const [moved] = ids.splice(index, 1)
+    ids.splice(targetIndex, 0, moved)
+    try {
+      setProjectGroups(await window.forgeDesk.reorderProjectGroups(ids))
+    } catch (error) {
+      message.error(getErrorMessage(error, '调整分组顺序失败'))
+    }
+  }
+
+  async function changeProjectGroup(projectId: string, groupId: string | null): Promise<void> {
+    if (!window.forgeDesk) return
+    try {
+      await window.forgeDesk.setProjectGroup({ groupId, projectId })
+      await loadWorkspace()
+      setProjectGroups(await window.forgeDesk.listProjectGroups())
+    } catch (error) {
+      message.error(getErrorMessage(error, '更新项目分组失败'))
+    }
+  }
+
+  useEffect(() => {
     if (!selectedProject || projectRepositories.length === 0 || !window.forgeDesk) {
       return
     }
@@ -15736,23 +15839,15 @@ function ProjectOverview({
   }
 
   async function syncProjectRepository(targetRepository: Repository): Promise<void> {
-    if (!window.forgeDesk) {
+    if (!window.forgeDesk || !selectedProject) {
       return
     }
 
     setSyncingProjectRepositoryId(targetRepository.id)
 
     try {
-      const synced = await window.forgeDesk.fetchRepositoryRemote(targetRepository.id)
-      updateRepository(synced)
-      setProjectGitRepositoryId(synced.id)
-      setProjectGitRefreshToken((current) => current + 1)
-      const nextSummary = await window.forgeDesk.analyzeProjectGit(synced.projectId)
-      setProjectSummary(nextSummary)
-      setAnalysisGitError(null)
-      message.success('远端已 Fetch，Git 数据已刷新')
-    } catch (error) {
-      setAnalysisGitError(createGitErrorGuidance(error, '同步远端'))
+      setProjectGitRepositoryId(targetRepository.id)
+      await runProjectGitTask(selectedProject, 'fetch', undefined, targetRepository.id)
     } finally {
       setSyncingProjectRepositoryId(null)
     }
@@ -15861,7 +15956,6 @@ function ProjectOverview({
 
     setSelectedProjectRowIds((current) => current.filter((item) => item !== projectId))
     setRunningProjectGitTaskKeys((current) => current.filter((item) => !item.startsWith(`${projectId}:`)))
-    setProjectGitTaskLogs((current) => current.filter((log) => log.projectId !== projectId))
     setProjectRepositoryCommitCounts((current) => omitRecordKeys(current, deletedRepositoryIds))
     setProjectServiceCounts((current) => omitRecordKeys(current, new Set([projectId])))
     setProjectPlaneAvailability((current) => omitRecordKeys(current, new Set([projectId])))
@@ -15894,6 +15988,7 @@ function ProjectOverview({
         try {
           await deleteProject(project.id)
           removeDeletedProjectFromLocalLists(project.id)
+          await onRefreshProjectGitTasks()
           setProjectSettingsDrawerOpen(false)
           message.success('项目已删除')
         } catch (error) {
@@ -15939,6 +16034,20 @@ function ProjectOverview({
             {project.workspacePath}
           </Typography.Text>
         </Space>
+      )
+    },
+    {
+      title: '分组',
+      key: 'group',
+      width: 170,
+      render: (_, project) => (
+        <Select
+          size="small"
+          value={project.groupId ?? '__ungrouped__'}
+          options={[{ label: '未分组', value: '__ungrouped__' }, ...projectGroups.map((group) => ({ label: group.name, value: group.id }))]}
+          onClick={(event) => event.stopPropagation()}
+          onChange={(value: string) => void changeProjectGroup(project.id, value === '__ungrouped__' ? null : value)}
+        />
       )
     },
     {
@@ -16070,6 +16179,20 @@ function ProjectOverview({
       )
     },
     {
+      title: '分组',
+      key: 'group',
+      width: 150,
+      render: (_, project) => (
+        <Select
+          size="small"
+          value={project.groupId ?? '__ungrouped__'}
+          options={[{ label: '未分组', value: '__ungrouped__' }, ...projectGroups.map((group) => ({ label: group.name, value: group.id }))]}
+          onClick={(event) => event.stopPropagation()}
+          onChange={(value: string) => void changeProjectGroup(project.id, value === '__ungrouped__' ? null : value)}
+        />
+      )
+    },
+    {
       title: '状态',
       key: 'status',
       width: 340,
@@ -16177,6 +16300,34 @@ function ProjectOverview({
 
   return (
     <section className="workspace-section project-workspace">
+      <Modal
+        open={projectGroupModalOpen}
+        title="项目分组"
+        okText="保存"
+        cancelText="取消"
+        onCancel={() => setProjectGroupModalOpen(false)}
+        onOk={() => void saveProjectGroupChanges()}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Space.Compact style={{ width: '100%' }}>
+            <Input placeholder="分组名称" value={projectGroupName} onChange={(event) => setProjectGroupName(event.target.value)} onPressEnter={() => void saveProjectGroupChanges()} />
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => void saveProjectGroupChanges()}>{editingProjectGroupId ? '保存修改' : '新增分组'}</Button>
+          </Space.Compact>
+          {projectGroups.length > 0 ? projectGroups.map((group, index) => (
+            <Space key={group.id} style={{ width: '100%', justifyContent: 'space-between' }}>
+              <Space><FolderOpenOutlined /><Typography.Text>{group.name}</Typography.Text><Tag>{group.projectCount} 个项目</Tag></Space>
+              <Space size={4}>
+                <Button size="small" disabled={index === 0} onClick={() => void moveProjectGroup(group, -1)}>上移</Button>
+                <Button size="small" disabled={index === projectGroups.length - 1} onClick={() => void moveProjectGroup(group, 1)}>下移</Button>
+                <Button size="small" icon={<EditOutlined />} onClick={() => openProjectGroupEditor(group)}>编辑</Button>
+                <Popconfirm title={`删除分组“${group.name}”？`} description="项目会移动到未分组，不会删除项目。" onConfirm={() => void removeProjectGroup(group)}>
+                  <Button size="small" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
+              </Space>
+            </Space>
+          )) : <Typography.Text type="secondary">还没有自定义分组，项目将显示在未分组中。</Typography.Text>}
+        </Space>
+      </Modal>
       {!selectedProject ? (
         <div className="section-heading">
           <div>
@@ -16187,8 +16338,8 @@ function ProjectOverview({
           </div>
           <Space wrap>
             {!isSimpleMode ? (
-              <Button icon={<FileTextOutlined />} onClick={() => setProjectGitTaskDrawerOpen(true)}>
-                任务日志{runningProjectTaskCount > 0 ? `（${runningProjectTaskCount}）` : ''}
+              <Button icon={<FileTextOutlined />} onClick={onOpenProjectGitTasks}>
+                任务日志
               </Button>
             ) : null}
             <Button type="primary" icon={<PlusOutlined />} onClick={onCreateProject}>
@@ -16222,6 +16373,7 @@ function ProjectOverview({
                 </Space>
               </div>
               <Space wrap>
+                <Button icon={<FolderOpenOutlined />} onClick={() => openProjectGroupEditor()}>管理分组</Button>
                 {!isSimpleMode ? (
                   <>
                     <Button
@@ -16432,6 +16584,11 @@ function ProjectOverview({
               initialRepositoryId={selectedProjectGitRepository?.id}
               onClose={() => setMergeModalOpen(false)}
               onChanged={(repository) => selectedProject && refreshProjectGitData(selectedProject.id, repository)}
+              onOperationResult={(repository, result) => {
+                if (selectedProject) {
+                  void logProjectMergeResult(selectedProject, repository, result)
+                }
+              }}
             />
             <DeploymentApprovalModal
               open={approvalModalOpen}
@@ -16674,14 +16831,6 @@ function ProjectOverview({
           }
         }}
       />
-      <ProjectGitTaskLogDrawer
-        open={projectGitTaskDrawerOpen}
-        logs={projectGitTaskLogs}
-        onClose={() => setProjectGitTaskDrawerOpen(false)}
-        onCancel={cancelProjectGitTask}
-        onDelete={deleteProjectGitTask}
-        onClear={clearProjectGitTaskLogs}
-      />
     </section>
   )
 }
@@ -16692,33 +16841,85 @@ function ProjectGitTaskLogDrawer({
   onClose,
   onCancel,
   onDelete,
-  onClear
+  onClear,
+  onRefresh
 }: {
   open: boolean
   logs: ProjectGitTaskLog[]
   onClose: () => void
   onCancel: (taskId: string) => Promise<void>
   onDelete: (taskId: string) => Promise<void>
-  onClear: () => void
+  onClear: () => Promise<void>
+  onRefresh: () => Promise<void>
 }): JSX.Element {
-  const runningCount = logs.filter((log) => log.status === 'running').length
+  const [projectFilter, setProjectFilter] = useState('all')
+  const [actionFilter, setActionFilter] = useState<ProjectGitListAction | 'all'>('all')
+  const [statusFilter, setStatusFilter] = useState<ProjectGitTaskStatus | 'all'>('all')
+  const projectOptions = useMemo(
+    () => [{ label: '全部项目', value: 'all' }, ...Array.from(new Map(logs.map((log) => [log.projectId, log.projectName])).entries()).map(([value, label]) => ({ label, value }))],
+    [logs]
+  )
+  const visibleLogs = useMemo(
+    () => filterProjectGitTaskLogs(logs, { projectId: projectFilter, action: actionFilter, status: statusFilter }),
+    [actionFilter, logs, projectFilter, statusFilter]
+  )
+  const runningCount = visibleLogs.filter((log) => log.status === 'running').length
 
   return (
     <Drawer
-      title="项目 Git 任务"
+      title="Git 任务日志"
       open={open}
-      width={520}
+      width="min(760px, calc(100vw - 48px))"
       onClose={onClose}
       extra={
-        <Button size="small" icon={<DeleteOutlined />} disabled={logs.length === 0} onClick={onClear}>
-          清空
-        </Button>
+        <Space size={6}>
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => void onRefresh()}>
+            刷新
+          </Button>
+          <Popconfirm
+            title="清空 Git 任务日志？"
+            description="将删除当前保留的全部日志，运行中的任务会先请求终止。"
+            okText="清空"
+            cancelText="取消"
+            onConfirm={() => onClear()}
+          >
+            <Button size="small" danger icon={<DeleteOutlined />} disabled={logs.length === 0}>
+              清空
+            </Button>
+          </Popconfirm>
+        </Space>
       }
     >
       <Space direction="vertical" size={14} className="project-git-task-drawer">
         {runningCount > 0 ? <Alert type="info" showIcon message={`${runningCount} 个任务正在执行`} /> : null}
-        {logs.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有项目 Git 任务" /> : null}
-        {logs.map((log) => {
+        <Space wrap className="project-git-task-filters">
+          <Select value={projectFilter} options={projectOptions} onChange={setProjectFilter} style={{ minWidth: 180 }} />
+          <Segmented
+            value={actionFilter}
+            onChange={(value) => setActionFilter(value as ProjectGitListAction | 'all')}
+            options={[
+              { label: '全部操作', value: 'all' },
+              { label: 'Fetch', value: 'fetch' },
+              { label: '推送', value: 'push' },
+              { label: '合并', value: 'merge' }
+            ]}
+          />
+          <Segmented
+            value={statusFilter}
+            onChange={(value) => setStatusFilter(value as ProjectGitTaskStatus | 'all')}
+            options={[
+              { label: '全部状态', value: 'all' },
+              { label: '执行中', value: 'running' },
+              { label: '成功', value: 'success' },
+              { label: '失败', value: 'failed' },
+              { label: '跳过', value: 'skipped' },
+              { label: '已终止', value: 'cancelled' },
+              { label: '已中断', value: 'interrupted' }
+            ]}
+          />
+        </Space>
+        {visibleLogs.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={logs.length === 0 ? '还没有项目 Git 任务' : '没有匹配的 Git 任务'} /> : null}
+        {visibleLogs.map((log) => {
           const actionLabel = getProjectGitActionLabel(log.action)
           const statusMeta = getProjectGitTaskStatusMeta(log.status)
           const repositoryCount = log.repositoryResults.length
@@ -21237,7 +21438,7 @@ function PasswordGeneratorTool({ onBack }: { onBack: () => void }): JSX.Element 
 }
 
 function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppProps): JSX.Element {
-  const { loadingWorkspace, loadWorkspace, selectedProjectId, projects } = useForgeDeskStore()
+  const { loadingWorkspace, loadWorkspace, selectedProjectId, projects, setSelectedProjectId } = useForgeDeskStore()
   const [appMode, setAppMode] = useState<AppMode>(() => readStoredAppMode())
   const [activeKey, setActiveKey] = useState<AppActiveKey>(() => (readStoredAppMode() === 'simple' ? 'projects' : 'overview'))
   const usesCustomTitleBar = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
@@ -21250,6 +21451,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const [systemLogs, setSystemLogs] = useState<SystemLogEntry[]>([])
   const [systemLogDrawerOpen, setSystemLogDrawerOpen] = useState(false)
   const [systemLogFilter, setSystemLogFilter] = useState<SystemLogFilter>('all')
+  const [projectGitTaskLogs, setProjectGitTaskLogs] = useState<ProjectGitTaskLog[]>([])
+  const [projectGitTaskDrawerOpen, setProjectGitTaskDrawerOpen] = useState(false)
   const [deploymentRefreshActive, setDeploymentRefreshActive] = useState(false)
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateState>({
     status: 'idle',
@@ -21258,10 +21461,41 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const [appUpdateActionBusy, setAppUpdateActionBusy] = useState(false)
   const [appRuntimeInfo, setAppRuntimeInfo] = useState<AppRuntimeInfo | null>(null)
   const [quickBuildState, setQuickBuildState] = useState<QuickBuildState>(() => createInitialQuickBuildState())
+  const [codexMonitorFocusAlert, setCodexMonitorFocusAlert] = useState<CodexUncommittedAlert | null>(null)
   const terminalOpenRequestIdRef = useRef(0)
   const quickBuildStateRef = useRef(quickBuildState)
   const systemLogSummary = useMemo(() => createSystemLogSummary(systemLogs), [systemLogs])
+  const projectGitTaskRunningCount = useMemo(() => countRunningProjectGitTaskLogs(projectGitTaskLogs), [projectGitTaskLogs])
   const isSimpleMode = !isFullAppMode(appMode)
+
+  useEffect(() => {
+    if (!window.forgeDesk) {
+      return undefined
+    }
+
+    let mounted = true
+
+    window.forgeDesk.listProjectGitTasks().then((tasks) => {
+      if (mounted) {
+        setProjectGitTaskLogs(tasks)
+      }
+    }).catch((error) => {
+      if (mounted) {
+        message.warning(getErrorMessage(error, '读取 Git 任务日志失败'))
+      }
+    })
+
+    const unsubscribe = window.forgeDesk.onProjectGitTaskUpdated((task) => {
+      if (mounted) {
+        setProjectGitTaskLogs((current) => upsertProjectGitTaskLogList(current, task))
+      }
+    })
+
+    return () => {
+      mounted = false
+      unsubscribe()
+    }
+  }, [])
 
   useEffect(() => {
     const syncAppMode = (): void => setAppMode(readStoredAppMode())
@@ -21280,6 +21514,15 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       setActiveKey('projects')
     }
   }, [activeKey, appMode])
+
+  useEffect(() => {
+    if (!window.forgeDesk) return undefined
+    return window.forgeDesk.onCodexMonitorFocus((alert) => {
+      setCodexMonitorFocusAlert(alert)
+      if (appMode === 'simple') setAppMode(writeStoredAppMode('full'))
+      setActiveKey('codex-sessions')
+    })
+  }, [appMode])
 
   useEffect(() => {
     let cancelled = false
@@ -21544,6 +21787,11 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     setActiveKey('ai-tools')
   }
 
+  function openForgeProjectFromCodex(projectId: string): void {
+    setSelectedProjectId(projectId)
+    setActiveKey('projects')
+  }
+
   function openSettingsModule(module: SettingsModuleKey): void {
     setSettingsInitialModule(module)
     setActiveKey('settings')
@@ -21707,6 +21955,66 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     message.success('正在打开新版本 ForgeDesk')
   }
 
+  async function refreshProjectGitTaskLogs(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    try {
+      setProjectGitTaskLogs(await window.forgeDesk.listProjectGitTasks())
+    } catch (error) {
+      message.warning(getErrorMessage(error, '刷新 Git 任务日志失败'))
+    }
+  }
+
+  async function cancelGlobalProjectGitTask(taskId: string): Promise<void> {
+    const task = projectGitTaskLogs.find((item) => item.id === taskId)
+
+    if (!task || task.status !== 'running' || !window.forgeDesk) {
+      return
+    }
+
+    try {
+      await window.forgeDesk.cancelRepositoryGitOperation(taskId)
+    } catch (error) {
+      message.warning(getErrorMessage(error, '终止 Git 任务时未能立即结束进程'))
+    }
+
+    await window.forgeDesk.saveProjectGitTask({
+      ...task,
+      status: 'cancelled',
+      finishedAt: new Date().toISOString(),
+      summary: `${getProjectGitActionLabel(task.action)} 已终止`
+    })
+  }
+
+  async function deleteGlobalProjectGitTask(taskId: string): Promise<void> {
+    const task = projectGitTaskLogs.find((item) => item.id === taskId)
+
+    if (!task || !window.forgeDesk) {
+      return
+    }
+
+    if (task.status === 'running') {
+      await cancelGlobalProjectGitTask(taskId)
+    }
+
+    await window.forgeDesk.deleteProjectGitTask(taskId)
+    setProjectGitTaskLogs((current) => current.filter((item) => item.id !== taskId))
+  }
+
+  async function clearGlobalProjectGitTasks(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    const runningTasks = projectGitTaskLogs.filter((task) => task.status === 'running')
+
+    await Promise.all(runningTasks.map((task) => cancelGlobalProjectGitTask(task.id)))
+    await window.forgeDesk.clearProjectGitTasks()
+    setProjectGitTaskLogs([])
+  }
+
   function appendSystemLog(entry: SystemLogInput): void {
     setSystemLogs((current) => [createSystemLogEntry(entry), ...current].slice(0, 300))
   }
@@ -21726,9 +22034,23 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       onClear={clearSystemLogs}
     />
   )
+  const projectGitTaskDrawer = (
+    <ProjectGitTaskLogDrawer
+      open={projectGitTaskDrawerOpen}
+      logs={projectGitTaskLogs}
+      onClose={() => setProjectGitTaskDrawerOpen(false)}
+      onCancel={cancelGlobalProjectGitTask}
+      onDelete={deleteGlobalProjectGitTask}
+      onClear={clearGlobalProjectGitTasks}
+      onRefresh={refreshProjectGitTaskLogs}
+    />
+  )
   const appStatusBar = (
     <AppStatusBar
+      appMode={appMode}
       summary={systemLogSummary}
+      projectGitTaskCount={projectGitTaskLogs.length}
+      projectGitTaskRunningCount={projectGitTaskRunningCount}
       refreshing={deploymentRefreshActive}
       showQuickBuildButton={showQuickBuildButton}
       quickBuildState={quickBuildState}
@@ -21736,6 +22058,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       versionLabel={appVersionLabel}
       onQuickBuild={() => startQuickBuild().catch((error) => message.error(getErrorMessage(error, '快速构建启动失败')))}
       onOpenLogs={() => setSystemLogDrawerOpen(true)}
+      onOpenSystemMonitor={() => setActiveKey('system-monitor')}
+      onOpenProjectGitTasks={() => setProjectGitTaskDrawerOpen(true)}
     />
   )
   const appUpdateBanner = (
@@ -21762,7 +22086,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   if (activeKey === 'ai-chat') {
     return (
       <>
-        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenSystemMonitor={() => setActiveKey('system-monitor')} />
+        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} />
         {appUpdateBanner}
         {appModeSwitcherFallback}
         <AiChatPanel
@@ -21771,6 +22095,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           onOpenAiSettings={() => openSettingsModule('ai')}
         />
         {systemLogDrawer}
+        {projectGitTaskDrawer}
         {appStatusBar}
       </>
     )
@@ -21779,11 +22104,12 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   if (activeKey === 'codex-sessions') {
     return (
       <>
-        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenSystemMonitor={() => setActiveKey('system-monitor')} />
+        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} />
         {appUpdateBanner}
         {appModeSwitcherFallback}
-        <CodexSessionManagerPanel usesCustomTitleBar={usesCustomTitleBar} onBack={() => setActiveKey('overview')} />
+        <CodexSessionManagerPanel focusAlert={codexMonitorFocusAlert} usesCustomTitleBar={usesCustomTitleBar} onBack={() => setActiveKey('overview')} onOpenForgeProject={openForgeProjectFromCodex} />
         {systemLogDrawer}
+        {projectGitTaskDrawer}
         {appStatusBar}
       </>
     )
@@ -21792,7 +22118,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   if (activeKey === 'terminal') {
     return (
       <>
-        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenSystemMonitor={() => setActiveKey('system-monitor')} />
+        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} />
         {appUpdateBanner}
         {appModeSwitcherFallback}
         <Layout className={`terminal-mode-shell${usesCustomTitleBar ? ' terminal-mode-shell-with-titlebar' : ''}`}>
@@ -21835,6 +22161,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           />
         </Drawer>
         {systemLogDrawer}
+        {projectGitTaskDrawer}
         {appStatusBar}
       </>
     )
@@ -21842,7 +22169,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
   return (
     <>
-      <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenSystemMonitor={() => setActiveKey('system-monitor')} />
+      <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} />
       {appUpdateBanner}
       <Layout className={`app-shell${usesCustomTitleBar ? ' app-shell-with-titlebar' : ''}${isSimpleMode ? ' app-shell-simple' : ''}`}>
         {appModeSwitcherFallback}
@@ -21924,6 +22251,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
                 onOpenAiTools={() => setActiveKey('ai-tools')}
                 onOpenTerminalRequest={openTerminalRequest}
                 resolvedTheme={resolvedTheme}
+                onOpenProjectGitTasks={() => setProjectGitTaskDrawerOpen(true)}
+                onRefreshProjectGitTasks={refreshProjectGitTaskLogs}
               />
             )}
             {!loadingWorkspace && activeKey === 'ai-tools' && (
@@ -21937,6 +22266,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           </Layout.Content>
         </Layout>
         {systemLogDrawer}
+        {projectGitTaskDrawer}
         {appStatusBar}
         <ReleasePublishTaskDock />
       </Layout>

@@ -26,15 +26,18 @@ import {
 import { Badge, Button, Empty, Input, Layout, Select, Space, Spin, Tag, Tooltip, Typography, message } from 'antd'
 import type { ClipboardEvent as ReactClipboardEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { CodexConversationItem, CodexSessionDetail, CodexSessionEvent, CodexSessionSummary, CodexSessionsSnapshot } from './data'
+import type { CodexConversationItem, CodexProjectMonitorSnapshot, CodexSessionDetail, CodexSessionEvent, CodexSessionSummary, CodexSessionsSnapshot, CodexUncommittedAlert } from './data'
 import { CodexProjectMonitor, type CodexProjectGroup } from './codex-project-monitor'
 import { CodexSitesPanel } from './codex-sites-panel'
 import { getErrorMessage } from './error-messages'
 import { ModuleBackButton } from './module-navigation'
+import { useForgeDeskStore } from './store'
 
 type CodexSessionManagerPanelProps = {
   onBack: () => void
   usesCustomTitleBar: boolean
+  onOpenForgeProject?: (projectId: string) => void
+  focusAlert?: CodexUncommittedAlert | null
 }
 
 const statusLabels: Record<CodexSessionSummary['status'], string> = {
@@ -65,6 +68,30 @@ function emptySnapshot(): CodexSessionsSnapshot {
     running: 0,
     sessions: [],
     source: ''
+  }
+}
+
+function snapshotFromMonitor(snapshot: CodexProjectMonitorSnapshot): CodexSessionsSnapshot {
+  return {
+    aborted: snapshot.projects.reduce((total, project) => total + project.sessions.filter((session) => session.status === 'aborted').length, 0),
+    available: snapshot.available,
+    checkedAt: snapshot.checkedAt,
+    completed: snapshot.projects.reduce((total, project) => total + project.sessions.filter((session) => session.status === 'completed').length, 0),
+    error: snapshot.error,
+    projects: snapshot.projects.map((project) => {
+      const updatedAt = [...project.sessions.map((session) => session.updatedAt), ...project.tasks.map((task) => task.updatedAt)].sort().at(-1) || snapshot.checkedAt
+      return {
+        cwd: project.cwd,
+        key: project.key,
+        name: project.sessions[0]?.projectName || project.cwd.split(/[\\/]/).filter(Boolean).pop() || '未记录项目',
+        runningCount: project.runningCount,
+        sessionCount: project.sessionCount,
+        updatedAt
+      }
+    }),
+    running: snapshot.running,
+    sessions: snapshot.sessions,
+    source: snapshot.source
   }
 }
 
@@ -418,8 +445,10 @@ function ConversationActivity({ items }: { items: CodexConversationItem[] }): JS
   )
 }
 
-export function CodexSessionManagerPanel({ onBack, usesCustomTitleBar }: CodexSessionManagerPanelProps): JSX.Element {
+export function CodexSessionManagerPanel({ focusAlert, onBack, onOpenForgeProject, usesCustomTitleBar }: CodexSessionManagerPanelProps): JSX.Element {
+  const forgeProjects = useForgeDeskStore((state) => state.projects)
   const [snapshot, setSnapshot] = useState<CodexSessionsSnapshot>(() => emptySnapshot())
+  const [monitorSnapshot, setMonitorSnapshot] = useState<CodexProjectMonitorSnapshot | null>(null)
   const [detail, setDetail] = useState<CodexSessionDetail | null>(null)
   const [selectedProjectKey, setSelectedProjectKey] = useState('')
   const [selectedSessionId, setSelectedSessionId] = useState('')
@@ -468,7 +497,9 @@ export function CodexSessionManagerPanel({ onBack, usesCustomTitleBar }: CodexSe
     }
     setRefreshing(true)
     try {
-      const nextSnapshot = await window.forgeDesk.listCodexSessions()
+      const nextMonitorSnapshot = await window.forgeDesk.getCodexProjectMonitorSnapshot()
+      const nextSnapshot = snapshotFromMonitor(nextMonitorSnapshot)
+      setMonitorSnapshot(nextMonitorSnapshot)
       setSnapshot(nextSnapshot)
       setSelectedProjectKey((current) => current && nextSnapshot.projects.some((project) => project.key === current) ? current : nextSnapshot.projects[0]?.key || '')
       setSelectedSessionId((current) => current && nextSnapshot.sessions.some((session) => session.id === current) ? current : '')
@@ -529,6 +560,28 @@ export function CodexSessionManagerPanel({ onBack, usesCustomTitleBar }: CodexSe
     if (selectedSessionId) loadDetail(selectedSessionId).catch(() => undefined)
     else setDetail(null)
   }, [selectedSessionId])
+
+  useEffect(() => {
+    if (!window.forgeDesk) return undefined
+    const unsubscribeUpdated = window.forgeDesk.onCodexProjectMonitorUpdated((nextMonitorSnapshot) => {
+      setMonitorSnapshot(nextMonitorSnapshot)
+      setSnapshot(snapshotFromMonitor(nextMonitorSnapshot))
+    })
+    const unsubscribeFocus = window.forgeDesk.onCodexMonitorFocus((alert) => {
+      setSelectedProjectKey(alert.codexKey)
+      setViewMode('monitor')
+    })
+    return () => {
+      unsubscribeUpdated()
+      unsubscribeFocus()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!focusAlert) return
+    setSelectedProjectKey(focusAlert.codexKey)
+    setViewMode('monitor')
+  }, [focusAlert])
 
   useEffect(() => {
     if (!window.forgeDesk) return undefined
@@ -818,6 +871,8 @@ export function CodexSessionManagerPanel({ onBack, usesCustomTitleBar }: CodexSe
       </>}
       {viewMode === 'monitor' ? (
         <CodexProjectMonitor
+          forgeProjects={forgeProjects}
+          monitorSnapshot={monitorSnapshot}
           snapshot={snapshot}
           projectGroups={filteredProjects}
           selectedProjectKey={selectedProject?.key || ''}
@@ -834,6 +889,13 @@ export function CodexSessionManagerPanel({ onBack, usesCustomTitleBar }: CodexSe
           }}
           onRefresh={() => refresh().catch(() => undefined)}
           onOpenConversation={openConversationMode}
+          onLinkCodexProject={async (cwd, projectId) => {
+            await window.forgeDesk.saveCodexProjectLink({ cwd, projectId })
+            const nextMonitorSnapshot = await window.forgeDesk.getCodexProjectMonitorSnapshot()
+            setMonitorSnapshot(nextMonitorSnapshot)
+            setSnapshot(snapshotFromMonitor(nextMonitorSnapshot))
+          }}
+          onOpenForgeProject={onOpenForgeProject}
         />
       ) : null}
       </Layout>
