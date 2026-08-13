@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   gitAdd: (repositoryId: string, input: GitAddInput) => ipcRenderer.invoke('repository:git-add', repositoryId, input),
   gitCommit: (repositoryId: string, input: GitCommitInput) => ipcRenderer.invoke('repository:git-commit', repositoryId, input),
   gitPush: (repositoryId: string, input: GitPushInput, operationId?: string) => ipcRenderer.invoke('repository:git-push', repositoryId, input, operationId),
+  gitPushTask: (repositoryId: string, input: GitPushInput, operationId: string) => ipcRenderer.invoke('repository:git-push-task', repositoryId, input, operationId),
   cancelRepositoryGitOperation: (operationId: string) => ipcRenderer.invoke('repository:git-operation:cancel', operationId),
   getRepositoryDeploymentApprovalConfig: (repositoryId: string) => ipcRenderer.invoke('repository:deployment-approval:config:get', repositoryId),
   saveRepositoryDeploymentApprovalConfig: (input: DeploymentApprovalConfig) => ipcRenderer.invoke('repository:deployment-approval:config:save', input),

@@ -573,6 +573,13 @@ type GitOperationResult = {
   stderr: string
 }
 
+type GitPushTaskResult = {
+  ok: boolean
+  status: GitWorkspaceStatus
+  stdout: string
+  stderr: string
+}
+
 type GitCommitMessageInput = {
   paths: string[]
 }
@@ -6639,6 +6646,16 @@ ipcMain.handle('repository:git-commit', async (_event, repositoryId: string, inp
 ipcMain.handle('repository:git-push', async (_event, repositoryId: string, input: GitPushInput, operationId?: string): Promise<GitOperationResult> =>
   pushRepositoryChanges(repositoryId, input, operationId)
 )
+
+ipcMain.handle('repository:git-push-task', async (_event, repositoryId: string, input: GitPushInput, operationId: string): Promise<GitPushTaskResult> => {
+  const result = await pushRepositoryChanges(repositoryId, input, operationId)
+  return {
+    ok: result.ok,
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr
+  }
+})
 
 ipcMain.handle('repository:git-operation:cancel', async (_event, operationId: string): Promise<boolean> => cancelRepositoryGitOperation(operationId))
 

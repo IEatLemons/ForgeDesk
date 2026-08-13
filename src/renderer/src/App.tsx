@@ -15309,8 +15309,8 @@ function ProjectOverview({
           }
 
           try {
-            const result = await window.forgeDesk.gitPush(repository.id, createGitPushInput(group.remotes, group.branch), taskId)
-            updateRepository(mergeRepositoryWorkspaceStatus(result.repository, result.status))
+            const result = await window.forgeDesk.gitPushTask(repository.id, createGitPushInput(group.remotes, group.branch), taskId)
+            updateRepository(mergeRepositoryWorkspaceStatus(repository, result.status))
 
             if (result.stdout) {
               outputs.push(result.stdout)
@@ -15388,7 +15388,12 @@ function ProjectOverview({
             ? `${actionLabel} 完成 ${successCount} 个仓库，失败 ${failedCount} 个`
             : `${actionLabel} 完成 ${successCount} 个仓库`
 
-      if (successCount > 0) {
+      // Pushing only changes the remote. The repository result above already
+      // contains the refreshed local workspace/push status, so re-analyzing
+      // the full project history here is unnecessary and can be very
+      // expensive for large projects. Fetch still needs the full analysis
+      // because it may introduce new remote commits.
+      if (successCount > 0 && action === 'fetch') {
         await refreshProjectAfterGitTask(project.id)
       }
 

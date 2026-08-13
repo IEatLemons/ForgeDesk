@@ -805,6 +805,13 @@ type GitOperationResult = {
   stderr: string
 }
 
+type GitPushTaskResult = {
+  ok: boolean
+  status: GitWorkspaceStatus
+  stdout: string
+  stderr: string
+}
+
 type GitMergeAnalysis = {
   repositoryId: string
   ok: boolean
