@@ -15360,7 +15360,10 @@ function ProjectOverview({
 
           try {
             const result = await window.forgeDesk.gitPushTask(repository.id, createGitPushInput(group.remotes, group.branch), taskId)
-            updateRepository(mergeRepositoryWorkspaceStatus(repository, result.status))
+            updateRepository(mergeRepositoryWorkspaceStatus(repository, {
+              branch: result.branch,
+              pushTargets: result.pushTargets
+            }))
 
             if (result.stdout) {
               outputs.push(result.stdout)

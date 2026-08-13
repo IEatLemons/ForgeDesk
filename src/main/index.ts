@@ -609,7 +609,8 @@ type GitOperationResult = {
 
 type GitPushTaskResult = {
   ok: boolean
-  status: GitWorkspaceStatus
+  branch: string
+  pushTargets: GitPushTarget[]
   stdout: string
   stderr: string
 }
@@ -4144,6 +4145,48 @@ async function pushRepositoryChanges(repositoryId: string, input: GitPushInput, 
   })
 }
 
+/**
+ * Project tasks only need the result of the push itself.  The regular push
+ * handler rescans the repository and builds the complete workspace status for
+ * the interactive modal, which can involve many git processes and conflict
+ * file reads.  Keep that work out of the background task's IPC call so a
+ * native Electron/V8 failure in the rescan path cannot take down the app
+ * before the task is persisted.
+ */
+async function pushRepositoryTaskChanges(repositoryId: string, input: GitPushInput, operationId: string): Promise<GitPushTaskResult> {
+  return withSavedSshPassphrases(async (env) => {
+    const repository = getRepositoryOrThrow(repositoryId)
+    const operationArgs = buildGitPushOperationArgs(input)
+    const results: GitCommandResult[] = []
+
+    for (const args of operationArgs) {
+      if (isGitOperationCancelled(operationId)) {
+        throw new Error('Git 操作已终止')
+      }
+
+      results.push(await runGitInPathResult(repository.localPath, args, { env, operationId }))
+    }
+
+    if (isGitOperationCancelled(operationId)) {
+      throw new Error('Git 操作已终止')
+    }
+
+    const failedResult = results.find((result) => !result.ok)
+    return {
+      ok: results.every((result) => result.ok),
+      branch: input.branch,
+      pushTargets: repository.pushTargets.map((target) => ({
+        remote: target.remote,
+        branch: target.branch,
+        ahead: target.branch === input.branch && operationArgs.some((args) => args[1] === target.remote) && !failedResult ? 0 : target.ahead,
+        hasRemoteBranch: target.hasRemoteBranch
+      })),
+      stdout: results.map((result) => result.stdout).filter(Boolean).join('\n'),
+      stderr: failedResult ? failedResult.stderr || failedResult.stdout || '部分远端推送失败' : results.map((result) => result.stderr).filter(Boolean).join('\n')
+    }
+  })
+}
+
 function getRepositoryDeploymentApprovalConfig(repositoryId: string): DeploymentApprovalConfig | null {
   getRepositoryOrThrow(repositoryId)
   return getDeploymentApprovalConfig(getDatabase(), repositoryId)
@@ -6786,13 +6829,7 @@ ipcMain.handle('repository:git-push', async (_event, repositoryId: string, input
 )
 
 ipcMain.handle('repository:git-push-task', async (_event, repositoryId: string, input: GitPushInput, operationId: string): Promise<GitPushTaskResult> => {
-  const result = await pushRepositoryChanges(repositoryId, input, operationId)
-  return {
-    ok: result.ok,
-    status: result.status,
-    stdout: result.stdout,
-    stderr: result.stderr
-  }
+  return pushRepositoryTaskChanges(repositoryId, input, operationId)
 })
 
 ipcMain.handle('repository:git-operation:cancel', async (_event, operationId: string): Promise<boolean> => cancelRepositoryGitOperation(operationId))

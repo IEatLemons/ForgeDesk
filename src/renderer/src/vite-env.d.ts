@@ -807,7 +807,8 @@ type GitOperationResult = {
 
 type GitPushTaskResult = {
   ok: boolean
-  status: GitWorkspaceStatus
+  branch: string
+  pushTargets: GitPushTarget[]
   stdout: string
   stderr: string
 }
