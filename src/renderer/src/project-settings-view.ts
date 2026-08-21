@@ -1,4 +1,4 @@
-export type ProjectSettingsModuleKey = 'basic' | 'people' | 'branches' | 'git' | 'services' | 'release' | 'cloudflare' | 'plane'
+export type ProjectSettingsModuleKey = 'basic' | 'people' | 'branches' | 'git' | 'services' | 'release' | 'cloudflare' | 'plane' | 'codex'
 
 export type ProjectSettingsCategoryKey = 'project' | 'git' | 'delivery' | 'collaboration'
 
@@ -43,7 +43,7 @@ export const PROJECT_SETTINGS_CATEGORIES: ProjectSettingsCategory[] = [
     key: 'collaboration',
     title: '协作与集成',
     description: '连接项目协作工具，让外部工作内容回到项目详情。',
-    moduleKeys: ['plane']
+    moduleKeys: ['plane', 'codex']
   }
 ]
 
@@ -87,6 +87,11 @@ export const PROJECT_SETTINGS_MODULES: ProjectSettingsModule[] = [
     key: 'plane',
     title: 'Plane 绑定',
     description: '绑定 Plane workspace/project，让项目详情显示 Plane 内容。'
+  },
+  {
+    key: 'codex',
+    title: 'Codex 项目绑定',
+    description: '绑定多个 Codex 原生项目，并统一查看普通任务和工作树。'
   }
 ]
 

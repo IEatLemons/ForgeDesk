@@ -142,7 +142,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
   const [accounts, setAccounts] = useState<CodexAccountRegistryView | null>(null)
   const [apiService, setApiService] = useState<CodexApiServiceView | null>(null)
   const [quotaByAccountId, setQuotaByAccountId] = useState<Record<string, QuotaSnapshot | null>>({})
-  const [binding, setBinding] = useState<ProjectAiBinding | null>(null)
+  const [bindings, setBindings] = useState<AiProjectResourceLink[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [providerAction, setProviderAction] = useState(false)
@@ -205,9 +205,9 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
     try {
       await Promise.all([refreshProvider(), refreshAccounts(showMessage), refreshApiService()])
       if (projectId) {
-        setBinding(await window.forgeDesk.getProjectAiBinding({ projectId, providerId: 'codex' }))
+        setBindings(await window.forgeDesk.listAiProjectResourceLinks({ projectId, providerId: 'codex' }))
       } else {
-        setBinding(null)
+        setBindings([])
       }
       if (showMessage) message.success('AI 工具状态已刷新')
     } catch (error) {
@@ -248,7 +248,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
       return
     }
     try {
-      setBinding(await window.forgeDesk.saveProjectAiBinding({ projectId, providerId: 'codex', workspacePath: projectPath }))
+      setBindings(await window.forgeDesk.saveAiProjectResourceLinks({ projectId, providerId: 'codex', resourcePaths: [...bindings.map((binding) => binding.resourcePath), projectPath] }))
       message.success('当前项目已绑定 Codex')
     } catch (error) {
       message.error(`绑定项目失败：${getErrorMessage(error)}`)
@@ -565,13 +565,13 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
         )}
       </Card>
 
-      <Card title="Codex 项目" extra={binding ? <Tag color="green">已绑定</Tag> : <Tag>未绑定</Tag>}>
+      <Card title="Codex 项目" extra={bindings.length ? <Tag color="green">已绑定 {bindings.length}</Tag> : <Tag>未绑定</Tag>}>
         {projectId ? (
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
             <Typography.Text>{projectPath || '当前项目目录未设置'}</Typography.Text>
             <Typography.Text type="secondary">绑定关系只保存在 ForgeDesk，不会写入 Codex 私有项目数据。</Typography.Text>
             <Button icon={<LinkOutlined />} onClick={() => void bindCurrentProject()}>
-              {binding ? '更新绑定目录' : '绑定当前项目'}
+              {bindings.length ? '添加当前项目目录' : '绑定当前项目'}
             </Button>
           </Space>
         ) : <Alert type="info" showIcon message="请先在项目模块选择一个项目" />}

@@ -92,6 +92,7 @@ import forgedeskLogoUrl from './assets/forgedesk-logo.svg'
 import { AI_CODING_ASSISTANT_NAME } from './ai-coding-assistant'
 import type {
   AppRuntimeInfo,
+  AiProjectResourceLink,
   AiSettingsView,
   AiRuntimeStatus,
   CodexAccountRegistryView,
@@ -192,6 +193,8 @@ import {
 } from './app-navigation'
 import { AiChatPanel } from './ai-chat-panel'
 import { AiToolsPanel } from './ai-tools-panel'
+import { CodexProjectBindingSettings } from './codex-project-binding-settings'
+import { CodexWorkPanel } from './codex-work-panel'
 import { CodexSessionManagerPanel } from './codex-session-manager-panel'
 import { DataSourcePanel } from './data-source-panel'
 import { DockerPanel } from './docker-panel'
@@ -12961,7 +12964,8 @@ function ProjectSettingsPanel({
     services: <ThunderboltOutlined />,
     release: <UploadOutlined />,
     cloudflare: <CloudOutlined />,
-    plane: <LinkOutlined />
+    plane: <LinkOutlined />,
+    codex: <RobotOutlined />
   }
   const categoryIcons: Record<ProjectSettingsCategoryKey, JSX.Element> = {
     project: <SettingOutlined />,
@@ -13053,6 +13057,8 @@ function ProjectSettingsPanel({
         return <ProjectCloudflareSettings project={project} />
       case 'plane':
         return <ProjectPlaneSettings project={project} />
+      case 'codex':
+        return <CodexProjectBindingSettings project={project} />
     }
   }
 
@@ -15091,7 +15097,7 @@ function ProjectOverview({
   const [projectPlaneAvailability, setProjectPlaneAvailability] = useState<Record<string, boolean>>({})
   const [selectedProjectRowIds, setSelectedProjectRowIds] = useState<string[]>([])
   const [runningProjectGitTaskKeys, setRunningProjectGitTaskKeys] = useState<string[]>([])
-  const [projectAiBinding, setProjectAiBinding] = useState<ProjectAiBinding | null>(null)
+  const [projectAiBindings, setProjectAiBindings] = useState<AiProjectResourceLink[]>([])
   const [projectAiProvider, setProjectAiProvider] = useState<AiProviderRuntimeSnapshot | null>(null)
   const [projectAiStatusLoading, setProjectAiStatusLoading] = useState(false)
   const cancelledProjectGitTaskIdsRef = useRef(new Set<string>())
@@ -15130,7 +15136,7 @@ function ProjectOverview({
     hasPlane: hasConfiguredProjectPlane
   }
   const projectDetailTabs = createProjectDetailTabs(projectDetailTabAvailability)
-  const simpleProjectDetailTabKeys: ProjectDetailTabKey[] = ['log-tree', 'service-monitor', 'terminal']
+  const simpleProjectDetailTabKeys: ProjectDetailTabKey[] = ['log-tree', 'codex-work', 'service-monitor', 'terminal']
   const visibleProjectDetailTabs = isSimpleMode ? projectDetailTabs.filter((tab) => simpleProjectDetailTabKeys.includes(tab.key)) : projectDetailTabs
   const activeProjectDetailTab = visibleProjectDetailTabs.some((tab) => tab.key === projectDetailTab)
     ? projectDetailTab
@@ -15157,7 +15163,7 @@ function ProjectOverview({
 
   useEffect(() => {
     if (!window.forgeDesk || !selectedProject) {
-      setProjectAiBinding(null)
+      setProjectAiBindings([])
       setProjectAiProvider(null)
       return undefined
     }
@@ -15165,12 +15171,12 @@ function ProjectOverview({
     let mounted = true
     setProjectAiStatusLoading(true)
     Promise.all([
-      window.forgeDesk.getProjectAiBinding({ projectId: selectedProject.id, providerId: 'codex' }),
+      window.forgeDesk.listAiProjectResourceLinks({ projectId: selectedProject.id, providerId: 'codex' }),
       window.forgeDesk.listAiProviders()
     ])
-      .then(([nextBinding, providers]) => {
+      .then(([nextBindings, providers]) => {
         if (!mounted) return
-        setProjectAiBinding(nextBinding)
+        setProjectAiBindings(nextBindings)
         setProjectAiProvider(providers.find((provider) => provider.id === 'codex') ?? null)
       })
       .catch((error) => {
@@ -16494,7 +16500,7 @@ function ProjectOverview({
                       <Space wrap>
                         <Typography.Text strong>AI 工具</Typography.Text>
                         <Tag color={projectAiProvider?.installed ? 'green' : 'default'}>{projectAiProvider?.installed ? 'Codex 已检测到' : 'Codex 未安装'}</Tag>
-                        <Tag color={projectAiBinding ? 'blue' : 'default'}>{projectAiBinding ? '项目已绑定' : '尚未绑定'}</Tag>
+                        <Tag color={projectAiBindings.length ? 'blue' : 'default'}>{projectAiBindings.length ? `已绑定 ${projectAiBindings.length} 个项目` : '尚未绑定'}</Tag>
                       </Space>
                       <Typography.Text type="secondary">
                         {projectAiProvider?.message || '可以在 AI 工具模块中检测 Codex、管理账户和本机 API。'}
@@ -16797,6 +16803,14 @@ function ProjectOverview({
                       onOpenProjectSettings={() => setProjectSettingsDrawerOpen(true)}
                     />
                   )
+                },
+                {
+                  key: 'codex-work',
+                  label: 'Codex 工作',
+                  children: <CodexWorkPanel project={selectedProject} onOpenBinding={() => {
+                    setProjectSettingsInitialModule('codex')
+                    setProjectSettingsDrawerOpen(true)
+                  }} />
                 },
                 {
                   key: 'service-monitor',

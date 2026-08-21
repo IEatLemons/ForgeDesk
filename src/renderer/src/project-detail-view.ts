@@ -1,7 +1,7 @@
 import type { TerminalOpenRequest } from './terminal-panel-events.js'
 import { createTerminalReuseKey } from './terminal-panel-state.js'
 
-export type ProjectDetailTabKey = 'data' | 'log-tree' | 'remote-alignment' | 'plane' | 'service-monitor' | 'terminal'
+export type ProjectDetailTabKey = 'data' | 'log-tree' | 'remote-alignment' | 'plane' | 'codex-work' | 'service-monitor' | 'terminal'
 
 export type ProjectDetailTab = { key: ProjectDetailTabKey; label: string }
 
@@ -23,6 +23,7 @@ export const PROJECT_DETAIL_TABS: ProjectDetailTab[] = [
   { key: 'terminal', label: '终端' },
   { key: 'remote-alignment', label: '多端对齐' },
   { key: 'plane', label: 'Plane' },
+  { key: 'codex-work', label: 'Codex 工作' },
   { key: 'service-monitor', label: '服务监控' }
 ]
 

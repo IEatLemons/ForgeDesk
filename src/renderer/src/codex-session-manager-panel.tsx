@@ -543,9 +543,10 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
 
   useEffect(() => {
     refresh().catch(() => undefined)
-    const intervalId = window.setInterval(() => refresh().catch(() => undefined), 5000)
+    if (viewMode !== 'monitor') return undefined
+    const intervalId = window.setInterval(() => refresh().catch(() => undefined), 15_000)
     return () => window.clearInterval(intervalId)
-  }, [])
+  }, [viewMode])
 
   useEffect(() => {
     let active = true
@@ -928,7 +929,8 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
           onRefresh={() => refresh().catch(() => undefined)}
           onOpenConversation={openConversationMode}
           onLinkCodexProject={async (cwd, projectId) => {
-            await window.forgeDesk.saveCodexProjectLink({ cwd, projectId })
+            if (projectId) await window.forgeDesk.saveAiProjectResourceLink({ providerId: 'codex', projectId, resourcePath: cwd })
+            else await window.forgeDesk.deleteAiProjectResourceLink({ providerId: 'codex', resourcePath: cwd })
             const nextMonitorSnapshot = await window.forgeDesk.getCodexProjectMonitorSnapshot()
             setMonitorSnapshot(nextMonitorSnapshot)
             setSnapshot(snapshotFromMonitor(nextMonitorSnapshot))

@@ -4,6 +4,7 @@ import { basename, relative, resolve } from 'node:path'
 import type { CodexSessionSummary, CodexSessionsSnapshot } from './codex-sessions.js'
 import type { CodexTaskRecord, CodexTaskRunStatus } from './codex-tasks.js'
 import type { ProjectGroupRecord } from './project-groups.js'
+import { listAiProjectResourceLinks, type AiProjectResourceLink } from './ai-project-resource-links.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -37,6 +38,17 @@ export type CodexGitWorkspaceState = {
   hasChanges: boolean
   repositoryAvailable: boolean
   checkedAt: string
+}
+
+export type CodexWorktree = {
+  path: string
+  branch: string
+  head: string
+  detached: boolean
+  isMain: boolean
+  git: CodexGitWorkspaceState
+  sessionIds: string[]
+  taskIds: string[]
 }
 
 export type CodexTaskMonitorSummary = {
@@ -91,6 +103,9 @@ export type CodexProjectMonitorItem = {
   failedCount: number
   sessions: CodexSessionSummary[]
   tasks: CodexTaskMonitorSummary[]
+  worktrees: CodexWorktree[]
+  regularSessionIds: string[]
+  regularTaskIds: string[]
   git: CodexGitWorkspaceState
   status: CodexProjectMonitorStatus
   openAlert: CodexUncommittedAlert | null
@@ -131,6 +146,7 @@ export type CodexMonitorOptions = {
   listTasks: () => CodexTaskRecord[]
   now?: () => Date
   inspectGit?: (cwd: string) => Promise<CodexGitWorkspaceState>
+  inspectWorktrees?: (cwd: string, now?: Date) => Promise<CodexWorktree[]>
   onAlert?: (alert: CodexUncommittedAlert) => void
 }
 
@@ -356,6 +372,49 @@ export async function inspectCodexGitWorkspace(cwd: string, now = new Date()): P
   }
 }
 
+export type ParsedWorktree = { path: string; branch: string; head: string; detached: boolean }
+
+export function parseGitWorktreeList(value: string): ParsedWorktree[] {
+  const result: ParsedWorktree[] = []
+  let current: ParsedWorktree | null = null
+  for (const line of value.split(/\r?\n/)) {
+    if (!line.trim()) {
+      if (current?.path) result.push(current)
+      current = null
+      continue
+    }
+    const [key, ...parts] = line.split(' ')
+    const payload = parts.join(' ').trim()
+    if (key === 'worktree') {
+      if (current?.path) result.push(current)
+      current = { branch: '', detached: false, head: '', path: normalizedPath(payload) }
+    } else if (current && key === 'HEAD') current.head = payload
+    else if (current && key === 'branch') current.branch = payload.replace(/^refs\/heads\//, '')
+    else if (current && key === 'detached') current.detached = true
+  }
+  if (current?.path) result.push(current)
+  return result
+}
+
+export async function inspectCodexWorktrees(cwd: string, now = new Date()): Promise<CodexWorktree[]> {
+  const normalizedCwd = normalizedPath(cwd)
+  if (!normalizedCwd) return []
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', normalizedCwd, 'worktree', 'list', '--porcelain'], { timeout: 5000 })
+    const parsed = parseGitWorktreeList(stdout)
+    return await Promise.all(parsed.map(async (worktree, index) => ({
+      ...worktree,
+      branch: worktree.branch || (worktree.detached ? 'detached' : ''),
+      git: await inspectCodexGitWorkspace(worktree.path, now),
+      isMain: index === 0,
+      sessionIds: [],
+      taskIds: []
+    })))
+  } catch {
+    return []
+  }
+}
+
 function taskSummary(task: CodexTaskRecord): CodexTaskMonitorSummary {
   return {
     additions: task.additions,
@@ -381,7 +440,7 @@ type MutableProject = {
   tasks: CodexTaskMonitorSummary[]
 }
 
-function resolveProjectBinding(db: CodexMonitorDatabase, cwd: string, projects: MonitorProjectRecord[], links: Map<string, CodexProjectLink>): { project: MonitorProjectRecord | null; source: CodexProjectMonitorItem['linkSource'] } {
+function resolveProjectBinding(cwd: string, projects: MonitorProjectRecord[], links: Map<string, AiProjectResourceLink>): { project: MonitorProjectRecord | null; source: CodexProjectMonitorItem['linkSource'] } {
   const key = codexProjectKey(cwd)
   const manual = links.get(key)
   if (manual) {
@@ -423,7 +482,31 @@ export class CodexProjectMonitorService {
     const [sessionSnapshot, tasks] = await Promise.all([this.options.listSessions(), Promise.resolve(this.options.listTasks())])
     const projects = this.options.listProjects()
     const groups = this.options.listGroups()
-    const links = new Map(listCodexProjectLinks(this.options.db()).map((link) => [link.codexKey, link]))
+    let resourceLinks: AiProjectResourceLink[] = []
+    try {
+      resourceLinks = listAiProjectResourceLinks(this.options.db(), { providerId: 'codex' })
+    } catch {
+      // Allows the monitor to keep working while an older test or database is being upgraded.
+    }
+    // Read historic explicit links as a compatibility fallback. New writes use ai_project_resource_links.
+    try {
+      for (const legacy of listCodexProjectLinks(this.options.db())) {
+        const key = codexProjectKey(legacy.cwd)
+        if (!resourceLinks.some((link) => link.resourceKey === key)) {
+          resourceLinks.push({
+            createdAt: legacy.updatedAt,
+            projectId: legacy.projectId || '',
+            providerId: 'codex',
+            resourceKey: key,
+            resourcePath: legacy.cwd,
+            updatedAt: legacy.updatedAt
+          })
+        }
+      }
+    } catch {
+      // The compatibility table is optional for fresh installations.
+    }
+    const links = new Map(resourceLinks.map((link) => [link.resourceKey, link]))
     const byKey = new Map<string, MutableProject>()
 
     for (const session of sessionSnapshot.sessions) {
@@ -439,37 +522,68 @@ export class CodexProjectMonitorService {
       byKey.set(key, current)
     }
 
+    // Keep explicit links visible even before Codex has written its first thread.
+    for (const link of resourceLinks) {
+      const key = codexProjectKey(link.resourcePath)
+      if (!byKey.has(key)) byKey.set(key, { cwd: link.resourcePath, key, sessions: [], tasks: [] })
+    }
+
     const db = this.options.db()
     const items: CodexProjectMonitorItem[] = []
     for (const current of byKey.values()) {
-      const binding = resolveProjectBinding(db, current.cwd, projects, links)
+      const binding = resolveProjectBinding(current.cwd, projects, links)
       const explicitProject = current.tasks.find((task) => task.projectId)?.projectId
       const project = explicitProject ? projects.find((candidate) => candidate.id === explicitProject) ?? binding.project : binding.project
       const source = explicitProject && project ? 'manual' : binding.source
       const git = await (this.options.inspectGit ?? inspectCodexGitWorkspace)(current.cwd, this.now())
+      const worktrees = await (this.options.inspectWorktrees ?? inspectCodexWorktrees)(current.cwd, this.now())
+      const boundWorktree = !project
+        ? worktrees.map((worktree) => links.get(codexProjectKey(worktree.path))).find(Boolean)
+        : undefined
+      const inheritedProject = boundWorktree?.projectId ? projects.find((candidate) => candidate.id === boundWorktree.projectId) ?? null : null
+      const resolvedProject = project ?? inheritedProject
+      const resolvedSource = project ? source : inheritedProject ? 'manual' : source
+      const regularSessionIds: string[] = []
+      const regularTaskIds: string[] = []
+      const targetWorktree = (cwd: string): CodexWorktree | undefined => worktrees
+        .filter((worktree) => isPathWithin(worktree.path, cwd))
+        .sort((left, right) => right.path.length - left.path.length)[0]
+      for (const session of current.sessions) {
+        const worktree = targetWorktree(session.cwd)
+        if (worktree) worktree.sessionIds.push(session.id)
+        else regularSessionIds.push(session.id)
+      }
+      for (const task of current.tasks) {
+        const worktree = targetWorktree(task.cwd)
+        if (worktree) worktree.taskIds.push(task.id)
+        else regularTaskIds.push(task.id)
+      }
       const terminalSessions = current.sessions.filter((session) => session.status === 'completed' || session.status === 'aborted')
       const terminalTasks = current.tasks.filter((task) => task.status === 'succeeded' || task.status === 'failed' || task.status === 'cancelled')
       const runningCount = current.sessions.filter((session) => session.status === 'running').length + current.tasks.filter((task) => task.status === 'running').length
       const completedCount = current.sessions.filter((session) => session.status === 'completed').length + current.tasks.filter((task) => task.status === 'succeeded').length
       const failedCount = current.sessions.filter((session) => session.status === 'aborted').length + current.tasks.filter((task) => task.status === 'failed' || task.status === 'cancelled').length
       const hasTerminalActivity = terminalSessions.length > 0 || terminalTasks.length > 0
-      const forgeProjectId = project?.id ?? null
+      const forgeProjectId = resolvedProject?.id ?? null
       const item: CodexProjectMonitorItem = {
         completedCount,
         cwd: current.cwd,
         failedCount,
         forgeProjectId,
-        forgeProjectName: project?.name ?? '',
-        groupId: project?.groupId ?? null,
-        groupName: getGroupName(project?.groupId ?? null, groups),
+        forgeProjectName: resolvedProject?.name ?? '',
+        groupId: resolvedProject?.groupId ?? null,
+        groupName: getGroupName(resolvedProject?.groupId ?? null, groups),
         git,
         key: current.key,
-        linkSource: source,
+        linkSource: resolvedSource,
         openAlert: null,
         sessionCount: current.sessions.length,
         sessions: current.sessions,
         status: runningCount > 0 ? 'running' : failedCount > 0 ? 'attention' : !git.repositoryAvailable ? 'unknown' : git.hasChanges && hasTerminalActivity ? 'attention' : hasTerminalActivity ? 'completed' : 'clean',
         tasks: current.tasks,
+        worktrees,
+        regularSessionIds,
+        regularTaskIds,
         runningCount
       }
 
@@ -508,7 +622,7 @@ export class CodexProjectMonitorService {
 
     return {
       alerts,
-      available: sessionSnapshot.available || tasks.length > 0,
+      available: sessionSnapshot.available || tasks.length > 0 || items.length > 0,
       checkedAt,
       completed: items.reduce((total, item) => total + item.completedCount, 0),
       error: sessionSnapshot.error,
