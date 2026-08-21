@@ -212,17 +212,17 @@ export function CodexProjectMonitor({
   const monitorGroups = useMemo(() => {
     const groups = new Map<string, CodexProjectMonitorItem[]>()
     for (const project of monitorProjects) {
-      const key = project.forgeProjectId ? project.groupId || '__ungrouped__' : '__unlinked__'
+      const key = project.forgeProjectId ? '__bound__' : '__unlinked__'
       groups.set(key, [...(groups.get(key) ?? []), project])
     }
     return Array.from(groups.entries()).sort((left, right) => {
+      if (left[0] === '__bound__') return -1
+      if (right[0] === '__bound__') return 1
       if (left[0] === '__unlinked__') return 1
       if (right[0] === '__unlinked__') return -1
-      if (left[0] === '__ungrouped__') return 1
-      if (right[0] === '__ungrouped__') return -1
-      return (monitorSnapshot?.groups.find((group) => group.id === left[0])?.sortOrder ?? 9999) - (monitorSnapshot?.groups.find((group) => group.id === right[0])?.sortOrder ?? 9999)
+      return 0
     })
-  }, [monitorProjects, monitorSnapshot?.groups])
+  }, [monitorProjects])
   const selectedTone = selectedGroup ? toneMeta(projectTone(selectedGroup)) : toneMeta('idle')
   const runningSessions = useMemo(() => snapshot.sessions.filter((session) => session.status === 'running').sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 5), [snapshot.sessions])
   const attentionSessions = useMemo(() => snapshot.sessions.filter((session) => session.status === 'aborted').sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 5), [snapshot.sessions])
@@ -298,6 +298,7 @@ export function CodexProjectMonitor({
         <div className="codex-monitor-project-path" title={project.cwd}>{project.cwd || '未记录工作目录'}</div>
         <div className="codex-monitor-project-stats">
           <span><strong>{project.sessionCount}</strong> 会话</span>
+          <span><strong>{project.worktrees.length}</strong> 工作树</span>
           <span><strong>{project.tasks.length}</strong> 内置任务</span>
           <span><strong>{project.runningCount}</strong> 进行中</span>
         </div>
@@ -477,6 +478,7 @@ export function CodexProjectMonitor({
           <div className="codex-monitor-task-meta">
             <span>工作目录：{selectedMonitorProject.cwd}</span>
             <span>分支：{selectedMonitorProject.git.branch || '无法检查'}</span>
+            <span>工作树：{selectedMonitorProject.worktrees.length} 个 · 常规任务：{selectedMonitorProject.regularSessionIds.length} 个会话</span>
             <span>改动：{selectedMonitorProject.git.filesChanged} 个文件 · +{selectedMonitorProject.git.additions} -{selectedMonitorProject.git.deletions}</span>
           </div>
           {selectedMonitorProject.tasks.length > 0 ? (
@@ -501,7 +503,7 @@ export function CodexProjectMonitor({
             {monitorSnapshot ? monitorGroups.map(([groupKey, groupProjects]) => (
               <section className="codex-monitor-project-group" key={groupKey}>
                 <div className="codex-monitor-section-heading">
-                  <div><Typography.Title level={4}>{groupKey === '__unlinked__' ? '未关联项目' : groupKey === '__ungrouped__' ? '未分组' : groupProjects[0]?.groupName || '未分组'}</Typography.Title><Typography.Text type="secondary">{groupKey === '__unlinked__' ? '尚未绑定 ForgeDesk 项目 · ' : ''}{groupProjects.length} 个 Codex 项目</Typography.Text></div>
+                  <div><Typography.Title level={4}>{groupKey === '__unlinked__' ? '未关联项目' : '已绑定 ForgeDesk 项目'}</Typography.Title><Typography.Text type="secondary">{groupKey === '__unlinked__' ? '尚未绑定 ForgeDesk 项目 · ' : '可直接打开对应项目的 Codex 工作页 · '}{groupProjects.length} 个 Codex 项目</Typography.Text></div>
                   <Button
                     aria-label={collapsedMonitorGroups.has(groupKey) ? '展开分组' : '折叠分组'}
                     icon={collapsedMonitorGroups.has(groupKey) ? <ArrowRightOutlined /> : <DownOutlined />}

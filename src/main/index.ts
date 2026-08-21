@@ -49,10 +49,19 @@ import {
 import {
   getProjectAiBinding,
   migrateProjectAiBindingTable,
-  saveProjectAiBinding,
   type ProjectAiBinding,
   type ProjectAiBindingInput
 } from './project-ai-bindings'
+import {
+  deleteAiProjectResourceLink,
+  listAiProjectResourceLinks,
+  migrateAiProjectResourceLinkTables,
+  migrateLegacyAiProjectResourceLinks,
+  saveAiProjectResourceLink,
+  saveAiProjectResourceLinks,
+  type AiProjectResourceLink,
+  type AiProjectResourceLinkInput
+} from './ai-project-resource-links'
 import { CodexActivityService, type CodexActivitySnapshot } from './codex-activity'
 import {
   CodexSessionService,
@@ -84,9 +93,7 @@ import {
   codexProjectKey,
   findAutomaticCodexProjectId,
   migrateCodexProjectMonitorTables,
-  saveCodexProjectLink,
   listCodexProjectLinks,
-  deleteCodexProjectLink,
   type CodexProjectLink,
   type CodexProjectLinkInput,
   type CodexProjectMonitorSnapshot,
@@ -929,7 +936,7 @@ const codexTaskService = new CodexTaskService({
   db: () => getDatabase(),
   emit: (event) => sendCodexTaskEvent(event),
   resolveProjectId: (cwd) => {
-    const manualLink = listCodexProjectLinks(getDatabase()).find((link) => link.codexKey === codexProjectKey(cwd))
+    const manualLink = listAiProjectResourceLinks(getDatabase(), { providerId: 'codex' }).find((link) => link.resourceKey === codexProjectKey(cwd))
     if (manualLink) return manualLink.projectId ?? undefined
     return findAutomaticCodexProjectId(cwd, listCodexMonitorProjects())
   },
@@ -2278,6 +2285,8 @@ function migrateDatabase(db: Database.Database): void {
   migrateCodexProjectMonitorTables(db)
   migrateCodexSiteTables(db)
   migrateProjectAiBindingTable(db)
+  migrateAiProjectResourceLinkTables(db)
+  migrateLegacyAiProjectResourceLinks(db)
   migrateProjectGitTaskTable(db)
   recoverProjectGitTasks(db)
 
@@ -6540,13 +6549,42 @@ ipcMain.handle('project:group:set', async (_event, input: { projectId: string; g
 ipcMain.handle('codex-project-link:list', async (): Promise<CodexProjectLink[]> => listCodexProjectLinks(getDatabase()))
 
 ipcMain.handle('codex-project-link:save', async (_event, input: CodexProjectLinkInput): Promise<CodexProjectLink> => {
-  const saved = saveCodexProjectLink(getDatabase(), input)
+  const cwd = String(input.cwd || '').trim()
+  if (!cwd) throw new Error('Codex 工作目录不能为空')
+  const savedLink = input.projectId
+    ? saveAiProjectResourceLink(getDatabase(), { providerId: 'codex', projectId: input.projectId, resourcePath: cwd })
+    : (deleteAiProjectResourceLink(getDatabase(), { providerId: 'codex', resourcePath: cwd }), null)
+  await refreshCodexProjectMonitor()
+  return {
+    codexKey: codexProjectKey(cwd),
+    cwd: savedLink?.resourcePath ?? resolve(cwd),
+    projectId: savedLink?.projectId ?? null,
+    updatedAt: savedLink?.updatedAt ?? new Date().toISOString()
+  }
+})
+
+ipcMain.handle('codex-project-link:delete', async (_event, cwd: string): Promise<void> => {
+  deleteAiProjectResourceLink(getDatabase(), { providerId: 'codex', resourcePath: cwd })
+  await refreshCodexProjectMonitor()
+})
+
+ipcMain.handle('ai-project-resource-links:list', async (_event, query?: { projectId?: string; providerId?: string }): Promise<AiProjectResourceLink[]> =>
+  listAiProjectResourceLinks(getDatabase(), query))
+
+ipcMain.handle('ai-project-resource-link:save', async (_event, input: AiProjectResourceLinkInput): Promise<AiProjectResourceLink> => {
+  const saved = saveAiProjectResourceLink(getDatabase(), input)
   await refreshCodexProjectMonitor()
   return saved
 })
 
-ipcMain.handle('codex-project-link:delete', async (_event, cwd: string): Promise<void> => {
-  deleteCodexProjectLink(getDatabase(), cwd)
+ipcMain.handle('ai-project-resource-links:save', async (_event, input: { providerId: string; projectId: string; resourcePaths: string[] }): Promise<AiProjectResourceLink[]> => {
+  const saved = saveAiProjectResourceLinks(getDatabase(), input)
+  await refreshCodexProjectMonitor()
+  return saved
+})
+
+ipcMain.handle('ai-project-resource-link:delete', async (_event, input: { providerId: string; resourcePath: string }): Promise<void> => {
+  deleteAiProjectResourceLink(getDatabase(), input)
   await refreshCodexProjectMonitor()
 })
 
@@ -7536,13 +7574,40 @@ ipcMain.handle(
 
 ipcMain.handle(
   'project-ai-bindings:get',
-  async (_event, input: { projectId: string; providerId: string }): Promise<ProjectAiBinding | null> =>
-    getProjectAiBinding(getDatabase(), String(input.projectId || ''), String(input.providerId || 'codex'))
+  async (_event, input: { projectId: string; providerId: string }): Promise<ProjectAiBinding | null> => {
+    const projectId = String(input.projectId || '')
+    const providerId = String(input.providerId || 'codex')
+    const resource = listAiProjectResourceLinks(getDatabase(), { projectId, providerId })[0]
+    if (resource) {
+      return {
+        createdAt: resource.createdAt,
+        projectId: resource.projectId,
+        providerId: resource.providerId,
+        updatedAt: resource.updatedAt,
+        workspacePath: resource.resourcePath
+      }
+    }
+    return getProjectAiBinding(getDatabase(), projectId, providerId)
+  }
 )
 
 ipcMain.handle(
   'project-ai-bindings:save',
-  async (_event, input: ProjectAiBindingInput): Promise<ProjectAiBinding> => saveProjectAiBinding(getDatabase(), input)
+  async (_event, input: ProjectAiBindingInput): Promise<ProjectAiBinding> => {
+    const resource = saveAiProjectResourceLink(getDatabase(), {
+      projectId: input.projectId,
+      providerId: input.providerId,
+      resourcePath: input.workspacePath
+    })
+    await refreshCodexProjectMonitor()
+    return {
+      createdAt: resource.createdAt,
+      projectId: resource.projectId,
+      providerId: resource.providerId,
+      updatedAt: resource.updatedAt,
+      workspacePath: resource.resourcePath
+    }
+  }
 )
 
 ipcMain.handle('codex:account:get', async (): Promise<CodexAccountInfo> => getActiveCodexAccountInfo(app.getPath('userData')))

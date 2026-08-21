@@ -38,6 +38,21 @@ export type CodexProjectLinkInput = {
   projectId: string | null
 }
 
+export type AiProjectResourceLink = {
+  providerId: string
+  resourceKey: string
+  resourcePath: string
+  projectId: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type AiProjectResourceLinkInput = {
+  providerId: string
+  resourcePath: string
+  projectId: string
+}
+
 export type RsaPrivateKeySize = 2048 | 4096
 
 export type RsaPrivateKeyRecord = {
@@ -2131,6 +2146,17 @@ export type CodexGitWorkspaceState = {
   checkedAt: string
 }
 
+export type CodexWorktree = {
+  path: string
+  branch: string
+  head: string
+  detached: boolean
+  isMain: boolean
+  git: CodexGitWorkspaceState
+  sessionIds: string[]
+  taskIds: string[]
+}
+
 export type CodexTaskMonitorSummary = {
   id: string
   title: string
@@ -2183,6 +2209,9 @@ export type CodexProjectMonitorItem = {
   failedCount: number
   sessions: CodexSessionSummary[]
   tasks: CodexTaskMonitorSummary[]
+  worktrees: CodexWorktree[]
+  regularSessionIds: string[]
+  regularTaskIds: string[]
   git: CodexGitWorkspaceState
   status: CodexProjectMonitorStatus
   openAlert: CodexUncommittedAlert | null

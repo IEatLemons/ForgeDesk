@@ -1585,6 +1585,21 @@ type ProjectAiBindingInput = {
   workspacePath: string
 }
 
+type AiProjectResourceLink = {
+  providerId: string
+  resourceKey: string
+  resourcePath: string
+  projectId: string
+  createdAt: string
+  updatedAt: string
+}
+
+type AiProjectResourceLinkInput = {
+  providerId: string
+  resourcePath: string
+  projectId: string
+}
+
 type AiProviderOpenResult = {
   mode: 'app' | 'cli' | 'download'
   runtime: AiProviderRuntimeSnapshot
@@ -1909,6 +1924,17 @@ type CodexGitWorkspaceState = {
   checkedAt: string
 }
 
+type CodexWorktree = {
+  path: string
+  branch: string
+  head: string
+  detached: boolean
+  isMain: boolean
+  git: CodexGitWorkspaceState
+  sessionIds: string[]
+  taskIds: string[]
+}
+
 type CodexTaskMonitorSummary = {
   id: string
   title: string
@@ -1959,6 +1985,9 @@ type CodexProjectMonitorItem = {
   failedCount: number
   sessions: CodexSessionSummary[]
   tasks: CodexTaskMonitorSummary[]
+  worktrees: CodexWorktree[]
+  regularSessionIds: string[]
+  regularTaskIds: string[]
   git: CodexGitWorkspaceState
   status: 'running' | 'attention' | 'completed' | 'clean' | 'unknown'
   openAlert: CodexUncommittedAlert | null
@@ -2747,6 +2776,10 @@ interface Window {
     listCodexProjectLinks: () => Promise<CodexProjectLink[]>
     saveCodexProjectLink: (input: CodexProjectLinkInput) => Promise<CodexProjectLink>
     deleteCodexProjectLink: (cwd: string) => Promise<void>
+    listAiProjectResourceLinks: (query?: { projectId?: string; providerId?: string }) => Promise<AiProjectResourceLink[]>
+    saveAiProjectResourceLink: (input: AiProjectResourceLinkInput) => Promise<AiProjectResourceLink>
+    saveAiProjectResourceLinks: (input: { providerId: string; projectId: string; resourcePaths: string[] }) => Promise<AiProjectResourceLink[]>
+    deleteAiProjectResourceLink: (input: { providerId: string; resourcePath: string }) => Promise<void>
     deleteProject: (projectId: string) => Promise<WorkspaceSnapshot>
     rescanProjectRepositories: (projectId: string) => Promise<WorkspaceSnapshot>
     initializeProjectRepository: (projectId: string) => Promise<WorkspaceSnapshot>

@@ -5,10 +5,12 @@ import {
   CodexProjectMonitorService,
   findAutomaticCodexProjectId,
   migrateCodexProjectMonitorTables,
+  parseGitWorktreeList,
   saveCodexProjectLink,
   type CodexGitWorkspaceState,
   type MonitorProjectRecord
 } from './codex-project-monitor.js'
+import { migrateAiProjectResourceLinkTables, saveAiProjectResourceLink } from './ai-project-resource-links.js'
 import type { CodexSessionsSnapshot } from './codex-sessions.js'
 
 function createDatabase(): DatabaseSync {
@@ -24,6 +26,7 @@ function createDatabase(): DatabaseSync {
     );
   `)
   migrateCodexProjectMonitorTables(db as any)
+  migrateAiProjectResourceLinkTables(db as any)
   return db
 }
 
@@ -71,6 +74,22 @@ function gitState(hasChanges: boolean): CodexGitWorkspaceState {
 }
 
 describe('Codex project monitor', () => {
+  it('parses named and detached Git worktrees', () => {
+    assert.deepEqual(parseGitWorktreeList([
+      'worktree /tmp/repo',
+      'HEAD abcdef',
+      'branch refs/heads/main',
+      '',
+      'worktree /tmp/codex-worktree',
+      'HEAD 123456',
+      'detached',
+      ''
+    ].join('\n')), [
+      { path: '/tmp/repo', head: 'abcdef', branch: 'main', detached: false },
+      { path: '/tmp/codex-worktree', head: '123456', branch: '', detached: true }
+    ])
+  })
+
   it('chooses the most specific automatic project match', () => {
     const projects: MonitorProjectRecord[] = [
       { groupId: null, id: 'root', name: 'Root', workspacePath: '/tmp/workspace' },
@@ -187,5 +206,83 @@ describe('Codex project monitor', () => {
     const snapshot = await service.snapshot()
     assert.equal(snapshot.projects[0]?.forgeProjectId, null)
     assert.equal(snapshot.projects[0]?.linkSource, 'unlinked')
+  })
+
+  it('keeps a manually bound non-Git path visible before its first Codex session', async () => {
+    const db = createDatabase()
+    db.prepare('INSERT INTO projects (id, name, group_id, workspace_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run('project-a', 'ForgeDesk', null, '/tmp/workspace', '2026-08-13', '2026-08-13')
+    saveAiProjectResourceLink(db as any, { providerId: 'codex', projectId: 'project-a', resourcePath: '/tmp/manual-only' })
+    const service = new CodexProjectMonitorService({
+      db: () => db as any,
+      listGroups: () => [],
+      listProjects: () => [{ groupId: null, id: 'project-a', name: 'ForgeDesk', workspacePath: '/tmp/workspace' }],
+      listSessions: async () => ({ ...sessionSnapshot(), available: false, projects: [], sessions: [] }),
+      listTasks: () => [],
+      inspectGit: async () => ({ ...gitState(false), cwd: '/tmp/manual-only', repositoryAvailable: false })
+    })
+
+    const snapshot = await service.snapshot()
+    assert.equal(snapshot.available, true)
+    assert.equal(snapshot.projects[0]?.cwd, '/tmp/manual-only')
+    assert.equal(snapshot.projects[0]?.forgeProjectId, 'project-a')
+    assert.equal(snapshot.projects[0]?.worktrees.length, 0)
+  })
+
+  it('discovers every native Codex CWD without a ForgeDesk-project filter', async () => {
+    const db = createDatabase()
+    const base = sessionSnapshot().sessions[0]
+    const sessions = Array.from({ length: 55 }, (_, index) => ({
+      ...base,
+      cwd: `/tmp/codex-project-${index}`,
+      id: `session-${index}`,
+      projectKey: `/tmp/codex-project-${index}`,
+      projectName: `codex-project-${index}`,
+      status: index === 0 ? ('running' as const) : ('completed' as const),
+      title: `任务 ${index}`
+    }))
+    const service = new CodexProjectMonitorService({
+      db: () => db as any,
+      listGroups: () => [],
+      listProjects: () => [],
+      listSessions: async () => ({ ...sessionSnapshot(), projects: [], sessions }),
+      listTasks: () => [],
+      inspectGit: async (cwd) => ({ ...gitState(false), cwd, repositoryAvailable: false }),
+      inspectWorktrees: async () => []
+    })
+
+    const snapshot = await service.snapshot()
+    assert.equal(snapshot.projects.length, 55)
+    assert.equal(snapshot.unlinked, 55)
+    assert.equal(snapshot.running, 1)
+  })
+
+  it('inherits a bound worktree owner unless the exact Codex path is bound', async () => {
+    const db = createDatabase()
+    for (const [id, name] of [['project-a', 'A'], ['project-b', 'B']]) {
+      db.prepare('INSERT INTO projects (id, name, group_id, workspace_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, name, null, '/tmp/workspace', '2026-08-13', '2026-08-13')
+    }
+    saveAiProjectResourceLink(db as any, { providerId: 'codex', projectId: 'project-b', resourcePath: '/tmp/workspace/worktree-b' })
+    const baseOptions = {
+      db: () => db as any,
+      listGroups: () => [],
+      listProjects: () => [
+        { groupId: null, id: 'project-a', name: 'A', workspacePath: '/tmp/a' },
+        { groupId: null, id: 'project-b', name: 'B', workspacePath: '/tmp/b' }
+      ],
+      listSessions: async () => ({ ...sessionSnapshot(), sessions: [{ ...sessionSnapshot().sessions[0], cwd: '/tmp/workspace/worktree-a', projectKey: '/tmp/workspace/worktree-a' }] }),
+      listTasks: () => [],
+      inspectGit: async () => ({ ...gitState(false), cwd: '/tmp/workspace/worktree-a' }),
+      inspectWorktrees: async () => [
+        { path: '/tmp/workspace/worktree-a', branch: 'main', head: 'aaa', detached: false, isMain: true, git: gitState(false), sessionIds: [], taskIds: [] },
+        { path: '/tmp/workspace/worktree-b', branch: 'feature', head: 'bbb', detached: false, isMain: false, git: gitState(false), sessionIds: [], taskIds: [] }
+      ]
+    }
+    const inherited = await new CodexProjectMonitorService(baseOptions).snapshot()
+    assert.equal(inherited.projects[0]?.forgeProjectId, 'project-b')
+
+    saveAiProjectResourceLink(db as any, { providerId: 'codex', projectId: 'project-a', resourcePath: '/tmp/workspace/worktree-a' })
+    const exact = await new CodexProjectMonitorService(baseOptions).snapshot()
+    assert.equal(exact.projects[0]?.forgeProjectId, 'project-a')
+    assert.deepEqual(exact.projects[0]?.worktrees[0]?.sessionIds, ['session-1'])
   })
 })
