@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import type { CodexProjectMonitorSnapshot, CodexSessionSummary, CodexSessionsSnapshot, SystemMonitorSnapshot } from './data'
-import { formatCodexQuotaPercent, getCodexQuotaProgressMeta, selectCodexWeeklyQuotaWindow } from './codex-titlebar-state'
+import ReactECharts from 'echarts-for-react'
+import type { CodexProjectMonitorSnapshot, CodexSessionSummary, CodexSessionsSnapshot, CodexUncommittedAlert, SystemMonitorSnapshot } from './data'
+import { formatCodexQuotaPercent, formatCodexResetAt, getCodexQuotaProgressMeta, selectCodexWeeklyQuotaWindow, sortCodexUncommittedAlerts } from './codex-titlebar-state'
 import {
+  SYSTEM_MONITOR_HARDWARE_LABELS,
   createSystemMonitorHardwareMetrics,
+  formatSystemMonitorHistoryValue,
+  getSystemMonitorHistoryValue,
   getSystemMonitorStatusMeta,
+  readStoredSystemMonitorHistory,
   readStoredSystemMonitorOverviewHardwareKeys,
   rememberSystemMonitorSnapshot,
   systemMonitorOverviewHardwareChangedEvent,
-  type SystemMonitorHardwareKey
+  type SystemMonitorHardwareKey,
+  type SystemMonitorHistoryPoint
 } from './system-monitor-view'
 import type { AppMode } from './app-mode'
 import { AppModeSwitcher } from './app-mode-switcher'
@@ -33,11 +39,115 @@ function codexSessionProject(session: CodexSessionSummary): string {
   return session.projectName || session.cwd.split(/[\\/]/).filter(Boolean).pop() || '未记录项目'
 }
 
-function formatCodexResetAt(value: string): string {
-  if (!value) return '重置时间未知'
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return '重置时间未知'
-  return `重置：${new Date(timestamp).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+function codexAlertProject(alert: CodexUncommittedAlert): string {
+  return alert.projectName || alert.cwd.split(/[\\/]/).filter(Boolean).pop() || '未记录项目'
+}
+
+function formatRelativeTime(value: string): string {
+  if (!value) return '未知时间'
+  const timestamp = new Date(value).getTime()
+  if (!Number.isFinite(timestamp)) return '未知时间'
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000))
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  return `${Math.floor(hours / 24)} 天前`
+}
+
+function getSystemMonitorChartColor(key: SystemMonitorHardwareKey): string {
+  switch (key) {
+    case 'cpu':
+      return '#1677ff'
+    case 'memory':
+      return '#13c2c2'
+    case 'storage':
+      return '#faad14'
+    case 'network':
+      return '#52c41a'
+  }
+}
+
+function formatSystemMonitorChartTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+}
+
+function createSystemMonitorPopoverChartOption(
+  history: SystemMonitorHistoryPoint[],
+  visibleMetrics: ReturnType<typeof createSystemMonitorHardwareMetrics>
+): Record<string, unknown> {
+  const visibleHistory = history.slice(-36)
+  const visibleKeys = visibleMetrics.map((metric) => metric.key)
+  const hasPercentMetric = visibleKeys.some((key) => key !== 'network')
+  const hasNetworkMetric = visibleKeys.includes('network')
+  const yAxis: Array<Record<string, unknown>> = [
+    {
+      axisLabel: { color: '#8c8c8c', formatter: (value: number) => `${Math.round(value)}%` },
+      max: 100,
+      min: 0,
+      name: hasPercentMetric ? '使用率' : '',
+      nameTextStyle: { color: '#8c8c8c', fontSize: 10 },
+      splitLine: { lineStyle: { color: 'rgba(140, 140, 140, 0.16)' } },
+      type: 'value'
+    }
+  ]
+
+  if (hasNetworkMetric) {
+    yAxis.push({
+      axisLabel: { color: '#8c8c8c', formatter: (value: number) => formatSystemMonitorHistoryValue('network', value) },
+      min: 0,
+      name: '速率',
+      nameTextStyle: { color: '#8c8c8c', fontSize: 10 },
+      position: 'right',
+      splitLine: { show: false },
+      type: 'value'
+    })
+  }
+
+  return {
+    animation: false,
+    color: visibleKeys.map(getSystemMonitorChartColor),
+    grid: { bottom: 22, containLabel: true, left: 8, right: hasNetworkMetric ? 8 : 4, top: 32 },
+    legend: {
+      data: visibleKeys.map((key) => SYSTEM_MONITOR_HARDWARE_LABELS[key]),
+      itemHeight: 8,
+      itemWidth: 8,
+      left: 0,
+      textStyle: { color: '#667085', fontSize: 10 },
+      top: 0
+    },
+    tooltip: {
+      axisPointer: { type: 'line' },
+      formatter: (params: Array<{ axisValue: string; data: number; seriesName: string; seriesIndex: number }>) => {
+        const lines = params.map((item) => {
+          const key = visibleKeys[item.seriesIndex]
+          return `${item.seriesName}：${formatSystemMonitorHistoryValue(key, Number(item.data))}`
+        })
+        return `${params[0]?.axisValue ?? ''}<br/>${lines.join('<br/>')}`
+      },
+      trigger: 'axis'
+    },
+    xAxis: {
+      axisLabel: { color: '#8c8c8c', fontSize: 10, hideOverlap: true },
+      axisLine: { lineStyle: { color: 'rgba(140, 140, 140, 0.24)' } },
+      axisTick: { show: false },
+      boundaryGap: false,
+      data: visibleHistory.map((point) => formatSystemMonitorChartTime(point.checkedAt)),
+      type: 'category'
+    },
+    yAxis,
+    series: visibleKeys.map((key) => ({
+      areaStyle: visibleKeys.length === 1 ? { opacity: 0.1 } : undefined,
+      data: visibleHistory.map((point) => getSystemMonitorHistoryValue(point, key)),
+      lineStyle: { width: 2 },
+      name: SYSTEM_MONITOR_HARDWARE_LABELS[key],
+      smooth: true,
+      symbol: 'none',
+      type: 'line',
+      yAxisIndex: key === 'network' && hasPercentMetric ? 1 : 0
+    }))
+  }
 }
 
 export function AppSystemMonitorStatus({
@@ -49,6 +159,7 @@ export function AppSystemMonitorStatus({
 }): JSX.Element | null {
   const [enabled] = useState(isMacPlatform)
   const [snapshot, setSnapshot] = useState<SystemMonitorSnapshot | null>(null)
+  const [history, setHistory] = useState<SystemMonitorHistoryPoint[]>(() => readStoredSystemMonitorHistory())
   const [overviewHardwareKeys, setOverviewHardwareKeys] = useState<SystemMonitorHardwareKey[]>(() => readStoredSystemMonitorOverviewHardwareKeys())
   const [error, setError] = useState('')
   const [systemPopoverOpen, setSystemPopoverOpen] = useState(false)
@@ -73,7 +184,8 @@ export function AppSystemMonitorStatus({
           return
         }
 
-        rememberSystemMonitorSnapshot(nextSnapshot)
+        const nextHistory = rememberSystemMonitorSnapshot(nextSnapshot)
+        setHistory(nextHistory)
         setSnapshot(nextSnapshot)
         setError('')
       } catch {
@@ -96,6 +208,8 @@ export function AppSystemMonitorStatus({
 
   useEffect(() => {
     if (!systemPopoverOpen) return undefined
+
+    setHistory(readStoredSystemMonitorHistory())
 
     const closeOnOutsideClick = (event: MouseEvent): void => {
       if (!systemPopoverRef.current?.contains(event.target as Node)) setSystemPopoverOpen(false)
@@ -126,7 +240,8 @@ export function AppSystemMonitorStatus({
         return
       }
 
-      rememberSystemMonitorSnapshot(nextSnapshot)
+      const nextHistory = rememberSystemMonitorSnapshot(nextSnapshot)
+      setHistory(nextHistory)
       setSnapshot(nextSnapshot)
       setError('')
     } catch {
@@ -199,18 +314,30 @@ export function AppSystemMonitorStatus({
             <span>{snapshot?.checkedAt ? new Date(snapshot.checkedAt).toLocaleTimeString('zh-CN') : '等待数据'}</span>
           </div>
           {visibleMetrics.length > 0 ? (
-            <div className="app-titlebar-system-popover-metrics">
-              {visibleMetrics.map((metric) => (
-                <div className="app-titlebar-system-popover-metric" key={metric.key}>
-                  <div>
-                    <strong>{metric.label}</strong>
+            <>
+              <div className="app-titlebar-system-popover-chart-heading">
+                <strong>最近 36 次采样</strong>
+                <span>{history.length > 1 ? '每分钟更新一次' : '历史采样正在积累'}</span>
+              </div>
+              {history.length > 1 ? (
+                <ReactECharts
+                  className="app-titlebar-system-popover-chart"
+                  option={createSystemMonitorPopoverChartOption(history, visibleMetrics)}
+                  notMerge
+                  lazyUpdate
+                />
+              ) : (
+                <div className="app-titlebar-system-popover-chart-empty">保持弹窗或电脑监控页面打开，即可看到历史曲线</div>
+              )}
+              <div className="app-titlebar-system-popover-metrics">
+                {visibleMetrics.map((metric) => (
+                  <div className="app-titlebar-system-popover-metric" key={metric.key}>
+                    <span>{metric.label}</span>
                     <strong>{metric.displayValue}</strong>
                   </div>
-                  <span>{metric.description}</span>
-                  <span>{metric.detail}</span>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            </>
           ) : (
             <div className="app-titlebar-system-popover-empty">正在读取电脑监控信息</div>
           )}
@@ -224,11 +351,15 @@ export function AppSystemMonitorStatus({
 export function AppTitleBar({
   appMode,
   onAppModeChange,
-  onOpenCodex
+  onOpenCodex,
+  onOpenCodexMonitor,
+  onOpenForgeProject
 }: {
   appMode: AppMode
   onAppModeChange: (mode: AppMode) => void
   onOpenCodex: () => void
+  onOpenCodexMonitor: () => void
+  onOpenForgeProject: (projectId: string) => void
 }): JSX.Element | null {
   const [enabled] = useState(isMacPlatform)
   const [codexActivity, setCodexActivity] = useState<CodexSessionsSnapshot | null>(null)
@@ -241,7 +372,14 @@ export function AppTitleBar({
   const [codexPopoverOpen, setCodexPopoverOpen] = useState(false)
   const codexPopoverRef = useRef<HTMLDivElement>(null)
   const codexMountedRef = useRef(true)
-  const runningCodexSessions = useMemo(() => codexActivity?.sessions.filter((session) => session.status === 'running').slice(0, 5) ?? [], [codexActivity])
+  // Keep the title-bar number and its running list on the same monitor
+  // snapshot. Previously the number came from the project monitor while the
+  // list came from a separate session poll, so their refreshes could race.
+  const codexStatusSessions = codexMonitor?.sessions ?? codexActivity?.sessions ?? []
+  const codexRunningCount = codexMonitor?.running ?? codexActivity?.running ?? 0
+  const codexCompletedCount = codexMonitor?.completed ?? codexActivity?.completed ?? 0
+  const runningCodexSessions = useMemo(() => codexStatusSessions.filter((session) => session.status === 'running').slice(0, 5), [codexStatusSessions])
+  const uncommittedCodexAlerts = useMemo(() => sortCodexUncommittedAlerts(codexMonitor?.alerts ?? []), [codexMonitor?.alerts])
   const weeklyQuota = useMemo(() => selectCodexWeeklyQuotaWindow(codexQuota), [codexQuota])
   const quotaProgress = useMemo(() => getCodexQuotaProgressMeta(weeklyQuota?.remainingPercent), [weeklyQuota])
   const codexNeedsLogin = Boolean(codexRuntime?.installed && !codexRuntime.authenticated)
@@ -252,6 +390,37 @@ export function AppTitleBar({
   const openCodexWorkspace = (): void => {
     setCodexPopoverOpen(false)
     onOpenCodex()
+  }
+
+  const openCodexMonitor = (): void => {
+    setCodexPopoverOpen(false)
+    onOpenCodexMonitor()
+  }
+
+  function findAlertProject(alert: CodexUncommittedAlert): CodexProjectMonitorSnapshot['projects'][number] | null {
+    return codexMonitor?.projects.find((project) => project.key === alert.codexKey) ?? null
+  }
+
+  function getAlertTitle(alert: CodexUncommittedAlert): string {
+    const project = findAlertProject(alert)
+    if (alert.sourceType === 'task') {
+      return project?.tasks.find((task) => task.id === alert.sourceId)?.title || '已完成的 Codex 任务'
+    }
+    return project?.sessions.find((session) => session.id === alert.sourceId)?.title || '已完成的 Codex 会话'
+  }
+
+  function getAlertProjectName(alert: CodexUncommittedAlert): string {
+    const project = findAlertProject(alert)
+    return alert.projectName || project?.forgeProjectName || codexAlertProject(alert)
+  }
+
+  function openCodexAlert(alert: CodexUncommittedAlert): void {
+    setCodexPopoverOpen(false)
+    if (alert.projectId) {
+      onOpenForgeProject(alert.projectId)
+      return
+    }
+    onOpenCodexMonitor()
   }
 
   async function loadCodexActivity(): Promise<void> {
@@ -397,7 +566,7 @@ export function AppTitleBar({
             <span className="app-titlebar-codex-unavailable">未安装</span>
           ) : codexRuntime ? (
             <span className="app-titlebar-codex-stats">
-              <span>进行中 <strong>{codexMonitor?.running ?? codexActivity?.running ?? 0}</strong></span>
+              <span>进行中 <strong>{codexRunningCount}</strong></span>
               {codexMonitor?.uncommitted ? <span className="app-titlebar-codex-alert-count">未提交 <strong>{codexMonitor.uncommitted}</strong></span> : null}
               <span>本周 <strong>{formatCodexQuotaPercent(quotaProgress.percent)}</strong></span>
             </span>
@@ -422,13 +591,13 @@ export function AppTitleBar({
                 <span>{codexRuntime?.message || '当前没有可用的 Codex 账号，登录后才能读取周配额。'}</span>
                 <button type="button" onClick={openCodexWorkspace}>去 AI 工具</button>
               </div>
-            ) : codexActivity?.available ? (
+            ) : codexActivity?.available || codexMonitor?.available ? (
               <>
                 <div className="app-titlebar-codex-popover-summary">
-                  <span><strong>{codexMonitor?.running ?? codexActivity.running}</strong> 进行中</span>
+                  <span><strong>{codexRunningCount}</strong> 进行中</span>
                   <span className={codexMonitor?.uncommitted ? 'is-alert' : undefined}><strong>{codexMonitor?.uncommitted ?? 0}</strong> 未提交</span>
-                  <span><strong>{codexActivity.completed.toLocaleString()}</strong> 已完成</span>
-                  <span><strong>{codexActivity.sessions.length}</strong> 会话</span>
+                  <span><strong>{codexCompletedCount.toLocaleString()}</strong> 已完成</span>
+                  <span><strong>{codexStatusSessions.length}</strong> 会话</span>
                 </div>
                 <div className={`app-titlebar-codex-quota is-${quotaProgress.tone}`}>
                   <div className="app-titlebar-codex-quota-heading">
@@ -443,7 +612,7 @@ export function AppTitleBar({
                   </div>
                   <div className="app-titlebar-codex-quota-meta">
                     <span>{weeklyQuota?.usedPercent === null || weeklyQuota?.usedPercent === undefined ? '已用未知' : `已用 ${formatCodexQuotaPercent(weeklyQuota.usedPercent)}`}</span>
-                    <span>{weeklyQuota ? formatCodexResetAt(weeklyQuota.resetAt) : '重置时间未知'}</span>
+                    <span>{weeklyQuota ? formatCodexResetAt(weeklyQuota.resetAt) : '下次重置：未知'}</span>
                   </div>
                 </div>
                 <section className="app-titlebar-codex-popover-section">
@@ -455,11 +624,39 @@ export function AppTitleBar({
                     </button>
                   )) : <div className="app-titlebar-codex-popover-empty">当前没有正在运行的会话</div>}
                 </section>
+                <section className="app-titlebar-codex-popover-section is-alerts">
+                  <div className="app-titlebar-codex-popover-section-title">
+                    <span>最近完成但未提交</span>
+                    <strong>{uncommittedCodexAlerts.length}</strong>
+                  </div>
+                  {uncommittedCodexAlerts.length > 0 ? (
+                    <div className="app-titlebar-codex-alert-list">
+                      {uncommittedCodexAlerts.map((alert) => (
+                        <button
+                          aria-label={`${getAlertTitle(alert)}，${alert.projectId ? '进入项目' : '打开 Codex 监控'}`}
+                          className={`app-titlebar-codex-popover-session is-alert${alert.projectId ? '' : ' is-unlinked'}`}
+                          key={alert.id}
+                          title={alert.projectId ? '进入 ForgeDesk 项目详情' : '该任务未关联 ForgeDesk 项目，将打开 Codex 监控'}
+                          type="button"
+                          onClick={() => openCodexAlert(alert)}
+                        >
+                          <span className="app-titlebar-codex-popover-session-title">{getAlertTitle(alert)}</span>
+                          <span className="app-titlebar-codex-popover-session-meta">
+                            {alert.projectId ? `项目：${getAlertProjectName(alert)}` : '未关联 ForgeDesk 项目'} · {alert.sourceType === 'task' ? '内置任务' : '会话'} · {formatRelativeTime(alert.completedAt)}
+                          </span>
+                          <span className="app-titlebar-codex-popover-session-meta">
+                            {alert.filesChanged} 个文件 · +{alert.additions} -{alert.deletions} · {alert.projectId ? '进入项目 ›' : '打开监控 ›'}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : <div className="app-titlebar-codex-popover-empty">暂无刚完成但未提交的任务</div>}
+                </section>
               </>
             ) : (
               <div className="app-titlebar-codex-popover-error">{codexRuntime?.message || codexActivityError || codexActivity?.error || '尚未读取到本机 Codex 会话'}</div>
             )}
-            <button className="app-titlebar-codex-popover-footer" type="button" onClick={openCodexWorkspace}>查看全部会话 <span>›</span></button>
+            <button className="app-titlebar-codex-popover-footer" type="button" onClick={openCodexMonitor}>查看全部 Codex 监控 <span>›</span></button>
           </div>
         ) : null}
       </div>

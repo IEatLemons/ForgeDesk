@@ -1,84 +1,95 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import { parseGitIpcPayload } from './git-ipc'
+
+function invokeGitIpc<T>(channel: string, ...args: unknown[]): Promise<T> {
+  return ipcRenderer.invoke(channel, ...args).then((payload: unknown) => parseGitIpcPayload<T>(channel, payload))
+}
 
 contextBridge.exposeInMainWorld('forgeDesk', {
-  listProjects: () => ipcRenderer.invoke('projects:list'),
-  createProject: (input: { name: string; workspacePath: string; repositories: ScannedRepository[] }) => ipcRenderer.invoke('projects:create', input),
-  createEmptyProject: (input: { name: string; parentPath: string }) => ipcRenderer.invoke('projects:create-empty', input),
-  createProjectFromRemote: (input: { name: string; remoteUrl: string; parentPath: string }) => ipcRenderer.invoke('projects:create-from-remote', input),
-  updateProject: (input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }) => ipcRenderer.invoke('projects:update', input),
-  setProjectFavorite: (input: { id: string; isFavorite: boolean }) => ipcRenderer.invoke('projects:favorite', input),
+  listProjects: () => invokeGitIpc<WorkspaceSnapshot>('projects:list'),
+  createProject: (input: { name: string; workspacePath: string; repositories: ScannedRepository[] }) => invokeGitIpc<WorkspaceSnapshot>('projects:create', input),
+  createEmptyProject: (input: { name: string; parentPath: string }) => invokeGitIpc<WorkspaceSnapshot>('projects:create-empty', input),
+  createProjectFromRemote: (input: { name: string; remoteUrl: string; parentPath: string }) => invokeGitIpc<WorkspaceSnapshot>('projects:create-from-remote', input),
+  updateProject: (input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }) => invokeGitIpc<WorkspaceSnapshot>('projects:update', input),
+  setProjectFavorite: (input: { id: string; isFavorite: boolean }) => invokeGitIpc<WorkspaceSnapshot>('projects:favorite', input),
   listProjectGroups: () => ipcRenderer.invoke('project-groups:list'),
   saveProjectGroup: (input: ProjectGroupInput) => ipcRenderer.invoke('project-group:save', input),
   deleteProjectGroup: (groupId: string) => ipcRenderer.invoke('project-group:delete', groupId),
   reorderProjectGroups: (groupIds: string[]) => ipcRenderer.invoke('project-groups:reorder', groupIds),
-  setProjectGroup: (input: { projectId: string; groupId: string | null }) => ipcRenderer.invoke('project:group:set', input),
+  setProjectGroup: (input: { projectId: string; groupId: string | null }) => invokeGitIpc<WorkspaceSnapshot>('project:group:set', input),
   listCodexProjectLinks: () => ipcRenderer.invoke('codex-project-link:list'),
   saveCodexProjectLink: (input: CodexProjectLinkInput) => ipcRenderer.invoke('codex-project-link:save', input),
   deleteCodexProjectLink: (cwd: string) => ipcRenderer.invoke('codex-project-link:delete', cwd),
-  deleteProject: (projectId: string) => ipcRenderer.invoke('projects:delete', projectId),
-  rescanProjectRepositories: (projectId: string) => ipcRenderer.invoke('project:repositories:rescan', projectId),
-  initializeProjectRepository: (projectId: string) => ipcRenderer.invoke('project:repository:init', projectId),
-  listRepositories: (projectId?: string) => ipcRenderer.invoke('repositories:list', projectId),
-  getRepositoryDetail: (repositoryId: string) => ipcRenderer.invoke('repository:detail', repositoryId),
+  deleteProject: (projectId: string) => invokeGitIpc<WorkspaceSnapshot>('projects:delete', projectId),
+  rescanProjectRepositories: (projectId: string) => invokeGitIpc<WorkspaceSnapshot>('project:repositories:rescan', projectId),
+  initializeProjectRepository: (projectId: string) => invokeGitIpc<WorkspaceSnapshot>('project:repository:init', projectId),
+  listRepositories: (projectId?: string) => invokeGitIpc<RepositoryRecord[]>('repositories:list', projectId),
+  getRepositoryDetail: (repositoryId: string) => invokeGitIpc<RepositoryRecord>('repository:detail', repositoryId),
   listRepositoryCommits: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) =>
-    ipcRenderer.invoke('repository:commits', repositoryId, options),
+    invokeGitIpc<GitCommitRecord[]>('repository:commits', repositoryId, options),
   getRepositoryCommitGraph: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) =>
-    ipcRenderer.invoke('repository:commit-graph', repositoryId, options),
-  syncRepositoryRemote: (repositoryId: string) => ipcRenderer.invoke('repository:sync-remote', repositoryId),
-  saveRepositoryRemote: (input: RepositoryRemoteInput) => ipcRenderer.invoke('repository:remote:save', input),
-  deleteRepositoryRemote: (repositoryId: string, remoteName: string) => ipcRenderer.invoke('repository:remote:delete', repositoryId, remoteName),
-  fetchRepositoryRemote: (repositoryId: string, remoteName?: string, operationId?: string) => ipcRenderer.invoke('repository:remote:fetch', repositoryId, remoteName, operationId),
-  switchRepositoryBranch: (repositoryId: string, input: GitBranchSwitchInput) => ipcRenderer.invoke('repository:branch:switch', repositoryId, input),
-  runRepositoryGitCommand: (input: GitCommandRequest) => ipcRenderer.invoke('repository:git-command', input),
-  getRepositoryWorkspaceStatus: (repositoryId: string) => ipcRenderer.invoke('repository:workspace-status', repositoryId),
-  gitAdd: (repositoryId: string, input: GitAddInput) => ipcRenderer.invoke('repository:git-add', repositoryId, input),
-  gitCommit: (repositoryId: string, input: GitCommitInput) => ipcRenderer.invoke('repository:git-commit', repositoryId, input),
-  gitPush: (repositoryId: string, input: GitPushInput, operationId?: string) => ipcRenderer.invoke('repository:git-push', repositoryId, input, operationId),
-  gitPushTask: (repositoryId: string, input: GitPushInput, operationId: string) => ipcRenderer.invoke('repository:git-push-task', repositoryId, input, operationId),
-  cancelRepositoryGitOperation: (operationId: string) => ipcRenderer.invoke('repository:git-operation:cancel', operationId),
-  listProjectGitTasks: (projectId?: string) => ipcRenderer.invoke('project:git-tasks:list', projectId),
-  getProjectGitTask: (taskId: string) => ipcRenderer.invoke('project:git-task:get', taskId),
-  saveProjectGitTask: (task: ProjectGitTaskLog) => ipcRenderer.invoke('project:git-task:save', task),
+    invokeGitIpc<GitCommitRecord[]>('repository:commit-graph', repositoryId, options),
+  syncRepositoryRemote: (repositoryId: string) => invokeGitIpc<RepositoryRecord>('repository:sync-remote', repositoryId),
+  saveRepositoryRemote: (input: RepositoryRemoteInput) => invokeGitIpc<RepositoryRecord>('repository:remote:save', input),
+  deleteRepositoryRemote: (repositoryId: string, remoteName: string) => invokeGitIpc<RepositoryRecord>('repository:remote:delete', repositoryId, remoteName),
+  fetchRepositoryRemote: (repositoryId: string, remoteName?: string, operationId?: string) => invokeGitIpc<RepositoryRecord>('repository:remote:fetch', repositoryId, remoteName, operationId),
+  switchRepositoryBranch: (repositoryId: string, input: GitBranchSwitchInput) => invokeGitIpc<RepositoryRecord>('repository:branch:switch', repositoryId, input),
+  runRepositoryGitCommand: (input: GitCommandRequest) => invokeGitIpc<GitCommandResult>('repository:git-command', input),
+  getRepositoryWorkspaceStatus: (repositoryId: string) => invokeGitIpc<GitWorkspaceStatus>('repository:workspace-status', repositoryId),
+  gitAdd: (repositoryId: string, input: GitAddInput) => invokeGitIpc<GitOperationResult>('repository:git-add', repositoryId, input),
+  gitCommit: (repositoryId: string, input: GitCommitInput) => invokeGitIpc<GitOperationResult>('repository:git-commit', repositoryId, input),
+  gitPush: (repositoryId: string, input: GitPushInput, operationId?: string) => invokeGitIpc<GitOperationResult>('repository:git-push', repositoryId, input, operationId),
+  gitPushTask: (repositoryId: string, input: GitPushInput, operationId: string) => invokeGitIpc<GitPushTaskResult>('repository:git-push-task', repositoryId, input, operationId),
+  cancelRepositoryGitOperation: (operationId: string) => invokeGitIpc<boolean>('repository:git-operation:cancel', operationId),
+  listProjectGitTasks: (projectId?: string) => invokeGitIpc<ProjectGitTaskLog[]>('project:git-tasks:list', projectId),
+  getProjectGitTask: (taskId: string) => invokeGitIpc<ProjectGitTaskLog | null>('project:git-task:get', taskId),
+  saveProjectGitTask: (task: ProjectGitTaskLog) => invokeGitIpc<ProjectGitTaskLog>('project:git-task:save', task),
   deleteProjectGitTask: (taskId: string) => ipcRenderer.invoke('project:git-task:delete', taskId),
   clearProjectGitTasks: () => ipcRenderer.invoke('project:git-tasks:clear'),
   onProjectGitTaskUpdated: (listener: (task: ProjectGitTaskLog) => void) => {
-    const wrapped = (_event: Electron.IpcRendererEvent, task: ProjectGitTaskLog): void => listener(task)
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown): void => {
+      try {
+        listener(parseGitIpcPayload<ProjectGitTaskLog>('project-git-tasks:updated', payload))
+      } catch (error) {
+        console.error(error)
+      }
+    }
     ipcRenderer.on('project-git-tasks:updated', wrapped)
     return () => ipcRenderer.removeListener('project-git-tasks:updated', wrapped)
   },
-  getRepositoryDeploymentApprovalConfig: (repositoryId: string) => ipcRenderer.invoke('repository:deployment-approval:config:get', repositoryId),
-  saveRepositoryDeploymentApprovalConfig: (input: DeploymentApprovalConfig) => ipcRenderer.invoke('repository:deployment-approval:config:save', input),
+  getRepositoryDeploymentApprovalConfig: (repositoryId: string) => invokeGitIpc<DeploymentApprovalConfig | null>('repository:deployment-approval:config:get', repositoryId),
+  saveRepositoryDeploymentApprovalConfig: (input: DeploymentApprovalConfig) => invokeGitIpc<DeploymentApprovalConfig>('repository:deployment-approval:config:save', input),
   analyzeRepositoryDeploymentApproval: (repositoryId: string, input?: { manualBaselineSha?: string }) =>
-    ipcRenderer.invoke('repository:deployment-approval:analyze', repositoryId, input),
+    invokeGitIpc<DeploymentApprovalAnalysis>('repository:deployment-approval:analyze', repositoryId, input),
   executeRepositoryDeploymentApproval: (repositoryId: string, input: { reviewedHeadSha: string; baselineSha: string }) =>
-    ipcRenderer.invoke('repository:deployment-approval:execute', repositoryId, input),
-  listRepositoryDeploymentApprovals: (repositoryId: string) => ipcRenderer.invoke('repository:deployment-approvals:list', repositoryId),
-  analyzeRepositoryMerge: (repositoryId: string, input: GitMergeAnalysisInput) => ipcRenderer.invoke('repository:merge-analysis', repositoryId, input),
-  gitMerge: (repositoryId: string, input: GitMergeInput) => ipcRenderer.invoke('repository:git-merge', repositoryId, input),
-  suggestCommitMessage: (repositoryId: string, input: GitCommitMessageInput) => ipcRenderer.invoke('repository:commit-message:suggest', repositoryId, input),
-  prepareRepositoryRelease: (repositoryId: string, input?: RepositoryReleasePrepareInput) => ipcRenderer.invoke('repository:release:prepare', repositoryId, input),
-  recommendRepositoryReleaseTag: (repositoryId: string) => ipcRenderer.invoke('repository:release-tag:recommend', repositoryId),
-  suggestRepositoryRelease: (repositoryId: string, input?: RepositoryReleaseSuggestionInput) => ipcRenderer.invoke('repository:release:suggest', repositoryId, input),
-  publishRepositoryRelease: (repositoryId: string, input: RepositoryReleasePublishInput) => ipcRenderer.invoke('repository:release:publish', repositoryId, input),
-  startRepositoryReleasePublishTask: (repositoryId: string, input: RepositoryReleasePublishInput) => ipcRenderer.invoke('repository:release-publish-task:start', repositoryId, input),
-  listRepositoryReleasePublishTasks: (repositoryId?: string) => ipcRenderer.invoke('repository:release-publish-tasks:list', repositoryId),
-  getRepositoryReleasePublishTask: (taskId: string) => ipcRenderer.invoke('repository:release-publish-task:get', taskId),
-  cancelRepositoryReleasePublishTask: (taskId: string) => ipcRenderer.invoke('repository:release-publish-task:cancel', taskId),
-  getRepositoryCodemagicBinding: (repositoryId: string) => ipcRenderer.invoke('repository:codemagic-binding:get', repositoryId),
-  saveRepositoryCodemagicBinding: (input: CodemagicRepositoryBindingInput) => ipcRenderer.invoke('repository:codemagic-binding:save', input),
+    invokeGitIpc<DeploymentApprovalExecutionResult & { repository: RepositoryRecord }>('repository:deployment-approval:execute', repositoryId, input),
+  listRepositoryDeploymentApprovals: (repositoryId: string) => invokeGitIpc<DeploymentApprovalHistory[]>('repository:deployment-approvals:list', repositoryId),
+  analyzeRepositoryMerge: (repositoryId: string, input: GitMergeAnalysisInput) => invokeGitIpc<GitMergeAnalysis>('repository:merge-analysis', repositoryId, input),
+  gitMerge: (repositoryId: string, input: GitMergeInput) => invokeGitIpc<GitOperationResult>('repository:git-merge', repositoryId, input),
+  suggestCommitMessage: (repositoryId: string, input: GitCommitMessageInput) => invokeGitIpc<CommitMessageSuggestion>('repository:commit-message:suggest', repositoryId, input),
+  prepareRepositoryRelease: (repositoryId: string, input?: RepositoryReleasePrepareInput) => invokeGitIpc<RepositoryReleasePreparation>('repository:release:prepare', repositoryId, input),
+  recommendRepositoryReleaseTag: (repositoryId: string) => invokeGitIpc<RepositoryReleaseTagRecommendation>('repository:release-tag:recommend', repositoryId),
+  suggestRepositoryRelease: (repositoryId: string, input?: RepositoryReleaseSuggestionInput) => invokeGitIpc<RepositoryReleaseSuggestion>('repository:release:suggest', repositoryId, input),
+  publishRepositoryRelease: (repositoryId: string, input: RepositoryReleasePublishInput) => invokeGitIpc<RepositoryReleasePublishResult>('repository:release:publish', repositoryId, input),
+  startRepositoryReleasePublishTask: (repositoryId: string, input: RepositoryReleasePublishInput) => invokeGitIpc<RepositoryReleasePublishTask>('repository:release-publish-task:start', repositoryId, input),
+  listRepositoryReleasePublishTasks: (repositoryId?: string) => invokeGitIpc<RepositoryReleasePublishTask[]>('repository:release-publish-tasks:list', repositoryId),
+  getRepositoryReleasePublishTask: (taskId: string) => invokeGitIpc<RepositoryReleasePublishTask | null>('repository:release-publish-task:get', taskId),
+  cancelRepositoryReleasePublishTask: (taskId: string) => invokeGitIpc<RepositoryReleasePublishTask>('repository:release-publish-task:cancel', taskId),
+  getRepositoryCodemagicBinding: (repositoryId: string) => invokeGitIpc<CodemagicRepositoryBinding | null>('repository:codemagic-binding:get', repositoryId),
+  saveRepositoryCodemagicBinding: (input: CodemagicRepositoryBindingInput) => invokeGitIpc<CodemagicRepositoryBinding>('repository:codemagic-binding:save', input),
   deleteRepositoryCodemagicBinding: (repositoryId: string) => ipcRenderer.invoke('repository:codemagic-binding:delete', repositoryId),
-  suggestConflictResolution: (repositoryId: string, filePath: string) => ipcRenderer.invoke('repository:conflict:suggest', repositoryId, filePath),
-  applyConflictResolution: (repositoryId: string, filePath: string, content: string) => ipcRenderer.invoke('repository:conflict:apply', repositoryId, filePath, content),
-  listRepositoryCommitFiles: (repositoryId: string, commitHash: string) => ipcRenderer.invoke('repository:commit-files', repositoryId, commitHash),
+  suggestConflictResolution: (repositoryId: string, filePath: string) => invokeGitIpc<AiConflictSuggestion>('repository:conflict:suggest', repositoryId, filePath),
+  applyConflictResolution: (repositoryId: string, filePath: string, content: string) => invokeGitIpc<GitOperationResult>('repository:conflict:apply', repositoryId, filePath, content),
+  listRepositoryCommitFiles: (repositoryId: string, commitHash: string) => invokeGitIpc<GitCommitFileChange[]>('repository:commit-files', repositoryId, commitHash),
   getRepositoryCommitDiff: (repositoryId: string, commitHash: string, filePath: string, oldPath?: string, status?: string) =>
-    ipcRenderer.invoke('repository:commit-diff', repositoryId, commitHash, filePath, oldPath, status),
-  getProjectSummary: (projectId: string, range?: { startDate?: string; endDate?: string }) => ipcRenderer.invoke('project:summary', projectId, range),
-  analyzeProjectGit: (projectId: string) => ipcRenderer.invoke('project:analyze-git', projectId),
-  listProjectPeople: (projectId: string) => ipcRenderer.invoke('project:people', projectId),
-  listProjectContributorIdentities: (projectId: string) => ipcRenderer.invoke('project:contributor-identities', projectId),
-  listProjectBranchTags: (projectId: string) => ipcRenderer.invoke('project:branch-tags', projectId),
-  saveProjectBranchTag: (input: { id?: string; projectId: string; label: string; branchName: string; color: string }) => ipcRenderer.invoke('project:branch-tag:save', input),
-  deleteProjectBranchTag: (projectId: string, tagId: string) => ipcRenderer.invoke('project:branch-tag:delete', projectId, tagId),
+    invokeGitIpc<GitCommitDiff>('repository:commit-diff', repositoryId, commitHash, filePath, oldPath, status),
+  getProjectSummary: (projectId: string, range?: { startDate?: string; endDate?: string }) => invokeGitIpc<ProjectGitSummary>('project:summary', projectId, range),
+  analyzeProjectGit: (projectId: string) => invokeGitIpc<ProjectGitSummary>('project:analyze-git', projectId),
+  listProjectPeople: (projectId: string) => invokeGitIpc<ProjectPersonRecord[]>('project:people', projectId),
+  listProjectContributorIdentities: (projectId: string) => invokeGitIpc<GitContributorIdentity[]>('project:contributor-identities', projectId),
+  listProjectBranchTags: (projectId: string) => invokeGitIpc<ProjectBranchTagRecord[]>('project:branch-tags', projectId),
+  saveProjectBranchTag: (input: { id?: string; projectId: string; label: string; branchName: string; color: string }) => invokeGitIpc<ProjectBranchTagRecord>('project:branch-tag:save', input),
+  deleteProjectBranchTag: (projectId: string, tagId: string) => invokeGitIpc<ProjectBranchTagRecord[]>('project:branch-tag:delete', projectId, tagId),
   listProjectTerminalCommands: (projectId: string) => ipcRenderer.invoke('project:terminal-commands:list', projectId),
   saveProjectTerminalCommand: (input: ProjectTerminalCommandInput) => ipcRenderer.invoke('project:terminal-command:save', input),
   deleteProjectTerminalCommand: (projectId: string, commandId: string) => ipcRenderer.invoke('project:terminal-command:delete', projectId, commandId),
@@ -177,22 +188,22 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   saveProjectPerson: (input: { id?: string; projectId: string; displayName: string; role?: string; identities: Array<{ name: string; email: string }> }) =>
     ipcRenderer.invoke('project:person:save', input),
   deleteProjectPerson: (projectId: string, personId: string) => ipcRenderer.invoke('project:person:delete', projectId, personId),
-  scanRepositories: (paths: string[]) => ipcRenderer.invoke('repositories:scan', paths),
-  scanWorkspace: (rootPath: string) => ipcRenderer.invoke('repositories:scan-workspace', rootPath),
+  scanRepositories: (paths: string[]) => invokeGitIpc<ScannedRepository[]>('repositories:scan', paths),
+  scanWorkspace: (rootPath: string) => invokeGitIpc<ScannedRepository[]>('repositories:scan-workspace', rootPath),
   configureRepositoryIdentity: (localPath: string, identity: { userName: string; userEmail: string }) =>
-    ipcRenderer.invoke('repository:configure-identity', localPath, identity),
-  clearRepositoryIdentity: (localPath: string) => ipcRenderer.invoke('repository:clear-identity', localPath),
+    invokeGitIpc<ScannedRepository>('repository:configure-identity', localPath, identity),
+  clearRepositoryIdentity: (localPath: string) => invokeGitIpc<ScannedRepository>('repository:clear-identity', localPath),
   selectDirectory: () => ipcRenderer.invoke('dialog:select-directory'),
   selectFile: () => ipcRenderer.invoke('dialog:select-file'),
   selectImage: () => ipcRenderer.invoke('dialog:select-image'),
   readClipboardImage: () => ipcRenderer.invoke('clipboard:read-image'),
   readImageData: (imagePath: string) => ipcRenderer.invoke('file:read-image-data', imagePath),
-  getGitSetupStatus: () => ipcRenderer.invoke('git:setup-status'),
-  configureGitIdentity: (identity: { userName: string; userEmail: string }) => ipcRenderer.invoke('git:configure-identity', identity),
-  installGpg: () => ipcRenderer.invoke('gpg:install'),
-  importGpgBundle: (input: { sourcePath: string }) => ipcRenderer.invoke('gpg:import-bundle', input),
+  getGitSetupStatus: () => invokeGitIpc<GitSetupStatus>('git:setup-status'),
+  configureGitIdentity: (identity: { userName: string; userEmail: string }) => invokeGitIpc<GitSetupStatus>('git:configure-identity', identity),
+  installGpg: () => invokeGitIpc<{ status: GitSetupStatus; requiresManualInstall: boolean }>('gpg:install'),
+  importGpgBundle: (input: { sourcePath: string }) => invokeGitIpc<GitSetupStatus>('gpg:import-bundle', input),
   copyGpgPublicKey: (fingerprint: string) => ipcRenderer.invoke('gpg:copy-public-key', fingerprint),
-  configureGitGpgSigning: (fingerprint: string) => ipcRenderer.invoke('gpg:configure-git-signing', fingerprint),
+  configureGitGpgSigning: (fingerprint: string) => invokeGitIpc<GitSetupStatus>('gpg:configure-git-signing', fingerprint),
   getAiSettings: () => ipcRenderer.invoke('settings:ai:get'),
   connectCodexApiServiceToAi: () => ipcRenderer.invoke('settings:ai:connect-codex-api'),
   syncCodexApiServiceToAi: () => ipcRenderer.invoke('settings:ai:sync-codex-api'),
@@ -224,19 +235,37 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   toggleCodexSessionPin: (sessionId: string) => ipcRenderer.invoke('codex:sessions:pin', sessionId),
   sendCodexSessionMessage: (input: CodexSessionMessageInput) => ipcRenderer.invoke('codex:sessions:send', input),
   cancelCodexSession: (sessionId: string) => ipcRenderer.invoke('codex:sessions:cancel', sessionId),
-  getCodexProjectMonitorSnapshot: () => ipcRenderer.invoke('codex:project-monitor:snapshot'),
+  getCodexProjectMonitorSnapshot: () => invokeGitIpc<CodexProjectMonitorSnapshot>('codex:project-monitor:snapshot'),
   onCodexProjectMonitorUpdated: (listener: (snapshot: CodexProjectMonitorSnapshot) => void) => {
-    const wrapped = (_event: Electron.IpcRendererEvent, snapshot: CodexProjectMonitorSnapshot): void => listener(snapshot)
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown): void => {
+      try {
+        listener(parseGitIpcPayload<CodexProjectMonitorSnapshot>('codex:project-monitor:updated', payload))
+      } catch (error) {
+        console.error(error)
+      }
+    }
     ipcRenderer.on('codex:project-monitor:updated', wrapped)
     return () => ipcRenderer.removeListener('codex:project-monitor:updated', wrapped)
   },
   onCodexMonitorAlert: (listener: (alert: CodexUncommittedAlert) => void) => {
-    const wrapped = (_event: Electron.IpcRendererEvent, alert: CodexUncommittedAlert): void => listener(alert)
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown): void => {
+      try {
+        listener(parseGitIpcPayload<CodexUncommittedAlert>('codex:project-monitor:alert', payload))
+      } catch (error) {
+        console.error(error)
+      }
+    }
     ipcRenderer.on('codex:project-monitor:alert', wrapped)
     return () => ipcRenderer.removeListener('codex:project-monitor:alert', wrapped)
   },
   onCodexMonitorFocus: (listener: (alert: CodexUncommittedAlert) => void) => {
-    const wrapped = (_event: Electron.IpcRendererEvent, alert: CodexUncommittedAlert): void => listener(alert)
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown): void => {
+      try {
+        listener(parseGitIpcPayload<CodexUncommittedAlert>('codex:project-monitor:focus', payload))
+      } catch (error) {
+        console.error(error)
+      }
+    }
     ipcRenderer.on('codex:project-monitor:focus', wrapped)
     return () => ipcRenderer.removeListener('codex:project-monitor:focus', wrapped)
   },
@@ -262,6 +291,21 @@ contextBridge.exposeInMainWorld('forgeDesk', {
     const wrapped = (_event: Electron.IpcRendererEvent, event: CodexTaskEvent): void => listener(event)
     ipcRenderer.on('codex:tasks:event', wrapped)
     return () => ipcRenderer.removeListener('codex:tasks:event', wrapped)
+  },
+  listManagedTasks: (projectId?: string) => ipcRenderer.invoke('managed-tasks:list', projectId),
+  syncManagedTasks: () => ipcRenderer.invoke('managed-tasks:sync'),
+  importLegacyManagedTasks: (tasks: LegacyManagedTaskImport[]) => ipcRenderer.invoke('managed-tasks:import-legacy', tasks),
+  createManagedTask: (input: ManagedTaskCreateInput) => ipcRenderer.invoke('managed-tasks:create', input),
+  saveManagedTaskPlan: (input: { taskId: string; subtasks: ManagedTaskPlanItem[] }) => ipcRenderer.invoke('managed-tasks:plan', input),
+  executeManagedTask: (input: { taskId: string; baseBranch?: string }) => ipcRenderer.invoke('managed-tasks:execute', input),
+  cancelManagedTask: (taskId: string) => ipcRenderer.invoke('managed-tasks:cancel', taskId),
+  approveManagedTaskReview: (taskId: string) => ipcRenderer.invoke('managed-tasks:review:approve', taskId),
+  commitManagedTask: (input: { taskId: string; message?: string }) => ipcRenderer.invoke('managed-tasks:commit', input),
+  publishManagedTask: (input: { taskId: string; targetBranch: 'develop' | 'preview' }) => ipcRenderer.invoke('managed-tasks:publish', input),
+  onManagedTaskEvent: (listener: (task: ManagedTask) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, task: ManagedTask): void => listener(task)
+    ipcRenderer.on('managed-tasks:event', wrapped)
+    return () => ipcRenderer.removeListener('managed-tasks:event', wrapped)
   },
   listOpenRouterModels: () => ipcRenderer.invoke('settings:ai:models:openrouter'),
   saveAiSettings: (input: AiSettingsInput) => ipcRenderer.invoke('settings:ai:save', input),
@@ -352,17 +396,17 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   sendMonthlyPerformanceSessionMessage: (input: MonthlyPerformanceSessionMessageInput) => ipcRenderer.invoke('tools:monthly-performance:sessions:message', input),
   confirmMonthlyPerformanceSession: (input: { sessionId: string; projectId: string; month: string }) => ipcRenderer.invoke('tools:monthly-performance:sessions:confirm', input),
   exportMonthlyPerformanceSession: (input: MonthlyPerformanceSessionExportInput) => ipcRenderer.invoke('tools:monthly-performance:sessions:export', input),
-  generateSshKey: (input: string | SshKeyGenerationInput) => ipcRenderer.invoke('ssh:generate-key', input),
+  generateSshKey: (input: string | SshKeyGenerationInput) => invokeGitIpc<GitSetupStatus['sshPublicKeys'][number]>('ssh:generate-key', input),
   copySshPublicKey: (publicKeyPath: string) => ipcRenderer.invoke('ssh:copy-public-key', publicKeyPath),
   copySshKeyPath: (path: string, kind: SshKeyKind) => ipcRenderer.invoke('ssh:copy-key-path', path, kind),
-  importSshKey: (input: SshKeyImportInput) => ipcRenderer.invoke('ssh:import-key', input),
-  deleteSshKey: (path: string, kind: SshKeyKind) => ipcRenderer.invoke('ssh:delete-key', path, kind),
-  saveSshPrivateKeyPassphrase: (path: string, passphrase: string) => ipcRenderer.invoke('ssh:save-private-key-passphrase', path, passphrase),
-  clearSshPrivateKeyPassphrase: (path: string) => ipcRenderer.invoke('ssh:clear-private-key-passphrase', path),
-  fixSshPrivateKeyPermissions: (path: string) => ipcRenderer.invoke('ssh:fix-private-key-permissions', path),
-  deriveSshPublicKey: (privateKeyPath: string) => ipcRenderer.invoke('ssh:derive-public-key', privateKeyPath),
-  readSshConfig: () => ipcRenderer.invoke('ssh:read-config'),
-  writeSshConfig: (content: string) => ipcRenderer.invoke('ssh:write-config', content),
+  importSshKey: (input: SshKeyImportInput) => invokeGitIpc<GitSetupStatus>('ssh:import-key', input),
+  deleteSshKey: (path: string, kind: SshKeyKind) => invokeGitIpc<GitSetupStatus>('ssh:delete-key', path, kind),
+  saveSshPrivateKeyPassphrase: (path: string, passphrase: string) => invokeGitIpc<GitSetupStatus>('ssh:save-private-key-passphrase', path, passphrase),
+  clearSshPrivateKeyPassphrase: (path: string) => invokeGitIpc<GitSetupStatus>('ssh:clear-private-key-passphrase', path),
+  fixSshPrivateKeyPermissions: (path: string) => invokeGitIpc<GitSetupStatus>('ssh:fix-private-key-permissions', path),
+  deriveSshPublicKey: (privateKeyPath: string) => invokeGitIpc<GitSetupStatus>('ssh:derive-public-key', privateKeyPath),
+  readSshConfig: () => invokeGitIpc<SshConfigFile>('ssh:read-config'),
+  writeSshConfig: (content: string) => invokeGitIpc<SshConfigFile>('ssh:write-config', content),
   openSshDirectory: () => ipcRenderer.invoke('ssh:open-directory'),
   listTerminalRemoteGroups: () => ipcRenderer.invoke('terminal:remote-groups:list'),
   saveTerminalRemoteGroup: (input: TerminalRemoteGroupInput) => ipcRenderer.invoke('terminal:remote-group:save', input),

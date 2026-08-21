@@ -25,6 +25,7 @@ describe('git workspace operations', () => {
   it('builds safe git add args', () => {
     assert.deepEqual(buildGitAddArgs({ mode: 'all', paths: [] }), ['add', '--all'])
     assert.deepEqual(buildGitAddArgs({ mode: 'paths', paths: ['src/main/index.ts'] }), ['add', '--', 'src/main/index.ts'])
+    assert.deepEqual(buildGitAddArgs({ mode: 'paths', paths: ['docs/Codex/可/对接能力API文档.md'] }), ['add', '--', 'docs/Codex/可/对接能力API文档.md'])
     assert.throws(() => buildGitAddArgs({ mode: 'paths', paths: ['src/main/index.ts;rm'] }), /不支持的文件路径/)
   })
 
@@ -86,17 +87,36 @@ describe('git workspace operations', () => {
     assert.throws(() => buildGitRevListCountArgs('main', 'feature bad'), /不支持的分支/)
   })
 
-  it('parses porcelain status rows', () => {
-    assert.deepEqual(parsePorcelainStatus(' M src/App.tsx\nA  README.md\nUU src/conflict.ts\n'), [
+  it('parses NUL-delimited porcelain status rows', () => {
+    assert.deepEqual(parsePorcelainStatus(' M src/App.tsx\0A  README.md\0UU src/conflict.ts\0'), [
       { path: 'src/App.tsx', oldPath: '', indexStatus: ' ', worktreeStatus: 'M', conflict: false },
       { path: 'README.md', oldPath: '', indexStatus: 'A', worktreeStatus: ' ', conflict: false },
       { path: 'src/conflict.ts', oldPath: '', indexStatus: 'U', worktreeStatus: 'U', conflict: true }
     ])
   })
 
-  it('keeps the first path character when status output has one status column', () => {
-    assert.deepEqual(parsePorcelainStatus('M src/main/ai-conflict-assistant.ts\n'), [
-      { path: 'src/main/ai-conflict-assistant.ts', oldPath: '', indexStatus: 'M', worktreeStatus: ' ', conflict: false }
+  it('keeps Unicode file paths unescaped', () => {
+    assert.deepEqual(parsePorcelainStatus(' M docs/Codex/可/对接能力API文档.md\0'), [
+      { path: 'docs/Codex/可/对接能力API文档.md', oldPath: '', indexStatus: ' ', worktreeStatus: 'M', conflict: false }
+    ])
+  })
+
+  it('parses rename paths from NUL-delimited porcelain status', () => {
+    assert.deepEqual(parsePorcelainStatus('R  docs/Codex/新 -> 接口文档.md\0docs/Codex/旧接口文档.md\0 R docs/Codex/工作区新接口.md\0docs/Codex/工作区旧接口.md\0'), [
+      {
+        path: 'docs/Codex/新 -> 接口文档.md',
+        oldPath: 'docs/Codex/旧接口文档.md',
+        indexStatus: 'R',
+        worktreeStatus: ' ',
+        conflict: false
+      },
+      {
+        path: 'docs/Codex/工作区新接口.md',
+        oldPath: 'docs/Codex/工作区旧接口.md',
+        indexStatus: ' ',
+        worktreeStatus: 'R',
+        conflict: false
+      }
     ])
   })
 

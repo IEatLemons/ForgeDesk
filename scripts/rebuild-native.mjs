@@ -1,14 +1,13 @@
+import { rebuild } from '@electron/rebuild'
 import { createRequire } from 'node:module'
-import { chmodSync, existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { spawnSync } from 'node:child_process'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const require = createRequire(import.meta.url)
 const betterSqlitePath = join(root, 'node_modules', 'better-sqlite3')
 const electronPackagePath = join(root, 'node_modules', 'electron', 'package.json')
-const nativeCachePath = join(root, '.cache', 'native')
 
 function ensureNodePtySpawnHelperPermissions() {
   if (process.platform !== 'darwin') {
@@ -39,17 +38,7 @@ function ensureNodePtySpawnHelperPermissions() {
 
 ensureNodePtySpawnHelperPermissions()
 
-let prebuildInstallBin
-if (existsSync(betterSqlitePath)) {
-  try {
-    const betterSqliteModulesRoot = dirname(realpathSync(betterSqlitePath))
-    prebuildInstallBin = require.resolve('prebuild-install/bin.js', { paths: [betterSqliteModulesRoot] })
-  } catch {
-    prebuildInstallBin = null
-  }
-}
-
-if (!existsSync(betterSqlitePath) || !prebuildInstallBin || !existsSync(electronPackagePath)) {
+if (!existsSync(betterSqlitePath) || !existsSync(electronPackagePath)) {
   console.warn('Skipping native rebuild: dependencies are not installed yet.')
   process.exit(0)
 }
@@ -57,21 +46,17 @@ if (!existsSync(betterSqlitePath) || !prebuildInstallBin || !existsSync(electron
 const electronPackage = JSON.parse(readFileSync(electronPackagePath, 'utf8'))
 const electronVersion = electronPackage.version
 
-const result = spawnSync(
-  process.execPath,
-  [prebuildInstallBin, '--runtime', 'electron', '--target', electronVersion, '--arch', process.arch],
-  {
-    cwd: betterSqlitePath,
-    env: {
-      ...process.env,
-      npm_config_cache: nativeCachePath
-    },
-    stdio: 'inherit'
-  }
-)
+// better-sqlite3 does not publish a prebuilt binary for every Electron ABI.
+// Rebuild it from source against the Electron version that will actually run
+// the app, rather than failing the whole build when a download is unavailable.
+await rebuild({
+  arch: process.arch,
+  buildFromSource: true,
+  buildPath: root,
+  electronVersion,
+  force: true,
+  mode: 'sequential',
+  onlyModules: ['better-sqlite3']
+})
 
-if (result.error) {
-  throw result.error
-}
-
-process.exit(result.status ?? 0)
+ensureNodePtySpawnHelperPermissions()

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, Notification, powerMonitor, shell, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, Notification, powerMonitor, shell, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { execFile, spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
@@ -54,6 +54,17 @@ import {
   type ProjectAiBindingInput
 } from './project-ai-bindings'
 import { CodexActivityService, type CodexActivitySnapshot } from './codex-activity'
+import { CodexAppServerThreadService, type CodexAppServerNotification } from './codex-app-server'
+import {
+  ManagedTaskService,
+  migrateManagedTaskTables,
+  managedTaskStageLabels,
+  type ManagedTask,
+  type ManagedTaskCreateInput,
+  type ManagedTaskImportedThread,
+  type ManagedTaskLegacyImport,
+  type ManagedTaskPlanItem
+} from './managed-tasks'
 import {
   CodexSessionService,
   type CodexSessionEvent,
@@ -169,6 +180,7 @@ import {
 } from './lark-bot-service'
 import { MenuBarManagerService } from './menu-bar-manager'
 import { collectCloseGuardActivities, createCloseGuardPrompt, type CloseGuardAction, type CloseGuardActivity } from './app-close-guard'
+import { acquireSingleProcessFileLock } from './instance-lock'
 import { isAppUpdateQuitRequested, registerAppUpdateIpc } from './app-updates'
 import { inspectCliEnvironment, repairCliEnvironment, type CliEnvironmentRepairResult, type CliEnvironmentSnapshot } from './cli-environment'
 import {
@@ -245,6 +257,7 @@ import {
   type DataSourceTabularResult
 } from './data-sources'
 import { buildGitAuthorLookup, resolveGitAuthorDisplay, type GitAuthorLookup } from './git-author-mapping'
+import { serializeGitIpcPayload } from './git-ipc'
 import { discoverSubmoduleTree, type SubmoduleDescriptor } from './git-submodules'
 import {
   analyzeDeploymentApproval,
@@ -514,6 +527,23 @@ import {
   type MonthlyPerformanceSessionMessageInput,
   type MonthlyPerformanceWorkItemSource
 } from './monthly-performance'
+
+// Development and packaged builds share the ForgeDesk user-data directory. Do
+// not allow a second main process to open the same SQLite database: besides
+// SQLITE_BUSY errors this can make native-module failures look like an
+// Electron/V8 startup crash. The file lock covers Electron major-version
+// transitions, where Electron's built-in lock is not interoperable.
+const releaseSingleProcessFileLock = acquireSingleProcessFileLock(join(app.getPath('userData'), 'forgedesk.instance.lock'))
+const hasElectronInstanceLock = app.requestSingleInstanceLock()
+const hasSingleInstanceLock = Boolean(releaseSingleProcessFileLock && hasElectronInstanceLock)
+
+if (!hasSingleInstanceLock) {
+  releaseSingleProcessFileLock?.()
+  if (hasElectronInstanceLock) app.releaseSingleInstanceLock()
+  app.quit()
+} else {
+  process.once('exit', () => releaseSingleProcessFileLock?.())
+}
 
 type RepositoryScanResult = {
   id: string
@@ -909,6 +939,7 @@ type QuickBuildTaskSnapshot = {
 type GitExecutionOptions = {
   env?: NodeJS.ProcessEnv
   operationId?: string
+  preserveOutput?: boolean
 }
 
 type GitExecutionError = Error & {
@@ -935,6 +966,8 @@ const codexTaskService = new CodexTaskService({
   },
   resolveCodexHome: (accountId) => resolveCodexHome(app.getPath('userData'), accountId)
 })
+const managedTaskService = new ManagedTaskService(() => getDatabase())
+let managedCodexThreadService: CodexAppServerThreadService | null = null
 const codexActivityService = new CodexActivityService()
 const codexSiteService = new CodexSiteService({ db: () => getDatabase() })
 const codexSessionService = new CodexSessionService({
@@ -1765,20 +1798,26 @@ function sendCodexSessionEvent(event: CodexSessionEvent): void {
 }
 
 function sendProjectGitTaskEvent(task: ProjectGitTaskLog): void {
+  const payload = serializeGitIpcPayload('project-git-tasks:updated', task)
+
   for (const window of BrowserWindow.getAllWindows()) {
-    window.webContents.send('project-git-tasks:updated', task)
+    window.webContents.send('project-git-tasks:updated', payload)
   }
 }
 
 function sendCodexProjectMonitorEvent(snapshot: CodexProjectMonitorSnapshot): void {
+  const payload = serializeGitIpcPayload('codex:project-monitor:updated', snapshot)
+
   for (const window of BrowserWindow.getAllWindows()) {
-    window.webContents.send('codex:project-monitor:updated', snapshot)
+    window.webContents.send('codex:project-monitor:updated', payload)
   }
 }
 
 function sendCodexMonitorAlert(alert: CodexUncommittedAlert): void {
+  const payload = serializeGitIpcPayload('codex:project-monitor:alert', alert)
+
   for (const window of BrowserWindow.getAllWindows()) {
-    window.webContents.send('codex:project-monitor:alert', alert)
+    window.webContents.send('codex:project-monitor:alert', payload)
   }
 
   if (!Notification.isSupported()) return
@@ -1788,10 +1827,12 @@ function sendCodexMonitorAlert(alert: CodexUncommittedAlert): void {
     title: 'Codex 执行完成，但工作区未提交'
   })
   notification.on('click', () => {
+    const focusPayload = serializeGitIpcPayload('codex:project-monitor:focus', alert)
+
     for (const window of BrowserWindow.getAllWindows()) {
       window.show()
       window.focus()
-      window.webContents.send('codex:project-monitor:focus', alert)
+      window.webContents.send('codex:project-monitor:focus', focusPayload)
     }
   })
   notification.show()
@@ -2139,6 +2180,7 @@ function getDatabase(): Database.Database {
 
   const databasePath = join(app.getPath('userData'), 'forgedesk.db')
   database = new Database(databasePath)
+  database.pragma('busy_timeout = 5000')
   database.pragma('journal_mode = WAL')
   database.pragma('foreign_keys = ON')
   migrateDatabase(database)
@@ -2274,6 +2316,7 @@ function migrateDatabase(db: Database.Database): void {
   migrateMonthlyPerformanceTables(db)
   migrateResourceGovernanceTables(db)
   migrateCodexTaskTables(db)
+  migrateManagedTaskTables(db)
   migrateProjectGroupTables(db)
   migrateCodexProjectMonitorTables(db)
   migrateCodexSiteTables(db)
@@ -2821,7 +2864,7 @@ function runGitInPathStrict(localPath: string, args: string[], options: GitExecu
         return
       }
 
-      resolveOutput(stdout.trim())
+      resolveOutput(options.preserveOutput ? stdout : stdout.trim())
     })
     registerGitProcess(options.operationId, child)
   })
@@ -3922,7 +3965,7 @@ function resolveRepositoryFilePath(repository: RepositoryRecord, filePath: strin
 async function getRepositoryWorkspaceStatus(repositoryId: string): Promise<GitWorkspaceStatus> {
   const repository = getRepositoryOrThrow(repositoryId)
   const [statusOutput, branch] = await Promise.all([
-    runGitInPathStrict(repository.localPath, ['status', '--porcelain']),
+    runGitInPathStrict(repository.localPath, ['status', '--porcelain=v1', '-z'], { preserveOutput: true }),
     runGitInPath(repository.localPath, ['branch', '--show-current'])
   ])
   const files = parsePorcelainStatus(statusOutput)
@@ -6514,15 +6557,25 @@ async function getGitSetupStatus(): Promise<GitSetupStatus> {
   }
 }
 
-ipcMain.handle('repositories:scan', async (_event, paths: string[]) => {
+function registerGitIpc<TResult>(
+  channel: string,
+  handler: (event: IpcMainInvokeEvent, ...args: any[]) => TResult | Promise<TResult>
+): void {
+  ipcMain.handle(channel, async (event, ...args) => {
+    const result = await handler(event, ...args)
+    return serializeGitIpcPayload(channel, result)
+  })
+}
+
+registerGitIpc('repositories:scan', async (_event, paths: string[]) => {
   return scanRepositoryTrees(paths)
 })
 
-ipcMain.handle('repositories:scan-workspace', async (_event, rootPath: string) => {
+registerGitIpc('repositories:scan-workspace', async (_event, rootPath: string) => {
   return scanRepositoryTree(rootPath)
 })
 
-ipcMain.handle('projects:list', async (): Promise<WorkspaceSnapshot> => getWorkspaceSnapshot())
+registerGitIpc('projects:list', async (): Promise<WorkspaceSnapshot> => getWorkspaceSnapshot())
 
 ipcMain.handle('project-groups:list', async (): Promise<ProjectGroupRecord[]> => listProjectGroups(getDatabase()))
 
@@ -6532,7 +6585,7 @@ ipcMain.handle('project-group:delete', async (_event, groupId: string): Promise<
 
 ipcMain.handle('project-groups:reorder', async (_event, groupIds: string[]): Promise<ProjectGroupRecord[]> => reorderProjectGroups(getDatabase(), groupIds))
 
-ipcMain.handle('project:group:set', async (_event, input: { projectId: string; groupId: string | null }): Promise<WorkspaceSnapshot> => {
+registerGitIpc('project:group:set', async (_event, input: { projectId: string; groupId: string | null }): Promise<WorkspaceSnapshot> => {
   setProjectGroup(getDatabase(), input.projectId, input.groupId)
   return getWorkspaceSnapshot()
 })
@@ -6550,7 +6603,7 @@ ipcMain.handle('codex-project-link:delete', async (_event, cwd: string): Promise
   await refreshCodexProjectMonitor()
 })
 
-ipcMain.handle(
+registerGitIpc(
   'projects:create',
   async (_event, input: { name: string; workspacePath: string; repositories: RepositoryScanResult[] }): Promise<WorkspaceSnapshot> => {
     const name = input.name.trim()
@@ -6585,7 +6638,7 @@ ipcMain.handle(
   }
 )
 
-ipcMain.handle(
+registerGitIpc(
   'projects:create-empty',
   async (_event, input: { name: string; parentPath: string }): Promise<WorkspaceSnapshot> => {
     const name = String(input.name || '').trim()
@@ -6641,7 +6694,7 @@ ipcMain.handle(
   }
 )
 
-ipcMain.handle(
+registerGitIpc(
   'projects:create-from-remote',
   async (_event, input: RemoteProjectCreateInput): Promise<WorkspaceSnapshot> => {
     const name = input.name.trim()
@@ -6723,7 +6776,7 @@ ipcMain.handle(
   }
 )
 
-ipcMain.handle(
+registerGitIpc(
   'projects:update',
   async (_event, input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }): Promise<WorkspaceSnapshot> => {
     const existing = getDatabase().prepare('SELECT * FROM projects WHERE id = ?').get(input.id) as Record<string, unknown> | undefined
@@ -6753,7 +6806,7 @@ ipcMain.handle(
   }
 )
 
-ipcMain.handle(
+registerGitIpc(
   'projects:favorite',
   async (_event, input: { id: string; isFavorite: boolean }): Promise<WorkspaceSnapshot> => {
     getProjectOrThrow(input.id)
@@ -6772,15 +6825,15 @@ ipcMain.handle(
   }
 )
 
-ipcMain.handle('projects:delete', async (_event, projectId: string): Promise<WorkspaceSnapshot> => deleteProject(projectId))
+registerGitIpc('projects:delete', async (_event, projectId: string): Promise<WorkspaceSnapshot> => deleteProject(projectId))
 
-ipcMain.handle('project:repositories:rescan', async (_event, projectId: string): Promise<WorkspaceSnapshot> => rescanProjectRepositories(projectId))
+registerGitIpc('project:repositories:rescan', async (_event, projectId: string): Promise<WorkspaceSnapshot> => rescanProjectRepositories(projectId))
 
-ipcMain.handle('project:repository:init', async (_event, projectId: string): Promise<WorkspaceSnapshot> => initializeProjectRepository(projectId))
+registerGitIpc('project:repository:init', async (_event, projectId: string): Promise<WorkspaceSnapshot> => initializeProjectRepository(projectId))
 
-ipcMain.handle('repositories:list', async (_event, projectId?: string): Promise<RepositoryRecord[]> => listRepositories(projectId))
+registerGitIpc('repositories:list', async (_event, projectId?: string): Promise<RepositoryRecord[]> => listRepositories(projectId))
 
-ipcMain.handle('repository:detail', async (_event, repositoryId: string): Promise<RepositoryRecord> => {
+registerGitIpc('repository:detail', async (_event, repositoryId: string): Promise<RepositoryRecord> => {
   const existing = listRepositories().find((repository) => repository.id === repositoryId)
 
   if (!existing) {
@@ -6790,55 +6843,55 @@ ipcMain.handle('repository:detail', async (_event, repositoryId: string): Promis
   return rescanRepositoryRecord(existing)
 })
 
-ipcMain.handle(
+registerGitIpc(
   'repository:commits',
   async (_event, repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }): Promise<GitCommitRecord[]> =>
     listRepositoryCommits(repositoryId, options)
 )
 
-ipcMain.handle(
+registerGitIpc(
   'repository:commit-graph',
   async (_event, repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }): Promise<GitCommitRecord[]> =>
     listRepositoryCommits(repositoryId, options)
 )
 
-ipcMain.handle('repository:sync-remote', async (_event, repositoryId: string): Promise<RepositoryRecord> => syncRepositoryRemote(repositoryId))
+registerGitIpc('repository:sync-remote', async (_event, repositoryId: string): Promise<RepositoryRecord> => syncRepositoryRemote(repositoryId))
 
-ipcMain.handle('repository:remote:save', async (_event, input: RepositoryRemoteInput): Promise<RepositoryRecord> => saveRepositoryRemote(input))
+registerGitIpc('repository:remote:save', async (_event, input: RepositoryRemoteInput): Promise<RepositoryRecord> => saveRepositoryRemote(input))
 
-ipcMain.handle('repository:remote:delete', async (_event, repositoryId: string, remoteName: string): Promise<RepositoryRecord> => deleteRepositoryRemote(repositoryId, remoteName))
+registerGitIpc('repository:remote:delete', async (_event, repositoryId: string, remoteName: string): Promise<RepositoryRecord> => deleteRepositoryRemote(repositoryId, remoteName))
 
-ipcMain.handle('repository:remote:fetch', async (_event, repositoryId: string, remoteName?: string, operationId?: string): Promise<RepositoryRecord> => fetchRepositoryRemote(repositoryId, remoteName, operationId))
+registerGitIpc('repository:remote:fetch', async (_event, repositoryId: string, remoteName?: string, operationId?: string): Promise<RepositoryRecord> => fetchRepositoryRemote(repositoryId, remoteName, operationId))
 
-ipcMain.handle('repository:branch:switch', async (_event, repositoryId: string, input: GitBranchSwitchInput): Promise<RepositoryRecord> => switchRepositoryBranch(repositoryId, input))
+registerGitIpc('repository:branch:switch', async (_event, repositoryId: string, input: GitBranchSwitchInput): Promise<RepositoryRecord> => switchRepositoryBranch(repositoryId, input))
 
-ipcMain.handle('repository:git-command', async (_event, input: GitCommandRequest): Promise<GitCommandResult> => runRepositoryGitCommand(input))
+registerGitIpc('repository:git-command', async (_event, input: GitCommandRequest): Promise<GitCommandResult> => runRepositoryGitCommand(input))
 
-ipcMain.handle('repository:workspace-status', async (_event, repositoryId: string): Promise<GitWorkspaceStatus> => getRepositoryWorkspaceStatus(repositoryId))
+registerGitIpc('repository:workspace-status', async (_event, repositoryId: string): Promise<GitWorkspaceStatus> => getRepositoryWorkspaceStatus(repositoryId))
 
-ipcMain.handle('repository:git-add', async (_event, repositoryId: string, input: GitAddInput): Promise<GitOperationResult> =>
+registerGitIpc('repository:git-add', async (_event, repositoryId: string, input: GitAddInput): Promise<GitOperationResult> =>
   runRepositoryWriteOperation(repositoryId, buildGitAddArgs(input))
 )
 
-ipcMain.handle('repository:git-commit', async (_event, repositoryId: string, input: GitCommitInput): Promise<GitOperationResult> =>
+registerGitIpc('repository:git-commit', async (_event, repositoryId: string, input: GitCommitInput): Promise<GitOperationResult> =>
   commitRepositoryChanges(repositoryId, input)
 )
 
-ipcMain.handle('repository:git-push', async (_event, repositoryId: string, input: GitPushInput, operationId?: string): Promise<GitOperationResult> =>
+registerGitIpc('repository:git-push', async (_event, repositoryId: string, input: GitPushInput, operationId?: string): Promise<GitOperationResult> =>
   pushRepositoryChanges(repositoryId, input, operationId)
 )
 
-ipcMain.handle('repository:git-push-task', async (_event, repositoryId: string, input: GitPushInput, operationId: string): Promise<GitPushTaskResult> => {
+registerGitIpc('repository:git-push-task', async (_event, repositoryId: string, input: GitPushInput, operationId: string): Promise<GitPushTaskResult> => {
   return pushRepositoryTaskChanges(repositoryId, input, operationId)
 })
 
-ipcMain.handle('repository:git-operation:cancel', async (_event, operationId: string): Promise<boolean> => cancelRepositoryGitOperation(operationId))
+registerGitIpc('repository:git-operation:cancel', async (_event, operationId: string): Promise<boolean> => cancelRepositoryGitOperation(operationId))
 
-ipcMain.handle('project:git-tasks:list', async (_event, projectId?: string): Promise<ProjectGitTaskLog[]> => listProjectGitTasks(getDatabase(), projectId))
+registerGitIpc('project:git-tasks:list', async (_event, projectId?: string): Promise<ProjectGitTaskLog[]> => listProjectGitTasks(getDatabase(), projectId))
 
-ipcMain.handle('project:git-task:get', async (_event, taskId: string): Promise<ProjectGitTaskLog | null> => getProjectGitTask(getDatabase(), taskId))
+registerGitIpc('project:git-task:get', async (_event, taskId: string): Promise<ProjectGitTaskLog | null> => getProjectGitTask(getDatabase(), taskId))
 
-ipcMain.handle('project:git-task:save', async (_event, task: ProjectGitTaskLog): Promise<ProjectGitTaskLog> => {
+registerGitIpc('project:git-task:save', async (_event, task: ProjectGitTaskLog): Promise<ProjectGitTaskLog> => {
   const saved = saveProjectGitTask(getDatabase(), task)
   sendProjectGitTaskEvent(saved)
   return saved
@@ -6852,83 +6905,83 @@ ipcMain.handle('project:git-tasks:clear', async (): Promise<void> => {
   clearProjectGitTasks(getDatabase())
 })
 
-ipcMain.handle('repository:deployment-approval:config:get', async (_event, repositoryId: string): Promise<DeploymentApprovalConfig | null> =>
+registerGitIpc('repository:deployment-approval:config:get', async (_event, repositoryId: string): Promise<DeploymentApprovalConfig | null> =>
   getRepositoryDeploymentApprovalConfig(repositoryId)
 )
 
-ipcMain.handle('repository:deployment-approval:config:save', async (_event, input: DeploymentApprovalConfig): Promise<DeploymentApprovalConfig> =>
+registerGitIpc('repository:deployment-approval:config:save', async (_event, input: DeploymentApprovalConfig): Promise<DeploymentApprovalConfig> =>
   saveRepositoryDeploymentApprovalConfig(input)
 )
 
-ipcMain.handle(
+registerGitIpc(
   'repository:deployment-approval:analyze',
   async (_event, repositoryId: string, input?: { manualBaselineSha?: string }): Promise<DeploymentApprovalAnalysis> =>
     analyzeRepositoryDeploymentApproval(repositoryId, input)
 )
 
-ipcMain.handle(
+registerGitIpc(
   'repository:deployment-approval:execute',
   async (_event, repositoryId: string, input: { reviewedHeadSha: string; baselineSha: string }): Promise<DeploymentApprovalExecutionResult & { repository: RepositoryRecord }> =>
     executeRepositoryDeploymentApproval(repositoryId, input)
 )
 
-ipcMain.handle('repository:deployment-approvals:list', async (_event, repositoryId: string): Promise<DeploymentApprovalHistory[]> =>
+registerGitIpc('repository:deployment-approvals:list', async (_event, repositoryId: string): Promise<DeploymentApprovalHistory[]> =>
   listRepositoryDeploymentApprovals(repositoryId)
 )
 
-ipcMain.handle('repository:merge-analysis', async (_event, repositoryId: string, input: GitMergeAnalysisInput): Promise<GitMergeAnalysis> =>
+registerGitIpc('repository:merge-analysis', async (_event, repositoryId: string, input: GitMergeAnalysisInput): Promise<GitMergeAnalysis> =>
   analyzeRepositoryMerge(repositoryId, input)
 )
 
-ipcMain.handle('repository:git-merge', async (_event, repositoryId: string, input: GitMergeInput): Promise<GitOperationResult> =>
+registerGitIpc('repository:git-merge', async (_event, repositoryId: string, input: GitMergeInput): Promise<GitOperationResult> =>
   runRepositoryWriteOperation(repositoryId, buildGitMergeArgs(input))
 )
 
-ipcMain.handle('repository:conflict:suggest', async (_event, repositoryId: string, filePath: string): Promise<ConflictResolutionSuggestion> =>
+registerGitIpc('repository:conflict:suggest', async (_event, repositoryId: string, filePath: string): Promise<ConflictResolutionSuggestion> =>
   suggestRepositoryConflictResolution(repositoryId, filePath)
 )
 
-ipcMain.handle('repository:commit-message:suggest', async (_event, repositoryId: string, input: GitCommitMessageInput): Promise<CommitMessageSuggestion> =>
+registerGitIpc('repository:commit-message:suggest', async (_event, repositoryId: string, input: GitCommitMessageInput): Promise<CommitMessageSuggestion> =>
   suggestRepositoryCommitMessage(repositoryId, input)
 )
 
-ipcMain.handle('repository:release:prepare', async (_event, repositoryId: string, input?: RepositoryReleasePrepareInput): Promise<RepositoryReleasePreparation> =>
+registerGitIpc('repository:release:prepare', async (_event, repositoryId: string, input?: RepositoryReleasePrepareInput): Promise<RepositoryReleasePreparation> =>
   prepareRepositoryRelease(repositoryId, input)
 )
 
-ipcMain.handle('repository:release-tag:recommend', async (_event, repositoryId: string): Promise<RepositoryReleaseTagRecommendation> =>
+registerGitIpc('repository:release-tag:recommend', async (_event, repositoryId: string): Promise<RepositoryReleaseTagRecommendation> =>
   recommendRepositoryReleaseTag(repositoryId)
 )
 
-ipcMain.handle('repository:release:suggest', async (_event, repositoryId: string, input?: RepositoryReleaseSuggestionInput): Promise<ReleaseSuggestion> =>
+registerGitIpc('repository:release:suggest', async (_event, repositoryId: string, input?: RepositoryReleaseSuggestionInput): Promise<ReleaseSuggestion> =>
   suggestRepositoryRelease(repositoryId, input)
 )
 
-ipcMain.handle('repository:release:publish', async (_event, repositoryId: string, input: RepositoryReleasePublishInput): Promise<RepositoryReleasePublishResult> =>
+registerGitIpc('repository:release:publish', async (_event, repositoryId: string, input: RepositoryReleasePublishInput): Promise<RepositoryReleasePublishResult> =>
   publishRepositoryRelease(repositoryId, input)
 )
 
-ipcMain.handle('repository:release-publish-task:start', async (_event, repositoryId: string, input: RepositoryReleasePublishInput): Promise<RepositoryReleasePublishTaskSnapshot> =>
+registerGitIpc('repository:release-publish-task:start', async (_event, repositoryId: string, input: RepositoryReleasePublishInput): Promise<RepositoryReleasePublishTaskSnapshot> =>
   startRepositoryReleasePublishTask(repositoryId, input)
 )
 
-ipcMain.handle('repository:release-publish-tasks:list', async (_event, repositoryId?: string): Promise<RepositoryReleasePublishTaskSnapshot[]> =>
+registerGitIpc('repository:release-publish-tasks:list', async (_event, repositoryId?: string): Promise<RepositoryReleasePublishTaskSnapshot[]> =>
   listRepositoryReleasePublishTasks(repositoryId)
 )
 
-ipcMain.handle('repository:release-publish-task:get', async (_event, taskId: string): Promise<RepositoryReleasePublishTaskSnapshot | null> =>
+registerGitIpc('repository:release-publish-task:get', async (_event, taskId: string): Promise<RepositoryReleasePublishTaskSnapshot | null> =>
   getRepositoryReleasePublishTask(taskId)
 )
 
-ipcMain.handle('repository:release-publish-task:cancel', async (_event, taskId: string): Promise<RepositoryReleasePublishTaskSnapshot> =>
+registerGitIpc('repository:release-publish-task:cancel', async (_event, taskId: string): Promise<RepositoryReleasePublishTaskSnapshot> =>
   cancelRepositoryReleasePublishTask(taskId)
 )
 
-ipcMain.handle('repository:codemagic-binding:get', async (_event, repositoryId: string): Promise<CodemagicRepositoryBinding | null> =>
+registerGitIpc('repository:codemagic-binding:get', async (_event, repositoryId: string): Promise<CodemagicRepositoryBinding | null> =>
   getCodemagicRepositoryBindingRecord(getDatabase(), repositoryId)
 )
 
-ipcMain.handle('repository:codemagic-binding:save', async (_event, input: CodemagicRepositoryBindingInput): Promise<CodemagicRepositoryBinding> =>
+registerGitIpc('repository:codemagic-binding:save', async (_event, input: CodemagicRepositoryBindingInput): Promise<CodemagicRepositoryBinding> =>
   saveCodemagicRepositoryBindingRecord(getDatabase(), input)
 )
 
@@ -6936,33 +6989,33 @@ ipcMain.handle('repository:codemagic-binding:delete', async (_event, repositoryI
   deleteCodemagicRepositoryBindingRecord(getDatabase(), repositoryId)
 )
 
-ipcMain.handle('repository:conflict:apply', async (_event, repositoryId: string, filePath: string, content: string): Promise<GitOperationResult> =>
+registerGitIpc('repository:conflict:apply', async (_event, repositoryId: string, filePath: string, content: string): Promise<GitOperationResult> =>
   applyRepositoryConflictResolution(repositoryId, filePath, content)
 )
 
-ipcMain.handle('repository:commit-files', async (_event, repositoryId: string, commitHash: string): Promise<GitCommitFileChange[]> =>
+registerGitIpc('repository:commit-files', async (_event, repositoryId: string, commitHash: string): Promise<GitCommitFileChange[]> =>
   listRepositoryCommitFiles(repositoryId, commitHash)
 )
 
-ipcMain.handle(
+registerGitIpc(
   'repository:commit-diff',
   async (_event, repositoryId: string, commitHash: string, filePath: string, oldPath?: string, status?: string): Promise<GitCommitDiff> =>
     getRepositoryCommitDiff(repositoryId, commitHash, filePath, oldPath, status)
 )
 
-ipcMain.handle('project:summary', async (_event, projectId: string, range?: { startDate?: string; endDate?: string }): Promise<ProjectGitSummary> => getProjectSummary(projectId, range))
+registerGitIpc('project:summary', async (_event, projectId: string, range?: { startDate?: string; endDate?: string }): Promise<ProjectGitSummary> => getProjectSummary(projectId, range))
 
-ipcMain.handle('project:analyze-git', async (_event, projectId: string): Promise<ProjectGitSummary> => analyzeProjectGit(projectId))
+registerGitIpc('project:analyze-git', async (_event, projectId: string): Promise<ProjectGitSummary> => analyzeProjectGit(projectId))
 
-ipcMain.handle('project:people', async (_event, projectId: string): Promise<ProjectPersonRecord[]> => listProjectPeople(projectId))
+registerGitIpc('project:people', async (_event, projectId: string): Promise<ProjectPersonRecord[]> => listProjectPeople(projectId))
 
-ipcMain.handle('project:contributor-identities', async (_event, projectId: string): Promise<GitContributorIdentity[]> => listProjectContributorIdentities(projectId))
+registerGitIpc('project:contributor-identities', async (_event, projectId: string): Promise<GitContributorIdentity[]> => listProjectContributorIdentities(projectId))
 
-ipcMain.handle('project:branch-tags', async (_event, projectId: string): Promise<ProjectBranchTagRecord[]> => listProjectBranchTagRecords(getDatabase(), projectId))
+registerGitIpc('project:branch-tags', async (_event, projectId: string): Promise<ProjectBranchTagRecord[]> => listProjectBranchTagRecords(getDatabase(), projectId))
 
-ipcMain.handle('project:branch-tag:save', async (_event, input: ProjectBranchTagInput): Promise<ProjectBranchTagRecord> => saveProjectBranchTagRecord(getDatabase(), input))
+registerGitIpc('project:branch-tag:save', async (_event, input: ProjectBranchTagInput): Promise<ProjectBranchTagRecord> => saveProjectBranchTagRecord(getDatabase(), input))
 
-ipcMain.handle('project:branch-tag:delete', async (_event, projectId: string, tagId: string): Promise<ProjectBranchTagRecord[]> =>
+registerGitIpc('project:branch-tag:delete', async (_event, projectId: string, tagId: string): Promise<ProjectBranchTagRecord[]> =>
   deleteProjectBranchTagRecord(getDatabase(), projectId, tagId)
 )
 
@@ -7275,7 +7328,7 @@ ipcMain.handle(
 
 ipcMain.handle('project:person:delete', async (_event, projectId: string, personId: string): Promise<ProjectPersonRecord[]> => deleteProjectPerson(projectId, personId))
 
-ipcMain.handle(
+registerGitIpc(
   'repository:configure-identity',
   async (_event, localPath: string, identity: { userName: string; userEmail: string }): Promise<RepositoryScanResult> => {
     const normalizedPath = resolve(expandHomePath(localPath))
@@ -7317,7 +7370,7 @@ ipcMain.handle(
   }
 )
 
-ipcMain.handle('repository:clear-identity', async (_event, localPath: string): Promise<RepositoryScanResult> => {
+registerGitIpc('repository:clear-identity', async (_event, localPath: string): Promise<RepositoryScanResult> => {
   const normalizedPath = resolve(expandHomePath(localPath))
 
   if (!existsSync(join(normalizedPath, '.git'))) {
@@ -7359,9 +7412,9 @@ ipcMain.handle('dialog:select-directory', async () => {
   return result.canceled ? null : result.filePaths[0]
 })
 
-ipcMain.handle('git:setup-status', async (): Promise<GitSetupStatus> => getGitSetupStatus())
+registerGitIpc('git:setup-status', async (): Promise<GitSetupStatus> => getGitSetupStatus())
 
-ipcMain.handle('git:configure-identity', async (_event, identity: { userName: string; userEmail: string }): Promise<GitSetupStatus> => {
+registerGitIpc('git:configure-identity', async (_event, identity: { userName: string; userEmail: string }): Promise<GitSetupStatus> => {
   const userName = identity.userName.trim()
   const userEmail = identity.userEmail.trim()
 
@@ -7375,7 +7428,7 @@ ipcMain.handle('git:configure-identity', async (_event, identity: { userName: st
   return getGitSetupStatus()
 })
 
-ipcMain.handle('gpg:import-bundle', async (_event, input: { sourcePath: string }): Promise<GitSetupStatus> => {
+registerGitIpc('gpg:import-bundle', async (_event, input: { sourcePath: string }): Promise<GitSetupStatus> => {
   const sourcePath = resolve(expandHomePath(String(input.sourcePath || '')))
   const sourceInfo = await stat(sourcePath)
   let importRoot = sourcePath
@@ -7410,7 +7463,7 @@ ipcMain.handle('gpg:import-bundle', async (_event, input: { sourcePath: string }
   }
 })
 
-ipcMain.handle('gpg:install', async (): Promise<GpgInstallResult> => installGpgWithBrew())
+registerGitIpc('gpg:install', async (): Promise<GpgInstallResult> => installGpgWithBrew())
 
 ipcMain.handle('gpg:copy-public-key', async (_event, fingerprint: string): Promise<void> => {
   const normalizedFingerprint = String(fingerprint || '').trim()
@@ -7428,7 +7481,7 @@ ipcMain.handle('gpg:copy-public-key', async (_event, fingerprint: string): Promi
   clipboard.writeText(`${publicKey.trim()}\n`)
 })
 
-ipcMain.handle('gpg:configure-git-signing', async (_event, fingerprint: string): Promise<GitSetupStatus> => {
+registerGitIpc('gpg:configure-git-signing', async (_event, fingerprint: string): Promise<GitSetupStatus> => {
   const normalizedFingerprint = String(fingerprint || '').trim()
 
   if (!normalizedFingerprint) {
@@ -7612,6 +7665,252 @@ ipcMain.handle('codex:accounts:login-terminal', async (_event, accountId: string
 ipcMain.handle('codex:runtime:status', async (_event, verify = false): Promise<AiRuntimeStatus> =>
   inspectCodexRuntime(Boolean(verify), await resolveCodexHome(app.getPath('userData'))))
 
+function sendManagedTaskEvent(task: ManagedTask): void {
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('managed-tasks:event', task)
+}
+
+function managedTaskTitle(task: ManagedTask): string {
+  return `[${managedTaskStageLabels[task.stage]}] ${task.title.replace(/^\[[^\]]+\]\s*/, '')}`
+}
+
+async function getManagedCodexThreadService(): Promise<CodexAppServerThreadService> {
+  if (managedCodexThreadService) return managedCodexThreadService
+  const codexHome = await resolveCodexHome(app.getPath('userData'))
+  const command = await findLocalAiCommand('codex-cli', { env: { ...process.env, CODEX_HOME: codexHome } })
+  if (!command) throw new Error('未检测到可用的 Codex App Server')
+  managedCodexThreadService = new CodexAppServerThreadService({
+    command,
+    codexHome,
+    onNotification: (notification: CodexAppServerNotification) => {
+      if (!notification.method.startsWith('turn/') && !notification.method.startsWith('thread/')) return
+      void syncManagedCodexThreads().catch(() => undefined)
+    }
+  })
+  return managedCodexThreadService
+}
+
+async function mirrorManagedTaskTitle(task: ManagedTask): Promise<void> {
+  if (!task.codexThreadId) return
+  const codex = await getManagedCodexThreadService()
+  await codex.renameThread(task.codexThreadId, managedTaskTitle(task))
+}
+
+async function advanceManagedTaskExecution(taskId: string): Promise<ManagedTask> {
+  const task = managedTaskService.get(taskId)
+  if (!task) throw new Error('任务不存在')
+  if (task.stage !== 'executing') return task
+  const repository = getRepositoryOrThrow(task.repositoryId)
+  if (task.subtasks.some((item) => item.runStatus === 'running')) return task
+  const nextSubtask = task.subtasks.find((item) => item.runStatus === 'idle' && item.dependencyIds.every((dependencyId) => task.subtasks.find((candidate) => candidate.id === dependencyId)?.runStatus === 'completed'))
+  if (!nextSubtask) {
+    if (task.subtasks.length > 0 && task.subtasks.every((item) => item.runStatus === 'completed')) {
+      const workspace = await getRepositoryWorkspaceStatus(repository.id)
+      const completed = managedTaskService.completeExecution(task.id, workspace.files.length > 0)
+      await mirrorManagedTaskTitle(completed)
+      return completed
+    }
+    return task
+  }
+  const codex = await getManagedCodexThreadService()
+  const thread = await codex.startThread({ cwd: repository.localPath, title: `${task.title} · ${nextSubtask.title}`, sandbox: 'workspace-write' })
+  const started = managedTaskService.startSubtask(task.id, nextSubtask.id, { id: thread.id, title: thread.name, cwd: repository.localPath, status: 'running', updatedAt: thread.updatedAt })
+  await codex.startTurn({
+    threadId: thread.id,
+    cwd: repository.localPath,
+    approvalPolicy: 'never',
+    text: `在分支 ${started.branch} 上执行以下 ForgeDesk 子任务。只处理当前子任务；完成后说明改动、测试和未完成项。\n\n父任务：${started.title}\n子任务：${nextSubtask.title}\n说明：${nextSubtask.description}\n验收标准：${nextSubtask.acceptance}`
+  })
+  await mirrorManagedTaskTitle(started)
+  return started
+}
+
+function managedThreadStatusFromSession(status: CodexSessionSummary['status']): string {
+  if (status === 'aborted') return 'failed'
+  return status
+}
+
+async function syncManagedCodexThreads(): Promise<ManagedTask[]> {
+  const sessionSnapshot = await codexSessionService.list()
+  let appThreads: Awaited<ReturnType<CodexAppServerThreadService['listThreads']>> = []
+  try {
+    appThreads = await (await getManagedCodexThreadService()).listThreads()
+  } catch (error) {
+    // The on-disk Codex session snapshot remains useful even when App Server is
+    // temporarily unavailable. Only fail if neither source can provide data.
+    if (!sessionSnapshot.available) throw error
+  }
+
+  // App Server fills gaps for ForgeDesk-created threads. The local snapshot is
+  // authoritative for native desktop/CLI sessions and overwrites stale status,
+  // title, cwd, and timestamp for the same thread id.
+  const threads = new Map<string, ManagedTaskImportedThread>()
+  for (const thread of appThreads) {
+    threads.set(thread.id, { id: thread.id, title: thread.name, cwd: thread.cwd, status: thread.status, updatedAt: thread.updatedAt })
+  }
+  for (const session of sessionSnapshot.sessions) {
+    threads.set(session.id, {
+      id: session.id,
+      title: session.title,
+      cwd: session.cwd,
+      status: managedThreadStatusFromSession(session.status),
+      updatedAt: session.updatedAt
+    })
+  }
+
+  const repositories = listRepositories()
+  const result = new Map<string, ManagedTask>()
+  for (const imported of threads.values()) {
+    const repository = imported.cwd ? repositories.find((item) => resolve(item.localPath) === resolve(imported.cwd)) : undefined
+    const binding = getDatabase().prepare('SELECT task_id, role FROM managed_task_thread_bindings WHERE codex_thread_id = ?').get(imported.id) as { task_id?: string; role?: string } | undefined
+    const previous = managedTaskService.get(binding?.task_id || '')
+    const task = previous ? managedTaskService.updateBinding(imported) : managedTaskService.importThread(imported, repository?.projectId || '', repository?.id || '')
+    if (!task) continue
+    if (previous?.stage === 'executing' && binding?.role === 'subtask' && ['completed', 'idle'].includes(imported.status) && repository) {
+      result.set(task.id, await advanceManagedTaskExecution(task.id))
+    } else {
+      result.set(task.id, task)
+    }
+  }
+  const tasks = [...result.values()]
+  for (const task of tasks) sendManagedTaskEvent(task)
+  return tasks
+}
+
+ipcMain.handle('managed-tasks:list', async (_event, projectId?: string): Promise<ManagedTask[]> => managedTaskService.list(projectId))
+
+ipcMain.handle('managed-tasks:sync', async (): Promise<ManagedTask[]> => syncManagedCodexThreads())
+
+ipcMain.handle('managed-tasks:cancel', async (_event, taskId: string): Promise<ManagedTask> => {
+  const task = managedTaskService.get(taskId)
+  if (!task) throw new Error('任务不存在')
+  if (['completed', 'completed-no-changes', 'failed', 'cancelled'].includes(task.stage)) return task
+
+  const threadIds = [...new Set([
+    task.codexThreadId,
+    ...task.bindings.map((binding) => binding.codexThreadId),
+    ...task.subtasks.filter((subtask) => subtask.runStatus === 'running').map((subtask) => subtask.codexThreadId)
+  ].filter(Boolean))]
+
+  if (threadIds.length > 0) {
+    try {
+      const codex = await getManagedCodexThreadService()
+      for (const threadId of threadIds) await codex.interruptRunningTurns(threadId)
+    } catch (error) {
+      // Running tasks must not be marked cancelled until Codex confirms the
+      // interrupt request. Idle tasks can still be closed when App Server is
+      // unavailable because they have no live execution to terminate.
+      if (task.runStatus === 'running') throw error
+    }
+  }
+
+  const cancelled = managedTaskService.cancel(task.id)
+  try { await mirrorManagedTaskTitle(cancelled) } catch (error) { console.warn('Failed to mirror cancelled task title', error) }
+  sendManagedTaskEvent(cancelled)
+  return cancelled
+})
+
+ipcMain.handle('managed-tasks:import-legacy', async (_event, legacyTasks: ManagedTaskLegacyImport[]): Promise<ManagedTask[]> => {
+  const repositories = listRepositories()
+  const imported = legacyTasks.map((legacy) => {
+    const repository = legacy.projectId ? repositories.find((item) => item.projectId === legacy.projectId) : undefined
+    return managedTaskService.importLegacy(legacy, repository?.id, repository?.localPath)
+  })
+  for (const task of imported) sendManagedTaskEvent(task)
+  return imported
+})
+
+ipcMain.handle('managed-tasks:create', async (_event, input: Omit<ManagedTaskCreateInput, 'codexThreadId' | 'cwd'>): Promise<ManagedTask> => {
+  const repository = getRepositoryOrThrow(input.repositoryId)
+  if (repository.projectId !== input.projectId) throw new Error('所选仓库不属于该项目')
+  const codex = await getManagedCodexThreadService()
+  const thread = await codex.startThread({ cwd: repository.localPath, title: input.title.trim(), sandbox: 'workspace-write' })
+  const task = managedTaskService.create({ ...input, cwd: repository.localPath, codexThreadId: thread.id })
+  const planning = managedTaskService.beginPlanning(task.id)
+  try {
+    await codex.startTurn({
+      threadId: thread.id,
+      cwd: repository.localPath,
+      text: `请分析并拆分以下 ForgeDesk 任务。只输出可执行的子任务计划、依赖和验收标准，不要修改文件或运行命令。\n\n任务：${task.title}\n${task.description}`,
+      outputSchema: { type: 'object', properties: { subtasks: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, description: { type: 'string' }, acceptance: { type: 'string' }, dependencyIndexes: { type: 'array', items: { type: 'integer' } } }, required: ['title'] } } }, required: ['subtasks'] }
+    })
+    await mirrorManagedTaskTitle(planning)
+    sendManagedTaskEvent(planning)
+    return planning
+  } catch (error) {
+    const failed = managedTaskService.fail(task.id, error instanceof Error ? error.message : String(error))
+    sendManagedTaskEvent(failed)
+    return failed
+  }
+})
+
+ipcMain.handle('managed-tasks:plan', async (_event, input: { taskId: string; subtasks: ManagedTaskPlanItem[] }): Promise<ManagedTask> => {
+  const task = managedTaskService.setPlan(input.taskId, input.subtasks)
+  await mirrorManagedTaskTitle(task)
+  sendManagedTaskEvent(task)
+  return task
+})
+
+ipcMain.handle('managed-tasks:execute', async (_event, input: { taskId: string; baseBranch?: string }): Promise<ManagedTask> => {
+  const task = managedTaskService.get(input.taskId)
+  if (!task) throw new Error('任务不存在')
+  const repository = getRepositoryOrThrow(task.repositoryId)
+  const baseBranch = input.baseBranch?.trim() || repository.defaultBranch || repository.currentBranch
+  if (!baseBranch) throw new Error('请先选择任务基线分支')
+  const slug = task.title.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'task'
+  const branch = `codex/${task.id.replace('managed-task-', '').slice(0, 8)}-${slug}`
+  const baselineSha = await runGitInPathStrict(repository.localPath, ['rev-parse', baseBranch])
+  let next = managedTaskService.beginBranch(task.id, { branch, baseBranch, baselineSha })
+  sendManagedTaskEvent(next)
+  try {
+    await switchRepositoryBranch(repository.id, { branchName: branch, create: true, startPoint: baseBranch })
+    next = managedTaskService.startExecution(task.id)
+    next = await advanceManagedTaskExecution(task.id)
+    sendManagedTaskEvent(next)
+    return next
+  } catch (error) {
+    next = managedTaskService.fail(task.id, error instanceof Error ? error.message : String(error))
+    sendManagedTaskEvent(next)
+    return next
+  }
+})
+
+ipcMain.handle('managed-tasks:review:approve', async (_event, taskId: string): Promise<ManagedTask> => {
+  const task = managedTaskService.approveReview(taskId); await mirrorManagedTaskTitle(task); sendManagedTaskEvent(task); return task
+})
+
+ipcMain.handle('managed-tasks:commit', async (_event, input: { taskId: string; message?: string }): Promise<ManagedTask> => {
+  const task = managedTaskService.get(input.taskId); if (!task) throw new Error('任务不存在')
+  const repository = getRepositoryOrThrow(task.repositoryId)
+  const workspace = await getRepositoryWorkspaceStatus(repository.id)
+  if (workspace.files.length > 0) {
+    const message = input.message?.trim(); if (!message) throw new Error('检测到未提交变更，请填写提交信息')
+    const committed = await commitRepositoryChanges(repository.id, { message })
+    if (!committed.ok) throw new Error(committed.stderr || '提交失败')
+  }
+  const sha = await runGitInPathStrict(repository.localPath, ['rev-parse', 'HEAD'])
+  const next = managedTaskService.recordCommit(task.id, sha); await mirrorManagedTaskTitle(next); sendManagedTaskEvent(next); return next
+})
+
+ipcMain.handle('managed-tasks:publish', async (_event, input: { taskId: string; targetBranch: 'develop' | 'preview' }): Promise<ManagedTask> => {
+  const task = managedTaskService.get(input.taskId); if (!task) throw new Error('任务不存在')
+  const repository = getRepositoryOrThrow(task.repositoryId)
+  let next = managedTaskService.beginMerge(task.id, input.targetBranch); sendManagedTaskEvent(next)
+  try {
+    await switchRepositoryBranch(repository.id, { branchName: input.targetBranch })
+    const analysis = await analyzeRepositoryMerge(repository.id, { source: task.branch, target: input.targetBranch })
+    if (!analysis.ok) throw new Error(analysis.issues.join('；') || '合并预检失败')
+    const merged = await runRepositoryWriteOperation(repository.id, buildGitMergeArgs({ source: task.branch }))
+    if (!merged.ok) throw new Error(merged.stderr || '合并失败')
+    next = managedTaskService.merged(task.id, merged.stdout)
+    next = managedTaskService.beginPush(task.id); sendManagedTaskEvent(next)
+    const pushed = await pushRepositoryChanges(repository.id, { branch: input.targetBranch })
+    if (!pushed.ok) throw new Error(pushed.stderr || '推送失败')
+    next = managedTaskService.completePublish(task.id, pushed.stdout); await mirrorManagedTaskTitle(next); sendManagedTaskEvent(next); return next
+  } catch (error) {
+    next = managedTaskService.fail(task.id, error instanceof Error ? error.message : String(error)); sendManagedTaskEvent(next); return next
+  }
+})
+
 ipcMain.handle('codex:activity:snapshot', async (): Promise<CodexActivitySnapshot> => codexActivityService.snapshot())
 
 ipcMain.handle('codex:sessions:list', async (): Promise<CodexSessionsSnapshot> => codexSessionService.list())
@@ -7624,7 +7923,10 @@ ipcMain.handle('codex:sessions:send', async (_event, input: CodexSessionMessageI
 
 ipcMain.handle('codex:sessions:cancel', async (_event, sessionId: string): Promise<CodexSessionDetail> => codexSessionService.cancel(sessionId))
 
-ipcMain.handle('codex:project-monitor:snapshot', async (): Promise<CodexProjectMonitorSnapshot> => refreshCodexProjectMonitor(false))
+// A manual/page refresh is also the freshest monitor state for the title bar
+// and any other open renderer. Broadcast it so separate polling intervals
+// cannot leave different parts of the UI showing different run counts.
+registerGitIpc('codex:project-monitor:snapshot', async (): Promise<CodexProjectMonitorSnapshot> => refreshCodexProjectMonitor())
 
 ipcMain.handle('codex:sites:list', async (): Promise<CodexSite[]> => codexSiteService.list())
 
@@ -7942,7 +8244,7 @@ ipcMain.handle('codemagic:artifact:public-url', async (_event, input: CodemagicA
   )
 )
 
-ipcMain.handle('ssh:generate-key', async (_event, input: string | SshKeyGenerationInput): Promise<GitSetupStatus['sshPublicKeys'][number]> => {
+registerGitIpc('ssh:generate-key', async (_event, input: string | SshKeyGenerationInput): Promise<GitSetupStatus['sshPublicKeys'][number]> => {
   const comment = (typeof input === 'string' ? input : input.email).trim()
 
   if (!comment) {
@@ -7983,12 +8285,12 @@ ipcMain.handle('ssh:copy-key-path', async (_event, path: string, kind: 'private'
   clipboard.writeText(resolveSshKeyFilePath(sshDirectory, expandHomePath(path), kind))
 })
 
-ipcMain.handle('ssh:import-key', async (_event, input: SshKeyImportInput): Promise<GitSetupStatus> => {
+registerGitIpc('ssh:import-key', async (_event, input: SshKeyImportInput): Promise<GitSetupStatus> => {
   await importSshKeyFile(sshDirectory, input)
   return getGitSetupStatus()
 })
 
-ipcMain.handle('ssh:delete-key', async (_event, path: string, kind: 'private' | 'public'): Promise<GitSetupStatus> => {
+registerGitIpc('ssh:delete-key', async (_event, path: string, kind: 'private' | 'public'): Promise<GitSetupStatus> => {
   const normalizedPath = resolveSshKeyFilePath(sshDirectory, expandHomePath(path), kind)
   await deleteSshKeyFile(sshDirectory, normalizedPath, kind)
 
@@ -7999,24 +8301,24 @@ ipcMain.handle('ssh:delete-key', async (_event, path: string, kind: 'private' | 
   return getGitSetupStatus()
 })
 
-ipcMain.handle('ssh:save-private-key-passphrase', async (_event, path: string, passphrase: string): Promise<GitSetupStatus> => {
+registerGitIpc('ssh:save-private-key-passphrase', async (_event, path: string, passphrase: string): Promise<GitSetupStatus> => {
   const normalizedPath = resolveSshKeyFilePath(sshDirectory, expandHomePath(path), 'private')
   await saveSshPassphrase(app.getPath('userData'), normalizedPath, passphrase)
   return getGitSetupStatus()
 })
 
-ipcMain.handle('ssh:clear-private-key-passphrase', async (_event, path: string): Promise<GitSetupStatus> => {
+registerGitIpc('ssh:clear-private-key-passphrase', async (_event, path: string): Promise<GitSetupStatus> => {
   const normalizedPath = resolveSshKeyFilePath(sshDirectory, expandHomePath(path), 'private')
   await clearSshPassphrase(app.getPath('userData'), normalizedPath)
   return getGitSetupStatus()
 })
 
-ipcMain.handle('ssh:fix-private-key-permissions', async (_event, path: string): Promise<GitSetupStatus> => {
+registerGitIpc('ssh:fix-private-key-permissions', async (_event, path: string): Promise<GitSetupStatus> => {
   await fixSshPrivateKeyPermissions(sshDirectory, expandHomePath(path))
   return getGitSetupStatus()
 })
 
-ipcMain.handle('ssh:derive-public-key', async (_event, privateKeyPath: string): Promise<GitSetupStatus> => {
+registerGitIpc('ssh:derive-public-key', async (_event, privateKeyPath: string): Promise<GitSetupStatus> => {
   const normalizedPrivateKeyPath = resolveSshKeyFilePath(sshDirectory, expandHomePath(privateKeyPath), 'private')
   const publicKeyContent = await withSavedSshPassphrases((env) => runSshKeygen(['-y', '-f', normalizedPrivateKeyPath], env))
 
@@ -8088,9 +8390,9 @@ ipcMain.handle('file:read-image-data', async (_event, imagePath: string): Promis
   }
 })
 
-ipcMain.handle('ssh:read-config', async (): Promise<SshConfigFile> => readSshConfigFile(sshDirectory))
+registerGitIpc('ssh:read-config', async (): Promise<SshConfigFile> => readSshConfigFile(sshDirectory))
 
-ipcMain.handle('ssh:write-config', async (_event, content: string): Promise<SshConfigFile> => writeSshConfigFile(sshDirectory, content))
+registerGitIpc('ssh:write-config', async (_event, content: string): Promise<SshConfigFile> => writeSshConfigFile(sshDirectory, content))
 
 ipcMain.handle('ssh:open-directory', async (): Promise<void> => {
   await mkdir(sshDirectory, { recursive: true, mode: 0o700 })
@@ -8260,6 +8562,12 @@ app.whenReady().then(async () => {
   })
 })
 
+if (hasSingleInstanceLock) {
+  app.on('second-instance', () => {
+    showOrCreatePrimaryWindow()
+  })
+}
+
 app.on('before-quit', (event) => {
   if (forceQuitRequested || isAppUpdateQuitRequested()) {
     return
@@ -8270,6 +8578,7 @@ app.on('before-quit', (event) => {
 })
 
 app.on('will-quit', () => {
+  releaseSingleProcessFileLock?.()
   void menuBarManagerService?.shutdown().catch((error) => console.warn('Failed to stop menu bar helper', error))
   resourceMonitorService.stop()
   if (storageGovernanceTimer) clearInterval(storageGovernanceTimer)

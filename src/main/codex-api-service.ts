@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getActiveCodexAccountInfo, resolveCodexHome, type CodexAccountInfo } from './codex-accounts.js'
 import { requestAiText } from './ai-runtime.js'
+import { readAiSettingsFile, writeAiSettingsFile } from './ai-settings.js'
 
 const defaultPort = 55914
 const defaultModel = 'gpt-5.3-codex'
@@ -123,6 +124,18 @@ function buildView(settings: CodexApiServiceSettings, account: CodexAccountInfo)
     account,
     message: running ? 'Codex API 服务正在运行，仅接受本机连接。' : settings.enabled ? 'Codex API 服务已配置，尚未启动。' : 'Codex API 服务未启用。'
   }
+}
+
+async function makeServiceDefaultAi(userDataPath: string, settings: CodexApiServiceSettings): Promise<void> {
+  const current = await readAiSettingsFile(userDataPath)
+  await writeAiSettingsFile(userDataPath, {
+    ...current,
+    enabled: true,
+    provider: 'codex-local-api',
+    baseUrl: `http://127.0.0.1:${settings.port}/v1`,
+    apiKey: settings.apiKey,
+    model: settings.model
+  })
 }
 
 export async function getCodexApiServiceIntegrationSettings(userDataPath: string): Promise<CodexApiServiceIntegrationSettings> {
@@ -289,6 +302,7 @@ export async function startCodexApiService(userDataPath: string, input: Partial<
 
   if (activeServer && activeUserDataPath === userDataPath && activePort === settings.port && (!input.apiKey || input.apiKey === current.apiKey) && (!input.model || input.model === current.model)) {
     await writeSettings(userDataPath, settings)
+    await makeServiceDefaultAi(userDataPath, settings)
     return buildView(settings, await getActiveCodexAccountInfo(userDataPath))
   }
   if (activeServer) await stopCodexApiService()
@@ -319,6 +333,7 @@ export async function startCodexApiService(userDataPath: string, input: Partial<
   activeUserDataPath = userDataPath
   const saved = { ...settings, port: activePort, enabled: true, updatedAt: new Date().toISOString() }
   await writeSettings(userDataPath, saved)
+  await makeServiceDefaultAi(userDataPath, saved)
   return buildView(saved, await getActiveCodexAccountInfo(userDataPath))
 }
 

@@ -112,6 +112,11 @@ type SessionCacheEntry = {
   detail: CodexSessionDetail
 }
 
+type SessionSummaryCacheEntry = {
+  signature: string
+  summary: CodexSessionSummary
+}
+
 type SpawnCodex = (file: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => ChildProcessWithoutNullStreams
 
 export type CodexSessionServiceOptions = {
@@ -288,6 +293,26 @@ function makeItem(input: Partial<CodexConversationItem> & Pick<CodexConversation
     toolName: input.toolName ?? '',
     ...(input.usage ? { usage: input.usage } : {})
   }
+}
+
+function toSessionSummary(detail: CodexSessionDetail): CodexSessionSummary {
+  const { items: _items, ...summary } = detail
+  return compactSessionSummary(summary)
+}
+
+function compactSessionSummary(summary: CodexSessionSummary): CodexSessionSummary {
+  return {
+    ...summary,
+    preview: compactSessionText(summary.preview),
+    title: compactSessionText(summary.title, 240)
+  }
+}
+
+const sessionSummaryTailBytes = 256 * 1024
+
+function compactSessionText(value: string, maxLength = 4000): string {
+  if (value.length <= maxLength) return value
+  return `${value.slice(0, maxLength)}…`
 }
 
 function tokenUsageFromRecord(record: Record<string, unknown>): CodexTokenUsage | undefined {
@@ -481,6 +506,85 @@ async function listSessionFiles(directory: string): Promise<string[]> {
   return files
 }
 
+function sessionEventType(record: Record<string, unknown>): string {
+  const payload = objectValue(record.payload)
+  if (record.type === 'event_msg') return textValue(payload?.type)
+  if (record.type === 'thread.started' || record.type === 'turn.started') return 'task_started'
+  if (record.type === 'turn.completed') return 'task_complete'
+  if (record.type === 'turn.failed' || record.type === 'turn.cancelled' || record.type === 'turn.aborted') return 'turn_aborted'
+  return ''
+}
+
+async function parseSessionSummaryFile(filePath: string, fallback: CodexSessionSummary, fileSize?: number, readWholeFile = false): Promise<CodexSessionSummary> {
+  const size = fileSize ?? (await stat(filePath)).size
+  const input = createReadStream(filePath, {
+    encoding: 'utf8',
+    start: readWholeFile ? 0 : Math.max(0, size - sessionSummaryTailBytes)
+  })
+  const lines = createInterface({ input, crlfDelay: Infinity })
+  let lastEvent = fallback.lastEvent
+  let lastTerminalEvent = ''
+  let running = fallback.status === 'running'
+  let sequence = 0
+  let lastTerminal = 0
+  let lastTaskActivity = 0
+  let sawLifecycleEvent = false
+  let startedAt = fallback.createdAt
+  let updatedAt = fallback.updatedAt
+
+  try {
+    for await (const line of lines) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(line)
+      } catch {
+        continue
+      }
+      const record = objectValue(parsed)
+      if (!record) continue
+      const timestamp = parseTimestamp(record.timestamp, updatedAt || fallback.updatedAt)
+      if (timestamp) {
+        startedAt ||= timestamp
+        updatedAt = timestamp
+      }
+      const eventType = sessionEventType(record)
+      if (!eventType) continue
+      sequence += 1
+      lastEvent = eventType
+      if (eventType === 'task_started' || eventType === 'user_message') {
+        sawLifecycleEvent = true
+        lastTaskActivity = sequence
+      }
+      if (eventType === 'task_complete' || eventType === 'turn_aborted') {
+        sawLifecycleEvent = true
+        lastTerminal = sequence
+        lastTerminalEvent = eventType
+      }
+    }
+  } finally {
+    lines.close()
+  }
+
+  // The tail can contain only tool output when a long-running turn has emitted
+  // more than the summary window. In that case its start event is outside the
+  // window, so fall back to one full scan instead of incorrectly showing idle.
+  if (!readWholeFile && !sawLifecycleEvent && size > sessionSummaryTailBytes) {
+    return parseSessionSummaryFile(filePath, fallback, size, true)
+  }
+
+  if (lastTaskActivity > lastTerminal) running = true
+  else if (lastEvent === 'task_complete') running = false
+  else if (lastEvent === 'turn_aborted') running = false
+
+  return {
+    ...compactSessionSummary(fallback),
+    createdAt: startedAt || fallback.createdAt,
+    lastEvent,
+    status: running ? 'running' : lastTerminalEvent === 'task_complete' ? 'completed' : lastTerminalEvent === 'turn_aborted' ? 'aborted' : fallback.status,
+    updatedAt: updatedAt || fallback.updatedAt
+  }
+}
+
 async function parseSessionFile(filePath: string, fallback: CodexSessionSummary): Promise<CodexSessionDetail> {
   const items: CodexConversationItem[] = []
   let lastEvent = fallback.lastEvent
@@ -509,15 +613,8 @@ async function parseSessionFile(filePath: string, fallback: CodexSessionSummary)
         startedAt ||= timestamp
         updatedAt = timestamp
       }
-      const payload = objectValue(record.payload)
       if (record.type === 'event_msg' || record.type === 'thread.started' || record.type === 'turn.started' || record.type === 'turn.completed' || record.type === 'turn.failed' || record.type === 'turn.cancelled' || record.type === 'turn.aborted') {
-        const eventType = record.type === 'event_msg'
-          ? textValue(payload?.type)
-          : record.type === 'thread.started' || record.type === 'turn.started'
-            ? 'task_started'
-            : record.type === 'turn.completed'
-              ? 'task_complete'
-              : 'turn_aborted'
+        const eventType = sessionEventType(record)
         if (eventType) {
           sequence += 1
           lastEvent = eventType
@@ -574,6 +671,7 @@ export class CodexSessionService {
   private readonly emit?: (event: CodexSessionEvent) => void
   private readonly readStateRowsOverride?: () => Promise<CodexSessionStateThread[]>
   private readonly cache = new Map<string, SessionCacheEntry>()
+  private readonly summaryCache = new Map<string, SessionSummaryCacheEntry>()
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>()
   private readonly cancelledSessions = new Set<string>()
   private readonly terminalStatuses = new Map<string, CodexSessionStatus>()
@@ -662,9 +760,11 @@ export class CodexSessionService {
     const session = await this.get(sessionId)
     const pinned = !session.pinned
     await setCodexSessionPinned(await this.resolveCodexHome(), sessionId, pinned)
-    const nextSession = { ...session, pinned }
+    const nextSession = { ...toSessionSummary(session), pinned }
     const cached = this.cache.get(sessionId)
     if (cached) this.cache.set(sessionId, { ...cached, detail: { ...cached.detail, pinned } })
+    const cachedSummary = this.summaryCache.get(sessionId)
+    if (cachedSummary) this.summaryCache.set(sessionId, { ...cachedSummary, summary: nextSession })
     this.emit?.({ session: nextSession, sessionId, type: 'updated' })
     return nextSession
   }
@@ -774,37 +874,38 @@ export class CodexSessionService {
         const filePath = textValue(row.rollout_path)
         if (!id || !filePath) continue
         const cwd = textValue(row.cwd)
-          const fallback: CodexSessionSummary = {
+        const fallback: CodexSessionSummary = {
           archived: Boolean(numberValue(row.archived)),
           createdAt: toIsoTimestamp(row.created_at_ms, ''),
           cwd,
           filePath,
           id,
           lastEvent: '',
-          preview: normalizeVisibleUserMessage(textValue(row.preview)),
+          preview: compactSessionText(normalizeVisibleUserMessage(textValue(row.preview))),
           projectKey: projectKey(cwd),
           projectName: projectName(cwd),
           status: this.processes.has(id) ? 'running' : this.terminalStatuses.get(id) ?? 'idle',
           pinned: pinnedSessionIds.has(id),
-          title: normalizeVisibleUserMessage(textValue(row.title)) || fallbackTitle(filePath, cwd, id),
+          title: compactSessionText(normalizeVisibleUserMessage(textValue(row.title)) || fallbackTitle(filePath, cwd, id), 240),
           updatedAt: toIsoTimestamp(row.updated_at_ms, toIsoTimestamp(row.created_at_ms, ''))
         }
         try {
           const fileStat = await stat(filePath)
           const signature = `${fileStat.size}:${fileStat.mtimeMs}`
-          const cached = this.cache.get(id)
-          if (cached?.signature === signature) {
+          const cachedSummary = this.summaryCache.get(id)
+          if (cachedSummary?.signature === signature) {
             summaries.push({
-              ...fallback,
-              lastEvent: cached.detail.lastEvent,
-              preview: cached.detail.preview || fallback.preview,
-              status: this.processes.has(id) ? 'running' : this.terminalStatuses.get(id) ?? cached.detail.status
+              ...cachedSummary.summary,
+              status: this.processes.has(id) ? 'running' : this.terminalStatuses.get(id) ?? cachedSummary.summary.status
             })
             continue
           }
-          const detail = await parseSessionFile(filePath, fallback)
-          this.cache.set(id, { detail, signature })
-          summaries.push({ ...detail })
+          const summary = await parseSessionSummaryFile(filePath, fallback, fileStat.size)
+          this.summaryCache.set(id, { signature, summary })
+          summaries.push({
+            ...summary,
+            status: this.processes.has(id) ? 'running' : this.terminalStatuses.get(id) ?? summary.status
+          })
         } catch {
           summaries.push(fallback)
         }
@@ -833,9 +934,10 @@ export class CodexSessionService {
         title: fallbackTitle(filePath, '', id),
         updatedAt: fileStat.mtime.toISOString()
       }
-      const detail = await parseSessionFile(filePath, fallback)
-      this.cache.set(id, { detail, signature: `${fileStat.size}:${fileStat.mtimeMs}` })
-      summaries.push(detail)
+      const signature = `${fileStat.size}:${fileStat.mtimeMs}`
+      const summary = await parseSessionSummaryFile(filePath, fallback, fileStat.size)
+      this.summaryCache.set(id, { signature, summary })
+      summaries.push(summary)
     }
     return summaries
   }

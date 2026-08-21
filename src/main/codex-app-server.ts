@@ -85,6 +85,24 @@ type JsonRpcResponse = {
   params?: unknown
 }
 
+export type CodexAppServerThread = {
+  id: string
+  name: string
+  cwd: string
+  status: string
+  updatedAt: string
+}
+
+export type CodexAppServerTurn = {
+  id: string
+  status: string
+}
+
+export type CodexAppServerNotification = {
+  method: string
+  params: unknown
+}
+
 type PendingRequest = {
   resolve: (response: JsonRpcResponse) => void
   reject: (error: Error) => void
@@ -229,14 +247,14 @@ function sanitizeRpcError(error: JsonRpcResponse['error']): CodexAppServerError 
   return new CodexAppServerError(unauthorized ? 'unauthorized' : 'protocol', message)
 }
 
-class CodexAppServerClient {
+export class CodexAppServerClient {
   private readonly process: ChildProcessWithoutNullStreams
   private readonly pending = new Map<string, PendingRequest>()
   private nextId = 1
   private buffer = ''
   private disposed = false
 
-  constructor(process: ChildProcessWithoutNullStreams) {
+  constructor(process: ChildProcessWithoutNullStreams, private readonly onNotification?: (notification: CodexAppServerNotification) => void) {
     this.process = process
     this.process.stdout.setEncoding('utf8')
     this.process.stdout.on('data', (chunk: string) => this.handleData(chunk))
@@ -259,7 +277,10 @@ class CodexAppServerClient {
         this.failAll(new CodexAppServerError('protocol', 'Codex App Server 返回了无效 JSON'))
         continue
       }
-      if (message.id === undefined || message.id === null) continue
+      if (message.id === undefined || message.id === null) {
+        if (message.method) this.onNotification?.({ method: message.method, params: message.params })
+        continue
+      }
       const request = this.pending.get(String(message.id))
       if (!request) continue
       this.pending.delete(String(message.id))
@@ -307,6 +328,122 @@ class CodexAppServerClient {
     this.disposed = true
     this.failAll(new CodexAppServerError('process', 'Codex App Server 连接已关闭'))
     if (!this.process.killed) this.process.kill()
+  }
+}
+
+function threadFromResponse(value: unknown): CodexAppServerThread | null {
+  const response = asObject(value)
+  const thread = asObject(response.thread || value)
+  const id = asString(thread.id)
+  if (!id) return null
+  const status = asObject(thread.status)
+  return {
+    id,
+    name: asString(thread.name) || asString(thread.title) || asString(thread.preview),
+    cwd: asString(thread.cwd),
+    status: asString(status.type) || asString(thread.status) || 'idle',
+    updatedAt: asString(thread.updatedAt) || new Date().toISOString()
+  }
+}
+
+function turnFromResponse(value: unknown): CodexAppServerTurn | null {
+  const turn = asObject(value)
+  const id = asString(turn.id)
+  if (!id) return null
+  return { id, status: asString(turn.status) }
+}
+
+/**
+ * A small persistent adapter for the local Codex App Server. It intentionally
+ * exposes only the stable task-thread primitives ForgeDesk needs and keeps
+ * the experimental JSON-RPC wire format out of renderer code.
+ */
+export class CodexAppServerThreadService {
+  private client: CodexAppServerClient | null = null
+
+  constructor(private readonly input: {
+    command: string
+    codexHome: string
+    onNotification?: (notification: CodexAppServerNotification) => void
+    spawnProcess?: CodexAppServerSpawnProcess
+  }) {}
+
+  async startThread(input: { cwd: string; title: string; model?: string; sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access' }): Promise<CodexAppServerThread> {
+    const result = await this.request('thread/start', { cwd: input.cwd, model: input.model || null, sandbox: input.sandbox || 'workspace-write' })
+    const thread = threadFromResponse(result)
+    if (!thread) throw new CodexAppServerError('protocol', 'Codex App Server 未返回线程 ID')
+    await this.renameThread(thread.id, input.title)
+    return { ...thread, name: input.title }
+  }
+
+  async startTurn(input: { threadId: string; text: string; cwd?: string; outputSchema?: unknown; approvalPolicy?: 'untrusted' | 'on-request' | 'never' }): Promise<string> {
+    const result = await this.request('turn/start', {
+      threadId: input.threadId,
+      cwd: input.cwd || null,
+      input: [{ type: 'text', text: input.text }],
+      outputSchema: input.outputSchema || null,
+      approvalPolicy: input.approvalPolicy || 'on-request'
+    })
+    return asString(asObject(asObject(result).turn).id) || asString(asObject(result).id)
+  }
+
+  async listThreads(cwd?: string): Promise<CodexAppServerThread[]> {
+    const result = asObject(await this.request('thread/list', { cwd: cwd || null, archived: false, sortKey: 'updated_at', sortDirection: 'desc' }))
+    const threads = Array.isArray(result.data) ? result.data : Array.isArray(result.threads) ? result.threads : []
+    return threads.map(threadFromResponse).filter((thread): thread is CodexAppServerThread => Boolean(thread))
+  }
+
+  async listTurns(threadId: string): Promise<CodexAppServerTurn[]> {
+    const result = asObject(await this.request('thread/turns/list', { threadId, limit: 100, sortDirection: 'desc', itemsView: 'notLoaded' }))
+    const turns = Array.isArray(result.data) ? result.data : Array.isArray(result.turns) ? result.turns : []
+    return turns.map(turnFromResponse).filter((turn): turn is CodexAppServerTurn => Boolean(turn))
+  }
+
+  async interruptRunningTurns(threadId: string): Promise<number> {
+    const turns = await this.listTurns(threadId)
+    const runningTurns = turns.filter((turn) => turn.status === 'inProgress' || turn.status === 'running')
+    for (const turn of runningTurns) await this.request('turn/interrupt', { threadId, turnId: turn.id })
+    return runningTurns.length
+  }
+
+  async renameThread(threadId: string, title: string): Promise<void> {
+    await this.request('thread/name/set', { threadId, name: title })
+  }
+
+  async dispose(): Promise<void> {
+    this.client?.dispose()
+    this.client = null
+  }
+
+  private async request(method: string, params?: unknown): Promise<unknown> {
+    const client = await this.ready()
+    return client.request(method, params)
+  }
+
+  private async ready(): Promise<CodexAppServerClient> {
+    if (this.client) return this.client
+    if (!this.input.command) throw new CodexAppServerError('not-installed', '未检测到可用的 Codex App Server 命令')
+    const spawnImpl = this.input.spawnProcess || defaultSpawnProcess
+    let child: ChildProcessWithoutNullStreams
+    try {
+      child = spawnImpl(this.input.command, ['app-server', '--stdio'], {
+        cwd: this.input.codexHome,
+        env: { ...process.env, CODEX_HOME: this.input.codexHome, NO_COLOR: '1', RUST_LOG: 'off' },
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+    } catch (error) {
+      throw new CodexAppServerError('process', error instanceof Error ? error.message : String(error))
+    }
+    const client = new CodexAppServerClient(child, this.input.onNotification)
+    try {
+      await client.request('initialize', { clientInfo: { name: 'forgedesk', title: 'ForgeDesk', version: '1.1.1' }, capabilities: { experimentalApi: true } })
+      client.notify('initialized', {})
+      this.client = client
+      return client
+    } catch (error) {
+      client.dispose()
+      throw error
+    }
   }
 }
 

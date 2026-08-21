@@ -1813,6 +1813,15 @@ type CodexTaskEvent = {
   task: CodexTaskRecord
 }
 
+type ManagedTaskStage = 'created' | 'planning' | 'ready' | 'branching' | 'executing' | 'codex-complete' | 'completed-no-changes' | 'awaiting-review' | 'awaiting-commit' | 'awaiting-target' | 'merging' | 'merged' | 'pushing' | 'completed' | 'failed' | 'cancelled' | 'needs-attention' | 'unassigned'
+type ManagedTaskSubtask = { id: string; taskId: string; title: string; description: string; acceptance: string; dependencyIds: string[]; order: number; codexThreadId: string; stage: ManagedTaskStage; runStatus: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled'; createdAt: string; updatedAt: string }
+type ManagedTaskEvent = { id: string; taskId: string; stage: ManagedTaskStage; message: string; detail: string; createdAt: string }
+type ManagedTask = { id: string; title: string; description: string; source: 'forgedesk' | 'codex-import' | 'legacy'; projectId: string; repositoryId: string; cwd: string; codexThreadId: string; stage: ManagedTaskStage; runStatus: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled'; branch: string; baseBranch: string; baselineSha: string; targetBranch: string; commitSha: string; hasChanges: boolean; autoExecute: boolean; createdAt: string; updatedAt: string; finishedAt: string; subtasks: ManagedTaskSubtask[]; events: ManagedTaskEvent[]; bindings: CodexThreadBinding[] }
+type CodexThreadBinding = { taskId: string; codexThreadId: string; role: 'parent' | 'subtask' | 'imported'; title: string; cwd: string; nativeStatus: string; updatedAt: string }
+type ManagedTaskCreateInput = { title: string; description?: string; projectId: string; repositoryId: string; autoExecute?: boolean }
+type ManagedTaskPlanItem = { title: string; description?: string; acceptance?: string; dependencyIndexes?: number[] }
+type LegacyManagedTaskImport = { id: string; title: string; notes?: string; status: 'todo' | 'doing' | 'done'; projectId?: string | null; createdAt?: string; updatedAt?: string; completedAt?: string | null; subtasks?: Array<{ id?: string; title: string; done?: boolean; createdAt?: string; completedAt?: string | null }> }
+
 type CodexActivitySnapshot = {
   available: boolean
   running: number
@@ -2950,6 +2959,17 @@ interface Window {
     deleteCodexTask: (taskId: string) => Promise<CodexTaskRecord[]>
     getCodexTaskEnvironment: (taskId: string) => Promise<CodexTaskEnvironment>
     onCodexTaskEvent: (listener: (event: CodexTaskEvent) => void) => () => void
+    listManagedTasks: (projectId?: string) => Promise<ManagedTask[]>
+    syncManagedTasks: () => Promise<ManagedTask[]>
+    importLegacyManagedTasks: (tasks: LegacyManagedTaskImport[]) => Promise<ManagedTask[]>
+    createManagedTask: (input: ManagedTaskCreateInput) => Promise<ManagedTask>
+    saveManagedTaskPlan: (input: { taskId: string; subtasks: ManagedTaskPlanItem[] }) => Promise<ManagedTask>
+    executeManagedTask: (input: { taskId: string; baseBranch?: string }) => Promise<ManagedTask>
+    cancelManagedTask: (taskId: string) => Promise<ManagedTask>
+    approveManagedTaskReview: (taskId: string) => Promise<ManagedTask>
+    commitManagedTask: (input: { taskId: string; message?: string }) => Promise<ManagedTask>
+    publishManagedTask: (input: { taskId: string; targetBranch: 'develop' | 'preview' }) => Promise<ManagedTask>
+    onManagedTaskEvent: (listener: (task: ManagedTask) => void) => () => void
     listOpenRouterModels: () => Promise<OpenRouterModel[]>
     saveAiSettings: (input: AiSettingsInput) => Promise<AiSettingsView>
     getOverviewSnapshot: () => Promise<OverviewSnapshot>

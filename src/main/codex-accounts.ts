@@ -1,7 +1,7 @@
-import { chmod, copyFile, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 
 type JsonObject = Record<string, unknown>
 
@@ -70,6 +70,59 @@ function asObject(value: unknown): JsonObject {
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function hasCodexCredentials(value: unknown): boolean {
+  const auth = asObject(value)
+  const tokens = asObject(auth.tokens)
+  return Boolean(
+    asString(tokens.access_token || tokens.accessToken || auth.access_token || auth.accessToken) ||
+    asString(tokens.refresh_token || tokens.refreshToken || auth.refresh_token || auth.refreshToken) ||
+    asString(auth.OPENAI_API_KEY || auth.openai_api_key)
+  )
+}
+
+function normalizeImportedAuth(value: unknown): JsonObject {
+  const auth = asObject(value)
+  if (!hasCodexCredentials(auth)) throw new Error('所选 JSON 不包含可用的 Codex 登录凭据')
+
+  // A normal Codex auth.json (including API-key authentication) is already in
+  // the format consumed by Codex.  Preserve it instead of rewriting fields we
+  // do not know about.
+  if (Object.keys(asObject(auth.tokens)).length > 0 || asString(auth.OPENAI_API_KEY || auth.openai_api_key)) return auth
+
+  // Some account-export tools produce a flat account object rather than
+  // Codex's { tokens: ... } layout.  Convert that portable export to the
+  // canonical auth.json shape before storing it in the managed profile.
+  const tokens: JsonObject = {}
+  const copyToken = (target: string, ...values: unknown[]): void => {
+    const token = values.map(asString).find(Boolean)
+    if (token) tokens[target] = token
+  }
+  copyToken('access_token', auth.access_token, auth.accessToken)
+  copyToken('refresh_token', auth.refresh_token, auth.refreshToken)
+  copyToken('id_token', auth.id_token, auth.idToken)
+  copyToken('account_id', auth.account_id, auth.accountId)
+
+  const normalized: JsonObject = { tokens }
+  const lastRefresh = asString(auth.last_refresh || auth.lastRefresh)
+  if (lastRefresh) normalized.last_refresh = lastRefresh
+  return normalized
+}
+
+async function readImportedAuth(sourceAuthPath: string): Promise<JsonObject> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await readFile(sourceAuthPath, 'utf8'))
+  } catch {
+    throw new Error('所选文件不是有效的 JSON')
+  }
+
+  if (Array.isArray(parsed)) {
+    if (parsed.length !== 1) throw new Error('该导出文件包含多个账户，请先导出或选择单个账户')
+    return normalizeImportedAuth(parsed[0])
+  }
+  return normalizeImportedAuth(parsed)
 }
 
 function decodeJwtPayload(token: string): JsonObject {
@@ -275,7 +328,7 @@ export async function activateCodexAccount(userDataPath: string, accountId: stri
 
 export async function importCodexAccount(userDataPath: string, input: CodexAccountImportInput, homeDirectory = homedir()): Promise<CodexAccountRegistryView> {
   const rawSourcePath = input.sourcePath.trim()
-  if (!rawSourcePath) throw new Error('请选择 Codex auth.json 文件或 profile 目录')
+  if (!rawSourcePath) throw new Error('请选择 Codex 认证文件或 profile 目录')
   const sourcePath = resolve(rawSourcePath)
 
   let sourceAuthPath = sourcePath
@@ -284,18 +337,18 @@ export async function importCodexAccount(userDataPath: string, input: CodexAccou
   } catch {
     throw new Error('选择的 Codex profile 不存在')
   }
-  if (basename(sourceAuthPath) !== 'auth.json') throw new Error('请选择 auth.json 或包含 auth.json 的 Codex profile 目录')
   try {
     await stat(sourceAuthPath)
   } catch {
-    throw new Error('选择的 profile 中没有 auth.json')
+    throw new Error('选择的 profile 中没有 auth.json，或所选文件不存在')
   }
+  const normalizedAuth = await readImportedAuth(sourceAuthPath)
 
   const registry = await readRegistry(userDataPath, homeDirectory)
   const id = `account-${randomUUID()}`
   const destinationHome = join(userDataPath, 'codex-accounts', id)
   await mkdir(destinationHome, { recursive: true, mode: 0o700 })
-  await copyFile(sourceAuthPath, join(destinationHome, 'auth.json'))
+  await writeFile(join(destinationHome, 'auth.json'), `${JSON.stringify(normalizedAuth, null, 2)}\n`, { mode: 0o600 })
   await chmod(join(destinationHome, 'auth.json'), 0o600)
 
   const now = new Date().toISOString()

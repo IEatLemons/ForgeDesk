@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
@@ -94,6 +94,39 @@ describe('codex account reader', () => {
       await rm(homeDirectory, { recursive: true, force: true })
       await rm(userDataPath, { recursive: true, force: true })
       await rm(sourceHome, { recursive: true, force: true })
+    }
+  })
+
+  it('imports a single-account export by its content instead of its file name', async () => {
+    const homeDirectory = join(tmpdir(), `forgedesk-codex-import-home-${Date.now()}`)
+    const userDataPath = join(tmpdir(), `forgedesk-codex-import-data-${Date.now()}`)
+    const exportPath = join(tmpdir(), `forgedesk-account-export-${Date.now()}.json`)
+    const accessToken = jwt({ email: 'exported@example.com', account_id: 'exported-account-123456' })
+
+    try {
+      await writeFile(exportPath, JSON.stringify([{
+        account_id: 'exported-account-123456',
+        access_token: accessToken,
+        email: 'exported@example.com',
+        id_token: jwt({ email: 'exported@example.com' }),
+        last_refresh: '2026-08-07T00:00:00.000Z',
+        refresh_token: 'exported-refresh-secret'
+      }]))
+
+      const imported = await importCodexAccount(userDataPath, { name: '导出账户', sourcePath: exportPath }, homeDirectory)
+      const account = imported.accounts.find((item) => item.name === '导出账户')
+      assert.ok(account)
+      assert.equal(account?.available, true)
+      assert.equal(account?.email, 'exported@example.com')
+
+      const storedAuth = JSON.parse(await readFile(join(account?.codexHome ?? '', 'auth.json'), 'utf8'))
+      assert.equal(Array.isArray(storedAuth), false)
+      assert.equal(storedAuth.tokens.access_token, accessToken)
+      assert.equal(storedAuth.tokens.refresh_token, 'exported-refresh-secret')
+    } finally {
+      await rm(homeDirectory, { recursive: true, force: true })
+      await rm(userDataPath, { recursive: true, force: true })
+      await rm(exportPath, { force: true })
     }
   })
 })

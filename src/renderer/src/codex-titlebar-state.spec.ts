@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { formatCodexQuotaPercent, getCodexQuotaProgressMeta, selectCodexWeeklyQuotaWindow, type CodexTitlebarQuotaWindow } from './codex-titlebar-state.js'
+import type { CodexUncommittedAlert } from './data.js'
+import { formatCodexQuotaPercent, formatCodexResetAt, getCodexQuotaProgressMeta, selectCodexWeeklyQuotaWindow, sortCodexUncommittedAlerts, type CodexTitlebarQuotaWindow } from './codex-titlebar-state.js'
 
 function quotaWindow(patch: Partial<CodexTitlebarQuotaWindow> = {}): CodexTitlebarQuotaWindow {
   return {
@@ -9,6 +10,29 @@ function quotaWindow(patch: Partial<CodexTitlebarQuotaWindow> = {}): CodexTitleb
     remainingPercent: 50,
     resetAt: '',
     windowDurationMins: 7 * 24 * 60,
+    ...patch
+  }
+}
+
+function alert(id: string, completedAt: string, patch: Partial<CodexUncommittedAlert> = {}): CodexUncommittedAlert {
+  return {
+    additions: 1,
+    branch: 'main',
+    completedAt,
+    completionMarker: `${id}-marker`,
+    cwd: '/tmp/project',
+    deletions: 0,
+    detectedAt: completedAt,
+    filesChanged: 1,
+    id,
+    notifiedAt: null,
+    projectId: 'project-1',
+    projectName: '项目',
+    resolvedAt: null,
+    sourceId: `source-${id}`,
+    sourceType: 'task',
+    status: 'open',
+    codexKey: '/tmp/project',
     ...patch
   }
 }
@@ -43,5 +67,20 @@ describe('Codex titlebar quota state', () => {
     assert.deepEqual(getCodexQuotaProgressMeta(120), { percent: 100, tone: 'healthy' })
     assert.equal(formatCodexQuotaPercent(4.9), '4.9%')
     assert.equal(formatCodexQuotaPercent(null), '未知')
+  })
+
+  it('sorts uncommitted alerts by completion time without mutating the source list', () => {
+    const older = alert('older', '2026-08-16T08:00:00.000Z')
+    const newer = alert('newer', '2026-08-16T09:00:00.000Z')
+    const input = [older, newer]
+
+    assert.deepEqual(sortCodexUncommittedAlerts(input).map((item) => item.id), ['newer', 'older'])
+    assert.deepEqual(input.map((item) => item.id), ['older', 'newer'])
+  })
+
+  it('formats the next reset time and handles missing values', () => {
+    assert.match(formatCodexResetAt('2026-08-20T03:43:00.000Z'), /^下次重置：/)
+    assert.equal(formatCodexResetAt(''), '下次重置：未知')
+    assert.equal(formatCodexResetAt('not-a-date'), '下次重置：未知')
   })
 })

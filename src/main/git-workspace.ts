@@ -217,22 +217,29 @@ export function buildGitMergeTreeArgs(input: GitMergeAnalysisInput): string[] {
 }
 
 export function parsePorcelainStatus(output: string): GitStatusFile[] {
-  return output
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => {
-      const usesSingleStatusColumn = line[1] === ' ' && line[2] !== ' '
-      const indexStatus = line[0] || ' '
-      const worktreeStatus = usesSingleStatusColumn ? ' ' : line[1] || ' '
-      const rawPath = line.slice(usesSingleStatusColumn ? 2 : 3)
-      const [oldPath, path] = rawPath.includes(' -> ') ? rawPath.split(' -> ') : ['', rawPath]
+  // `git status --porcelain=v1 -z` leaves file names unescaped, including
+  // non-ASCII characters and newlines. Do not trim or split this output by line.
+  const records = output.split('\0')
+  const files: GitStatusFile[] = []
 
-      return {
-        path,
-        oldPath,
-        indexStatus,
-        worktreeStatus,
-        conflict: CONFLICT_STATUSES.has(`${indexStatus}${worktreeStatus}`)
-      }
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index]
+    if (!record) continue
+
+    const indexStatus = record[0] || ' '
+    const worktreeStatus = record[1] || ' '
+    const path = record.slice(3)
+    const hasOriginalPath = indexStatus === 'R' || indexStatus === 'C' || worktreeStatus === 'R' || worktreeStatus === 'C'
+    const oldPath = hasOriginalPath ? records[++index] || '' : ''
+
+    files.push({
+      path,
+      oldPath,
+      indexStatus,
+      worktreeStatus,
+      conflict: CONFLICT_STATUSES.has(`${indexStatus}${worktreeStatus}`)
     })
+  }
+
+  return files
 }

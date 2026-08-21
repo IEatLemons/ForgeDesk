@@ -2021,6 +2021,18 @@ export type CodexTaskEvent = {
   task: CodexTaskRecord
 }
 
+export type ManagedTaskStage = 'created' | 'planning' | 'ready' | 'branching' | 'executing' | 'codex-complete' | 'completed-no-changes' | 'awaiting-review' | 'awaiting-commit' | 'awaiting-target' | 'merging' | 'merged' | 'pushing' | 'completed' | 'failed' | 'cancelled' | 'needs-attention' | 'unassigned'
+export type ManagedTaskRunStatus = 'idle' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type ManagedTaskSource = 'forgedesk' | 'codex-import' | 'legacy'
+export type ManagedTaskSubtask = { id: string; taskId: string; title: string; description: string; acceptance: string; dependencyIds: string[]; order: number; codexThreadId: string; stage: ManagedTaskStage; runStatus: ManagedTaskRunStatus; createdAt: string; updatedAt: string }
+export type ManagedTaskEvent = { id: string; taskId: string; stage: ManagedTaskStage; message: string; detail: string; createdAt: string }
+export type CodexThreadBinding = { taskId: string; codexThreadId: string; role: 'parent' | 'subtask' | 'imported'; title: string; cwd: string; nativeStatus: string; updatedAt: string }
+export type ManagedTask = {
+  id: string; title: string; description: string; source: ManagedTaskSource; projectId: string; repositoryId: string; cwd: string; codexThreadId: string; stage: ManagedTaskStage; runStatus: ManagedTaskRunStatus; branch: string; baseBranch: string; baselineSha: string; targetBranch: string; commitSha: string; hasChanges: boolean; autoExecute: boolean; createdAt: string; updatedAt: string; finishedAt: string; subtasks: ManagedTaskSubtask[]; events: ManagedTaskEvent[]; bindings: CodexThreadBinding[]
+}
+export type ManagedTaskCreateInput = { title: string; description?: string; projectId: string; repositoryId: string; autoExecute?: boolean }
+export type ManagedTaskPlanItem = { title: string; description?: string; acceptance?: string; dependencyIndexes?: number[] }
+
 export type CodexActivitySnapshot = {
   available: boolean
   running: number

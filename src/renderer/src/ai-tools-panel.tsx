@@ -263,7 +263,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
 
   async function importAccount(): Promise<void> {
     if (!window.forgeDesk || !importPath.trim()) {
-      message.warning('请选择 Codex auth.json 或 profile 目录')
+      message.warning('请选择 Codex 认证文件或 profile 目录')
       return
     }
     setAccountAction('import')
@@ -369,7 +369,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
           ? await window.forgeDesk.stopCodexApiService()
           : await window.forgeDesk.rotateCodexApiKey()
       setApiService(next)
-      message.success(action === 'start' ? '本机 Codex API 服务已启动' : action === 'stop' ? '本机 Codex API 服务已停止' : 'API Key 已轮换')
+      message.success(action === 'start' ? '本机 Codex API 服务已启动，ForgeDesk 内部 AI 已默认接入' : action === 'stop' ? '本机 Codex API 服务已停止' : 'API Key 已轮换')
     } catch (error) {
       message.error(`API 服务操作失败：${getErrorMessage(error)}`)
     } finally {
@@ -394,8 +394,6 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
   if (loading) {
     return <div className="loading-panel"><Spin /></div>
   }
-
-  const activeQuota = activeAccount ? quotaByAccountId[activeAccount.id] : null
 
   if (!codexDetailsOpen) {
     return (
@@ -452,7 +450,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
         <div>
           <Button type="link" icon={<ArrowLeftOutlined />} onClick={() => setCodexDetailsOpen(false)}>返回 AI 工具</Button>
           <Typography.Title level={2}>Codex</Typography.Title>
-          <Typography.Paragraph type="secondary">账户与配额是主要信息；本机 API 服务集中在账户管理区，软件状态提供快捷入口，项目绑定位于底部。</Typography.Paragraph>
+          <Typography.Paragraph type="secondary">账户、配额与本机 API 服务集中在账户管理区，软件状态提供快捷入口，项目绑定位于底部。</Typography.Paragraph>
         </div>
         <Button icon={<ReloadOutlined />} loading={refreshing} onClick={() => void refreshAll(true)}>刷新状态</Button>
       </div>
@@ -479,29 +477,6 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
                 </Space>
               </div>
             </Space>
-          </Card>
-        </Col>
-        <Col xs={24} lg={16}>
-          <Card title="Codex 账号信息" className="ai-top-card ai-account-summary-card" extra={activeAccount ? <Tag color="blue">当前账号</Tag> : <Tag>未设置</Tag>}>
-            {activeAccount ? (
-              <Space direction="vertical" size={8} className="ai-active-account-summary">
-                <Space wrap>
-                  <Typography.Title level={3} style={{ margin: 0 }}>{activeAccount.name}</Typography.Title>
-                  <Tag color={activeAccount.available ? 'green' : 'default'}>{activeAccount.available ? '可用' : '待验证'}</Tag>
-                </Space>
-                <Typography.Text type="secondary">{activeQuota?.email || activeAccount.email || activeAccount.accountIdSuffix || '未读取邮箱'}</Typography.Text>
-                <div className="ai-active-account-facts">
-                  <div><span>账户等级</span><strong>{activeQuota?.planType || activeAccount.planType || '未知'}</strong></div>
-                  <div><span>最近使用</span><strong>{formatDate(activeAccount.lastUsedAt)}</strong></div>
-                  <div><span>数据状态</span><Tag color={quotaSourceColor(activeQuota)}>{quotaSourceLabel(activeQuota)}</Tag></div>
-                </div>
-                <AccountUsageSummary quota={activeQuota} compact />
-                <Typography.Text type="secondary">
-                  {activeQuota?.checkedAt ? `最近检查：${formatDate(activeQuota.checkedAt)}` : '点击右上角刷新状态读取最新数据'}
-                </Typography.Text>
-                <Button onClick={() => document.getElementById('codex-account-management')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>管理账户</Button>
-              </Space>
-            ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有当前 Codex 账户" />}
           </Card>
         </Col>
       </Row>
@@ -562,7 +537,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
                             <Descriptions.Item label="API Key"><Space><LockOutlined />{apiService?.apiKeyMasked || '未设置'}</Space></Descriptions.Item>
                           </Descriptions>
                           <Space wrap className="ai-api-actions">
-                            {apiService?.running ? <Button size="small" icon={<StopOutlined />} loading={apiAction === 'stop'} onClick={() => void apiActionRun('stop')}>停止</Button> : <Button size="small" type="primary" icon={<PlayCircleOutlined />} loading={apiAction === 'start'} onClick={() => void apiActionRun('start')}>启动</Button>}
+                            {apiService?.running ? <Button size="small" icon={<StopOutlined />} loading={apiAction === 'stop'} onClick={() => void apiActionRun('stop')}>停止</Button> : <Button size="small" type="primary" icon={<PlayCircleOutlined />} loading={apiAction === 'start'} onClick={() => void apiActionRun('start')}>启动并接入</Button>}
                             <Button size="small" icon={<KeyOutlined />} loading={apiAction === 'rotate'} onClick={() => void apiActionRun('rotate')}>轮换 Key</Button>
                             <Button size="small" icon={<CheckCircleOutlined />} loading={apiAction === 'health'} onClick={() => void healthCheck()}>健康检查</Button>
                           </Space>
@@ -628,8 +603,8 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
       <Modal title="导入 Codex 账户" open={importOpen} confirmLoading={accountAction === 'import'} onCancel={() => setImportOpen(false)} onOk={() => void importAccount()} okText="导入">
         <Space direction="vertical" style={{ width: '100%' }}>
           <Input placeholder="账户名称（可选）" value={importName} onChange={(event) => setImportName(event.target.value)} />
-          <Input.Search placeholder="选择 auth.json 或 profile 目录" value={importPath} enterButton="选择" onChange={(event) => setImportPath(event.target.value)} onSearch={() => void chooseImportFile()} />
-          <Typography.Text type="secondary">ForgeDesk 只读取必要的账户元数据并保存到自己的账户注册表，不会把 token 展示到界面。</Typography.Text>
+          <Input.Search placeholder="选择 Codex 认证 JSON 或 profile 目录" value={importPath} enterButton="选择" onChange={(event) => setImportPath(event.target.value)} onSearch={() => void chooseImportFile()} />
+          <Typography.Text type="secondary">ForgeDesk 按 JSON 内容识别单个 Codex 账户，并保存到自己的账户注册表，不会把 token 展示到界面。</Typography.Text>
         </Space>
       </Modal>
     </section>

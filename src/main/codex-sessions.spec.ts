@@ -88,6 +88,7 @@ describe('codex session service', () => {
       assert.equal(snapshot.projects.length, 1)
       assert.equal(snapshot.projects[0]?.sessionCount, 2)
       assert.equal(snapshot.sessions.find((session) => session.id === 'session-2')?.status, 'running')
+      assert.equal('items' in (snapshot.sessions[0] ?? {}), false)
       assert.equal(detail.preview, '修复搜索页')
       assert.deepEqual(detail.items.filter((item) => item.kind === 'user' || item.kind === 'assistant').map((item) => item.text), ['修复搜索页', '我会先检查搜索页。', '实时回答'])
       assert.deepEqual(detail.items.find((item) => item.kind === 'user')?.images, ['/tmp/reference.png'])
@@ -138,6 +139,28 @@ describe('codex session service', () => {
       await service.sendMessage({ content: '继续检查', images: ['/tmp/reference.png'], sessionId: 'session-1' })
       assert.deepEqual(calls[0]?.args, ['exec', 'resume', '--json', '--skip-git-repo-check', '--image', '/tmp/reference.png', 'session-1', '继续检查'])
       assert.equal(calls[0]?.cwd, '/tmp/ForgeDesk')
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  })
+
+  it('keeps a long-running session running when its lifecycle event is outside the summary tail', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'forgedesk-codex-summary-tail-'))
+    const filePath = join(directory, 'session.jsonl')
+
+    try {
+      const toolOutput = JSON.stringify({
+        timestamp: '2026-07-27T08:03:00.000Z',
+        type: 'response_item',
+        payload: { output: 'x'.repeat(300 * 1024), type: 'custom_tool_call_output' }
+      })
+      await writeFile(filePath, [event('task_started'), toolOutput].join('\n'))
+      const stateRows = createStateRows([{ cwd: '/tmp/ForgeDesk', filePath, id: 'session-1', title: '长时间运行的任务' }])
+      const service = new CodexSessionService({ readStateRows: async () => stateRows, sessionsDirectory: directory })
+
+      const snapshot = await service.list()
+      assert.equal(snapshot.running, 1)
+      assert.equal(snapshot.sessions[0]?.status, 'running')
     } finally {
       await rm(directory, { force: true, recursive: true })
     }

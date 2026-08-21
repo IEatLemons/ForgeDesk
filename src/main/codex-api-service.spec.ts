@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { readAiSettingsFile, writeAiSettingsFile } from './ai-settings.js'
 import { createCodexApiKey, getCodexApiService, getCodexApiServiceIntegrationSettings, maskCodexApiKey, normalizeCodexApiServiceSettings, startCodexApiService, stopCodexApiService, toCodexMessages } from './codex-api-service.js'
 
 describe('codex api service', () => {
@@ -36,6 +37,15 @@ describe('codex api service', () => {
     const userDataPath = await mkdtemp(join(tmpdir(), 'forgedesk-codex-api-'))
 
     try {
+      await writeAiSettingsFile(userDataPath, {
+        enabled: true,
+        provider: 'openai-compatible',
+        baseUrl: 'https://llm.example.com/v1',
+        apiKey: 'existing-key',
+        model: 'existing-model',
+        temperature: 0.2
+      })
+
       let service: Awaited<ReturnType<typeof startCodexApiService>>
       try {
         service = await startCodexApiService(userDataPath, { port: 0 })
@@ -53,6 +63,12 @@ describe('codex api service', () => {
       assert.equal(unauthorized.status, 401)
 
       const integration = await getCodexApiServiceIntegrationSettings(userDataPath)
+      const aiSettings = await readAiSettingsFile(userDataPath)
+      assert.equal(aiSettings.enabled, true)
+      assert.equal(aiSettings.provider, 'codex-local-api')
+      assert.equal(aiSettings.baseUrl, service.baseUrl)
+      assert.equal(aiSettings.apiKey, integration.apiKey)
+      assert.equal(aiSettings.model, service.model)
       const models = await fetch(`${service.baseUrl}/models`, { headers: { authorization: `Bearer ${integration.apiKey}` } })
       assert.equal(models.status, 200)
       assert.equal((await models.json() as { data: Array<{ id: string }> }).data[0].id, service.model)

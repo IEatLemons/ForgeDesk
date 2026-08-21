@@ -381,7 +381,7 @@ import { getProjectRepositoriesForDisplay, sortProjectsForDisplay } from './proj
 import { TerminalWorkspace } from './terminal-panel'
 import type { TerminalOpenRequest } from './terminal-panel-events'
 import { TerminalRemoteShortcuts } from './terminal-remote-shortcuts'
-import { TaskListPanel } from './task-list-panel'
+import { ManagedTaskPanel as TaskListPanel } from './managed-task-panel'
 import { OverviewDashboard } from './overview-dashboard'
 import { MarketNewsDashboard } from './market-news-dashboard'
 import { SystemMonitorPanel } from './system-monitor-panel'
@@ -2179,7 +2179,7 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
   async function importAccount(): Promise<void> {
     if (!window.forgeDesk) return
     if (!importAccountPath.trim()) {
-      message.warning('请选择 Codex auth.json 或 profile 目录')
+      message.warning('请选择 Codex 认证文件或 profile 目录')
       return
     }
     setCodexAccountAction('import')
@@ -2564,11 +2564,11 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
           <Input placeholder="账户名称（可选，例如：个人 Pro）" value={importAccountName} onChange={(event) => setImportAccountName(event.target.value)} />
           <Input
             readOnly
-            placeholder="选择 auth.json 或 Codex profile 目录"
+            placeholder="选择 Codex 认证 JSON 或 profile 目录"
             value={importAccountPath}
             addonAfter={<Button type="link" onClick={() => void chooseCodexAccountFile()}>选择文件</Button>}
           />
-          <Typography.Text type="secondary">ForgeDesk 会复制 auth.json 到自己的受保护 profile 目录，不会把 token 返回给页面或第三方客户端。</Typography.Text>
+          <Typography.Text type="secondary">ForgeDesk 会按 JSON 内容识别单个 Codex 账户，并转换后保存到自己的受保护 profile 目录；不会把 token 返回给页面或第三方客户端。</Typography.Text>
         </Space>
       </Modal>
     </div>
@@ -15470,10 +15470,15 @@ function ProjectOverview({
       // Pushing only changes the remote. The repository result above already
       // contains the refreshed local workspace/push status, so re-analyzing
       // the full project history here is unnecessary and can be very
-      // expensive for large projects. Fetch still needs the full analysis
-      // because it may introduce new remote commits.
-      if (successCount > 0 && action === 'fetch') {
-        await refreshProjectAfterGitTask(project.id)
+      // expensive for large projects. The Log tree still needs a refresh so
+      // its remote refs reflect the successful push. Fetch needs the full
+      // analysis because it may introduce new remote commits.
+      if (successCount > 0) {
+        if (action === 'fetch') {
+          await refreshProjectAfterGitTask(project.id)
+        } else {
+          setProjectGitRefreshToken((current) => current + 1)
+        }
       }
 
       if (await isProjectGitTaskStopped(taskId)) {
@@ -21465,6 +21470,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const [appRuntimeInfo, setAppRuntimeInfo] = useState<AppRuntimeInfo | null>(null)
   const [quickBuildState, setQuickBuildState] = useState<QuickBuildState>(() => createInitialQuickBuildState())
   const [codexMonitorFocusAlert, setCodexMonitorFocusAlert] = useState<CodexUncommittedAlert | null>(null)
+  const [pendingCodexSessionId, setPendingCodexSessionId] = useState('')
+  const [codexSessionBackKey, setCodexSessionBackKey] = useState<AppActiveKey>('overview')
   const terminalOpenRequestIdRef = useRef(0)
   const quickBuildStateRef = useRef(quickBuildState)
   const systemLogSummary = useMemo(() => createSystemLogSummary(systemLogs), [systemLogs])
@@ -21522,6 +21529,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     if (!window.forgeDesk) return undefined
     return window.forgeDesk.onCodexMonitorFocus((alert) => {
       setCodexMonitorFocusAlert(alert)
+      setCodexSessionBackKey('overview')
       if (appMode === 'simple') setAppMode(writeStoredAppMode('full'))
       setActiveKey('codex-sessions')
     })
@@ -21776,6 +21784,11 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       setSettingsInitialModule('overview')
     }
 
+    if (key === 'codex-sessions') {
+      setCodexSessionBackKey('overview')
+      setPendingCodexSessionId('')
+    }
+
     setActiveKey(key)
   }
 
@@ -21788,6 +21801,19 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
   function openCodex(): void {
     setActiveKey('ai-tools')
+  }
+
+  function openCodexMonitor(): void {
+    setCodexSessionBackKey('overview')
+    if (appMode === 'simple') setAppMode(writeStoredAppMode('full'))
+    setActiveKey('codex-sessions')
+  }
+
+  function openManagedTaskCodexConversation(sessionId: string): void {
+    setCodexSessionBackKey('tasks')
+    if (appMode === 'simple') setAppMode(writeStoredAppMode('full'))
+    setPendingCodexSessionId(sessionId)
+    setActiveKey('codex-sessions')
   }
 
   function openForgeProjectFromCodex(projectId: string): void {
@@ -22089,7 +22115,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   if (activeKey === 'ai-chat') {
     return (
       <>
-        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} />
+        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} />
         {appUpdateBanner}
         {appModeSwitcherFallback}
         <AiChatPanel
@@ -22107,10 +22133,10 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   if (activeKey === 'codex-sessions') {
     return (
       <>
-        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} />
+        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} />
         {appUpdateBanner}
         {appModeSwitcherFallback}
-        <CodexSessionManagerPanel focusAlert={codexMonitorFocusAlert} usesCustomTitleBar={usesCustomTitleBar} onBack={() => setActiveKey('overview')} onOpenForgeProject={openForgeProjectFromCodex} />
+        <CodexSessionManagerPanel backLabel={codexSessionBackKey === 'tasks' ? '返回任务' : '返回总览'} focusAlert={codexMonitorFocusAlert} focusSessionId={pendingCodexSessionId} onFocusSessionHandled={() => setPendingCodexSessionId('')} usesCustomTitleBar={usesCustomTitleBar} onBack={() => setActiveKey(codexSessionBackKey)} onOpenForgeProject={openForgeProjectFromCodex} />
         {systemLogDrawer}
         {projectGitTaskDrawer}
         {appStatusBar}
@@ -22121,7 +22147,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   if (activeKey === 'terminal') {
     return (
       <>
-        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} />
+        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} />
         {appUpdateBanner}
         {appModeSwitcherFallback}
         <Layout className={`terminal-mode-shell${usesCustomTitleBar ? ' terminal-mode-shell-with-titlebar' : ''}`}>
@@ -22172,7 +22198,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
   return (
     <>
-      <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} />
+      <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} />
       {appUpdateBanner}
       <Layout className={`app-shell${usesCustomTitleBar ? ' app-shell-with-titlebar' : ''}${isSimpleMode ? ' app-shell-simple' : ''}`}>
         {appModeSwitcherFallback}
@@ -22232,7 +22258,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             {!loadingWorkspace && activeKey === 'data-sources' && <DataSourcePanel />}
             {!loadingWorkspace && activeKey === 'docker' && <DockerPanel onOpenTerminalRequest={openGlobalTerminalRequest} />}
             {!loadingWorkspace && activeKey === 'docs' && <OaDocsPanel onOpenSettings={() => openSettingsModule('oa')} />}
-            {!loadingWorkspace && activeKey === 'tasks' && <TaskListPanel />}
+            {!loadingWorkspace && activeKey === 'tasks' && <TaskListPanel onOpenCodexSession={openManagedTaskCodexConversation} />}
             {!loadingWorkspace && activeKey === 'tools' && <ToolsPanel />}
             {!loadingWorkspace && activeKey === 'system-monitor' && <SystemMonitorPanel onBack={() => setActiveKey('overview')} />}
             {!loadingWorkspace && activeKey === 'system-info' && <SystemInfoPanel onBack={() => setActiveKey('overview')} />}

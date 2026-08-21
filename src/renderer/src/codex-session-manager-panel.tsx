@@ -34,7 +34,10 @@ import { ModuleBackButton } from './module-navigation'
 import { useForgeDeskStore } from './store'
 
 type CodexSessionManagerPanelProps = {
+  backLabel?: string
+  focusSessionId?: string
   onBack: () => void
+  onFocusSessionHandled?: () => void
   usesCustomTitleBar: boolean
   onOpenForgeProject?: (projectId: string) => void
   focusAlert?: CodexUncommittedAlert | null
@@ -445,13 +448,14 @@ function ConversationActivity({ items }: { items: CodexConversationItem[] }): JS
   )
 }
 
-export function CodexSessionManagerPanel({ focusAlert, onBack, onOpenForgeProject, usesCustomTitleBar }: CodexSessionManagerPanelProps): JSX.Element {
+export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAlert, focusSessionId, onBack, onFocusSessionHandled, onOpenForgeProject, usesCustomTitleBar }: CodexSessionManagerPanelProps): JSX.Element {
   const forgeProjects = useForgeDeskStore((state) => state.projects)
   const [snapshot, setSnapshot] = useState<CodexSessionsSnapshot>(() => emptySnapshot())
   const [monitorSnapshot, setMonitorSnapshot] = useState<CodexProjectMonitorSnapshot | null>(null)
   const [detail, setDetail] = useState<CodexSessionDetail | null>(null)
   const [selectedProjectKey, setSelectedProjectKey] = useState('')
   const [selectedSessionId, setSelectedSessionId] = useState('')
+  const [requestedSessionId, setRequestedSessionId] = useState(() => focusSessionId?.trim() || '')
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState('')
   const [imageAttachments, setImageAttachments] = useState<string[]>([])
@@ -461,9 +465,12 @@ export function CodexSessionManagerPanel({ focusAlert, onBack, onOpenForgeProjec
   const [refreshing, setRefreshing] = useState(false)
   const [configuredModel, setConfiguredModel] = useState('')
   const [selectedModel, setSelectedModel] = useState(CODEX_DEFAULT_MODEL_VALUE)
-  const [viewMode, setViewMode] = useState<'monitor' | 'conversation'>('monitor')
+  const [viewMode, setViewMode] = useState<'monitor' | 'conversation'>(() => focusSessionId?.trim() ? 'conversation' : 'monitor')
   const [sitesOpen, setSitesOpen] = useState(false)
   const conversationRef = useRef<HTMLDivElement>(null)
+  const detailRequestIdRef = useRef(0)
+  const selectedSessionIdRef = useRef('')
+  selectedSessionIdRef.current = selectedSessionId
   const shellClassName = `codex-session-shell${usesCustomTitleBar ? ' codex-session-shell-with-titlebar' : ''}`
 
   const filteredProjects = useMemo<CodexProjectGroup[]>(() => {
@@ -511,19 +518,26 @@ export function CodexSessionManagerPanel({ focusAlert, onBack, onOpenForgeProjec
     }
   }
 
-  async function loadDetail(sessionId: string): Promise<void> {
+  async function loadDetail(sessionId: string, preserveDetail = false): Promise<void> {
+    if (selectedSessionIdRef.current !== sessionId) return
+    const requestId = detailRequestIdRef.current + 1
+    detailRequestIdRef.current = requestId
     if (!window.forgeDesk || !sessionId) {
       setDetail(null)
+      setLoadingDetail(false)
       return
     }
+    if (!preserveDetail) setDetail(null)
     setLoadingDetail(true)
     try {
-      setDetail(await window.forgeDesk.getCodexSession(sessionId))
+      const nextDetail = await window.forgeDesk.getCodexSession(sessionId)
+      if (detailRequestIdRef.current === requestId && selectedSessionIdRef.current === sessionId) setDetail(nextDetail)
     } catch (error) {
+      if (detailRequestIdRef.current !== requestId || selectedSessionIdRef.current !== sessionId) return
       setDetail(null)
       message.error(getErrorMessage(error, '读取 Codex 对话失败'))
     } finally {
-      setLoadingDetail(false)
+      if (detailRequestIdRef.current === requestId) setLoadingDetail(false)
     }
   }
 
@@ -558,7 +572,11 @@ export function CodexSessionManagerPanel({ focusAlert, onBack, onOpenForgeProjec
 
   useEffect(() => {
     if (selectedSessionId) loadDetail(selectedSessionId).catch(() => undefined)
-    else setDetail(null)
+    else {
+      detailRequestIdRef.current += 1
+      setDetail(null)
+      setLoadingDetail(false)
+    }
   }, [selectedSessionId])
 
   useEffect(() => {
@@ -584,10 +602,28 @@ export function CodexSessionManagerPanel({ focusAlert, onBack, onOpenForgeProjec
   }, [focusAlert])
 
   useEffect(() => {
+    const sessionId = focusSessionId?.trim() || ''
+    if (!sessionId) return
+    setRequestedSessionId(sessionId)
+    setViewMode('conversation')
+    onFocusSessionHandled?.()
+  }, [focusSessionId, onFocusSessionHandled])
+
+  useEffect(() => {
+    if (!requestedSessionId) return
+    const session = snapshot.sessions.find((item) => item.id === requestedSessionId)
+    if (!session) return
+    setSelectedProjectKey(session.projectKey)
+    setSelectedSessionId(session.id)
+    setViewMode('conversation')
+    setRequestedSessionId('')
+  }, [requestedSessionId, snapshot.sessions])
+
+  useEffect(() => {
     if (!window.forgeDesk) return undefined
     return window.forgeDesk.onCodexSessionEvent((event: CodexSessionEvent) => {
       if (event.session) setSnapshot((current) => updateSessionSnapshot(current, event.session as CodexSessionSummary))
-      if (event.sessionId !== selectedSessionId) return
+      if (event.sessionId !== selectedSessionIdRef.current) return
       const item = event.item
       if (item) {
         setDetail((current) => {
@@ -598,7 +634,9 @@ export function CodexSessionManagerPanel({ focusAlert, onBack, onOpenForgeProjec
       if (event.type === 'running') setDetail((current) => current ? { ...current, status: 'running' } : current)
       if (event.type === 'completed' || event.type === 'failed' || event.type === 'cancelled') {
         setDetail((current) => current ? { ...current, status: event.type === 'completed' ? 'completed' : 'aborted' } : current)
-        window.setTimeout(() => loadDetail(event.sessionId).catch(() => undefined), 120)
+        window.setTimeout(() => {
+          if (selectedSessionIdRef.current === event.sessionId) loadDetail(event.sessionId, true).catch(() => undefined)
+        }, 120)
       }
       if (event.error) message.error(event.error)
     })
@@ -741,7 +779,7 @@ export function CodexSessionManagerPanel({ focusAlert, onBack, onOpenForgeProjec
   const renderProjectRail = (): JSX.Element => (
     <aside className="codex-session-projects">
       <div className="module-back-row codex-session-back-row">
-        <ModuleBackButton label="返回总览" onClick={onBack} />
+        <ModuleBackButton label={backLabel} onClick={onBack} />
       </div>
       <div className="codex-session-brand-row">
         <div>
@@ -865,7 +903,7 @@ export function CodexSessionManagerPanel({ focusAlert, onBack, onOpenForgeProjec
             )}
           </>
         ) : (
-          <div className="codex-session-empty-stage"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={snapshot.available ? '选择一个 Codex 会话查看完整内容' : '尚未读取到本机 Codex 会话'} /></div>
+          <div className="codex-session-empty-stage"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={requestedSessionId ? '正在定位此任务的 Codex 对话；如果它刚创建，请稍后刷新。' : snapshot.available ? '选择一个 Codex 会话查看完整内容' : '尚未读取到本机 Codex 会话'} /></div>
         )}
       </main>
       </>}

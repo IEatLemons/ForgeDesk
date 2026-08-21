@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { describe, it } from 'node:test'
-import { readCodexAppServerSnapshot, type CodexAppServerSpawnProcess } from './codex-app-server.js'
+import { CodexAppServerThreadService, readCodexAppServerSnapshot, type CodexAppServerSpawnProcess } from './codex-app-server.js'
 
 class FakeAppServerProcess extends EventEmitter {
   readonly stdin = new PassThrough()
@@ -48,6 +48,14 @@ function fakeSpawn(): { spawn: CodexAppServerSpawnProcess; process: FakeAppServe
               summary: { lifetimeTokens: 1234, peakDailyTokens: 456, longestRunningTurnSec: 12, currentStreakDays: 2, longestStreakDays: 4 },
               dailyUsageBuckets: [{ startDate: '2026-08-07', tokens: 1234 }]
             }
+            : method === 'thread/start'
+              ? { thread: { id: 'thread-1', cwd: '/repo', name: '', status: 'idle', updatedAt: '2026-08-18T00:00:00.000Z' } }
+              : method === 'thread/list'
+                ? { data: [{ id: 'thread-1', cwd: '/repo', name: '任务', status: 'running', updatedAt: '2026-08-18T00:00:00.000Z' }] }
+                : method === 'thread/turns/list'
+                  ? { data: [{ id: 'turn-1', status: 'inProgress', items: [] }] }
+                : method === 'turn/start'
+                  ? { turn: { id: 'turn-1' } }
             : {}
       process.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`)
     }
@@ -87,5 +95,22 @@ describe('Codex App Server adapter', () => {
     assert.deepEqual(initialized?.params, {})
     assert.equal(initialized?.jsonrpc, undefined)
     assert.equal(fake.process.killed, true)
+  })
+
+  it('creates, names, lists, starts, and interrupts turns on native task threads', async () => {
+    const fake = fakeSpawn()
+    const service = new CodexAppServerThreadService({ command: '/fake/codex', codexHome: '/tmp/codex', spawnProcess: fake.spawn })
+    const thread = await service.startThread({ cwd: '/repo', title: '任务' })
+    const turnId = await service.startTurn({ threadId: thread.id, text: '分析任务' })
+    const listed = await service.listThreads('/repo')
+    const interrupted = await service.interruptRunningTurns(thread.id)
+    await service.dispose()
+
+    assert.equal(thread.id, 'thread-1')
+    assert.equal(turnId, 'turn-1')
+    assert.equal(listed[0]?.status, 'running')
+    assert.equal(interrupted, 1)
+    assert.equal(fake.requests.some((request) => request.method === 'thread/name/set'), true)
+    assert.deepEqual(fake.requests.find((request) => request.method === 'turn/interrupt')?.params, { threadId: 'thread-1', turnId: 'turn-1' })
   })
 })

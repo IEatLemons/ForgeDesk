@@ -1,3 +1,5 @@
+import type { CodexUncommittedAlert } from './data'
+
 export type CodexTitlebarQuotaWindow = {
   label: 'primary' | 'secondary' | 'hourly' | 'weekly'
   usedPercent: number | null
@@ -48,4 +50,22 @@ export function formatCodexQuotaPercent(remainingPercent: number | null | undefi
   if (remainingPercent === null || remainingPercent === undefined || !Number.isFinite(remainingPercent)) return '未知'
   const percent = Math.min(100, Math.max(0, remainingPercent))
   return `${Number.isInteger(percent) ? percent : percent.toFixed(1)}%`
+}
+
+function timestampValue(value: string): number {
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+export function sortCodexUncommittedAlerts(alerts: CodexUncommittedAlert[]): CodexUncommittedAlert[] {
+  return [...alerts].sort((left, right) =>
+    timestampValue(right.completedAt || right.detectedAt) - timestampValue(left.completedAt || left.detectedAt)
+  )
+}
+
+export function formatCodexResetAt(value: string): string {
+  if (!value) return '下次重置：未知'
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return '下次重置：未知'
+  return `下次重置：${new Date(timestamp).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
 }
