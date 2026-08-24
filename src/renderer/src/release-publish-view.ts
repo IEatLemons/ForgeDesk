@@ -4,7 +4,7 @@ export type ReleasePublishPlanView = {
   currentVersion: string
   suggestedVersion: string
   suggestedTagName: string
-  selectedScript: 'publish:mac' | 'package:mac' | 'package:android' | 'build:android' | 'build' | ''
+  selectedScript: 'publish:github' | 'publish:mac' | 'package:mac' | 'package:android' | 'build:android' | 'build' | ''
   needsVersionBump: boolean
   canPublish: boolean
   issues: string[]
@@ -141,7 +141,7 @@ export function createReleasePlatformOptions(input: { plan: ReleasePublishPlanVi
     {
       key: 'github',
       name: 'GitHub Releases',
-      description: '发布版本 Tag、安装包和发布说明。',
+      description: '推送版本 Tag，并由 GitHub Actions 构建、验证和发布安装包。',
       detail: input.plan ? `当前仓库将使用 ${scriptLabel} 流程。` : '读取仓库后确认发布流程。',
       statusLabel: '已对接',
       statusColor: 'green',
@@ -194,7 +194,6 @@ export function createReleasePublishViewModel(input: {
 }): ReleasePublishViewModel {
   const issueCount = input.plan?.issues.length ?? 0
   const warningCount = input.plan?.warnings.length ?? 0
-  const tokenReady = input.githubToken.trim().length > 0
   const provider = input.provider ?? input.plan?.provider ?? 'github'
 
   if (!input.plan) {
@@ -211,15 +210,6 @@ export function createReleasePublishViewModel(input: {
   if (!input.plan.canPublish && unresolvedIssueCount > 0) {
     return {
       primaryLabel: `先处理 ${unresolvedIssueCount || 1} 个问题`,
-      primaryDisabled: true,
-      issueCount,
-      warningCount
-    }
-  }
-
-  if (provider === 'github' && !tokenReady && input.plan.selectedScript === 'publish:mac') {
-    return {
-      primaryLabel: '选择 GitHub Token',
       primaryDisabled: true,
       issueCount,
       warningCount
@@ -290,11 +280,11 @@ export function createReleasePublishTaskView(input: { task: ReleasePublishTaskVi
       : input.task.status === 'cancelled'
         ? { label: '已终止', color: 'orange', active: false }
         : { label: '失败', color: 'red', active: false }
-  const externalStatusLabel = input.task.provider === 'nextjs-pm2' ? '远端状态' : input.task.provider === 'firebase' ? 'Firebase 状态' : 'Codemagic 状态'
-  const externalWorkflowLabel = input.task.provider === 'nextjs-pm2' ? 'PM2 应用' : input.task.provider === 'firebase' ? 'Firebase App' : 'Workflow'
+  const externalStatusLabel = input.task.provider === 'github' ? 'GitHub Actions 状态' : input.task.provider === 'nextjs-pm2' ? '远端状态' : input.task.provider === 'firebase' ? 'Firebase 状态' : 'Codemagic 状态'
+  const externalWorkflowLabel = input.task.provider === 'github' ? 'GitHub Workflow' : input.task.provider === 'nextjs-pm2' ? 'PM2 应用' : input.task.provider === 'firebase' ? 'Firebase App' : 'Workflow'
   const fallbackLog = [
     input.task.hint ? `中文提示：${input.task.hint}` : '',
-    input.task.externalBuildId ? `${input.task.provider === 'firebase' ? 'Firebase Release' : 'Codemagic Build'}：${input.task.externalBuildId}` : '',
+    input.task.externalBuildId ? `${input.task.provider === 'firebase' ? 'Firebase Release' : input.task.provider === 'github' ? 'GitHub Actions' : 'Codemagic Build'}：${input.task.externalBuildId}` : '',
     input.task.externalStatus ? `${externalStatusLabel}：${input.task.externalStatus}` : '',
     input.task.externalWorkflow ? `${externalWorkflowLabel}：${input.task.externalWorkflow}` : '',
     ...(input.task.artifacts ?? []).map((artifact) =>

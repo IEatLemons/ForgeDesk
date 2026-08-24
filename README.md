@@ -36,7 +36,11 @@ npm run dev
 
 ## 下载与安装
 
-macOS 用户可以前往 [GitHub Releases](https://github.com/IEatLemons/ForgeDesk/releases) 下载最新安装包。目前发布的是 Apple Silicon（`arm64`）版本，下载 `.dmg` 后将 `ForgeDesk.app` 拖入“应用程序”目录即可。
+前往 [GitHub Releases](https://github.com/IEatLemons/ForgeDesk/releases) 下载与系统匹配的安装包：
+
+- macOS（Intel 与 Apple Silicon）：`ForgeDesk-<version>-universal.dmg`，打开后把 `ForgeDesk.app` 拖入“应用程序”目录。
+- Windows x64：`ForgeDesk-<version>-x64.exe`，运行 NSIS 安装程序。
+- Linux x64：`ForgeDesk-<version>-x64.AppImage`，赋予执行权限后运行：`chmod +x ForgeDesk-*.AppImage`。
 
 ### macOS 提示“应用已损坏，无法打开”？
 
@@ -54,11 +58,22 @@ macOS 用户可以前往 [GitHub Releases](https://github.com/IEatLemons/ForgeDe
 
 > 注意：上述命令会移除下载文件的 quarantine 属性，降低 macOS 对该应用的拦截保护。请勿对来源不明的应用执行。
 
+### Windows 提示“Windows 已保护你的电脑”？
+
+当前开源发布流程还没有接入 Windows 代码签名证书，Windows SmartScreen 可能显示警告。请只从可信的 ForgeDesk GitHub Release 下载；确认来源可信后，选择“更多信息 → 仍要运行”。
+
 ### 应用自动更新
 
-已安装的 ForgeDesk 会在启动后自动检查 GitHub Releases，并每小时轮询一次。新版会在后台下载，下载完成后在应用内提示“重启安装”。开发模式不会连接更新源；请使用打包后的 `.app` 测试更新流程。
+已安装的 ForgeDesk 会在启动后自动检查 GitHub Releases，并每小时轮询一次。macOS、Windows 和 Linux AppImage 版本都会下载对应系统的更新包；下载完成后在应用内提示“重启安装”。开发模式不会连接更新源；请使用打包后的应用测试更新流程。
 
-发布新版本时，先把 `package.json` 的版本号改为目标版本并提交，再推送对应的 `v<version>` tag。GitHub Actions 会构建并发布 macOS arm64 的 `.dmg`、`.zip`、blockmap 和 `latest-mac.yml`，其中 `latest-mac.yml` 是 Electron 更新器必须的版本清单。
+发布新版本时，在 ForgeDesk 的“发布版本”页面选择 GitHub Releases，或在命令行更新并提交 `package.json` 的版本号后执行：
+
+```bash
+git tag v<version>
+git push origin v<version>
+```
+
+版本标签会自动触发 GitHub Actions：每个 Runner 检测自己的系统并构建 macOS Universal、Windows x64 或 Linux x64 包。三组产物和自动更新清单全部验证通过后，工作流才会公开 GitHub Release；任一平台失败时不会发布半成品。
 
 ## Android APK
 

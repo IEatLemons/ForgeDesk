@@ -5591,8 +5591,6 @@ async function publishRepositoryRelease(
   callbacks.onPhase?.('准备发布参数', 1, releasePublishPhaseTotal)
   callbacks.onLog?.(`准备发布 ${repository.name} ${tagName}`)
   throwIfReleaseCancelled(callbacks)
-  const githubToken = await resolveGithubReleaseToken(input)
-
   if (tagName !== expectedTagName) {
     throw new Error(`Tag 应为 ${expectedTagName}`)
   }
@@ -5605,10 +5603,6 @@ async function publishRepositoryRelease(
 
   if (!initialPreparation.plan.canPublish && initialIssues.length > 0) {
     throw new Error(initialIssues.join('\n') || '发布前检查未通过')
-  }
-
-  if (initialPreparation.plan.selectedScript === 'publish:mac' && !githubToken) {
-    throw new Error('发布到 GitHub Releases 需要选择或填写 GitHub Token')
   }
 
   const shouldCommitWorkspaceChanges = selectedActionSet.has('commit-workspace-changes')
@@ -5668,29 +5662,37 @@ async function publishRepositoryRelease(
     callbacks.onLog?.('当前不在命名分支上，跳过分支推送')
   }
 
-  callbacks.onPhase?.('执行发布脚本', 8, releasePublishPhaseTotal)
-  callbacks.onLog?.(`执行发布脚本：${getReleaseScriptCommand(finalPreparation.packageManager, finalPreparation.plan.selectedScript)}`)
+  const isGithubActionsRelease = finalPreparation.plan.selectedScript === 'publish:github'
+  callbacks.onPhase?.(isGithubActionsRelease ? '推送 GitHub 发布标签' : '执行发布脚本', 8, releasePublishPhaseTotal)
+  callbacks.onLog?.(`${isGithubActionsRelease ? '推送发布标签' : '执行发布脚本'}：${getReleaseScriptCommand(finalPreparation.packageManager, finalPreparation.plan.selectedScript)}`)
   throwIfReleaseCancelled(callbacks)
   const scriptResult = await withSavedSshPassphrases((env) =>
-    runReleaseScript(repository.localPath, finalPreparation.packageManager, finalPreparation.plan.selectedScript, {
-      ...env,
-      GH_TOKEN: githubToken || process.env.GH_TOKEN || '',
-      GITHUB_TOKEN: githubToken || process.env.GITHUB_TOKEN || ''
-    }, callbacks)
+    runReleaseScript(repository.localPath, finalPreparation.packageManager, finalPreparation.plan.selectedScript, env, callbacks)
   )
   let stdout = scriptResult.stdout
   let stderr = scriptResult.stderr
 
-  callbacks.onPhase?.('更新 Release 并刷新状态', 9, releasePublishPhaseTotal)
+  callbacks.onPhase?.(isGithubActionsRelease ? '已触发 GitHub Actions' : '更新 Release 并刷新状态', 9, releasePublishPhaseTotal)
   throwIfReleaseCancelled(callbacks)
   if (scriptResult.ok && finalPreparation.plan.selectedScript === 'publish:mac') {
     callbacks.onLog?.('更新 GitHub Release 标题和发布说明')
+    const githubToken = await resolveGithubReleaseToken(input)
     const releaseUpdateMessage = await updateGithubReleaseDetails(repository, input, githubToken)
 
     if (releaseUpdateMessage) {
       stdout = [stdout, releaseUpdateMessage].filter(Boolean).join('\n')
       callbacks.onLog?.(releaseUpdateMessage)
     }
+  }
+
+  const githubRepository = parseGithubRemote(repository.remoteUrl || repository.remotes.find((remote) => remote.name === 'origin')?.fetchUrl || '')
+  const githubActionsUrl = isGithubActionsRelease && githubRepository
+    ? `https://github.com/${githubRepository.owner}/${githubRepository.repo}/actions/workflows/release.yml`
+    : undefined
+
+  if (scriptResult.ok && isGithubActionsRelease) {
+    callbacks.onLog?.(`GitHub Actions 已触发：${githubActionsUrl || '请在仓库 Actions 页面查看进度'}`)
+    stdout = [stdout, githubActionsUrl ? `GitHub Actions: ${githubActionsUrl}` : 'GitHub Actions 已触发'].filter(Boolean).join('\n')
   }
 
   callbacks.onLog?.('刷新仓库状态')
@@ -5702,6 +5704,10 @@ async function publishRepositoryRelease(
     stdout,
     stderr,
     exitCode: scriptResult.exitCode,
+    externalBuildUrl: githubActionsUrl,
+    externalStatus: scriptResult.ok && isGithubActionsRelease ? 'queued' : undefined,
+    externalWorkflow: isGithubActionsRelease ? 'Release ForgeDesk' : undefined,
+    externalTag: isGithubActionsRelease ? tagName : undefined,
     artifacts: []
   }
 }
@@ -5779,7 +5785,9 @@ async function runRepositoryReleasePublishTask(task: RepositoryReleasePublishTas
             ? 'Firebase App Distribution 分发完成'
             : result.provider === 'nextjs-pm2'
               ? 'Next.js PM2 部署完成'
-              : '发布完成'
+              : result.plan.selectedScript === 'publish:github'
+                ? 'GitHub Actions 已触发'
+                : '发布完成'
         : '发布失败',
       phaseIndex: task.phaseTotal || releasePublishPhaseTotal,
       phaseTotal: task.phaseTotal || releasePublishPhaseTotal,
@@ -5798,7 +5806,11 @@ async function runRepositoryReleasePublishTask(task: RepositoryReleasePublishTas
       externalTag: result.externalTag,
       artifacts: result.artifacts ?? []
     })
-    appendReleaseTaskLog(task, result.ok ? `${task.tagName} ${getReleaseProviderLabel(result.provider)} 发布流程已完成` : `${task.tagName} 发布任务未成功完成`)
+    appendReleaseTaskLog(task, result.ok
+      ? result.plan.selectedScript === 'publish:github'
+        ? `${task.tagName} 已触发 GitHub Actions 三平台发布`
+        : `${task.tagName} ${getReleaseProviderLabel(result.provider)} 发布流程已完成`
+      : `${task.tagName} 发布任务未成功完成`)
   } catch (error) {
     const finishedAt = new Date().toISOString()
     const errorMessage = getUnknownErrorMessage(error, '发布失败')

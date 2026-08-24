@@ -118,4 +118,11 @@ describe('app icon assets', () => {
 
     assert.equal(rendererLogo, packagedLogo)
   })
+
+  it('ships a multi-resolution Windows icon', () => {
+    const icon = readFileSync(join(process.cwd(), 'resources/forgedesk.ico'))
+
+    assert.deepEqual([...icon.subarray(0, 4)], [0, 0, 1, 0])
+    assert.ok(icon.readUInt16LE(4) >= 4)
+  })
 })
