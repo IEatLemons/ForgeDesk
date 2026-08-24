@@ -78,6 +78,7 @@ import {
   StarFilled,
   StarOutlined,
   TeamOutlined,
+  TagOutlined,
   ToolOutlined,
   UnlockOutlined,
   UploadOutlined,
@@ -122,6 +123,7 @@ import type {
   GitMergeAnalysis,
   GitOperationResult,
   GitPushInput,
+  GitTagPushInput,
   GitRemote,
   GitStatusFile,
   GitWorkspaceStatus,
@@ -171,6 +173,8 @@ import type {
   RepositoryReleasePublishTask,
   RepositoryReleaseSuggestion,
   RepositoryReleaseTagRecommendation,
+  RepositoryTagSyncSnapshot,
+  RepositoryTagSyncTag,
   RsaPrivateKeyRecord,
   RsaPrivateKeySize,
   ServiceConnection,
@@ -295,6 +299,7 @@ import {
   normalizeGitLogRefreshPreferences,
   getRefColor,
   getRefCopyText,
+  groupCommitRefs,
   getRepositoryDefaultPushTarget,
   prependWorkingTreeCommit,
   gitGraphLaneWidth,
@@ -389,7 +394,13 @@ import { OverviewDashboard } from './overview-dashboard'
 import { MarketNewsDashboard } from './market-news-dashboard'
 import { SystemMonitorPanel } from './system-monitor-panel'
 import { SystemInfoPanel } from './system-info-panel'
-import { AppSystemMonitorStatus, AppTitleBar } from './app-titlebar'
+import { AppSystemMonitorStatus, AppTitleBar, CodexStatusControl } from './app-titlebar'
+import {
+  appChromePreferencesChangedEvent,
+  readStoredAppChromePreferences,
+  writeStoredAppChromePreferences,
+  type AppChromePreferences
+} from './app-chrome-preferences'
 import { appModeChangedEvent, isFullAppMode, readStoredAppMode, writeStoredAppMode, type AppMode } from './app-mode'
 import { AppModeSwitcher } from './app-mode-switcher'
 import { ModuleBackButton } from './module-navigation'
@@ -1357,6 +1368,7 @@ function SystemLogDrawer({
 
 function AppStatusBar({
   appMode,
+  chromePreferences,
   summary,
   projectGitTaskCount,
   projectGitTaskRunningCount,
@@ -1368,9 +1380,14 @@ function AppStatusBar({
   onQuickBuild,
   onOpenLogs,
   onOpenSystemMonitor,
-  onOpenProjectGitTasks
+  onOpenProjectGitTasks,
+  onAppModeChange,
+  onOpenCodex,
+  onOpenCodexMonitor,
+  onOpenForgeProject
 }: {
   appMode: AppMode
+  chromePreferences: AppChromePreferences
   summary: ReturnType<typeof createSystemLogSummary>
   projectGitTaskCount: number
   projectGitTaskRunningCount: number
@@ -1383,6 +1400,10 @@ function AppStatusBar({
   onOpenLogs: () => void
   onOpenSystemMonitor: () => void
   onOpenProjectGitTasks: () => void
+  onAppModeChange: (mode: AppMode) => void
+  onOpenCodex: () => void
+  onOpenCodexMonitor: () => void
+  onOpenForgeProject: (projectId: string) => void
 }): JSX.Element {
   const latest = summary.latest
   const level = summary.error > 0 ? 'error' : summary.warning > 0 ? 'warning' : latest?.level ?? 'success'
@@ -1419,6 +1440,8 @@ function AppStatusBar({
           </button>
         </Tooltip>
       ) : null}
+      {chromePreferences.codexStatus === 'bottom' ? <CodexStatusControl placement="bottom" onOpenCodex={onOpenCodex} onOpenCodexMonitor={onOpenCodexMonitor} onOpenForgeProject={onOpenForgeProject} /> : null}
+      {chromePreferences.appModeSwitcher === 'bottom' ? <AppModeSwitcher mode={appMode} onChange={onAppModeChange} /> : null}
       <span className="app-status-bar-item app-status-bar-static">Ready</span>
       {versionLabel ? <span className="app-status-bar-item app-status-bar-static app-status-bar-version">{versionLabel}</span> : null}
     </div>
@@ -1690,10 +1713,22 @@ function CommitAuthorCell({ commit }: { commit: RepositoryLogCommit }): JSX.Elem
   )
 }
 
-function CommitRefTag({ refName, branchTags, currentBranch }: { refName: string; branchTags: ProjectBranchTag[]; currentBranch: string }): JSX.Element {
-  const copyValue = getRefCopyText(refName)
-  const isTag = refName.startsWith('tag:')
-  const copyLabel = isTag ? '复制 Tag' : '复制分支号'
+function CommitBranchRefTag({
+  branchName,
+  refs,
+  sources,
+  branchTags,
+  currentBranch,
+  remoteNames
+}: {
+  branchName: string
+  refs: string[]
+  sources: Array<{ kind: 'current' | 'local' | 'remote'; label: string; ref: string }>
+  branchTags: ProjectBranchTag[]
+  currentBranch: string
+  remoteNames: string[]
+}): JSX.Element {
+  const copyLabel = '复制分支名'
 
   function stopRefActionPropagation(event: { stopPropagation: () => void }): void {
     event.stopPropagation()
@@ -1701,29 +1736,101 @@ function CommitRefTag({ refName, branchTags, currentBranch }: { refName: string;
 
   function copyRef(event: { stopPropagation: () => void }): void {
     event.stopPropagation()
-    void copyText(copyValue, `${isTag ? 'Tag' : '分支号'}已复制：${copyValue}`)
+    void copyText(branchName, `分支名已复制：${branchName}`)
   }
 
   return (
-    <Tag color={getRefColor(refName, branchTags, currentBranch)} className="source-tree-ref source-tree-ref-copyable">
-      <span className="source-tree-ref-text">{refName}</span>
-      <Tooltip title={copyLabel}>
-        <Button
-          aria-label={`${copyLabel} ${copyValue}`}
-          className="source-tree-ref-copy"
-          icon={<CopyOutlined />}
-          size="small"
-          type="text"
-          onClick={copyRef}
-          onMouseDown={stopRefActionPropagation}
-        />
-      </Tooltip>
-    </Tag>
+    <Tooltip title={<div>完整引用：{refs.map((ref) => <div key={ref}>{ref}</div>)}</div>}>
+      <Tag color={getRefColor(refs[0] || branchName, branchTags, currentBranch, remoteNames)} className="source-tree-ref source-tree-ref-copyable source-tree-branch-ref">
+        <span className="source-tree-ref-text">{branchName}</span>
+        <span className="source-tree-ref-sources">
+          {sources.map((source) => <span key={`${source.kind}:${source.label}`} className={`source-tree-ref-source is-${source.kind}`}>{source.label}</span>)}
+        </span>
+        <Tooltip title={copyLabel}>
+          <Button
+            aria-label={`${copyLabel} ${branchName}`}
+            className="source-tree-ref-copy"
+            icon={<CopyOutlined />}
+            size="small"
+            type="text"
+            onClick={copyRef}
+            onMouseDown={stopRefActionPropagation}
+          />
+        </Tooltip>
+      </Tag>
+    </Tooltip>
   )
 }
 
-function CommitMessageCell({ commit, branchTags, currentBranch }: { commit: RepositoryLogCommit; branchTags: ProjectBranchTag[]; currentBranch: string }): JSX.Element {
+function getTagSyncSummary(tag: RepositoryTagSyncTag | undefined): { label: string; color: string } {
+  if (!tag) return { label: '待检查', color: 'default' }
+  const remotes = tag.remotes
+  if (remotes.length === 0) return { label: '无远端', color: 'default' }
+  const count = remotes.length
+  if (remotes.some((remote) => remote.state === 'diverged')) return { label: '冲突', color: 'error' }
+  const missingCount = remotes.filter((remote) => remote.state === 'missing').length
+  if (missingCount) return { label: `缺失 ${missingCount}`, color: 'warning' }
+  if (!tag.localCommit) return { label: '仅远端', color: 'cyan' }
+  if (remotes.some((remote) => remote.state === 'unavailable')) return { label: '不可用', color: 'default' }
+  return { label: `已同步 ${remotes.filter((remote) => remote.state === 'synced').length}/${count}`, color: 'success' }
+}
+
+function getTagSyncStateLabel(state: string): string {
+  return ({ synced: '已同步', missing: '远端缺失', diverged: '同名冲突', 'remote-only': '仅远端', absent: '无此 Tag', unavailable: '不可用' } as Record<string, string>)[state] || state
+}
+
+function CommitTagRef({ refName, tag, onOpenTagSync }: { refName: string; tag?: RepositoryTagSyncTag; onOpenTagSync: () => void }): JSX.Element {
+  const copyValue = getRefCopyText(refName)
+  const summary = getTagSyncSummary(tag)
+
+  function stopRefActionPropagation(event: { stopPropagation: () => void }): void {
+    event.stopPropagation()
+  }
+
+  function copyRef(event: { stopPropagation: () => void }): void {
+    event.stopPropagation()
+    void copyText(copyValue, `Tag 已复制：${copyValue}`)
+  }
+
+  return (
+    <Tooltip title={tag ? <div>点击查看 Tag 同步详情{tag.remotes.map((remote) => <div key={remote.remoteName}>{remote.remoteName}：{getTagSyncStateLabel(remote.state)}{remote.commit ? ` · ${remote.commit.slice(0, 7)}` : ''}{remote.error ? ` · ${remote.error}` : ''}</div>)}</div> : '点击读取 Tag 同步状态'}>
+      <Tag color="gold" className="source-tree-ref source-tree-ref-copyable source-tree-tag-ref" onClick={(event) => { event.stopPropagation(); onOpenTagSync() }}>
+        <span className="source-tree-ref-text">{copyValue}</span>
+        <span className={`source-tree-tag-sync is-${summary.color}`}>{summary.label}</span>
+        <Tooltip title="复制 Tag">
+          <Button
+            aria-label={`复制 Tag ${copyValue}`}
+            className="source-tree-ref-copy"
+            icon={<CopyOutlined />}
+            size="small"
+            type="text"
+            onClick={copyRef}
+            onMouseDown={stopRefActionPropagation}
+          />
+        </Tooltip>
+      </Tag>
+    </Tooltip>
+  )
+}
+
+function CommitMessageCell({
+  commit,
+  branchTags,
+  currentBranch,
+  remoteNames,
+  tagSyncSnapshot,
+  onOpenTagSync
+}: {
+  commit: RepositoryLogCommit
+  branchTags: ProjectBranchTag[]
+  currentBranch: string
+  remoteNames: string[]
+  tagSyncSnapshot: RepositoryTagSyncSnapshot | null
+  onOpenTagSync: () => void
+}): JSX.Element {
   const isWorkingTree = isWorkingTreeCommit(commit)
+  const refs = groupCommitRefs(commit.refs, remoteNames)
+  const tagByName = new Map(tagSyncSnapshot?.tags.map((tag) => [tag.name, tag]))
 
   return (
     <div className={isWorkingTree ? 'source-tree-commit-message is-working-tree' : 'source-tree-commit-message'}>
@@ -1739,10 +1846,8 @@ function CommitMessageCell({ commit, branchTags, currentBranch }: { commit: Repo
         </div>
       ) : commit.refs.length > 0 && (
         <div className="source-tree-ref-strip">
-          {commit.refs.slice(0, 6).map((ref) => (
-            <CommitRefTag key={ref} refName={ref} branchTags={branchTags} currentBranch={currentBranch} />
-          ))}
-          {commit.refs.length > 6 && <Tag className="source-tree-ref">+{commit.refs.length - 6}</Tag>}
+          {refs.branches.map((branch) => <CommitBranchRefTag key={branch.branchName} {...branch} branchTags={branchTags} currentBranch={currentBranch} remoteNames={remoteNames} />)}
+          {refs.tags.map((ref) => <CommitTagRef key={ref} refName={ref} tag={tagByName.get(getRefCopyText(ref))} onOpenTagSync={onOpenTagSync} />)}
         </div>
       )}
     </div>
@@ -3559,6 +3664,8 @@ function SettingsPanel({
   themePreference,
   resolvedTheme,
   onThemePreferenceChange,
+  chromePreferences,
+  onChromePreferencesChange,
   onSystemLog,
   onDeploymentRefreshActiveChange,
   onOpenSystemLog
@@ -3567,6 +3674,8 @@ function SettingsPanel({
   themePreference: ThemePreference
   resolvedTheme: ResolvedTheme
   onThemePreferenceChange: (preference: ThemePreference) => void
+  chromePreferences: AppChromePreferences
+  onChromePreferencesChange: (preferences: AppChromePreferences) => void
   onSystemLog?: SystemLogHandler
   onDeploymentRefreshActiveChange?: (active: boolean) => void
   onOpenSystemLog?: () => void
@@ -5162,6 +5271,32 @@ function SettingsPanel({
             ]}
             onChange={(value) => onThemePreferenceChange(value as ThemePreference)}
           />
+        </div>
+        <div className="settings-management-form app-chrome-settings-form">
+          <div className="appearance-control-section">
+            <div>
+              <Typography.Text strong>版本切换器</Typography.Text>
+              <Typography.Text type="secondary">控制“简洁版 / 完整版”入口显示在标题栏、底部状态栏，或暂时隐藏。</Typography.Text>
+            </div>
+            <Segmented
+              block
+              value={chromePreferences.appModeSwitcher}
+              options={[{ label: '上方', value: 'top' }, { label: '下方', value: 'bottom' }, { label: '隐藏', value: 'hidden' }]}
+              onChange={(value) => onChromePreferencesChange({ ...chromePreferences, appModeSwitcher: value as AppChromePreferences['appModeSwitcher'] })}
+            />
+          </div>
+          <div className="appearance-control-section">
+            <div>
+              <Typography.Text strong>Codex 状态条</Typography.Text>
+              <Typography.Text type="secondary">控制 Codex 运行、未提交和周配额状态条的位置；隐藏后仍可从 AI 工具和 Codex 会话进入。</Typography.Text>
+            </div>
+            <Segmented
+              block
+              value={chromePreferences.codexStatus}
+              options={[{ label: '上方', value: 'top' }, { label: '下方', value: 'bottom' }, { label: '隐藏', value: 'hidden' }]}
+              onChange={(value) => onChromePreferencesChange({ ...chromePreferences, codexStatus: value as AppChromePreferences['codexStatus'] })}
+            />
+          </div>
         </div>
       </div>
     )
@@ -9730,8 +9865,9 @@ function getPreferredPushTarget(repository: Repository | null, status: GitWorksp
   return getRepositoryDefaultPushTarget(repository, status?.branch)
 }
 
-function createGitPushInput(remoteNames: string[], branch: string): GitPushInput {
-  return remoteNames.length > 1 ? { remotes: remoteNames, branch } : { remote: remoteNames[0], branch }
+function createGitPushInput(remoteNames: string[], branch: string, tagNames: string[] = []): GitPushInput {
+  const input = remoteNames.length > 1 ? { remotes: remoteNames, branch } : { remote: remoteNames[0], branch }
+  return tagNames.length > 0 ? { ...input, tagNames } : input
 }
 
 function GitCommitModal({
@@ -11346,7 +11482,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
 
 function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChanged, onStartTask }: GitActionModalProps & {
   initialRepositoryId?: string
-  onStartTask?: (input: { repository: Repository; remoteNames: string[]; branch: string }) => void
+  onStartTask?: (input: { repository: Repository; remoteNames: string[]; branch: string; tagNames: string[] }) => void
 }): JSX.Element {
   const { updateRepository } = useForgeDeskStore()
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
@@ -11354,14 +11490,18 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
   const [status, setStatus] = useState<GitWorkspaceStatus | null>(null)
   const [pushRemote, setPushRemote] = useState('origin')
   const [pushBranch, setPushBranch] = useState('')
+  const [pushTagNames, setPushTagNames] = useState<string[]>([])
+  const [tagRecommendation, setTagRecommendation] = useState<RepositoryReleaseTagRecommendation | null>(null)
   const [loadingStatus, setLoadingStatus] = useState(false)
+  const [loadingTagRecommendation, setLoadingTagRecommendation] = useState(false)
   const [working, setWorking] = useState(false)
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
   const pushTargets = status?.pushTargets ?? selectedRepository?.pushTargets ?? []
   const pushableTargets = getPushableTargets(pushTargets)
   const remoteOptions = createPushRemoteOptions(selectedRepository?.remotes ?? [], pushTargets)
   const currentBranch = getCurrentBranchName(selectedRepository, status)
-  const pushReady = Boolean(selectedRepository && pushBranch.trim() && canPushSelection(pushRemote, pushTargets))
+  const pushReady = Boolean(selectedRepository && pushBranch.trim() && (canPushSelection(pushRemote, pushTargets) || pushTagNames.length > 0))
+  const tagOptions = createReleaseTagOptions(tagRecommendation)
 
   useEffect(() => {
     const wasOpen = pushModalWasOpenRef.current
@@ -11393,6 +11533,23 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
       return preferredRepositoryId || repositories[0].id
     })
   }, [initialRepositoryId, open, repositories])
+
+  useEffect(() => {
+    if (!open || !selectedRepository || !window.forgeDesk) {
+      setTagRecommendation(null)
+      return
+    }
+
+    setPushTagNames([])
+    setLoadingTagRecommendation(true)
+    window.forgeDesk.recommendRepositoryReleaseTag(selectedRepository.id)
+      .then(setTagRecommendation)
+      .catch((error) => {
+        setTagRecommendation(null)
+        message.warning(getErrorMessage(error))
+      })
+      .finally(() => setLoadingTagRecommendation(false))
+  }, [open, selectedRepository?.id])
 
   async function refreshWorkspaceStatus(): Promise<void> {
     if (!selectedRepository || !window.forgeDesk) {
@@ -11443,7 +11600,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
     }
 
     if (onStartTask) {
-      onStartTask({ repository: selectedRepository, remoteNames, branch })
+      onStartTask({ repository: selectedRepository, remoteNames, branch, tagNames: pushTagNames })
       onClose()
       return
     }
@@ -11451,7 +11608,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
     setWorking(true)
 
     try {
-      const result = await window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, branch))
+      const result = await window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, branch, pushTagNames))
       updateRepository(result.repository)
       setStatus(result.status)
 
@@ -11460,7 +11617,8 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
         return
       }
 
-      message.success(remoteNames.length > 1 ? '分支已推送到所有远端' : '分支已推送')
+      const targetLabel = pushTagNames.length > 0 ? `分支和 ${pushTagNames.length} 个版本 Tag` : '分支'
+      message.success(remoteNames.length > 1 ? `${targetLabel}已推送到所有远端` : `${targetLabel}已推送`)
       await onChanged(result.repository)
       onClose()
     } catch (error) {
@@ -11472,7 +11630,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
 
   return (
     <Modal
-      title="推送分支"
+      title="推送分支与版本"
       open={open}
       width="min(720px, calc(100vw - 48px))"
       onCancel={onClose}
@@ -11503,15 +11661,25 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
           <Select value={pushRemote} options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]} onChange={setPushRemote} />
           <Input value={pushBranch} placeholder={currentBranch || 'main'} onChange={(event) => setPushBranch(event.target.value)} />
         </Space.Compact>
+        <Select
+          mode="tags"
+          value={pushTagNames}
+          options={tagOptions}
+          loading={loadingTagRecommendation}
+          placeholder="可选：同时推送版本 Tag，例如 v2.3.0"
+          tokenSeparators={[',']}
+          style={{ width: '100%' }}
+          onChange={(values) => setPushTagNames(Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))))}
+        />
         <Alert
           type={pushReady ? 'info' : 'warning'}
           showIcon
           message={
             pushReady
-              ? `将推送 ${selectedRepository?.name} 的 ${pushBranch || currentBranch} 到 ${pushRemote === PUSH_ALL_REMOTES_VALUE ? '所有远端' : pushRemote || 'origin'}`
-              : '当前分支没有待推送到任一远端的提交'
+              ? `将推送 ${selectedRepository?.name} 的 ${pushBranch || currentBranch}${pushTagNames.length > 0 ? `，以及版本 Tag：${pushTagNames.join('、')}` : ''} 到 ${pushRemote === PUSH_ALL_REMOTES_VALUE ? '所有远端' : pushRemote || 'origin'}`
+              : '当前分支没有待推送提交；选择版本 Tag 后仍可单独推送版本'
           }
-          description="推送会使用当前仓库配置的 Git 远端和 SSH/HTTPS 认证。"
+          description="版本 Tag 会明确列出后单独推送，不会推送全部本地标签。"
         />
       </Space>
     </Modal>
@@ -11983,6 +12151,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
   const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
   const [pushRemote, setPushRemote] = useState('origin')
   const [pushBranch, setPushBranch] = useState('')
+  const [pushTagNames, setPushTagNames] = useState<string[]>([])
   const [mergeSource, setMergeSource] = useState('')
   const [working, setWorking] = useState(false)
   const [generatingCommitMessage, setGeneratingCommitMessage] = useState(false)
@@ -12109,6 +12278,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
     setSelectedPaths([])
     setCommitMessage('')
     setTagRecommendation(null)
+    setPushTagNames([])
     setMergeSource('')
     const target = getPreferredPushTarget(selectedRepository)
     setPushRemote(target.remote)
@@ -12158,8 +12328,10 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
     }
 
     await runGitWrite(
-      () => window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, pushBranch)),
-      remoteNames.length > 1 ? '分支已推送到所有远端' : '分支已推送'
+      () => window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, pushBranch, pushTagNames)),
+      pushTagNames.length > 0
+        ? remoteNames.length > 1 ? `分支和 ${pushTagNames.length} 个版本 Tag 已推送到所有远端` : `分支和 ${pushTagNames.length} 个版本 Tag 已推送`
+        : remoteNames.length > 1 ? '分支已推送到所有远端' : '分支已推送'
     )
   }
 
@@ -12256,7 +12428,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
   const currentBranch = getCurrentBranchName(selectedRepository, status)
   const commitReady = canCommitSelection(files, files.map((file) => file.path), commitMessage) ||
     (isLocalCodexAutoCommitEnabled(aiSettings) && files.length > 0)
-  const pushReady = Boolean(selectedRepository && pushBranch.trim() && canPushSelection(pushRemote, pushTargets))
+  const pushReady = Boolean(selectedRepository && pushBranch.trim() && (canPushSelection(pushRemote, pushTargets) || pushTagNames.length > 0))
 
   async function commitWorkspaceChanges(): Promise<void> {
     if (!selectedRepository || !window.forgeDesk) {
@@ -12395,6 +12567,16 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
                 推送
               </Button>
             </Space.Compact>
+            <Select
+              mode="tags"
+              value={pushTagNames}
+              options={createReleaseTagOptions(tagRecommendation)}
+              loading={loadingTagRecommendation}
+              placeholder="可选：同时推送版本 Tag，例如 v2.3.0"
+              tokenSeparators={[',']}
+              style={{ marginTop: 8, width: '100%' }}
+              onChange={(values) => setPushTagNames(Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))))}
+            />
           </div>
         </Col>
         <Col xs={24} lg={12}>
@@ -14035,11 +14217,13 @@ function ProjectCard({
 }
 
 type ProjectGitListAction = 'fetch' | 'push' | 'merge'
-type ProjectGitTaskStatus = 'running' | 'success' | 'failed' | 'skipped' | 'cancelled' | 'interrupted'
+type ProjectGitTaskStatus = 'running' | 'success' | 'partial' | 'failed' | 'skipped' | 'cancelled' | 'interrupted'
 
 type ProjectGitRepositoryTaskResult = {
   repositoryId: string
   repositoryName: string
+  remoteName?: string
+  branch?: string
   ok: boolean
   message: string
   stdout?: string
@@ -14062,6 +14246,7 @@ type ProjectGitPushRequest = {
   repositoryId: string
   remoteNames: string[]
   branch: string
+  tagNames: string[]
 }
 
 function getProjectGitTaskKey(projectId: string, action: ProjectGitListAction): string {
@@ -14128,6 +14313,7 @@ function ProjectLogTreePanel({
   view,
   refreshToken,
   branchTagRefreshToken,
+  tagSyncOpenRequest = 0,
   onCommitCountChange,
   onRepositoryChange,
   initializingProjectRepository,
@@ -14139,6 +14325,7 @@ function ProjectLogTreePanel({
   view: RepositoryLogTreeView
   refreshToken: number
   branchTagRefreshToken: number
+  tagSyncOpenRequest?: number
   onCommitCountChange: (repositoryId: string, commitCount: number) => void
   onRepositoryChange: (repositoryId: string) => void
   initializingProjectRepository: boolean
@@ -14210,6 +14397,7 @@ function ProjectLogTreePanel({
         refreshToken={refreshToken}
         emptyDescription="请选择要查看的仓库"
         branchTagRefreshToken={branchTagRefreshToken}
+        tagSyncOpenRequest={tagSyncOpenRequest}
         onCommitCountChange={onCommitCountChange}
         onRepositoryChange={onRepositoryChange}
       />
@@ -15093,6 +15281,7 @@ function ProjectOverview({
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [updatingFavoriteProjectId, setUpdatingFavoriteProjectId] = useState<string | null>(null)
   const [branchTagRefreshToken, setBranchTagRefreshToken] = useState(0)
+  const [projectTagSyncOpenRequest, setProjectTagSyncOpenRequest] = useState(0)
   const [projectServiceCounts, setProjectServiceCounts] = useState<Record<string, number>>({})
   const [projectPlaneAvailability, setProjectPlaneAvailability] = useState<Record<string, boolean>>({})
   const [selectedProjectRowIds, setSelectedProjectRowIds] = useState<string[]>([])
@@ -15356,50 +15545,65 @@ function ProjectOverview({
         const branchGroups = request
           ? [{ branch: request.branch, remotes: request.remoteNames }]
           : groupPushTargetsByBranch(repository.pushTargets)
-        const outputs: string[] = []
-        const errors: string[] = []
+        const pushResults: ProjectGitRepositoryTaskResult[] = []
+        let currentRepository = repository
 
         for (const group of branchGroups) {
-          if (await isProjectGitTaskStopped(taskId)) {
-            break
-          }
-
-          try {
-            const result = await window.forgeDesk.gitPushTask(repository.id, createGitPushInput(group.remotes, group.branch), taskId)
-            updateRepository(mergeRepositoryWorkspaceStatus(repository, {
-              branch: result.branch,
-              pushTargets: result.pushTargets
-            }))
-
-            if (result.stdout) {
-              outputs.push(result.stdout)
+          for (const remoteName of group.remotes) {
+            if (await isProjectGitTaskStopped(taskId)) {
+              break
             }
 
-            if (!result.ok) {
-              errors.push(result.stderr || result.stdout || `${group.branch} 推送失败`)
+            let pushResult: ProjectGitRepositoryTaskResult
+
+            try {
+              // One IPC call per remote makes both the execution and the task
+              // log independent: a failed remote must not hide or stop the
+              // remaining push targets.
+              const result = await window.forgeDesk.gitPushTask(repository.id, createGitPushInput([remoteName], group.branch, request?.tagNames), taskId)
+              const pushedTarget = result.pushTargets.find((target) => target.remote === remoteName && target.branch === group.branch)
+              currentRepository = mergeRepositoryWorkspaceStatus(currentRepository, {
+                branch: result.branch,
+                // The task IPC intentionally avoids a full rescan, so its
+                // untouched targets can still contain their original ahead
+                // counts. Preserve prior successful targets and replace only
+                // the remote that just finished.
+                pushTargets: currentRepository.pushTargets.map((target) =>
+                  target.remote === remoteName && target.branch === group.branch && pushedTarget ? pushedTarget : target
+                )
+              })
+              updateRepository(currentRepository)
+
+              pushResult = {
+                repositoryId: repository.id,
+                repositoryName: repository.name,
+                remoteName,
+                branch: group.branch,
+                ok: result.ok,
+                message: result.ok ? `${[group.branch, ...(request?.tagNames ?? [])].join('、')} -> ${remoteName}` : formatGitTaskOutput(result.stderr || result.stdout || `${group.branch} -> ${remoteName} 推送失败`),
+                stdout: formatGitTaskOutput(result.stdout),
+                stderr: formatGitTaskOutput(result.stderr)
+              }
+            } catch (error) {
+              pushResult = {
+                repositoryId: repository.id,
+                repositoryName: repository.name,
+                remoteName,
+                branch: group.branch,
+                ok: false,
+                message: formatGitTaskOutput(getErrorMessage(error, `${project.name} / ${repository.name} 推送到 ${remoteName} 失败`)),
+                stderr: formatGitTaskOutput(getErrorMessage(error))
+              }
             }
-          } catch (error) {
-            errors.push(getErrorMessage(error, `${project.name} / ${repository.name} 推送失败`))
+
+            pushResults.push(pushResult)
+            await onRepositoryResult(pushResult)
           }
         }
 
-        const ok = errors.length === 0
-
-        const result = {
-          repositoryId: repository.id,
-          repositoryName: repository.name,
-          ok,
-          message: ok
-            ? `已推送 ${branchGroups.map((group) => `${group.branch} -> ${group.remotes.join(', ')}`).join('；')}`
-            : formatGitTaskOutput(errors.join('\n')),
-          stdout: formatGitTaskOutput(outputs.join('\n')),
-          stderr: formatGitTaskOutput(errors.join('\n'))
-        }
-
-        await onRepositoryResult(result)
-        return result
+        return pushResults
       })
-    )
+    ).then((results) => results.flat())
   }
 
   async function runProjectGitTask(
@@ -15463,15 +15667,22 @@ function ProjectOverview({
 
       const failedCount = repositoryResults.filter((result) => !result.ok).length
       const successCount = repositoryResults.length - failedCount
-      const status: ProjectGitTaskStatus = repositoryResults.length === 0 ? 'skipped' : failedCount > 0 ? 'failed' : 'success'
+      const resultUnit = action === 'push' ? '个远端' : '个仓库'
+      const status: ProjectGitTaskStatus = repositoryResults.length === 0
+        ? 'skipped'
+        : failedCount === 0
+          ? 'success'
+          : successCount === 0
+            ? 'failed'
+            : 'partial'
       const summary =
         status === 'skipped'
           ? action === 'push'
-            ? '没有待推送的仓库'
+            ? '没有待推送的远端'
             : '项目下没有仓库'
           : failedCount > 0
-            ? `${actionLabel} 完成 ${successCount} 个仓库，失败 ${failedCount} 个`
-            : `${actionLabel} 完成 ${successCount} 个仓库`
+            ? `${actionLabel} 完成 ${successCount}${resultUnit}，失败 ${failedCount} 个`
+            : `${actionLabel} 完成 ${successCount}${resultUnit}`
 
       // Pushing only changes the remote. The repository result above already
       // contains the refreshed local workspace/push status, so re-analyzing
@@ -16548,13 +16759,24 @@ function ProjectOverview({
                 <Button
                   icon={<UploadOutlined />}
                   loading={selectedProject ? isProjectGitTaskRunning(selectedProject.id, 'push') : false}
-                  disabled={!projectHasPushableTargets || (selectedProject ? isProjectGitTaskRunning(selectedProject.id, 'push') : false)}
+                  disabled={projectRepositories.length === 0 || (selectedProject ? isProjectGitTaskRunning(selectedProject.id, 'push') : false)}
+                  title={projectHasPushableTargets ? '推送待提交的分支和可选版本 Tag' : '没有待推送提交时，也可选择版本 Tag 推送'}
                   onClick={() => setPushModalOpen(true)}
                 >
                   推送
                 </Button>
                 <Button icon={<BranchesOutlined />} disabled={projectRepositories.length === 0} onClick={() => setMergeModalOpen(true)}>
                   合并
+                </Button>
+                <Button
+                  icon={<TagOutlined />}
+                  disabled={!selectedProjectGitRepository}
+                  onClick={() => {
+                    setProjectDetailTab('log-tree')
+                    setProjectTagSyncOpenRequest((current) => current + 1)
+                  }}
+                >
+                  Tag 对齐
                 </Button>
                 {!isSimpleMode ? (
                   <Button icon={<CheckCircleOutlined />} disabled={projectRepositories.length === 0} onClick={() => setApprovalModalOpen(true)}>
@@ -16585,9 +16807,9 @@ function ProjectOverview({
               repositories={projectRepositories}
               initialRepositoryId={selectedProjectGitRepository?.id}
               onClose={() => setPushModalOpen(false)}
-              onStartTask={({ repository, remoteNames, branch }) => {
+              onStartTask={({ repository, remoteNames, branch, tagNames }) => {
                 if (selectedProject) {
-                  void runProjectGitTask(selectedProject, 'push', { repositoryId: repository.id, remoteNames, branch })
+                  void runProjectGitTask(selectedProject, 'push', { repositoryId: repository.id, remoteNames, branch, tagNames })
                 }
               }}
               onChanged={(repository) => selectedProject && refreshProjectGitData(selectedProject.id, repository)}
@@ -16767,6 +16989,7 @@ function ProjectOverview({
                       view="log"
                       refreshToken={projectGitRefreshToken}
                       branchTagRefreshToken={branchTagRefreshToken}
+                      tagSyncOpenRequest={projectTagSyncOpenRequest}
                       onCommitCountChange={recordProjectRepositoryCommitCount}
                       onRepositoryChange={setProjectGitRepositoryId}
                       initializingProjectRepository={initializingProjectId === selectedProject.id}
@@ -16933,6 +17156,7 @@ function ProjectGitTaskLogDrawer({
               { label: '全部状态', value: 'all' },
               { label: '执行中', value: 'running' },
               { label: '成功', value: 'success' },
+              { label: '部分失败', value: 'partial' },
               { label: '失败', value: 'failed' },
               { label: '跳过', value: 'skipped' },
               { label: '已终止', value: 'cancelled' },
@@ -16945,6 +17169,7 @@ function ProjectGitTaskLogDrawer({
           const actionLabel = getProjectGitActionLabel(log.action)
           const statusMeta = getProjectGitTaskStatusMeta(log.status)
           const repositoryCount = log.repositoryResults.length
+          const resultLabel = log.action === 'push' ? '推送结果' : '仓库结果'
 
           return (
             <div className={`project-git-task-entry project-git-task-entry-${log.status}`} key={log.id}>
@@ -16984,7 +17209,7 @@ function ProjectGitTaskLogDrawer({
                 items={[
                   {
                     key: 'repositories',
-                    label: repositoryCount > 0 ? `仓库结果 ${repositoryCount}` : '仓库结果',
+                    label: repositoryCount > 0 ? `${resultLabel} ${repositoryCount}` : resultLabel,
                     children:
                       repositoryCount > 0 ? (
                         <div className="project-git-task-repository-list">
@@ -16993,6 +17218,7 @@ function ProjectGitTaskLogDrawer({
                               <Space size={6} wrap>
                                 <Badge status={result.ok ? 'success' : 'error'} />
                                 <Typography.Text strong>{result.repositoryName}</Typography.Text>
+                                {result.remoteName ? <Tag>{result.remoteName}</Tag> : null}
                               </Space>
                               <Typography.Text type={result.ok ? undefined : 'danger'}>{result.message}</Typography.Text>
                               {result.stdout ? <pre className="project-git-task-output">{result.stdout}</pre> : null}
@@ -18152,7 +18378,7 @@ function ProjectSubprojectSummary({
           const state = getRepositoryStateMeta(repository)
           const selected = selectedRepositoryId === repository.id
           const canCommitRepository = repository.available && repository.hasChanges
-          const canPushRepository = repository.available && getPushableTargets(repository.pushTargets).length > 0
+          const canPushRepository = repository.available
           const canFetchRepository = repository.available
           const canMergeRepository = repository.available
           const statusTags = [
@@ -18360,6 +18586,7 @@ function RepositoryLogTree({
   refreshToken = 0,
   emptyDescription = '请选择仓库',
   branchTagRefreshToken = 0,
+  tagSyncOpenRequest = 0,
   onCommitCountChange,
   onRepositoryChange
 }: {
@@ -18371,6 +18598,7 @@ function RepositoryLogTree({
   refreshToken?: number
   emptyDescription?: string
   branchTagRefreshToken?: number
+  tagSyncOpenRequest?: number
   onCommitCountChange?: (repositoryId: string, commitCount: number) => void
   onRepositoryChange?: (repositoryId: string) => void
 }): JSX.Element {
@@ -18395,10 +18623,15 @@ function RepositoryLogTree({
   const [gitError, setGitError] = useState<GitErrorGuidance | null>(null)
   const [branchDrawerOpen, setBranchDrawerOpen] = useState(false)
   const [branchTags, setBranchTags] = useState<ProjectBranchTag[]>([])
+  const [tagSyncSnapshot, setTagSyncSnapshot] = useState<RepositoryTagSyncSnapshot | null>(null)
+  const [tagSyncDrawerOpen, setTagSyncDrawerOpen] = useState(false)
+  const [tagSyncLoading, setTagSyncLoading] = useState(false)
+  const [pushingTagKey, setPushingTagKey] = useState('')
   const commitLoadMoreRef = useRef<HTMLDivElement | null>(null)
   const repositoryRefreshInFlightRef = useRef(false)
   const activeProjectId = (detailRepository ?? repository)?.projectId ?? ''
   const activeRepositoryForLog = detailRepository ?? repository
+  const remoteNames = useMemo(() => activeRepositoryForLog?.remotes.map((remote) => remote.name).filter(Boolean) ?? [], [activeRepositoryForLog?.remotes])
 
   const filteredCommits = useMemo(
     () => commits.filter((commit) => !commitAuthor || getCommitAuthorFilterValue(commit) === commitAuthor),
@@ -18449,7 +18682,7 @@ function RepositoryLogTree({
   )
   const activeBranchName = workspaceStatus?.branch || activeRepositoryForLog?.currentBranch || ''
   const graphRows = useMemo(() => createGraphRows(graphCommits), [graphCommits])
-  const coloredGraphRows = useMemo(() => applyBranchColorsToGraphRows(graphRows, branchTags, activeBranchName), [activeBranchName, branchTags, graphRows])
+  const coloredGraphRows = useMemo(() => applyBranchColorsToGraphRows(graphRows, branchTags, activeBranchName, remoteNames), [activeBranchName, branchTags, graphRows, remoteNames])
   const visibleGraphRows = useMemo(() => coloredGraphRows.slice(0, visibleCommitCount), [coloredGraphRows, visibleCommitCount])
   const graphColumnWidth = useMemo(() => getGitGraphColumnWidth(visibleGraphRows), [visibleGraphRows])
   const hasMoreCommits = visibleCommitCount < graphRows.length
@@ -18532,6 +18765,7 @@ function RepositoryLogTree({
         setDetailRepository(null)
         setCommits([])
         setWorkspaceStatus(null)
+        setTagSyncSnapshot(null)
         return
       }
 
@@ -18563,9 +18797,10 @@ function RepositoryLogTree({
             return
           }
 
-          const [nextCommits, nextWorkspaceStatus] = await Promise.all([
+          const [nextCommits, nextWorkspaceStatus, nextTagSyncSnapshot] = await Promise.all([
             window.forgeDesk.getRepositoryCommitGraph(detail.id),
-            window.forgeDesk.getRepositoryWorkspaceStatus(detail.id)
+            window.forgeDesk.getRepositoryWorkspaceStatus(detail.id),
+            window.forgeDesk.getRepositoryTagSyncStatus(detail.id).catch(() => null)
           ])
 
           if (cancelled) {
@@ -18576,6 +18811,7 @@ function RepositoryLogTree({
           setDetailRepository(detail)
           setCommits(nextCommits)
           setWorkspaceStatus(nextWorkspaceStatus)
+          setTagSyncSnapshot(nextTagSyncSnapshot)
           onCommitCountChange?.(detail.id, nextCommits.length)
           setGitError(null)
         }
@@ -18636,18 +18872,20 @@ function RepositoryLogTree({
         return
       }
 
-      const [nextCommits, nextWorkspaceStatus] = await Promise.all([
+      const [nextCommits, nextWorkspaceStatus, nextTagSyncSnapshot] = await Promise.all([
         window.forgeDesk.getRepositoryCommitGraph(detail.id, {
           ...nextRange,
           branchName: nextBranch || undefined
         }),
-        window.forgeDesk.getRepositoryWorkspaceStatus(detail.id)
+        window.forgeDesk.getRepositoryWorkspaceStatus(detail.id),
+        window.forgeDesk.getRepositoryTagSyncStatus(detail.id).catch(() => null)
       ])
 
       updateRepository(detail)
       setDetailRepository(detail)
       setCommits(nextCommits)
       setWorkspaceStatus(nextWorkspaceStatus)
+      setTagSyncSnapshot(nextTagSyncSnapshot)
       onCommitCountChange?.(detail.id, nextCommits.length)
       setGitError(null)
 
@@ -18692,6 +18930,42 @@ function RepositoryLogTree({
       setGitError(createGitErrorGuidance(error, '读取提交图谱'))
     } finally {
       setLoadingDetail(false)
+    }
+  }
+
+  async function refreshTagSyncStatus(targetRepository = detailRepository, showError = true): Promise<void> {
+    if (!targetRepository || !window.forgeDesk) return
+    setTagSyncLoading(true)
+    try {
+      setTagSyncSnapshot(await window.forgeDesk.getRepositoryTagSyncStatus(targetRepository.id))
+    } catch (error) {
+      if (showError) message.error(`读取 Tag 同步状态失败：${getErrorMessage(error)}`)
+    } finally {
+      setTagSyncLoading(false)
+    }
+  }
+
+  function openTagSync(): void {
+    setTagSyncDrawerOpen(true)
+    void refreshTagSyncStatus()
+  }
+
+  useEffect(() => {
+    if (tagSyncOpenRequest > 0) openTagSync()
+  }, [tagSyncOpenRequest])
+
+  async function pushTagToRemote(tagName: string, remoteName: string): Promise<void> {
+    if (!detailRepository || !window.forgeDesk) return
+    const actionKey = `${tagName}:${remoteName}`
+    setPushingTagKey(actionKey)
+    try {
+      const input: GitTagPushInput = { tagName, remoteName }
+      setTagSyncSnapshot(await window.forgeDesk.pushRepositoryTag(detailRepository.id, input))
+      message.success(`${tagName} 已推送到 ${remoteName}`)
+    } catch (error) {
+      message.error(`推送 Tag 失败：${getErrorMessage(error)}`)
+    } finally {
+      setPushingTagKey('')
     }
   }
 
@@ -18740,6 +19014,7 @@ function RepositoryLogTree({
       setDiffModalOpen(false)
       setVisibleCommitCount(commitGraphBatchSize)
       await refreshCommits({ startDate: '', endDate: '' }, '', synced)
+      await refreshTagSyncStatus(synced, false)
       const summary = await window.forgeDesk.analyzeProjectGit(synced.projectId)
       setProjectSummary(summary)
       setGitError(null)
@@ -18823,6 +19098,42 @@ function RepositoryLogTree({
     currentBranch: activeRepository.currentBranch,
     activeBranch: commitBranch
   })
+  const tagSyncColumns: ColumnsType<RepositoryTagSyncTag> = [
+    {
+      title: 'Tag',
+      dataIndex: 'name',
+      key: 'name',
+      width: 180,
+      render: (name: string, tag) => <Space direction="vertical" size={2}><Typography.Text strong>{name}</Typography.Text><Typography.Text type="secondary">本地：{tag.localCommit ? tag.localCommit.slice(0, 10) : '无'}</Typography.Text></Space>
+    },
+    {
+      title: '全部远端',
+      key: 'remotes',
+      render: (_value, tag) => (
+        <Space wrap size={[4, 6]}>
+          {tag.remotes.map((remote) => {
+            const color = remote.state === 'synced' ? 'success' : remote.state === 'missing' ? 'warning' : remote.state === 'diverged' ? 'error' : remote.state === 'remote-only' ? 'cyan' : 'default'
+            const pushable = Boolean(tag.localCommit && remote.state === 'missing')
+            return (
+              <Space key={remote.remoteName} size={4}>
+                <Tooltip title={remote.error || `${getTagSyncStateLabel(remote.state)}${remote.commit ? ` · ${remote.commit}` : ''}`}>
+                  <Tag color={color}>{remote.remoteName} · {getTagSyncStateLabel(remote.state)}</Tag>
+                </Tooltip>
+                {pushable && <Button size="small" type="link" loading={pushingTagKey === `${tag.name}:${remote.remoteName}`} onClick={() => void pushTagToRemote(tag.name, remote.remoteName)}>推送</Button>}
+              </Space>
+            )
+          })}
+          {tag.remotes.length === 0 && <Typography.Text type="secondary">未配置远端</Typography.Text>}
+        </Space>
+      )
+    },
+    {
+      title: '最后检查',
+      key: 'checkedAt',
+      width: 170,
+      render: () => (tagSyncSnapshot ? new Date(tagSyncSnapshot.checkedAt).toLocaleString() : '-')
+    }
+  ]
 
   return (
     <Space direction="vertical" size={16} className="repository-detail">
@@ -18861,6 +19172,9 @@ function RepositoryLogTree({
               </Tooltip>
               <Button icon={<BranchesOutlined />} onClick={() => setBranchDrawerOpen(true)}>
                 分支
+              </Button>
+              <Button icon={<TagOutlined />} loading={tagSyncLoading} onClick={openTagSync}>
+                Tag 同步
               </Button>
               {commitBranch && <Button onClick={() => selectBranchFilter('')}>全部引用</Button>}
               <Select
@@ -18919,7 +19233,7 @@ function RepositoryLogTree({
                 title: '提交',
                 dataIndex: 'message',
                 key: 'message',
-                render: (_, commit) => <CommitMessageCell commit={commit} branchTags={branchTags} currentBranch={activeBranchName} />
+                render: (_, commit) => <CommitMessageCell commit={commit} branchTags={branchTags} currentBranch={activeBranchName} remoteNames={remoteNames} tagSyncSnapshot={tagSyncSnapshot} onOpenTagSync={openTagSync} />
               },
               { title: '提交人', key: 'author', width: 210, render: (_, commit) => <CommitAuthorCell commit={commit} /> },
               {
@@ -19050,6 +19364,26 @@ function RepositoryLogTree({
             </div>
           ))}
         </div>
+      </Drawer>
+      <Drawer
+        title={<Space><span>Tag 同步</span>{tagSyncSnapshot && <Tag>{new Date(tagSyncSnapshot.checkedAt).toLocaleString()}</Tag>}</Space>}
+        extra={<Button size="small" icon={<ReloadOutlined />} loading={tagSyncLoading} onClick={() => void refreshTagSyncStatus()}>刷新状态</Button>}
+        open={tagSyncDrawerOpen}
+        width={720}
+        onClose={() => setTagSyncDrawerOpen(false)}
+      >
+        <Typography.Paragraph type="secondary">
+          对比本地 Tag 与全部远端；只有目标远端缺失的本地 Tag 可以推送。同名 Tag 指向不同提交时仅提示，不会覆盖远端。
+        </Typography.Paragraph>
+        <Table
+          rowKey="name"
+          size="small"
+          loading={tagSyncLoading}
+          columns={tagSyncColumns}
+          dataSource={tagSyncSnapshot?.tags || []}
+          pagination={{ pageSize: 20, hideOnSinglePage: true }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未发现本地或远端 Tag" /> }}
+        />
       </Drawer>
     </Space>
   )
@@ -21462,6 +21796,7 @@ function PasswordGeneratorTool({ onBack }: { onBack: () => void }): JSX.Element 
 function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppProps): JSX.Element {
   const { loadingWorkspace, loadWorkspace, selectedProjectId, projects, setSelectedProjectId } = useForgeDeskStore()
   const [appMode, setAppMode] = useState<AppMode>(() => readStoredAppMode())
+  const [chromePreferences, setChromePreferences] = useState<AppChromePreferences>(() => readStoredAppChromePreferences())
   const [activeKey, setActiveKey] = useState<AppActiveKey>(() => (readStoredAppMode() === 'simple' ? 'projects' : 'overview'))
   const usesCustomTitleBar = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
   const [settingsInitialModule, setSettingsInitialModule] = useState<SettingsModuleKey>('overview')
@@ -21518,6 +21853,16 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     return () => {
       mounted = false
       unsubscribe()
+    }
+  }, [])
+
+  useEffect(() => {
+    const syncChromePreferences = (): void => setChromePreferences(readStoredAppChromePreferences())
+    window.addEventListener('storage', syncChromePreferences)
+    window.addEventListener(appChromePreferencesChangedEvent, syncChromePreferences)
+    return () => {
+      window.removeEventListener('storage', syncChromePreferences)
+      window.removeEventListener(appChromePreferencesChangedEvent, syncChromePreferences)
     }
   }, [])
 
@@ -21778,9 +22123,10 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     </div>
   )
 
-  const appModeSwitcherFallback = !usesCustomTitleBar ? (
-    <div className="app-mode-switcher-floating">
-      <AppModeSwitcher mode={appMode} onChange={handleAppModeChange} />
+  const appChromeControlsFallback = !usesCustomTitleBar && (chromePreferences.appModeSwitcher === 'top' || chromePreferences.codexStatus === 'top') ? (
+    <div className="app-chrome-controls-floating">
+      {chromePreferences.codexStatus === 'top' ? <CodexStatusControl placement="top" onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} /> : null}
+      {chromePreferences.appModeSwitcher === 'top' ? <AppModeSwitcher mode={appMode} onChange={handleAppModeChange} /> : null}
     </div>
   ) : null
 
@@ -21811,6 +22157,10 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     setAppMode(nextAppMode)
     setActiveKey('projects')
     setCreatingProject(false)
+  }
+
+  function handleChromePreferencesChange(nextPreferences: AppChromePreferences): void {
+    setChromePreferences(writeStoredAppChromePreferences(nextPreferences))
   }
 
   function openCodex(): void {
@@ -22091,6 +22441,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const appStatusBar = (
     <AppStatusBar
       appMode={appMode}
+      chromePreferences={chromePreferences}
       summary={systemLogSummary}
       projectGitTaskCount={projectGitTaskLogs.length}
       projectGitTaskRunningCount={projectGitTaskRunningCount}
@@ -22103,6 +22454,10 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       onOpenLogs={() => setSystemLogDrawerOpen(true)}
       onOpenSystemMonitor={() => setActiveKey('system-monitor')}
       onOpenProjectGitTasks={() => setProjectGitTaskDrawerOpen(true)}
+      onAppModeChange={handleAppModeChange}
+      onOpenCodex={openCodex}
+      onOpenCodexMonitor={openCodexMonitor}
+      onOpenForgeProject={openForgeProjectFromCodex}
     />
   )
   const appUpdateBanner = (
@@ -22129,9 +22484,9 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   if (activeKey === 'ai-chat') {
     return (
       <>
-        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} />
+        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} showAppModeSwitcher={chromePreferences.appModeSwitcher === 'top'} showCodexStatus={chromePreferences.codexStatus === 'top'} />
         {appUpdateBanner}
-        {appModeSwitcherFallback}
+        {appChromeControlsFallback}
         <AiChatPanel
           usesCustomTitleBar={usesCustomTitleBar}
           onBack={() => setActiveKey('overview')}
@@ -22147,9 +22502,9 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   if (activeKey === 'codex-sessions') {
     return (
       <>
-        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} />
+        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} showAppModeSwitcher={chromePreferences.appModeSwitcher === 'top'} showCodexStatus={chromePreferences.codexStatus === 'top'} />
         {appUpdateBanner}
-        {appModeSwitcherFallback}
+        {appChromeControlsFallback}
         <CodexSessionManagerPanel backLabel={codexSessionBackKey === 'tasks' ? '返回任务' : '返回总览'} focusAlert={codexMonitorFocusAlert} focusSessionId={pendingCodexSessionId} onFocusSessionHandled={() => setPendingCodexSessionId('')} usesCustomTitleBar={usesCustomTitleBar} onBack={() => setActiveKey(codexSessionBackKey)} onOpenForgeProject={openForgeProjectFromCodex} />
         {systemLogDrawer}
         {projectGitTaskDrawer}
@@ -22161,9 +22516,9 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   if (activeKey === 'terminal') {
     return (
       <>
-        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} />
+        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} showAppModeSwitcher={chromePreferences.appModeSwitcher === 'top'} showCodexStatus={chromePreferences.codexStatus === 'top'} />
         {appUpdateBanner}
-        {appModeSwitcherFallback}
+        {appChromeControlsFallback}
         <Layout className={`terminal-mode-shell${usesCustomTitleBar ? ' terminal-mode-shell-with-titlebar' : ''}`}>
           <div className="terminal-mode-header">
             <div className="terminal-mode-header-leading">
@@ -22212,10 +22567,10 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
   return (
     <>
-      <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} />
+      <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} showAppModeSwitcher={chromePreferences.appModeSwitcher === 'top'} showCodexStatus={chromePreferences.codexStatus === 'top'} />
       {appUpdateBanner}
       <Layout className={`app-shell${usesCustomTitleBar ? ' app-shell-with-titlebar' : ''}${isSimpleMode ? ' app-shell-simple' : ''}`}>
-        {appModeSwitcherFallback}
+        {appChromeControlsFallback}
         <Layout.Sider width={236} theme={resolvedTheme} className="sidebar">
           <div className="sidebar-inner">
             <div className="brand">
@@ -22255,6 +22610,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
                 themePreference={themePreference}
                 resolvedTheme={resolvedTheme}
                 onThemePreferenceChange={onThemePreferenceChange}
+                chromePreferences={chromePreferences}
+                onChromePreferencesChange={handleChromePreferencesChange}
                 onSystemLog={appendSystemLog}
                 onDeploymentRefreshActiveChange={setDeploymentRefreshActive}
                 onOpenSystemLog={() => setSystemLogDrawerOpen(true)}

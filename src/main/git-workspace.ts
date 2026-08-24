@@ -26,6 +26,12 @@ export type GitPushInput = {
   remote?: string
   remotes?: string[]
   branch: string
+  tagNames?: string[]
+}
+
+export type GitTagPushInput = {
+  remoteName: string
+  tagName: string
 }
 
 export type GitPushTarget = {
@@ -143,12 +149,21 @@ export function buildGitPushOperationArgs(input: GitPushInput): string[][] {
   const branch = assertSafeRef(input.branch, '分支')
   const remoteNames = input.remotes?.length ? input.remotes : input.remote ? [input.remote] : []
   const uniqueRemoteNames = Array.from(new Set(remoteNames.map(assertRemoteName)))
+  const tagRefs = Array.from(new Set((input.tagNames ?? []).map((tagName) => `refs/tags/${assertSafeRef(tagName, '版本 Tag')}`)))
 
   if (uniqueRemoteNames.length === 0) {
     throw new Error('请选择要推送的远端')
   }
 
-  return uniqueRemoteNames.map((remote) => ['push', remote, branch])
+  return uniqueRemoteNames.map((remote) => ['push', remote, branch, ...tagRefs])
+}
+
+export function buildGitPushTagArgs(input: GitTagPushInput): string[] {
+  return ['push', assertRemoteName(input.remoteName), `refs/tags/${assertSafeRef(input.tagName, 'Tag')}`]
+}
+
+export function buildGitFetchRemoteArgs(remoteName: string): string[] {
+  return ['fetch', assertRemoteName(remoteName), '--prune', '--tags']
 }
 
 export function buildGitPushTargetRemoteRefArgs(remote: string, branch: string): string[] {

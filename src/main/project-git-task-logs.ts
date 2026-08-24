@@ -1,9 +1,11 @@
 export type ProjectGitTaskAction = 'fetch' | 'push' | 'merge'
-export type ProjectGitTaskStatus = 'running' | 'success' | 'failed' | 'skipped' | 'cancelled' | 'interrupted'
+export type ProjectGitTaskStatus = 'running' | 'success' | 'partial' | 'failed' | 'skipped' | 'cancelled' | 'interrupted'
 
 export type ProjectGitRepositoryTaskResult = {
   repositoryId: string
   repositoryName: string
+  remoteName?: string
+  branch?: string
   ok: boolean
   message: string
   stdout?: string
@@ -36,7 +38,7 @@ export type ProjectGitTaskDatabase = {
 export const projectGitTaskRetentionMs = 30 * 24 * 60 * 60 * 1000
 
 const projectGitTaskActions = new Set<ProjectGitTaskAction>(['fetch', 'push', 'merge'])
-const projectGitTaskStatuses = new Set<ProjectGitTaskStatus>(['running', 'success', 'failed', 'skipped', 'cancelled', 'interrupted'])
+const projectGitTaskStatuses = new Set<ProjectGitTaskStatus>(['running', 'success', 'partial', 'failed', 'skipped', 'cancelled', 'interrupted'])
 
 function normalizeText(value: unknown): string {
   return String(value ?? '').trim()
@@ -63,9 +65,13 @@ function parseRepositoryResults(value: unknown): ProjectGitRepositoryTaskResult[
           ok: Boolean(item.ok),
           message: normalizeText(item.message)
         }
+        const remoteName = normalizeText(item.remoteName ?? item.remote_name)
+        const branch = normalizeText(item.branch)
         const stdout = normalizeText(item.stdout)
         const stderr = normalizeText(item.stderr)
 
+        if (remoteName) result.remoteName = remoteName
+        if (branch) result.branch = branch
         if (stdout) result.stdout = stdout
         if (stderr) result.stderr = stderr
         return result

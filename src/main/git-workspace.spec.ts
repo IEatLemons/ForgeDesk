@@ -4,12 +4,14 @@ import {
   buildGitAddArgs,
   buildGitCommitArgs,
   buildGitDiffStatArgs,
+  buildGitFetchRemoteArgs,
   buildGitFastForwardCheckArgs,
   buildGitMergeArgs,
   buildGitMergeBaseArgs,
   buildGitMergeTreeArgs,
   buildGitPushArgs,
   buildGitPushOperationArgs,
+  buildGitPushTagArgs,
   buildGitPushTargetCommitCountArgs,
   buildGitPushTargetRemoteRefArgs,
   buildGitPushTargetRemoteRefVerifyArgs,
@@ -45,11 +47,19 @@ describe('git workspace operations', () => {
       ['push', 'origin', 'main'],
       ['push', 'backup', 'main']
     ])
+    assert.deepEqual(buildGitPushOperationArgs({ remote: 'origin', branch: 'main', tagNames: ['v2.3.0', 'v2.3.0'] }), [
+      ['push', 'origin', 'main', 'refs/tags/v2.3.0']
+    ])
+    assert.deepEqual(buildGitPushTagArgs({ remoteName: 'origin', tagName: 'v2.3.0' }), ['push', 'origin', 'refs/tags/v2.3.0'])
+    assert.deepEqual(buildGitFetchRemoteArgs('origin'), ['fetch', 'origin', '--prune', '--tags'])
     assert.deepEqual(buildGitMergeArgs({ source: 'origin/main' }), ['merge', '--no-edit', 'origin/main'])
     assert.throws(() => buildGitCommitArgs({ message: '' }), /请输入提交信息/)
     assert.throws(() => buildGitCommitArgs({ message: 'feat: bad path', paths: ['src/main/index.ts;rm'] }), /不支持的文件路径/)
     assert.throws(() => buildGitTagArgs('v1.2.3;rm'), /不支持的Tag/)
     assert.throws(() => buildGitPushArgs({ remote: 'bad/name', branch: 'main' }), /远端名称/)
+    assert.throws(() => buildGitPushTagArgs({ remoteName: 'bad/name', tagName: 'v2.3.0' }), /远端名称/)
+    assert.throws(() => buildGitFetchRemoteArgs('bad/name'), /远端名称/)
+    assert.throws(() => buildGitPushArgs({ remote: 'origin', branch: 'main', tagNames: ['v2.3.0;rm'] }), /不支持的版本 Tag/)
     assert.throws(() => buildGitPushOperationArgs({ remotes: [], branch: 'main' }), /请选择要推送的远端/)
     assert.throws(() => buildGitMergeArgs({ source: 'main;rm' }), /不支持的分支/)
   })

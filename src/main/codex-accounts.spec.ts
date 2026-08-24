@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { activateCodexAccount, importCodexAccount, listCodexAccounts, readCodexAccountInfo, removeCodexAccount } from './codex-accounts.js'
+import { activateCodexAccount, importCodexAccount, listCodexAccounts, readCodexAccountInfo, removeCodexAccount, updateCodexAccountRenewalDate } from './codex-accounts.js'
 
 function jwt(payload: Record<string, unknown>): string {
   const encode = (value: string): string => Buffer.from(value).toString('base64url')
@@ -127,6 +127,33 @@ describe('codex account reader', () => {
       await rm(homeDirectory, { recursive: true, force: true })
       await rm(userDataPath, { recursive: true, force: true })
       await rm(exportPath, { force: true })
+    }
+  })
+
+  it('stores a manually maintained subscription renewal date without touching credentials', async () => {
+    const homeDirectory = join(tmpdir(), `forgedesk-codex-renewal-home-${Date.now()}`)
+    const userDataPath = join(tmpdir(), `forgedesk-codex-renewal-data-${Date.now()}`)
+    const previousCodexHome = process.env.CODEX_HOME
+    delete process.env.CODEX_HOME
+
+    try {
+      const initial = await listCodexAccounts(userDataPath, homeDirectory)
+      const updated = await updateCodexAccountRenewalDate(userDataPath, 'local', { subscriptionRenewsAt: '2026-09-15' }, homeDirectory)
+      assert.equal(updated.accounts[0]?.subscriptionRenewsAt, '2026-09-15')
+
+      const persisted = await listCodexAccounts(userDataPath, homeDirectory)
+      assert.equal(persisted.accounts[0]?.subscriptionRenewsAt, '2026-09-15')
+      assert.equal(persisted.accounts[0]?.authFilePath, initial.accounts[0]?.authFilePath)
+
+      await assert.rejects(
+        updateCodexAccountRenewalDate(userDataPath, 'local', { subscriptionRenewsAt: '2026-02-30' }, homeDirectory),
+        /续费日期应为有效/
+      )
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = previousCodexHome
+      await rm(homeDirectory, { recursive: true, force: true })
+      await rm(userDataPath, { recursive: true, force: true })
     }
   })
 })

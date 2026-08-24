@@ -44,6 +44,7 @@ describe('project Git task log view helpers', () => {
   it('maps every persisted status to a stable label and badge state', () => {
     assert.deepEqual(getProjectGitTaskStatusMeta('running'), { label: '执行中', color: 'blue', badgeStatus: 'processing' })
     assert.deepEqual(getProjectGitTaskStatusMeta('success'), { label: '成功', color: 'green', badgeStatus: 'success' })
+    assert.deepEqual(getProjectGitTaskStatusMeta('partial'), { label: '部分失败', color: 'orange', badgeStatus: 'warning' })
     assert.deepEqual(getProjectGitTaskStatusMeta('failed'), { label: '失败', color: 'red', badgeStatus: 'error' })
     assert.deepEqual(getProjectGitTaskStatusMeta('skipped'), { label: '跳过', color: 'default', badgeStatus: 'default' })
     assert.deepEqual(getProjectGitTaskStatusMeta('cancelled'), { label: '已终止', color: 'orange', badgeStatus: 'warning' })

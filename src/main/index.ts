@@ -32,9 +32,11 @@ import {
   removeCodexAccount,
   resolveCodexHome,
   syncActiveCodexHome,
+  updateCodexAccountRenewalDate,
   type CodexAccountImportInput,
   type CodexAccountCreateInput,
   type CodexAccountInfo,
+  type CodexAccountRenewalDateInput,
   type CodexAccountRegistryView
 } from './codex-accounts'
 import {
@@ -293,11 +295,13 @@ import {
   buildGitAddArgs,
   buildGitCommitArgs,
   buildGitDiffStatArgs,
+  buildGitFetchRemoteArgs,
   buildGitFastForwardCheckArgs,
   buildGitMergeArgs,
   buildGitMergeBaseArgs,
   buildGitMergeTreeArgs,
   buildGitPushOperationArgs,
+  buildGitPushTagArgs,
   buildGitPushTargetCommitCountArgs,
   buildGitPushTargetLocalCommitCountArgs,
   buildGitPushTargetRemoteRefVerifyArgs,
@@ -313,9 +317,11 @@ import {
   type GitMergeAnalysisInput,
   type GitMergeInput,
   type GitPushInput,
+  type GitTagPushInput,
   type GitPushTarget,
   type GitStatusFile
 } from './git-workspace'
+import { buildRepositoryTagSyncSnapshot, canPushTagToRemote, parseLocalTagRefs, parseRemoteTagRefs, type RepositoryTagSyncSnapshot } from './git-tag-sync'
 import { buildRemoteCloneArgs, deriveRemoteRepositoryName, findNearestRepositoryParent, resolveRemoteCloneTarget, type RemoteProjectCreateInput } from './project-creation'
 import { extractConflictSections, hasConflictMarkers, type ConflictSection } from './merge-conflicts'
 import {
@@ -3842,7 +3848,7 @@ async function fetchRepositoryRemote(repositoryId: string, remoteName?: string, 
 
     if (remoteName) {
       const name = validateRepositoryRemoteName(remoteName)
-      await runGitInPathStrict(repository.localPath, ['fetch', name, '--prune'], { env, operationId })
+      await runGitInPathStrict(repository.localPath, buildGitFetchRemoteArgs(name), { env, operationId })
       return
     }
 
@@ -3861,7 +3867,7 @@ async function fetchRepositoryRemote(repositoryId: string, remoteName?: string, 
 
       results.push({
         remoteName: name,
-        result: await runGitInPathResult(repository.localPath, ['fetch', name, '--prune'], { env, operationId })
+        result: await runGitInPathResult(repository.localPath, buildGitFetchRemoteArgs(name), { env, operationId })
       })
     }
 
@@ -3871,6 +3877,43 @@ async function fetchRepositoryRemote(repositoryId: string, remoteName?: string, 
   })
 
   return rescanRepositoryRecord(repository)
+}
+
+async function getRepositoryTagSyncStatus(repositoryId: string): Promise<RepositoryTagSyncSnapshot> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const remoteNames = await listGitRemoteNames(repository.localPath)
+  const localOutput = await runGitInPath(repository.localPath, ['for-each-ref', '--format=%(refname:strip=2)%00%(*objectname)%00%(objectname)', 'refs/tags'])
+  const remoteSources = await withSavedSshPassphrases(async (env) =>
+    Promise.all(remoteNames.map(async (remoteName) => {
+      const result = await runGitInPathResult(repository.localPath, ['ls-remote', '--tags', remoteName], { env })
+      return result.ok
+        ? { remoteName, tags: parseRemoteTagRefs(result.stdout) }
+        : { remoteName, tags: new Map<string, string>(), error: result.stderr || result.stdout || '无法读取远端 Tag' }
+    }))
+  )
+
+  return buildRepositoryTagSyncSnapshot({
+    repositoryId: repository.id,
+    localTags: parseLocalTagRefs(localOutput),
+    remoteSources
+  })
+}
+
+async function pushRepositoryTag(repositoryId: string, input: GitTagPushInput): Promise<RepositoryTagSyncSnapshot> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const remoteName = validateRepositoryRemoteName(input.remoteName)
+  const pushArgs = buildGitPushTagArgs(input)
+  const configuredRemoteNames = await listGitRemoteNames(repository.localPath)
+  if (!configuredRemoteNames.includes(remoteName)) throw new Error(`远端 ${remoteName} 不存在`)
+
+  const snapshot = await getRepositoryTagSyncStatus(repositoryId)
+  const tag = snapshot.tags.find((item) => item.name === input.tagName.trim())
+  if (!canPushTagToRemote(tag, remoteName)) {
+    throw new Error('仅可推送本地存在且目标远端缺失的 Tag；同名冲突不会被覆盖')
+  }
+
+  await withSavedSshPassphrases((env) => runGitInPathStrict(repository.localPath, pushArgs, { env }))
+  return getRepositoryTagSyncStatus(repositoryId)
 }
 
 async function switchRepositoryBranch(repositoryId: string, input: GitBranchSwitchInput): Promise<RepositoryRecord> {
@@ -6295,7 +6338,13 @@ async function syncRepositoryRemote(repositoryId: string): Promise<RepositoryRec
     throw new Error('仓库不存在')
   }
 
-  await withSavedSshPassphrases((env) => runGitInPathStrict(existing.localPath, ['fetch', '--all', '--prune'], { env }))
+  await withSavedSshPassphrases(async (env) => {
+    const remoteNames = await listGitRemoteNames(existing.localPath)
+    if (remoteNames.length === 0) throw new Error('当前仓库没有远端配置')
+    for (const remoteName of remoteNames) {
+      await runGitInPathStrict(existing.localPath, buildGitFetchRemoteArgs(remoteName), { env })
+    }
+  })
 
   const scanned = await scanRepository(existing.localPath)
 
@@ -6894,6 +6943,14 @@ registerGitIpc(
 )
 
 registerGitIpc('repository:sync-remote', async (_event, repositoryId: string): Promise<RepositoryRecord> => syncRepositoryRemote(repositoryId))
+
+registerGitIpc('repository:tag-sync-status', async (_event, repositoryId: string): Promise<RepositoryTagSyncSnapshot> =>
+  getRepositoryTagSyncStatus(repositoryId)
+)
+
+registerGitIpc('repository:tag:push', async (_event, repositoryId: string, input: GitTagPushInput): Promise<RepositoryTagSyncSnapshot> =>
+  pushRepositoryTag(repositoryId, input)
+)
 
 registerGitIpc('repository:remote:save', async (_event, input: RepositoryRemoteInput): Promise<RepositoryRecord> => saveRepositoryRemote(input))
 
@@ -7672,6 +7729,9 @@ ipcMain.handle('codex:accounts:import', async (_event, input: CodexAccountImport
 
 ipcMain.handle('codex:accounts:create', async (_event, input?: CodexAccountCreateInput): Promise<CodexAccountRegistryView> =>
   createCodexAccount(app.getPath('userData'), input))
+
+ipcMain.handle('codex:accounts:renewal-date:update', async (_event, accountId: string, input: CodexAccountRenewalDateInput): Promise<CodexAccountRegistryView> =>
+  updateCodexAccountRenewalDate(app.getPath('userData'), accountId, input))
 
 ipcMain.handle('codex:accounts:activate', async (_event, accountId: string): Promise<CodexAccountRegistryView> =>
   activateCodexAccount(app.getPath('userData'), accountId))

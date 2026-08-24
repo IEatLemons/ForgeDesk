@@ -585,6 +585,7 @@ type GitPushInput = {
   remote?: string
   remotes?: string[]
   branch: string
+  tagNames?: string[]
 }
 
 type GitMergeInput = {
@@ -814,10 +815,12 @@ type GitPushTaskResult = {
 }
 
 type ProjectGitTaskAction = 'fetch' | 'push' | 'merge'
-type ProjectGitTaskStatus = 'running' | 'success' | 'failed' | 'skipped' | 'cancelled' | 'interrupted'
+type ProjectGitTaskStatus = 'running' | 'success' | 'partial' | 'failed' | 'skipped' | 'cancelled' | 'interrupted'
 type ProjectGitRepositoryTaskResult = {
   repositoryId: string
   repositoryName: string
+  remoteName?: string
+  branch?: string
   ok: boolean
   message: string
   stdout?: string
@@ -910,6 +913,32 @@ type GitCommitRecord = {
   additions: number
   deletions: number
   filesChanged: number
+}
+
+type TagSyncRemoteState = 'synced' | 'missing' | 'diverged' | 'remote-only' | 'absent' | 'unavailable'
+
+type RepositoryTagRemoteStatus = {
+  remoteName: string
+  state: TagSyncRemoteState
+  commit: string
+  error: string
+}
+
+type RepositoryTagSyncTag = {
+  name: string
+  localCommit: string
+  remotes: RepositoryTagRemoteStatus[]
+}
+
+type RepositoryTagSyncSnapshot = {
+  repositoryId: string
+  checkedAt: string
+  tags: RepositoryTagSyncTag[]
+}
+
+type GitTagPushInput = {
+  remoteName: string
+  tagName: string
 }
 
 type GitCommitFileChange = {
@@ -1720,6 +1749,7 @@ type CodexManagedAccount = CodexAccountInfo & {
   active: boolean
   createdAt: string
   lastUsedAt: string
+  subscriptionRenewsAt: string
 }
 
 type CodexAccountRegistryView = {
@@ -2797,6 +2827,8 @@ interface Window {
     listRepositoryCommits: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) => Promise<GitCommitRecord[]>
     getRepositoryCommitGraph: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) => Promise<GitCommitRecord[]>
     syncRepositoryRemote: (repositoryId: string) => Promise<RepositoryRecord>
+    getRepositoryTagSyncStatus: (repositoryId: string) => Promise<RepositoryTagSyncSnapshot>
+    pushRepositoryTag: (repositoryId: string, input: GitTagPushInput) => Promise<RepositoryTagSyncSnapshot>
     saveRepositoryRemote: (input: RepositoryRemoteInput) => Promise<RepositoryRecord>
     deleteRepositoryRemote: (repositoryId: string, remoteName: string) => Promise<RepositoryRecord>
     fetchRepositoryRemote: (repositoryId: string, remoteName?: string, operationId?: string) => Promise<RepositoryRecord>
@@ -2956,6 +2988,7 @@ interface Window {
     listCodexAccounts: () => Promise<CodexAccountRegistryView>
     importCodexAccount: (input: CodexAccountImportInput) => Promise<CodexAccountRegistryView>
     createCodexAccount: (input?: { name?: string }) => Promise<CodexAccountRegistryView>
+    updateCodexAccountRenewalDate: (accountId: string, input: { subscriptionRenewsAt?: string }) => Promise<CodexAccountRegistryView>
     activateCodexAccount: (accountId: string) => Promise<CodexAccountRegistryView>
     removeCodexAccount: (accountId: string) => Promise<CodexAccountRegistryView>
     verifyCodexAccount: (accountId: string) => Promise<AiRuntimeStatus>

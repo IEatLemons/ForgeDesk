@@ -1,7 +1,7 @@
 export type ProjectGitTaskLogFilter = {
   projectId: string
   action: 'all' | 'fetch' | 'push' | 'merge'
-  status: 'all' | 'running' | 'success' | 'failed' | 'skipped' | 'cancelled' | 'interrupted'
+  status: 'all' | 'running' | 'success' | 'partial' | 'failed' | 'skipped' | 'cancelled' | 'interrupted'
 }
 
 export type ProjectGitTaskStatusMeta = {
@@ -17,6 +17,10 @@ export function getProjectGitTaskStatusMeta(status: ProjectGitTaskStatus): Proje
 
   if (status === 'success') {
     return { label: '成功', color: 'green', badgeStatus: 'success' }
+  }
+
+  if (status === 'partial') {
+    return { label: '部分失败', color: 'orange', badgeStatus: 'warning' }
   }
 
   if (status === 'skipped') {

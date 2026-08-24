@@ -348,20 +348,17 @@ export function AppSystemMonitorStatus({
   )
 }
 
-export function AppTitleBar({
-  appMode,
-  onAppModeChange,
+export function CodexStatusControl({
+  placement,
   onOpenCodex,
   onOpenCodexMonitor,
   onOpenForgeProject
 }: {
-  appMode: AppMode
-  onAppModeChange: (mode: AppMode) => void
+  placement: 'top' | 'bottom'
   onOpenCodex: () => void
   onOpenCodexMonitor: () => void
   onOpenForgeProject: (projectId: string) => void
 }): JSX.Element | null {
-  const [enabled] = useState(isMacPlatform)
   const [codexActivity, setCodexActivity] = useState<CodexSessionsSnapshot | null>(null)
   const [codexMonitor, setCodexMonitor] = useState<CodexProjectMonitorSnapshot | null>(null)
   const [codexActivityError, setCodexActivityError] = useState('')
@@ -499,7 +496,7 @@ export function AppTitleBar({
   }, [codexPopoverOpen])
 
   useEffect(() => {
-    if (!enabled || !window.forgeDesk) {
+    if (!window.forgeDesk) {
       return undefined
     }
 
@@ -513,17 +510,17 @@ export function AppTitleBar({
     return () => {
       window.clearInterval(intervalId)
     }
-  }, [enabled])
+  }, [])
 
   useEffect(() => {
-    if (!enabled || !window.forgeDesk) return undefined
+    if (!window.forgeDesk) return undefined
     const unsubscribeUpdated = window.forgeDesk.onCodexProjectMonitorUpdated((snapshot) => setCodexMonitor(snapshot))
     return () => unsubscribeUpdated()
-  }, [enabled])
+  }, [])
 
   useEffect(() => {
     codexMountedRef.current = true
-    if (!enabled || !window.forgeDesk) {
+    if (!window.forgeDesk) {
       return () => {
         codexMountedRef.current = false
       }
@@ -538,16 +535,10 @@ export function AppTitleBar({
       codexMountedRef.current = false
       window.clearInterval(intervalId)
     }
-  }, [enabled])
-
-  if (!enabled) {
-    return null
-  }
+  }, [])
 
   return (
-    <header className="app-titlebar">
-      <div className="app-titlebar-title">ForgeDesk</div>
-      <div className="app-titlebar-codex-anchor" ref={codexPopoverRef}>
+      <div className={`app-titlebar-codex-anchor is-${placement}`} ref={codexPopoverRef}>
         <button
           aria-expanded={codexPopoverOpen}
           aria-haspopup="dialog"
@@ -660,9 +651,33 @@ export function AppTitleBar({
           </div>
         ) : null}
       </div>
-      <div className="app-titlebar-actions">
-        <AppModeSwitcher mode={appMode} onChange={onAppModeChange} />
-      </div>
+  )
+}
+
+export function AppTitleBar({
+  appMode,
+  onAppModeChange,
+  onOpenCodex,
+  onOpenCodexMonitor,
+  onOpenForgeProject,
+  showAppModeSwitcher,
+  showCodexStatus
+}: {
+  appMode: AppMode
+  onAppModeChange: (mode: AppMode) => void
+  onOpenCodex: () => void
+  onOpenCodexMonitor: () => void
+  onOpenForgeProject: (projectId: string) => void
+  showAppModeSwitcher: boolean
+  showCodexStatus: boolean
+}): JSX.Element | null {
+  if (!isMacPlatform()) return null
+
+  return (
+    <header className="app-titlebar">
+      <div className="app-titlebar-title">ForgeDesk</div>
+      {showCodexStatus ? <CodexStatusControl placement="top" onOpenCodex={onOpenCodex} onOpenCodexMonitor={onOpenCodexMonitor} onOpenForgeProject={onOpenForgeProject} /> : null}
+      {showAppModeSwitcher ? <div className="app-titlebar-actions"><AppModeSwitcher mode={appMode} onChange={onAppModeChange} /></div> : null}
     </header>
   )
 }

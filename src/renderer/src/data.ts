@@ -841,6 +841,7 @@ export type GitPushInput = {
   remote?: string
   remotes?: string[]
   branch: string
+  tagNames?: string[]
 }
 
 export type GitMergeInput = {
@@ -1136,6 +1137,32 @@ export type GitCommit = {
   additions: number
   deletions: number
   filesChanged: number
+}
+
+export type TagSyncRemoteState = 'synced' | 'missing' | 'diverged' | 'remote-only' | 'absent' | 'unavailable'
+
+export type RepositoryTagRemoteStatus = {
+  remoteName: string
+  state: TagSyncRemoteState
+  commit: string
+  error: string
+}
+
+export type RepositoryTagSyncTag = {
+  name: string
+  localCommit: string
+  remotes: RepositoryTagRemoteStatus[]
+}
+
+export type RepositoryTagSyncSnapshot = {
+  repositoryId: string
+  checkedAt: string
+  tags: RepositoryTagSyncTag[]
+}
+
+export type GitTagPushInput = {
+  remoteName: string
+  tagName: string
 }
 
 export type GitCommitFileChange = {
@@ -1851,6 +1878,7 @@ export type CodexManagedAccount = CodexAccountInfo & {
   active: boolean
   createdAt: string
   lastUsedAt: string
+  subscriptionRenewsAt: string
 }
 
 export type CodexAccountRegistryView = {

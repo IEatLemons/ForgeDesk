@@ -47,6 +47,8 @@ describe('project Git task log persistence', () => {
       repositoryResults: [{
         repositoryId: 'repository-1',
         repositoryName: 'ForgeDesk',
+        remoteName: 'origin',
+        branch: 'main',
         ok: true,
         message: 'main -> origin/main',
         stdout: 'Everything up-to-date'
@@ -60,6 +62,8 @@ describe('project Git task log persistence', () => {
       repositoryResults: [{
         repositoryId: 'repository-1',
         repositoryName: 'ForgeDesk',
+        remoteName: 'origin',
+        branch: 'main',
         ok: true,
         message: 'main -> origin/main',
         stdout: 'Everything up-to-date'

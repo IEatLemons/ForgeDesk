@@ -27,6 +27,7 @@ export type CodexManagedAccount = CodexAccountInfo & {
   active: boolean
   createdAt: string
   lastUsedAt: string
+  subscriptionRenewsAt: string
 }
 
 export type CodexAccountRegistryView = {
@@ -44,6 +45,10 @@ export type CodexAccountCreateInput = {
   name?: string
 }
 
+export type CodexAccountRenewalDateInput = {
+  subscriptionRenewsAt?: string
+}
+
 type CodexAccountRecord = {
   id: string
   name: string
@@ -51,6 +56,7 @@ type CodexAccountRecord = {
   codexHome: string
   createdAt: string
   lastUsedAt: string
+  subscriptionRenewsAt: string
 }
 
 type CodexAccountRegistry = {
@@ -70,6 +76,14 @@ function asObject(value: unknown): JsonObject {
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeRenewalDate(value: unknown): string {
+  const date = asString(value)
+  if (!date) return ''
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return ''
+  const parsed = new Date(`${date}T00:00:00.000Z`)
+  return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date ? '' : date
 }
 
 function hasCodexCredentials(value: unknown): boolean {
@@ -185,7 +199,8 @@ function normalizeRecord(value: unknown): CodexAccountRecord | null {
     id,
     lastUsedAt: asString(object.lastUsedAt),
     name: asString(object.name) || 'Codex 账户',
-    source: object.source === 'imported' ? 'imported' : 'local'
+    source: object.source === 'imported' ? 'imported' : 'local',
+    subscriptionRenewsAt: normalizeRenewalDate(object.subscriptionRenewsAt)
   }
 }
 
@@ -199,7 +214,8 @@ function defaultRegistry(homeDirectory = homedir()): CodexAccountRegistry {
       id: 'local',
       lastUsedAt: now,
       name: '本机 Codex',
-      source: 'local'
+      source: 'local',
+      subscriptionRenewsAt: ''
     }]
   }
 }
@@ -234,7 +250,8 @@ function accountView(record: CodexAccountRecord, info: CodexAccountInfo, activeA
     id: record.id,
     lastUsedAt: record.lastUsedAt,
     name: record.name,
-    source: record.source
+    source: record.source,
+    subscriptionRenewsAt: record.subscriptionRenewsAt
   }
 }
 
@@ -358,7 +375,8 @@ export async function importCodexAccount(userDataPath: string, input: CodexAccou
     id,
     lastUsedAt: '',
     name: input.name?.trim() || `导入账户 ${registry.accounts.length + 1}`,
-    source: 'imported'
+    source: 'imported',
+    subscriptionRenewsAt: ''
   })
   await writeRegistry(userDataPath, registry)
   return listCodexAccounts(userDataPath, homeDirectory)
@@ -376,8 +394,29 @@ export async function createCodexAccount(userDataPath: string, input: CodexAccou
     id,
     lastUsedAt: '',
     name: input.name?.trim() || `新 Codex 账户 ${registry.accounts.length + 1}`,
-    source: 'imported'
+    source: 'imported',
+    subscriptionRenewsAt: ''
   })
+  await writeRegistry(userDataPath, registry)
+  return listCodexAccounts(userDataPath, homeDirectory)
+}
+
+export async function updateCodexAccountRenewalDate(
+  userDataPath: string,
+  accountId: string,
+  input: CodexAccountRenewalDateInput = {},
+  homeDirectory = homedir()
+): Promise<CodexAccountRegistryView> {
+  const normalizedId = accountId.trim()
+  if (!normalizedId) throw new Error('请选择要更新的 Codex 账户')
+  const rawDate = input.subscriptionRenewsAt?.trim() || ''
+  const subscriptionRenewsAt = normalizeRenewalDate(rawDate)
+  if (rawDate && !subscriptionRenewsAt) throw new Error('续费日期应为有效的 YYYY-MM-DD 日期')
+
+  const registry = await readRegistry(userDataPath, homeDirectory)
+  const account = registry.accounts.find((item) => item.id === normalizedId)
+  if (!account) throw new Error('Codex 账户不存在')
+  account.subscriptionRenewsAt = subscriptionRenewsAt
   await writeRegistry(userDataPath, registry)
   return listCodexAccounts(userDataPath, homeDirectory)
 }

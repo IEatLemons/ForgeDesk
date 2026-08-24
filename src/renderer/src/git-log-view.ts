@@ -449,10 +449,79 @@ export function getRefTone(ref: string): RefTone {
   return ref ? 'blue' : 'default'
 }
 
-export function getRefShortBranchName(ref: string): string {
-  const value = ref.includes(' -> ') ? (ref.split(' -> ').pop() ?? ref) : ref
+export type CommitBranchRefSource = {
+  kind: 'current' | 'local' | 'remote'
+  label: string
+  ref: string
+}
 
-  return value.trim().replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '').replace(/^[^/]+\//, '')
+export type CommitBranchRefGroup = {
+  branchName: string
+  refs: string[]
+  sources: CommitBranchRefSource[]
+}
+
+export type CommitRefGroups = {
+  branches: CommitBranchRefGroup[]
+  tags: string[]
+}
+
+function parseBranchRef(ref: string, remoteNames: Set<string>): { branchName: string; source: CommitBranchRefSource } | null {
+  const normalized = ref.trim()
+  if (!normalized || normalized.startsWith('tag:')) return null
+
+  if (normalized.includes(' -> ')) {
+    const [sourceRef, ...targetParts] = normalized.split(' -> ')
+    const target = targetParts.join(' -> ').trim()
+    if (sourceRef.trim() !== 'HEAD') return parseBranchRef(target, remoteNames)
+    const branchName = target.replace(/^refs\/heads\//, '')
+    return branchName ? { branchName, source: { kind: 'current', label: '当前', ref: normalized } } : null
+  }
+
+  const remoteMatch = normalized.match(/^refs\/remotes\/([^/]+)\/(.+)$/)
+  if (remoteMatch) {
+    return { branchName: remoteMatch[2], source: { kind: 'remote', label: remoteMatch[1], ref: normalized } }
+  }
+
+  const localName = normalized.replace(/^refs\/heads\//, '')
+  const [candidateRemote, ...branchParts] = localName.split('/')
+  if (branchParts.length > 0 && remoteNames.has(candidateRemote)) {
+    return { branchName: branchParts.join('/'), source: { kind: 'remote', label: candidateRemote, ref: normalized } }
+  }
+
+  return { branchName: localName, source: { kind: 'local', label: '本地', ref: normalized } }
+}
+
+export function groupCommitRefs(refs: string[], remoteNames: string[] = []): CommitRefGroups {
+  const remoteNameSet = new Set(remoteNames.map((name) => name.trim()).filter(Boolean))
+  const branches = new Map<string, CommitBranchRefGroup>()
+  const tags: string[] = []
+
+  for (const ref of refs) {
+    if (ref.trim().startsWith('tag:')) {
+      tags.push(ref)
+      continue
+    }
+
+    const parsed = parseBranchRef(ref, remoteNameSet)
+    if (!parsed) continue
+    const group = branches.get(parsed.branchName) || { branchName: parsed.branchName, refs: [], sources: [] }
+    group.refs.push(ref)
+    if (!group.sources.some((source) => source.kind === parsed.source.kind && source.label === parsed.source.label)) {
+      group.sources.push(parsed.source)
+    }
+    branches.set(parsed.branchName, group)
+  }
+
+  return { branches: Array.from(branches.values()), tags }
+}
+
+export function getRefShortBranchName(ref: string, remoteNames: string[] = []): string {
+  if (remoteNames.length === 0) {
+    const value = ref.includes(' -> ') ? (ref.split(' -> ').pop() ?? ref) : ref
+    return value.trim().replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '').replace(/^[^/]+\//, '')
+  }
+  return groupCommitRefs([ref], remoteNames).branches[0]?.branchName || ref.trim().replace(/^tag:\s*/, '')
 }
 
 export function getRefCopyText(ref: string): string {
@@ -466,23 +535,28 @@ export function getRefCopyText(ref: string): string {
   return normalized.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '')
 }
 
-export function getRefColor(ref: string, branchTags: BranchTagColorRule[] = [], currentBranch = ''): RefTone | string {
+export function getRefColor(ref: string, branchTags: BranchTagColorRule[] = [], currentBranch = '', remoteNames: string[] = []): RefTone | string {
   if (ref.startsWith('tag:')) {
     return 'gold'
   }
 
-  const shortName = getRefShortBranchName(ref)
+  const shortName = getRefShortBranchName(ref, remoteNames)
   const branchTag = branchTags.find((tag) => tag.branchName === shortName)
 
   if (branchTag) {
     return branchTag.color
   }
 
-  return currentBranch && shortName === currentBranch ? currentBranchRefColor : getRefTone(ref)
+  if (currentBranch && shortName === currentBranch) return currentBranchRefColor
+  if (remoteNames.length > 0) {
+    const group = groupCommitRefs([ref], remoteNames).branches[0]
+    return group?.sources.some((source) => source.kind === 'remote') ? 'cyan' : 'blue'
+  }
+  return getRefTone(ref)
 }
 
-function getGraphRefColor(ref: string, branchTags: BranchTagColorRule[] = [], currentBranch = ''): string | null {
-  const color = getRefColor(ref, branchTags, currentBranch)
+function getGraphRefColor(ref: string, branchTags: BranchTagColorRule[] = [], currentBranch = '', remoteNames: string[] = []): string | null {
+  const color = getRefColor(ref, branchTags, currentBranch, remoteNames)
 
   if (color.startsWith('#') || color.startsWith('rgb') || color.startsWith('hsl')) {
     return color
@@ -503,11 +577,11 @@ function getGraphRefColor(ref: string, branchTags: BranchTagColorRule[] = [], cu
   return null
 }
 
-function getCommitGraphRefColor(commit: GraphCommitInput, branchTags: BranchTagColorRule[] = [], currentBranch = ''): string | null {
+function getCommitGraphRefColor(commit: GraphCommitInput, branchTags: BranchTagColorRule[] = [], currentBranch = '', remoteNames: string[] = []): string | null {
   const branchRefs = getCommitRefs(commit).filter((ref) => !ref.startsWith('tag:'))
 
   for (const ref of branchRefs) {
-    const color = getGraphRefColor(ref, branchTags, currentBranch)
+    const color = getGraphRefColor(ref, branchTags, currentBranch, remoteNames)
 
     if (color) {
       return color
@@ -580,9 +654,10 @@ function makeGraphLaneColorsDistinct(row: GitGraphRow, laneColors: string[]): st
 export function applyBranchColorsToGraphRows<TCommit extends GraphCommitInput>(
   rows: Array<GitGraphRow<TCommit>>,
   branchTags: BranchTagColorRule[] = [],
-  currentBranch = ''
+  currentBranch = '',
+  remoteNames: string[] = []
 ): Array<BranchColoredGitGraphRow<TCommit>> {
-  const refColorByHash = new Map(rows.map((row) => [row.hash, getCommitGraphRefColor(row, branchTags, currentBranch)] as const).filter(([, color]) => Boolean(color)))
+  const refColorByHash = new Map(rows.map((row) => [row.hash, getCommitGraphRefColor(row, branchTags, currentBranch, remoteNames)] as const).filter(([, color]) => Boolean(color)))
   let carriedLaneColors: Array<string | undefined> = []
 
   return rows.map((row) => {

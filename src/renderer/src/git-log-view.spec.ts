@@ -19,6 +19,7 @@ import {
   getNextVisibleCommitCount,
   getRefCopyText,
   getRefTone,
+  groupCommitRefs,
   normalizeGitLogRefreshPreferences,
   prependWorkingTreeCommit,
   workingTreeCommitHash
@@ -138,6 +139,31 @@ describe('git log view helpers', () => {
     assert.equal(getRefCopyText('origin/develop'), 'origin/develop')
     assert.equal(getRefCopyText('refs/remotes/company/codex/unipie/dailishangxitong'), 'company/codex/unipie/dailishangxitong')
     assert.equal(getRefCopyText('tag: v1.2.2'), 'v1.2.2')
+  })
+
+  it('groups identical local and remote branch refs without truncating nested local names', () => {
+    const grouped = groupCommitRefs([
+      'HEAD -> develop',
+      'develop',
+      'origin/develop',
+      'deploy/develop',
+      'origin/HEAD -> origin/develop',
+      'feature/login',
+      'tag: v1.2.3'
+    ], ['origin', 'deploy'])
+
+    assert.deepEqual(grouped.branches[0], {
+      branchName: 'develop',
+      refs: ['HEAD -> develop', 'develop', 'origin/develop', 'deploy/develop', 'origin/HEAD -> origin/develop'],
+      sources: [
+        { kind: 'current', label: '当前', ref: 'HEAD -> develop' },
+        { kind: 'local', label: '本地', ref: 'develop' },
+        { kind: 'remote', label: 'origin', ref: 'origin/develop' },
+        { kind: 'remote', label: 'deploy', ref: 'deploy/develop' }
+      ]
+    })
+    assert.equal(grouped.branches[1]?.branchName, 'feature/login')
+    assert.deepEqual(grouped.tags, ['tag: v1.2.3'])
   })
 
   it('uses project branch tag colors by short branch name', () => {

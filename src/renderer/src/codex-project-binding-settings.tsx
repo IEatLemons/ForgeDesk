@@ -2,6 +2,7 @@ import { DeleteOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Checkbox, Empty, Input, List, Popconfirm, Select, Space, Spin, Tag, Typography, message } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { AiProjectResourceLink, CodexProjectMonitorSnapshot, Project } from './data'
+import { getCodexBindingRecommendations } from './codex-project-binding-recommendation'
 import { getErrorMessage } from './error-messages'
 
 type BindingFilter = 'all' | 'bound' | 'unbound' | 'running'
@@ -40,7 +41,11 @@ export function CodexProjectBindingSettings({ project }: { project: Project }): 
 
   useEffect(() => { void refresh() }, [project.id])
 
-  const linkedPaths = new Set(links.map((link) => link.resourcePath))
+  const linkedPaths = useMemo(() => new Set(links.map((link) => link.resourcePath)), [links])
+  const recommendations = useMemo(
+    () => getCodexBindingRecommendations(project, snapshot?.projects ?? []).filter((item) => !linkedPaths.has(item.cwd)),
+    [linkedPaths, project, snapshot]
+  )
   const projects = useMemo(() => (snapshot?.projects ?? []).filter((item) => {
     const candidate = `${item.cwd}\n${item.forgeProjectName}`.toLowerCase()
     if (query.trim() && !candidate.includes(query.trim().toLowerCase())) return false
@@ -60,6 +65,20 @@ export function CodexProjectBindingSettings({ project }: { project: Project }): 
       await refresh()
     } catch (error) {
       message.error(`绑定 Codex 项目失败：${getErrorMessage(error)}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function bindRecommendations(): Promise<void> {
+    if (!window.forgeDesk || recommendations.length === 0) return
+    setSaving(true)
+    try {
+      await window.forgeDesk.saveAiProjectResourceLinks({ providerId: 'codex', projectId: project.id, resourcePaths: recommendations.map((item) => item.cwd) })
+      message.success(`已绑定 ${recommendations.length} 个推荐的 Codex 项目`)
+      await refresh()
+    } catch (error) {
+      message.error(`绑定推荐的 Codex 项目失败：${getErrorMessage(error)}`)
     } finally {
       setSaving(false)
     }
@@ -98,6 +117,12 @@ export function CodexProjectBindingSettings({ project }: { project: Project }): 
         <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void refresh()}>重新读取</Button>
       </div>
       <Alert type="info" showIcon message={`已绑定 ${links.length} 个 Codex 项目`} description="可一次绑定多个 Codex 原生项目。工作树会自动归属到对应项目，普通会话也会显示在项目详情中。" />
+      {recommendations.length > 0 ? <Alert
+        type="success"
+        showIcon
+        message={`智能推荐：${recommendations.length} 个 Codex 项目可能属于“${project.name}”`}
+        description={<Space direction="vertical" size={4}><Typography.Text>{recommendations.map((item) => `${displayName(item.cwd)}（${item.reason}）`).join('；')}</Typography.Text><Typography.Text type="secondary">{recommendations.map((item) => item.cwd).join('；')}</Typography.Text><Button type="primary" size="small" icon={<LinkOutlined />} loading={saving} onClick={() => void bindRecommendations()}>绑定推荐（{recommendations.length}）</Button></Space>}
+      /> : null}
       <Card size="small" title="当前绑定">
         {loading ? <Spin size="small" /> : links.length ? <List size="small" dataSource={links} renderItem={(link) => <List.Item actions={[<Popconfirm key="delete" title="解除该 Codex 项目绑定？" onConfirm={() => void removeLink(link)}><Button size="small" danger icon={<DeleteOutlined />}>解绑</Button></Popconfirm>]}><Space direction="vertical" size={0}><Typography.Text strong>{displayName(link.resourcePath)}</Typography.Text><Typography.Text type="secondary">{link.resourcePath}</Typography.Text></Space></List.Item>} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未绑定 Codex 项目" />}
       </Card>

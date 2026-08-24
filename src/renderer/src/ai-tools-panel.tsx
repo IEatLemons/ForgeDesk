@@ -2,7 +2,6 @@ import {
   Alert,
   Button,
   Card,
-  Col,
   Descriptions,
   Drawer,
   Empty,
@@ -11,7 +10,6 @@ import {
   Modal,
   Popconfirm,
   Progress,
-  Row,
   Space,
   Spin,
   Tag,
@@ -47,6 +45,10 @@ function formatDate(value: string): string {
   if (!value) return '未记录'
   const timestamp = Date.parse(value)
   return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : value
+}
+
+function formatRenewalDate(value: string): string {
+  return value ? value.replaceAll('-', '/') : '未设置'
 }
 
 function windowLabel(window: QuotaWindow): string {
@@ -149,6 +151,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
   const [accountAction, setAccountAction] = useState('')
   const [apiAction, setApiAction] = useState<'start' | 'stop' | 'rotate' | 'health' | ''>('')
   const [accountDrawer, setAccountDrawer] = useState<CodexManagedAccount | null>(null)
+  const [renewalDateInput, setRenewalDateInput] = useState('')
   const [importOpen, setImportOpen] = useState(false)
   const [importName, setImportName] = useState('')
   const [importPath, setImportPath] = useState('')
@@ -359,6 +362,23 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
     }
   }
 
+  async function saveRenewalDate(): Promise<void> {
+    if (!window.forgeDesk || !accountDrawer) return
+    setAccountAction(`renewal:${accountDrawer.id}`)
+    try {
+      const registry = await window.forgeDesk.updateCodexAccountRenewalDate(accountDrawer.id, { subscriptionRenewsAt: renewalDateInput })
+      const updatedAccount = registry.accounts.find((account) => account.id === accountDrawer.id) || null
+      setAccounts(registry)
+      setAccountDrawer(updatedAccount)
+      setRenewalDateInput(updatedAccount?.subscriptionRenewsAt || '')
+      message.success(renewalDateInput ? '续费日期已保存' : '续费日期已清除')
+    } catch (error) {
+      message.error(`保存续费日期失败：${getErrorMessage(error)}`)
+    } finally {
+      setAccountAction('')
+    }
+  }
+
   async function apiActionRun(action: 'start' | 'stop' | 'rotate'): Promise<void> {
     if (!window.forgeDesk) return
     setApiAction(action)
@@ -455,31 +475,33 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
         <Button icon={<ReloadOutlined />} loading={refreshing} onClick={() => void refreshAll(true)}>刷新状态</Button>
       </div>
 
-      <Row gutter={[16, 16]} className="ai-top-grid">
-        <Col xs={24} lg={8}>
-          <Card title="Codex 软件信息" className="ai-top-card ai-software-card" extra={<Tag color={provider?.installed ? 'green' : 'default'}>{provider?.installed ? '已安装' : '未安装'}</Tag>}>
-            <Space align="start" size={12} className="ai-software-card-content">
-              <div className="ai-provider-icon"><SafetyCertificateOutlined /></div>
-              <div className="ai-software-card-copy">
-                <Space wrap>
-                  <Typography.Title level={3} style={{ margin: 0 }}>Codex</Typography.Title>
-                  {provider?.authenticated ? <Tag color="blue">已登录</Tag> : <Tag>登录状态未知</Tag>}
-                </Space>
-                <Typography.Paragraph type="secondary" className="ai-software-card-message">{provider?.message || '正在检测本机 Codex 环境。'}</Typography.Paragraph>
-                <Typography.Text type="secondary" className="ai-software-card-version">
-                  {provider?.version ? `版本 ${provider.version}` : '版本未读取'}{provider?.command ? ` · ${provider.command}` : ''}
-                </Typography.Text>
-                <Space wrap className="ai-top-card-actions">
-                  <Button type="primary" icon={<PlayCircleOutlined />} loading={providerAction} onClick={() => void openCodex()}>
-                    {provider?.installed ? '打开 Codex' : '安装 Codex'}
-                  </Button>
-                  {!provider?.installed ? <Button icon={<DownloadOutlined />} onClick={() => window.forgeDesk?.openExternalUrl(provider?.installUrl || 'https://openai.com/codex/')}>官方安装页</Button> : null}
-                </Space>
-              </div>
-            </Space>
-          </Card>
-        </Col>
-      </Row>
+      <Card
+        title="Codex 软件信息"
+        className="ai-software-card"
+        extra={
+          <Button type="primary" icon={<PlayCircleOutlined />} loading={providerAction} onClick={() => void openCodex()}>
+            {provider?.installed ? '打开 Codex' : '安装 Codex'}
+          </Button>
+        }
+      >
+        <div className="ai-software-card-layout">
+          <div className="ai-software-card-identity">
+            <div className="ai-provider-icon"><SafetyCertificateOutlined /></div>
+            <div>
+              <Space wrap size={[8, 4]}>
+                <Typography.Text strong>Codex</Typography.Text>
+                <Tag color={provider?.installed ? 'green' : 'default'}>{provider?.installed ? '已安装' : '未安装'}</Tag>
+                {provider?.authenticated ? <Tag color="blue">已登录</Tag> : <Tag>登录状态未知</Tag>}
+              </Space>
+              <Typography.Text type="secondary" className="ai-software-card-message">{provider?.message || '正在检测本机 Codex 环境。'}</Typography.Text>
+            </div>
+          </div>
+          <div className="ai-software-card-meta">
+            <div><span>版本</span><strong>{provider?.version || '未读取'}</strong></div>
+            <div><span>启动方式</span><strong>{provider?.command || '自动识别'}</strong></div>
+          </div>
+        </div>
+      </Card>
 
       <Card
         id="codex-account-management"
@@ -494,7 +516,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
       >
         {accounts?.accounts.length ? (
           <List
-            grid={{ gutter: 16, xs: 1, sm: 1, md: 2, lg: 2, xl: 3 }}
+            className="ai-account-list"
             dataSource={accounts.accounts}
             renderItem={(account) => {
               const quota = quotaByAccountId[account.id]
@@ -502,24 +524,38 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
               return (
               <List.Item>
                 <Card className={`ai-account-card${account.active ? ' active' : ''}`} size="small">
-                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                    <div className="ai-account-card-heading">
+                  <div className="ai-account-card-layout">
+                    <div className="ai-account-card-identity">
+                      <div className="ai-account-card-heading">
                       <Space wrap>
                         <Typography.Text strong>{account.name}</Typography.Text>
                         {account.active ? <Tag color="blue">当前</Tag> : null}
                         <Tag color={account.available ? 'green' : 'default'}>{account.available ? '可用' : '待验证'}</Tag>
                       </Space>
-                      <Tag color={quotaSourceColor(quota)}>{quotaSourceLabel(quota)}</Tag>
-                    </div>
-                    <Typography.Text type="secondary">{account.email || account.accountIdSuffix || '未读取邮箱'}</Typography.Text>
-                    <div className="ai-account-card-facts">
-                      <div><span>账户等级</span><strong>{quota?.planType || account.planType || '未知'}</strong></div>
-                      <div><span>最近使用</span><strong>{formatDate(account.lastUsedAt)}</strong></div>
+                      </div>
+                      <Typography.Text type="secondary">{account.email || account.accountIdSuffix || '未读取邮箱'}</Typography.Text>
+                      <div className="ai-account-card-facts">
+                        <div><span>账户等级</span><strong>{quota?.planType || account.planType || '未知'}</strong></div>
+                        <div><span>最近使用</span><strong>{formatDate(account.lastUsedAt)}</strong></div>
+                        <div><span>续费日期</span><strong>{formatRenewalDate(account.subscriptionRenewsAt)}</strong></div>
+                      </div>
+                      <Space wrap className="ai-account-card-actions">
+                        <Button size="small" onClick={() => { setAccountDrawer(account); setRenewalDateInput(account.subscriptionRenewsAt) }}>详情</Button>
+                        {!account.active ? <Button size="small" icon={<SwapOutlined />} loading={accountAction === `activate:${account.id}`} onClick={() => void activateAccount(account)}>切换</Button> : null}
+                        <Button size="small" icon={<LinkOutlined />} loading={accountAction === `login:${account.id}`} onClick={() => void accountLogin(account)}>登录</Button>
+                        <Button size="small" icon={<CheckCircleOutlined />} loading={accountAction === `verify:${account.id}`} onClick={() => void verifyAccount(account)}>验证</Button>
+                        <Popconfirm title="从 ForgeDesk 移除这个账户？" onConfirm={() => void removeAccount(account)}>
+                          <Button size="small" danger icon={<DeleteOutlined />} loading={accountAction === `remove:${account.id}`}>移除</Button>
+                        </Popconfirm>
+                      </Space>
                     </div>
                     <div className="ai-account-quota">
                       <div className="ai-account-quota-heading">
                         <span>剩余配额</span>
-                        <Typography.Text type="secondary">{quota?.checkedAt ? `更新于 ${formatDate(quota.checkedAt)}` : '尚未读取'}</Typography.Text>
+                        <Space size={6} wrap>
+                          <Tag color={quotaSourceColor(quota)}>{quotaSourceLabel(quota)}</Tag>
+                          <Typography.Text type="secondary">{quota?.checkedAt ? `更新于 ${formatDate(quota.checkedAt)}` : '尚未读取'}</Typography.Text>
+                        </Space>
                       </div>
                       <AccountUsageSummary quota={quota} />
                       {quota?.credits ? <Typography.Text type="secondary">Credits：{quota.credits.balance || (quota.credits.unlimited ? '无限' : quota.credits.hasCredits === false ? '无' : '未知')}{quota.credits.availableCount !== null ? ` · 可用重置 ${quota.credits.availableCount}` : ''}</Typography.Text> : null}
@@ -545,16 +581,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
                         </>
                       ) : <Typography.Text type="secondary">本机 API 服务跟随当前账号运行。切换到此账户后即可启动、停止或检查服务。</Typography.Text>}
                     </Card>
-                    <Space wrap>
-                      <Button size="small" onClick={() => setAccountDrawer(account)}>详情</Button>
-                      {!account.active ? <Button size="small" icon={<SwapOutlined />} loading={accountAction === `activate:${account.id}`} onClick={() => void activateAccount(account)}>切换</Button> : null}
-                      <Button size="small" icon={<LinkOutlined />} loading={accountAction === `login:${account.id}`} onClick={() => void accountLogin(account)}>登录</Button>
-                      <Button size="small" icon={<CheckCircleOutlined />} loading={accountAction === `verify:${account.id}`} onClick={() => void verifyAccount(account)}>验证</Button>
-                      <Popconfirm title="从 ForgeDesk 移除这个账户？" onConfirm={() => void removeAccount(account)}>
-                        <Button size="small" danger icon={<DeleteOutlined />} loading={accountAction === `remove:${account.id}`}>移除</Button>
-                      </Popconfirm>
-                    </Space>
-                  </Space>
+                  </div>
                 </Card>
               </List.Item>
               )
@@ -579,11 +606,13 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
 
       <Drawer title={accountDrawer ? `账户详情 · ${accountDrawer.name}` : '账户详情'} width={420} open={Boolean(accountDrawer)} onClose={() => setAccountDrawer(null)}>
         {accountDrawer ? (
+          <>
           <Descriptions column={1} bordered size="small">
             <Descriptions.Item label="名称">{accountDrawer.name}</Descriptions.Item>
             <Descriptions.Item label="来源">{accountDrawer.source === 'local' ? '本机账户' : '导入账户'}</Descriptions.Item>
             <Descriptions.Item label="邮箱">{accountDrawer.email || '未读取'}</Descriptions.Item>
             <Descriptions.Item label="套餐">{quotaByAccountId[accountDrawer.id]?.planType || accountDrawer.planType || '未知'}</Descriptions.Item>
+            <Descriptions.Item label="订阅到期 / 续费日期">{formatRenewalDate(accountDrawer.subscriptionRenewsAt)}</Descriptions.Item>
             <Descriptions.Item label="账户 ID">{accountDrawer.accountId || '未读取'}</Descriptions.Item>
             <Descriptions.Item label="Profile 目录">{accountDrawer.codexHome}</Descriptions.Item>
             <Descriptions.Item label="认证方式">{accountDrawer.authMode || '未知'}</Descriptions.Item>
@@ -597,6 +626,16 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
             {(quotaByAccountId[accountDrawer.id]?.limitBuckets || []).filter((bucket) => bucket.id !== 'codex').map((bucket) => <Descriptions.Item key={bucket.id} label={bucket.name || bucket.id}>{bucket.primary ? `${bucket.primary.usedPercent ?? '未知'}% 已使用${bucket.primary.resetAt ? ` · ${formatDate(bucket.primary.resetAt)}` : ''}` : '官方未提供'}</Descriptions.Item>)}
             <Descriptions.Item label="累计 Token">{formatTokenCount(quotaByAccountId[accountDrawer.id]?.usage?.summary?.lifetimeTokens)}</Descriptions.Item>
           </Descriptions>
+          <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 16 }}>
+            <Typography.Text strong>维护续费日期</Typography.Text>
+            <Input type="date" value={renewalDateInput} onChange={(event) => setRenewalDateInput(event.target.value)} />
+            <Space wrap>
+              <Button type="primary" loading={accountAction === `renewal:${accountDrawer.id}`} onClick={() => void saveRenewalDate()}>保存续费日期</Button>
+              <Button disabled={!accountDrawer.subscriptionRenewsAt && !renewalDateInput} onClick={() => setRenewalDateInput('')}>清空输入</Button>
+            </Space>
+            <Typography.Text type="secondary">Codex App Server 未提供 ChatGPT 订阅到期日；请按账单中的实际续费日手动记录，配额重置时间不等同于订阅到期。</Typography.Text>
+          </Space>
+          </>
         ) : null}
       </Drawer>
 

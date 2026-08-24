@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   getRepositoryCommitGraph: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) =>
     invokeGitIpc<GitCommitRecord[]>('repository:commit-graph', repositoryId, options),
   syncRepositoryRemote: (repositoryId: string) => invokeGitIpc<RepositoryRecord>('repository:sync-remote', repositoryId),
+  getRepositoryTagSyncStatus: (repositoryId: string) => invokeGitIpc<RepositoryTagSyncSnapshot>('repository:tag-sync-status', repositoryId),
+  pushRepositoryTag: (repositoryId: string, input: GitTagPushInput) => invokeGitIpc<RepositoryTagSyncSnapshot>('repository:tag:push', repositoryId, input),
   saveRepositoryRemote: (input: RepositoryRemoteInput) => invokeGitIpc<RepositoryRecord>('repository:remote:save', input),
   deleteRepositoryRemote: (repositoryId: string, remoteName: string) => invokeGitIpc<RepositoryRecord>('repository:remote:delete', repositoryId, remoteName),
   fetchRepositoryRemote: (repositoryId: string, remoteName?: string, operationId?: string) => invokeGitIpc<RepositoryRecord>('repository:remote:fetch', repositoryId, remoteName, operationId),
@@ -222,6 +224,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   listCodexAccounts: () => ipcRenderer.invoke('codex:accounts:list'),
   importCodexAccount: (input: CodexAccountImportInput) => ipcRenderer.invoke('codex:accounts:import', input),
   createCodexAccount: (input?: { name?: string }) => ipcRenderer.invoke('codex:accounts:create', input),
+  updateCodexAccountRenewalDate: (accountId: string, input: { subscriptionRenewsAt?: string }) => ipcRenderer.invoke('codex:accounts:renewal-date:update', accountId, input),
   activateCodexAccount: (accountId: string) => ipcRenderer.invoke('codex:accounts:activate', accountId),
   removeCodexAccount: (accountId: string) => ipcRenderer.invoke('codex:accounts:remove', accountId),
   verifyCodexAccount: (accountId: string) => ipcRenderer.invoke('codex:accounts:verify', accountId),
