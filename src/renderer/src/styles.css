@@ -6357,6 +6357,25 @@ button.app-status-bar-item:hover {
   box-shadow: inset -1px 0 0 var(--graph-column-border);
 }
 
+.commit-lifecycle-action {
+  height: auto;
+  padding: 0;
+}
+
+.commit-lifecycle-action .ant-tag {
+  margin-inline-end: 0;
+}
+
+.commit-status-config {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--ant-color-border-secondary, #f0f0f0);
+  border-radius: 8px;
+  background: var(--ant-color-fill-quaternary, #fafafa);
+}
+
 .source-tree-table .ant-table-tbody > tr.ant-table-row > td:not(.commit-graph-column) {
   border-bottom: 1px solid var(--table-border-muted) !important;
 }

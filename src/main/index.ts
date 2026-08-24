@@ -327,6 +327,21 @@ import {
   type ProjectBranchTagRecord
 } from './project-branch-tags'
 import {
+  assertCommitLifecycleEditable,
+  getProjectCommitStatusConfig,
+  listRepositoryCommitTestStatuses,
+  matchesLifecycleBranchRef,
+  migrateProjectCommitStatusTables,
+  resolveCommitLifecycle,
+  saveProjectCommitStatusConfig,
+  saveRepositoryCommitTestStatus,
+  type CommitLifecycleSource,
+  type CommitLifecycleStatus,
+  type ManualCommitTestStatus,
+  type ProjectCommitStatusConfig,
+  type RepositoryCommitTestStatus
+} from './project-commit-statuses'
+import {
   deleteProjectTerminalCommand as deleteProjectTerminalCommandRecord,
   listProjectTerminalCommands as listProjectTerminalCommandRecords,
   migrateProjectTerminalCommandTable,
@@ -824,6 +839,9 @@ type GitCommitRecord = {
   additions: number
   deletions: number
   filesChanged: number
+  lifecycleStatus: CommitLifecycleStatus
+  lifecycleSource: CommitLifecycleSource
+  lifecycleEditable: boolean
 }
 
 type GitCommitFileChange = {
@@ -2306,6 +2324,7 @@ function migrateDatabase(db: Database.Database): void {
   `)
 
   migrateProjectBranchTagTable(db)
+  migrateProjectCommitStatusTables(db)
   migrateProjectTerminalCommandTable(db)
   migrateServiceMonitoringTables(db)
   migrateDeploymentApprovalTables(db)
@@ -3626,8 +3645,60 @@ function mapCommitRecord(
     branchName: commit.branchName,
     additions: commit.additions,
     deletions: commit.deletions,
-    filesChanged: commit.filesChanged
+    filesChanged: commit.filesChanged,
+    lifecycleStatus: 'pending-test',
+    lifecycleSource: 'pending-test',
+    lifecycleEditable: false
   }
+}
+
+async function listLifecycleBranchRefs(localPath: string, branchName: string): Promise<string[]> {
+  const output = await runGitInPathOptional(localPath, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes'])
+  return output
+    .split(/\r?\n/)
+    .map((ref) => ref.trim())
+    .filter((ref) => matchesLifecycleBranchRef(ref, branchName))
+}
+
+async function listReachableCommitHashes(localPath: string, refs: string[]): Promise<Set<string>> {
+  if (!refs.length) {
+    return new Set()
+  }
+
+  const output = await runGitInPathOptional(localPath, ['rev-list', ...refs])
+  return new Set(output.split(/\r?\n/).map((hash) => hash.trim()).filter(Boolean))
+}
+
+async function enrichCommitLifecycles(repository: RepositoryRecord, commits: GitCommitRecord[]): Promise<GitCommitRecord[]> {
+  if (!commits.length) {
+    return commits
+  }
+
+  const config = getProjectCommitStatusConfig(getDatabase(), repository.projectId)
+  const [mainRefs, testBranchRefs, manualStatuses] = await Promise.all([
+    listLifecycleBranchRefs(repository.localPath, 'main'),
+    listLifecycleBranchRefs(repository.localPath, config.testBranchName),
+    Promise.resolve(listRepositoryCommitTestStatuses(getDatabase(), repository.id, commits.map((commit) => commit.hash)))
+  ])
+  const [mainCommitHashes, testBranchCommitHashes] = await Promise.all([
+    listReachableCommitHashes(repository.localPath, mainRefs),
+    listReachableCommitHashes(repository.localPath, testBranchRefs)
+  ])
+
+  return commits.map((commit) => {
+    const lifecycle = resolveCommitLifecycle({
+      inMain: mainCommitHashes.has(commit.hash),
+      inTestBranch: testBranchCommitHashes.has(commit.hash),
+      manualStatus: manualStatuses.get(commit.hash)?.status
+    })
+
+    return {
+      ...commit,
+      lifecycleStatus: lifecycle.status,
+      lifecycleSource: lifecycle.source,
+      lifecycleEditable: lifecycle.editable
+    }
+  })
 }
 
 async function getCommitBaseRef(localPath: string, commitHash: string): Promise<string> {
@@ -6276,7 +6347,7 @@ async function listRepositoryCommits(
   const endTime = options.endDate ? new Date(`${options.endDate}T23:59:59.999Z`).getTime() : Number.POSITIVE_INFINITY
   const authorLookup = buildGitAuthorLookup(listProjectPeople(repository.projectId))
 
-  return parseGitLog(output)
+  const commits = parseGitLog(output)
     .filter((commit) => new Date(commit.committedAt).getTime() <= endTime)
     .map((commit) =>
       mapCommitRecord({
@@ -6286,6 +6357,46 @@ async function listRepositoryCommits(
         branchName: options.branchName || '全部引用'
       }, authorLookup)
     )
+
+  return enrichCommitLifecycles(repository, commits)
+}
+
+async function setRepositoryCommitTestStatus(
+  repositoryId: string,
+  input: { commitHash: string; status: ManualCommitTestStatus }
+): Promise<RepositoryCommitTestStatus> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const commitHash = input.commitHash.trim()
+
+  if (!/^[0-9a-f]{7,64}$/i.test(commitHash)) {
+    throw new Error('提交 Hash 无效')
+  }
+
+  const resolvedHash = (await runGitInPathOptional(repository.localPath, ['rev-parse', '--verify', `${commitHash}^{commit}`])).trim()
+
+  if (!resolvedHash) {
+    throw new Error('提交不存在于当前仓库')
+  }
+
+  const config = getProjectCommitStatusConfig(getDatabase(), repository.projectId)
+  const [mainRefs, testBranchRefs, manualStatuses] = await Promise.all([
+    listLifecycleBranchRefs(repository.localPath, 'main'),
+    listLifecycleBranchRefs(repository.localPath, config.testBranchName),
+    Promise.resolve(listRepositoryCommitTestStatuses(getDatabase(), repository.id, [resolvedHash]))
+  ])
+  const [mainCommitHashes, testBranchCommitHashes] = await Promise.all([
+    listReachableCommitHashes(repository.localPath, mainRefs),
+    listReachableCommitHashes(repository.localPath, testBranchRefs)
+  ])
+  const lifecycle = resolveCommitLifecycle({
+    inMain: mainCommitHashes.has(resolvedHash),
+    inTestBranch: testBranchCommitHashes.has(resolvedHash),
+    manualStatus: manualStatuses.get(resolvedHash)?.status
+  })
+
+  assertCommitLifecycleEditable(lifecycle, config.testBranchName)
+
+  return saveRepositoryCommitTestStatus(getDatabase(), { repositoryId: repository.id, commitHash: resolvedHash, status: input.status })
 }
 
 async function syncRepositoryRemote(repositoryId: string): Promise<RepositoryRecord> {
@@ -6891,6 +7002,20 @@ registerGitIpc(
   'repository:commit-graph',
   async (_event, repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }): Promise<GitCommitRecord[]> =>
     listRepositoryCommits(repositoryId, options)
+)
+
+registerGitIpc('project:commit-status:config:get', async (_event, projectId: string): Promise<ProjectCommitStatusConfig> =>
+  getProjectCommitStatusConfig(getDatabase(), projectId)
+)
+
+registerGitIpc('project:commit-status:config:save', async (_event, input: ProjectCommitStatusConfig): Promise<ProjectCommitStatusConfig> =>
+  saveProjectCommitStatusConfig(getDatabase(), input)
+)
+
+registerGitIpc(
+  'repository:commit-test-status:save',
+  async (_event, repositoryId: string, input: { commitHash: string; status: ManualCommitTestStatus }): Promise<RepositoryCommitTestStatus> =>
+    setRepositoryCommitTestStatus(repositoryId, input)
 )
 
 registerGitIpc('repository:sync-remote', async (_event, repositoryId: string): Promise<RepositoryRecord> => syncRepositoryRemote(repositoryId))

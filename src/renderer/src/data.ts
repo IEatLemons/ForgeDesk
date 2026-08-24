@@ -1136,6 +1136,27 @@ export type GitCommit = {
   additions: number
   deletions: number
   filesChanged: number
+  lifecycleStatus: CommitLifecycleStatus
+  lifecycleSource: CommitLifecycleSource
+  lifecycleEditable: boolean
+}
+
+export type ManualCommitTestStatus = 'passed' | 'failed'
+
+export type CommitLifecycleStatus = 'pending-test' | 'testing' | 'test-passed' | 'test-failed' | 'online'
+
+export type CommitLifecycleSource = 'pending-test' | 'testing-branch' | 'manual-test-result' | 'main'
+
+export type ProjectCommitStatusConfig = {
+  projectId: string
+  testBranchName: string
+}
+
+export type RepositoryCommitTestStatus = {
+  repositoryId: string
+  commitHash: string
+  status: ManualCommitTestStatus
+  updatedAt: string
 }
 
 export type GitCommitFileChange = {
