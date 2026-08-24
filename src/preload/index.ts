@@ -33,6 +33,10 @@ contextBridge.exposeInMainWorld('forgeDesk', {
     invokeGitIpc<GitCommitRecord[]>('repository:commits', repositoryId, options),
   getRepositoryCommitGraph: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) =>
     invokeGitIpc<GitCommitRecord[]>('repository:commit-graph', repositoryId, options),
+  getProjectCommitStatusConfig: (projectId: string) => invokeGitIpc<ProjectCommitStatusConfig>('project:commit-status:config:get', projectId),
+  saveProjectCommitStatusConfig: (input: ProjectCommitStatusConfig) => invokeGitIpc<ProjectCommitStatusConfig>('project:commit-status:config:save', input),
+  saveRepositoryCommitTestStatus: (repositoryId: string, input: { commitHash: string; status: ManualCommitTestStatus }) =>
+    invokeGitIpc<RepositoryCommitTestStatus>('repository:commit-test-status:save', repositoryId, input),
   syncRepositoryRemote: (repositoryId: string) => invokeGitIpc<RepositoryRecord>('repository:sync-remote', repositoryId),
   getRepositoryTagSyncStatus: (repositoryId: string) => invokeGitIpc<RepositoryTagSyncSnapshot>('repository:tag-sync-status', repositoryId),
   pushRepositoryTag: (repositoryId: string, input: GitTagPushInput) => invokeGitIpc<RepositoryTagSyncSnapshot>('repository:tag:push', repositoryId, input),

@@ -119,6 +119,7 @@ import type {
   GitCommit,
   GitCommitDiff,
   GitCommitFileChange,
+  CommitLifecycleStatus,
   GitContributorIdentity,
   GitMergeAnalysis,
   GitOperationResult,
@@ -127,6 +128,7 @@ import type {
   GitRemote,
   GitStatusFile,
   GitWorkspaceStatus,
+  ManualCommitTestStatus,
   GithubTokenView,
   MonthlyPerformancePreview,
   MonthlyPerformanceRow,
@@ -1561,6 +1563,14 @@ type RepositoryLogCommit = GitCommit & {
   worktreeFiles?: GitCommitFileChange[]
 }
 
+const commitLifecycleStatusMeta: Record<CommitLifecycleStatus, { label: string; color: string }> = {
+  'pending-test': { label: '等待提测', color: 'default' },
+  testing: { label: '测试中', color: 'processing' },
+  'test-passed': { label: '测试通过', color: 'success' },
+  'test-failed': { label: '测试不通过', color: 'error' },
+  online: { label: '已上线', color: 'purple' }
+}
+
 function createGraphParentPath({
   fromX,
   toX
@@ -1710,6 +1720,49 @@ function CommitAuthorCell({ commit }: { commit: RepositoryLogCommit }): JSX.Elem
       <span className="commit-author-name">{author.name}</span>
       {author.email && <span className="commit-author-email">{author.email}</span>}
     </span>
+  )
+}
+
+function CommitLifecycleCell({
+  commit,
+  onSave
+}: {
+  commit: RepositoryLogCommit
+  onSave: (commit: RepositoryLogCommit, status: ManualCommitTestStatus) => void
+}): JSX.Element {
+  if (isWorkingTreeCommit(commit)) {
+    return <Typography.Text type="secondary">—</Typography.Text>
+  }
+
+  const meta = commitLifecycleStatusMeta[commit.lifecycleStatus]
+  const tag = (
+    <Tag color={meta.color} icon={commit.lifecycleStatus === 'online' ? <LockOutlined /> : undefined}>
+      {meta.label}
+    </Tag>
+  )
+
+  if (!commit.lifecycleEditable) {
+    return tag
+  }
+
+  return (
+    <Dropdown
+      trigger={['click']}
+      menu={{
+        items: [
+          { key: 'passed', label: '标记测试通过', icon: <CheckCircleOutlined /> },
+          { key: 'failed', label: '标记测试不通过', danger: true, icon: <CloseCircleOutlined /> }
+        ],
+        onClick: ({ key, domEvent }) => {
+          domEvent.stopPropagation()
+          onSave(commit, key as ManualCommitTestStatus)
+        }
+      }}
+    >
+      <Button size="small" type="text" className="commit-lifecycle-action" onClick={(event) => event.stopPropagation()}>
+        {tag}
+      </Button>
+    </Dropdown>
   )
 }
 
@@ -13198,7 +13251,7 @@ function ProjectSettingsPanel({
       case 'people':
         return <ProjectPeopleMapping project={project} contributors={contributors} onChanged={onSummaryChanged} />
       case 'branches':
-        return <ProjectBranchTagSettings project={project} onChanged={notifyBranchTagsChanged} />
+        return <ProjectBranchTagSettings project={project} repositories={repositories} onChanged={notifyBranchTagsChanged} />
       case 'git':
         return (
           <Tabs
@@ -17851,12 +17904,15 @@ function ProjectPeopleMapping({ project, contributors, onChanged }: { project: P
 
 const branchTagColorPresets = ['#f5222d', '#1d39c4', '#1677ff', '#13c2c2', '#52c41a', '#722ed1', '#eb2f96', '#fa8c16']
 
-function ProjectBranchTagSettings({ project, onChanged }: { project: Project; onChanged: () => void }): JSX.Element {
+function ProjectBranchTagSettings({ project, repositories, onChanged }: { project: Project; repositories: Repository[]; onChanged: () => void }): JSX.Element {
   const [branchTags, setBranchTags] = useState<ProjectBranchTag[]>([])
   const [editingBranchTag, setEditingBranchTag] = useState<ProjectBranchTag | null>(null)
   const [branchTagModalOpen, setBranchTagModalOpen] = useState(false)
   const [loadingBranchTags, setLoadingBranchTags] = useState(false)
   const [savingBranchTag, setSavingBranchTag] = useState(false)
+  const [testBranchName, setTestBranchName] = useState('develop')
+  const [loadingCommitStatusConfig, setLoadingCommitStatusConfig] = useState(false)
+  const [savingCommitStatusConfig, setSavingCommitStatusConfig] = useState(false)
   const [branchTagForm] = Form.useForm<BranchTagForm>()
   const selectedColor = String(Form.useWatch('color', branchTagForm) ?? branchTagColorPresets[0])
 
@@ -17880,6 +17936,55 @@ function ProjectBranchTagSettings({ project, onChanged }: { project: Project; on
   useEffect(() => {
     loadBranchTags().catch((error) => message.error(getErrorMessage(error)))
   }, [project.id])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadCommitStatusConfig(): Promise<void> {
+      if (!window.forgeDesk) {
+        return
+      }
+
+      setLoadingCommitStatusConfig(true)
+
+      try {
+        const config = await window.forgeDesk.getProjectCommitStatusConfig(project.id)
+        if (!cancelled) {
+          setTestBranchName(config.testBranchName)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          message.error(getErrorMessage(error))
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingCommitStatusConfig(false)
+        }
+      }
+    }
+
+    void loadCommitStatusConfig()
+    return () => { cancelled = true }
+  }, [project.id])
+
+  async function saveCommitStatusConfig(): Promise<void> {
+    if (!window.forgeDesk) {
+      return
+    }
+
+    setSavingCommitStatusConfig(true)
+
+    try {
+      const config = await window.forgeDesk.saveProjectCommitStatusConfig({ projectId: project.id, testBranchName })
+      setTestBranchName(config.testBranchName)
+      message.success('测试分支已保存，提交状态已刷新')
+      onChanged()
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSavingCommitStatusConfig(false)
+    }
+  }
 
   function openBranchTagModal(tag?: ProjectBranchTag): void {
     setEditingBranchTag(tag ?? null)
@@ -17988,8 +18093,36 @@ function ProjectBranchTagSettings({ project, onChanged }: { project: Project; on
     }
   ]
 
+  const matchingRepositories = repositories.filter((repository) =>
+    repository.branches.includes(testBranchName) || repository.remoteBranches.some((branch) => branch.split('/').slice(1).join('/') === testBranchName)
+  )
+
   return (
     <div className="panel branch-tag-settings-panel">
+      <div className="commit-status-config">
+        <div>
+          <Typography.Text strong>提交生命周期</Typography.Text>
+          <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0' }}>
+            合入 <Typography.Text code>main</Typography.Text> 自动标记为已上线；合入测试分支后可标记测试通过或不通过。
+          </Typography.Paragraph>
+        </div>
+        <Space wrap>
+          <Input
+            aria-label="测试分支"
+            value={testBranchName}
+            disabled={loadingCommitStatusConfig}
+            placeholder="develop"
+            onChange={(event) => setTestBranchName(event.target.value)}
+            style={{ width: 180 }}
+          />
+          <Button type="primary" loading={savingCommitStatusConfig || loadingCommitStatusConfig} onClick={() => void saveCommitStatusConfig()}>
+            保存测试分支
+          </Button>
+        </Space>
+        <Typography.Text type={matchingRepositories.length ? 'secondary' : 'warning'}>
+          {matchingRepositories.length ? `当前 ${matchingRepositories.length} 个仓库存在 ${testBranchName} 引用。` : `当前项目没有找到 ${testBranchName} 引用；提交会保持等待提测。`}
+        </Typography.Text>
+      </div>
       <div className="branch-tag-settings-toolbar">
         <Typography.Text type="secondary">填写短分支名即可匹配本地和远端同名分支。</Typography.Text>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => openBranchTagModal()}>
@@ -18619,6 +18752,7 @@ function RepositoryLogTree({
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [loadingFiles, setLoadingFiles] = useState(false)
   const [loadingDiff, setLoadingDiff] = useState(false)
+  const [savingCommitStatus, setSavingCommitStatus] = useState(false)
   const [syncingRepositoryId, setSyncingRepositoryId] = useState<string | null>(null)
   const [gitError, setGitError] = useState<GitErrorGuidance | null>(null)
   const [branchDrawerOpen, setBranchDrawerOpen] = useState(false)
@@ -18672,6 +18806,9 @@ function RepositoryLogTree({
             additions: 0,
             deletions: 0,
             filesChanged: fileCount,
+            lifecycleStatus: 'pending-test',
+            lifecycleSource: 'pending-test',
+            lifecycleEditable: false,
             isWorkingTreeCommit: true,
             worktreeFiles: workspaceCommitFiles
           }), {
@@ -18831,7 +18968,7 @@ function RepositoryLogTree({
     return () => {
       cancelled = true
     }
-  }, [repository?.id, repository?.latestCommit, repository?.remoteCount, repository?.remoteBranchCount, refreshToken])
+  }, [repository?.id, repository?.latestCommit, repository?.remoteCount, repository?.remoteBranchCount, refreshToken, branchTagRefreshToken])
 
   async function refreshRepositorySnapshot({
     targetRepository = detailRepository,
@@ -19063,6 +19200,24 @@ function RepositoryLogTree({
     }
   }
 
+  async function saveCommitTestStatus(commit: RepositoryLogCommit, status: ManualCommitTestStatus): Promise<void> {
+    if (!detailRepository || !window.forgeDesk || isWorkingTreeCommit(commit) || savingCommitStatus) {
+      return
+    }
+
+    setSavingCommitStatus(true)
+
+    try {
+      await window.forgeDesk.saveRepositoryCommitTestStatus(detailRepository.id, { commitHash: commit.hash, status })
+      await refreshCommits()
+      message.success(status === 'passed' ? '已标记为测试通过' : '已标记为测试不通过')
+    } catch (error) {
+      setGitError(createGitErrorGuidance(error, '更新测试状态'))
+    } finally {
+      setSavingCommitStatus(false)
+    }
+  }
+
   async function selectCommitFile(file: GitCommitFileChange): Promise<void> {
     if (!detailRepository || !selectedCommit || isWorkingTreeCommit(selectedCommit) || !window.forgeDesk) {
       return
@@ -19235,6 +19390,12 @@ function RepositoryLogTree({
                 key: 'message',
                 render: (_, commit) => <CommitMessageCell commit={commit} branchTags={branchTags} currentBranch={activeBranchName} remoteNames={remoteNames} tagSyncSnapshot={tagSyncSnapshot} onOpenTagSync={openTagSync} />
               },
+              {
+                title: '状态',
+                key: 'lifecycle',
+                width: 138,
+                render: (_, commit) => <CommitLifecycleCell commit={commit} onSave={saveCommitTestStatus} />
+              },
               { title: '提交人', key: 'author', width: 210, render: (_, commit) => <CommitAuthorCell commit={commit} /> },
               {
                 title: '时间',
@@ -19271,7 +19432,7 @@ function RepositoryLogTree({
               showExpandColumn: false
             }}
             pagination={false}
-            scroll={{ x: graphColumnWidth + 864 }}
+            scroll={{ x: graphColumnWidth + 1002 }}
             locale={{
               emptyText: isEmptyRepositoryHistory ? (
                 <div className="empty-git-history">

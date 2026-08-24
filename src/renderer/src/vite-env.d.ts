@@ -913,6 +913,27 @@ type GitCommitRecord = {
   additions: number
   deletions: number
   filesChanged: number
+  lifecycleStatus: CommitLifecycleStatus
+  lifecycleSource: CommitLifecycleSource
+  lifecycleEditable: boolean
+}
+
+type ManualCommitTestStatus = 'passed' | 'failed'
+
+type CommitLifecycleStatus = 'pending-test' | 'testing' | 'test-passed' | 'test-failed' | 'online'
+
+type CommitLifecycleSource = 'pending-test' | 'testing-branch' | 'manual-test-result' | 'main'
+
+type ProjectCommitStatusConfig = {
+  projectId: string
+  testBranchName: string
+}
+
+type RepositoryCommitTestStatus = {
+  repositoryId: string
+  commitHash: string
+  status: ManualCommitTestStatus
+  updatedAt: string
 }
 
 type TagSyncRemoteState = 'synced' | 'missing' | 'diverged' | 'remote-only' | 'absent' | 'unavailable'
@@ -2826,6 +2847,9 @@ interface Window {
     getRepositoryDetail: (repositoryId: string) => Promise<RepositoryRecord>
     listRepositoryCommits: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) => Promise<GitCommitRecord[]>
     getRepositoryCommitGraph: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) => Promise<GitCommitRecord[]>
+    getProjectCommitStatusConfig: (projectId: string) => Promise<ProjectCommitStatusConfig>
+    saveProjectCommitStatusConfig: (input: ProjectCommitStatusConfig) => Promise<ProjectCommitStatusConfig>
+    saveRepositoryCommitTestStatus: (repositoryId: string, input: { commitHash: string; status: ManualCommitTestStatus }) => Promise<RepositoryCommitTestStatus>
     syncRepositoryRemote: (repositoryId: string) => Promise<RepositoryRecord>
     getRepositoryTagSyncStatus: (repositoryId: string) => Promise<RepositoryTagSyncSnapshot>
     pushRepositoryTag: (repositoryId: string, input: GitTagPushInput) => Promise<RepositoryTagSyncSnapshot>
