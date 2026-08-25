@@ -34,7 +34,7 @@ export type AppNavigationItem = {
 
 export const APP_NAVIGATION_SECTIONS: AppNavigationSection[] = [
   { key: 'home', label: '今日', placement: 'main' },
-  { key: 'system', label: '系统', placement: 'main' },
+  { key: 'system', label: '系统', placement: 'footer' },
   { key: 'life', label: '生活', placement: 'main' },
   { key: 'study', label: '学习', placement: 'main' },
   { key: 'work', label: '工作', placement: 'main' },

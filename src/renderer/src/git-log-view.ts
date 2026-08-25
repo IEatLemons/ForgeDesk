@@ -28,11 +28,18 @@ export const gitLogRefreshIntervalBounds = {
   minSeconds: 10,
   maxSeconds: 600
 }
+export const gitLogMaxLoadedCommitBounds = {
+  minCommits: 100,
+  maxCommits: 1000,
+  step: 50
+}
+export const gitLogScrollLoadBatchSize = 50
 const gitGraphColumnPadding = 56
 
 export type GitLogRefreshPreferences = {
   autoRefreshEnabled: boolean
   intervalSeconds: number
+  maxLoadedCommits: number
 }
 
 export type BranchColoredGitGraphRow<TCommit extends GraphCommitInput = GraphCommitInput> = GitGraphRow<TCommit> & {
@@ -41,22 +48,32 @@ export type BranchColoredGitGraphRow<TCommit extends GraphCommitInput = GraphCom
 
 export const defaultGitLogRefreshPreferences: GitLogRefreshPreferences = {
   autoRefreshEnabled: false,
-  intervalSeconds: 30
+  intervalSeconds: 30,
+  maxLoadedCommits: 100
 }
 
 function clampGitLogRefreshInterval(seconds: number): number {
   return Math.min(gitLogRefreshIntervalBounds.maxSeconds, Math.max(gitLogRefreshIntervalBounds.minSeconds, Math.round(seconds)))
 }
 
+function clampGitLogMaxLoadedCommits(commits: number): number {
+  const rounded = Math.round(commits / gitLogMaxLoadedCommitBounds.step) * gitLogMaxLoadedCommitBounds.step
+  return Math.min(gitLogMaxLoadedCommitBounds.maxCommits, Math.max(gitLogMaxLoadedCommitBounds.minCommits, rounded))
+}
+
 export function normalizeGitLogRefreshPreferences(input: unknown): GitLogRefreshPreferences {
   const candidate = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {}
   const intervalSeconds = Number(candidate.intervalSeconds)
+  const maxLoadedCommits = Number(candidate.maxLoadedCommits)
 
   return {
     autoRefreshEnabled: candidate.autoRefreshEnabled === true,
     intervalSeconds: Number.isFinite(intervalSeconds)
       ? clampGitLogRefreshInterval(intervalSeconds)
-      : defaultGitLogRefreshPreferences.intervalSeconds
+      : defaultGitLogRefreshPreferences.intervalSeconds,
+    maxLoadedCommits: Number.isFinite(maxLoadedCommits)
+      ? clampGitLogMaxLoadedCommits(maxLoadedCommits)
+      : defaultGitLogRefreshPreferences.maxLoadedCommits
   }
 }
 
@@ -236,6 +253,34 @@ export function getNextVisibleCommitCount({
   batchSize: number
 }): number {
   return Math.min(total, current + batchSize)
+}
+
+export function mergeGitLogCommitWindow<T>({
+  current,
+  page,
+  windowStart,
+  maxLoadedCommits,
+  direction
+}: {
+  current: T[]
+  page: T[]
+  windowStart: number
+  maxLoadedCommits: number
+  direction: 'older' | 'newer'
+}): { commits: T[]; windowStart: number } {
+  const retainedCurrentCount = Math.max(0, maxLoadedCommits - page.length)
+
+  if (direction === 'newer') {
+    return {
+      commits: [...page, ...current.slice(0, retainedCurrentCount)],
+      windowStart: Math.max(0, windowStart - page.length)
+    }
+  }
+
+  return {
+    commits: [...current.slice(-retainedCurrentCount), ...page],
+    windowStart: windowStart + Math.max(0, current.length - retainedCurrentCount)
+  }
 }
 
 function getGraphLaneCount(row: GitGraphRow): number {

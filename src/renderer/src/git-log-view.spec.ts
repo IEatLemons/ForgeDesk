@@ -6,6 +6,7 @@ import {
   createWorkingTreeCommit,
   createGraphRows,
   defaultGitLogRefreshPreferences,
+  gitLogMaxLoadedCommitBounds,
   gitLogRefreshIntervalBounds,
   getCommitAuthorDisplay,
   getCommitAuthorFilterValue,
@@ -17,6 +18,7 @@ import {
   getRefColor,
   getRepositoryDefaultPushTarget,
   getNextVisibleCommitCount,
+  mergeGitLogCommitWindow,
   getRefCopyText,
   getRefTone,
   groupCommitRefs,
@@ -336,19 +338,49 @@ describe('git log view helpers', () => {
     assert.deepEqual(getRepositoryDefaultPushTarget({ currentBranch: 'develop', remotes: [] }), { remote: 'origin', branch: 'develop' })
   })
 
-  it('normalizes log tree refresh preferences with safe interval bounds', () => {
+  it('normalizes log tree refresh preferences with safe refresh and memory bounds', () => {
     assert.deepEqual(normalizeGitLogRefreshPreferences(null), defaultGitLogRefreshPreferences)
     assert.deepEqual(normalizeGitLogRefreshPreferences({ autoRefreshEnabled: true, intervalSeconds: 2 }), {
       autoRefreshEnabled: true,
-      intervalSeconds: gitLogRefreshIntervalBounds.minSeconds
+      intervalSeconds: gitLogRefreshIntervalBounds.minSeconds,
+      maxLoadedCommits: defaultGitLogRefreshPreferences.maxLoadedCommits
     })
     assert.deepEqual(normalizeGitLogRefreshPreferences({ autoRefreshEnabled: false, intervalSeconds: 9999 }), {
       autoRefreshEnabled: false,
-      intervalSeconds: gitLogRefreshIntervalBounds.maxSeconds
+      intervalSeconds: gitLogRefreshIntervalBounds.maxSeconds,
+      maxLoadedCommits: defaultGitLogRefreshPreferences.maxLoadedCommits
     })
-    assert.deepEqual(normalizeGitLogRefreshPreferences({ autoRefreshEnabled: true, intervalSeconds: 45.4 }), {
+    assert.deepEqual(normalizeGitLogRefreshPreferences({ autoRefreshEnabled: true, intervalSeconds: 45.4, maxLoadedCommits: 73 }), {
       autoRefreshEnabled: true,
-      intervalSeconds: 45
+      intervalSeconds: 45,
+      maxLoadedCommits: gitLogMaxLoadedCommitBounds.minCommits
     })
+    assert.deepEqual(normalizeGitLogRefreshPreferences({ autoRefreshEnabled: true, intervalSeconds: 45, maxLoadedCommits: 9988 }), {
+      autoRefreshEnabled: true,
+      intervalSeconds: 45,
+      maxLoadedCommits: gitLogMaxLoadedCommitBounds.maxCommits
+    })
+  })
+
+  it('slides a bounded log window in both history directions', () => {
+    const older = mergeGitLogCommitWindow({
+      current: [0, 1, 2, 3],
+      page: [4, 5],
+      windowStart: 0,
+      maxLoadedCommits: 4,
+      direction: 'older'
+    })
+
+    assert.deepEqual(older, { commits: [2, 3, 4, 5], windowStart: 2 })
+
+    const newer = mergeGitLogCommitWindow({
+      current: older.commits,
+      page: [0, 1],
+      windowStart: older.windowStart,
+      maxLoadedCommits: 4,
+      direction: 'newer'
+    })
+
+    assert.deepEqual(newer, { commits: [0, 1, 2, 3], windowStart: 0 })
   })
 })

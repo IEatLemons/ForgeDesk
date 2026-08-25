@@ -162,6 +162,16 @@ export function buildGitPushTagArgs(input: GitTagPushInput): string[] {
   return ['push', assertRemoteName(input.remoteName), `refs/tags/${assertSafeRef(input.tagName, 'Tag')}`]
 }
 
+export function buildGitPushTagsArgs(input: { remoteName: string; tagNames: string[] }): string[] {
+  const tagRefs = Array.from(new Set(input.tagNames.map((tagName) => `refs/tags/${assertSafeRef(tagName, 'Tag')}`)))
+
+  if (tagRefs.length === 0) {
+    throw new Error('请选择至少一个 Tag')
+  }
+
+  return ['push', assertRemoteName(input.remoteName), ...tagRefs]
+}
+
 export function buildGitFetchRemoteArgs(remoteName: string): string[] {
   return ['fetch', assertRemoteName(remoteName), '--prune', '--tags']
 }

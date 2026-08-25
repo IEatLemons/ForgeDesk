@@ -12,6 +12,7 @@ import {
   buildGitPushArgs,
   buildGitPushOperationArgs,
   buildGitPushTagArgs,
+  buildGitPushTagsArgs,
   buildGitPushTargetCommitCountArgs,
   buildGitPushTargetRemoteRefArgs,
   buildGitPushTargetRemoteRefVerifyArgs,
@@ -51,6 +52,7 @@ describe('git workspace operations', () => {
       ['push', 'origin', 'main', 'refs/tags/v2.3.0']
     ])
     assert.deepEqual(buildGitPushTagArgs({ remoteName: 'origin', tagName: 'v2.3.0' }), ['push', 'origin', 'refs/tags/v2.3.0'])
+    assert.deepEqual(buildGitPushTagsArgs({ remoteName: 'origin', tagNames: ['v2.3.0', 'v2.4.0', 'v2.3.0'] }), ['push', 'origin', 'refs/tags/v2.3.0', 'refs/tags/v2.4.0'])
     assert.deepEqual(buildGitFetchRemoteArgs('origin'), ['fetch', 'origin', '--prune', '--tags'])
     assert.deepEqual(buildGitMergeArgs({ source: 'origin/main' }), ['merge', '--no-edit', 'origin/main'])
     assert.throws(() => buildGitCommitArgs({ message: '' }), /请输入提交信息/)
@@ -58,6 +60,7 @@ describe('git workspace operations', () => {
     assert.throws(() => buildGitTagArgs('v1.2.3;rm'), /不支持的Tag/)
     assert.throws(() => buildGitPushArgs({ remote: 'bad/name', branch: 'main' }), /远端名称/)
     assert.throws(() => buildGitPushTagArgs({ remoteName: 'bad/name', tagName: 'v2.3.0' }), /远端名称/)
+    assert.throws(() => buildGitPushTagsArgs({ remoteName: 'origin', tagNames: [] }), /至少一个 Tag/)
     assert.throws(() => buildGitFetchRemoteArgs('bad/name'), /远端名称/)
     assert.throws(() => buildGitPushArgs({ remote: 'origin', branch: 'main', tagNames: ['v2.3.0;rm'] }), /不支持的版本 Tag/)
     assert.throws(() => buildGitPushOperationArgs({ remotes: [], branch: 'main' }), /请选择要推送的远端/)

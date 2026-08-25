@@ -19,6 +19,12 @@ export type RepositoryTagSyncSnapshot = {
   tags: RepositoryTagSyncTag[]
 }
 
+export type RepositoryTagPushBatchResult = {
+  snapshot: RepositoryTagSyncSnapshot
+  pushed: Array<{ tagName: string; remoteName: string }>
+  failed: Array<{ tagNames: string[]; remoteName: string; error: string }>
+}
+
 export type RemoteTagSource = {
   remoteName: string
   tags: Map<string, string>

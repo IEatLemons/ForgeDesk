@@ -957,6 +957,12 @@ type RepositoryTagSyncSnapshot = {
   tags: RepositoryTagSyncTag[]
 }
 
+type RepositoryTagPushBatchResult = {
+  snapshot: RepositoryTagSyncSnapshot
+  pushed: Array<{ tagName: string; remoteName: string }>
+  failed: Array<{ tagNames: string[]; remoteName: string; error: string }>
+}
+
 type GitTagPushInput = {
   remoteName: string
   tagName: string
@@ -2845,14 +2851,15 @@ interface Window {
     initializeProjectRepository: (projectId: string) => Promise<WorkspaceSnapshot>
     listRepositories: (projectId?: string) => Promise<RepositoryRecord[]>
     getRepositoryDetail: (repositoryId: string) => Promise<RepositoryRecord>
-    listRepositoryCommits: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) => Promise<GitCommitRecord[]>
-    getRepositoryCommitGraph: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) => Promise<GitCommitRecord[]>
+    listRepositoryCommits: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number }) => Promise<GitCommitRecord[]>
+    getRepositoryCommitGraph: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number }) => Promise<GitCommitRecord[]>
     getProjectCommitStatusConfig: (projectId: string) => Promise<ProjectCommitStatusConfig>
     saveProjectCommitStatusConfig: (input: ProjectCommitStatusConfig) => Promise<ProjectCommitStatusConfig>
     saveRepositoryCommitTestStatus: (repositoryId: string, input: { commitHash: string; status: ManualCommitTestStatus }) => Promise<RepositoryCommitTestStatus>
     syncRepositoryRemote: (repositoryId: string) => Promise<RepositoryRecord>
     getRepositoryTagSyncStatus: (repositoryId: string) => Promise<RepositoryTagSyncSnapshot>
     pushRepositoryTag: (repositoryId: string, input: GitTagPushInput) => Promise<RepositoryTagSyncSnapshot>
+    pushRepositoryMissingTags: (repositoryId: string, input?: { tagName?: string }) => Promise<RepositoryTagPushBatchResult>
     saveRepositoryRemote: (input: RepositoryRemoteInput) => Promise<RepositoryRecord>
     deleteRepositoryRemote: (repositoryId: string, remoteName: string) => Promise<RepositoryRecord>
     fetchRepositoryRemote: (repositoryId: string, remoteName?: string, operationId?: string) => Promise<RepositoryRecord>

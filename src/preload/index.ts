@@ -29,9 +29,9 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   initializeProjectRepository: (projectId: string) => invokeGitIpc<WorkspaceSnapshot>('project:repository:init', projectId),
   listRepositories: (projectId?: string) => invokeGitIpc<RepositoryRecord[]>('repositories:list', projectId),
   getRepositoryDetail: (repositoryId: string) => invokeGitIpc<RepositoryRecord>('repository:detail', repositoryId),
-  listRepositoryCommits: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) =>
+  listRepositoryCommits: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number }) =>
     invokeGitIpc<GitCommitRecord[]>('repository:commits', repositoryId, options),
-  getRepositoryCommitGraph: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }) =>
+  getRepositoryCommitGraph: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number }) =>
     invokeGitIpc<GitCommitRecord[]>('repository:commit-graph', repositoryId, options),
   getProjectCommitStatusConfig: (projectId: string) => invokeGitIpc<ProjectCommitStatusConfig>('project:commit-status:config:get', projectId),
   saveProjectCommitStatusConfig: (input: ProjectCommitStatusConfig) => invokeGitIpc<ProjectCommitStatusConfig>('project:commit-status:config:save', input),
@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   syncRepositoryRemote: (repositoryId: string) => invokeGitIpc<RepositoryRecord>('repository:sync-remote', repositoryId),
   getRepositoryTagSyncStatus: (repositoryId: string) => invokeGitIpc<RepositoryTagSyncSnapshot>('repository:tag-sync-status', repositoryId),
   pushRepositoryTag: (repositoryId: string, input: GitTagPushInput) => invokeGitIpc<RepositoryTagSyncSnapshot>('repository:tag:push', repositoryId, input),
+  pushRepositoryMissingTags: (repositoryId: string, input?: { tagName?: string }) => invokeGitIpc<RepositoryTagPushBatchResult>('repository:tags:push-missing', repositoryId, input),
   saveRepositoryRemote: (input: RepositoryRemoteInput) => invokeGitIpc<RepositoryRecord>('repository:remote:save', input),
   deleteRepositoryRemote: (repositoryId: string, remoteName: string) => invokeGitIpc<RepositoryRecord>('repository:remote:delete', repositoryId, remoteName),
   fetchRepositoryRemote: (repositoryId: string, remoteName?: string, operationId?: string) => invokeGitIpc<RepositoryRecord>('repository:remote:fetch', repositoryId, remoteName, operationId),

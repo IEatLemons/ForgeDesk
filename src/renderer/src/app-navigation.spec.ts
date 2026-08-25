@@ -16,16 +16,16 @@ describe('app navigation', () => {
     )
     assert.deepEqual(
       APP_NAVIGATION_SECTIONS.filter((section) => section.placement === 'main').map((section) => section.key),
-      ['home', 'system', 'life', 'study', 'work', 'computer']
+      ['home', 'life', 'study', 'work', 'computer']
     )
   })
 
-  it('keeps settings near the top in the system area', () => {
+  it('keeps settings fixed in the footer system area', () => {
     assert.deepEqual(
       APP_NAVIGATION_ITEMS.filter((item) => item.section === 'system').map((item) => item.key),
       ['settings']
     )
-    assert.equal(APP_NAVIGATION_SECTIONS.find((section) => section.key === 'system')?.placement, 'main')
+    assert.equal(APP_NAVIGATION_SECTIONS.find((section) => section.key === 'system')?.placement, 'footer')
   })
 
   it('keeps AI chat beside the computer tools', () => {

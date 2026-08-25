@@ -302,6 +302,7 @@ import {
   buildGitMergeTreeArgs,
   buildGitPushOperationArgs,
   buildGitPushTagArgs,
+  buildGitPushTagsArgs,
   buildGitPushTargetCommitCountArgs,
   buildGitPushTargetLocalCommitCountArgs,
   buildGitPushTargetRemoteRefVerifyArgs,
@@ -321,7 +322,7 @@ import {
   type GitPushTarget,
   type GitStatusFile
 } from './git-workspace'
-import { buildRepositoryTagSyncSnapshot, canPushTagToRemote, parseLocalTagRefs, parseRemoteTagRefs, type RepositoryTagSyncSnapshot } from './git-tag-sync'
+import { buildRepositoryTagSyncSnapshot, canPushTagToRemote, parseLocalTagRefs, parseRemoteTagRefs, type RepositoryTagPushBatchResult, type RepositoryTagSyncSnapshot } from './git-tag-sync'
 import { buildRemoteCloneArgs, deriveRemoteRepositoryName, findNearestRepositoryParent, resolveRemoteCloneTarget, type RemoteProjectCreateInput } from './project-creation'
 import { extractConflictSections, hasConflictMarkers, type ConflictSection } from './merge-conflicts'
 import {
@@ -2051,11 +2052,23 @@ function runGitInPath(localPath: string, args: string[]): Promise<string> {
   })
 }
 
-function runGitLog(localPath: string, options: { sinceDate?: string; branchName?: string; allRefs?: boolean } = {}): Promise<string> {
+function runGitLog(localPath: string, options: { sinceDate?: string; untilDate?: string; branchName?: string; allRefs?: boolean; offset?: number; limit?: number } = {}): Promise<string> {
   const args = ['-C', localPath, 'log']
 
   if (options.sinceDate) {
     args.push(`--since=${options.sinceDate}`)
+  }
+
+  if (options.untilDate) {
+    args.push(`--until=${options.untilDate}`)
+  }
+
+  if (typeof options.offset === 'number' && options.offset > 0) {
+    args.push(`--skip=${Math.floor(options.offset)}`)
+  }
+
+  if (typeof options.limit === 'number' && options.limit > 0) {
+    args.push(`--max-count=${Math.floor(options.limit)}`)
   }
 
   if (options.branchName) {
@@ -3985,6 +3998,49 @@ async function pushRepositoryTag(repositoryId: string, input: GitTagPushInput): 
 
   await withSavedSshPassphrases((env) => runGitInPathStrict(repository.localPath, pushArgs, { env }))
   return getRepositoryTagSyncStatus(repositoryId)
+}
+
+async function pushRepositoryMissingTags(repositoryId: string, input: { tagName?: string } = {}): Promise<RepositoryTagPushBatchResult> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const requestedTagName = input.tagName?.trim()
+  const snapshot = await getRepositoryTagSyncStatus(repositoryId)
+  const targetsByRemote = new Map<string, string[]>()
+
+  snapshot.tags
+    .filter((tag) => !requestedTagName || tag.name === requestedTagName)
+    .forEach((tag) => {
+      tag.remotes
+        .filter((remote) => canPushTagToRemote(tag, remote.remoteName))
+        .forEach((remote) => {
+          const tagNames = targetsByRemote.get(remote.remoteName) ?? []
+          tagNames.push(tag.name)
+          targetsByRemote.set(remote.remoteName, tagNames)
+        })
+    })
+
+  const failedGroups: RepositoryTagPushBatchResult['failed'] = []
+
+  await withSavedSshPassphrases(async (env) => {
+    for (const [remoteName, tagNames] of targetsByRemote) {
+      try {
+        await runGitInPathStrict(repository.localPath, buildGitPushTagsArgs({ remoteName, tagNames }), { env })
+      } catch (error) {
+        failedGroups.push({ tagNames, remoteName, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+  })
+
+  const nextSnapshot = await getRepositoryTagSyncStatus(repositoryId)
+  const isSynced = (tagName: string, remoteName: string): boolean =>
+    nextSnapshot.tags.find((tag) => tag.name === tagName)?.remotes.some((remote) => remote.remoteName === remoteName && remote.state === 'synced') ?? false
+  const pushed = Array.from(targetsByRemote.entries()).flatMap(([remoteName, tagNames]) =>
+    tagNames.filter((tagName) => isSynced(tagName, remoteName)).map((tagName) => ({ tagName, remoteName }))
+  )
+  const failed = failedGroups
+    .map((group) => ({ ...group, tagNames: group.tagNames.filter((tagName) => !isSynced(tagName, group.remoteName)) }))
+    .filter((group) => group.tagNames.length > 0)
+
+  return { snapshot: nextSnapshot, pushed, failed }
 }
 
 async function switchRepositoryBranch(repositoryId: string, input: GitBranchSwitchInput): Promise<RepositoryRecord> {
@@ -6365,7 +6421,7 @@ async function applyRepositoryConflictResolution(repositoryId: string, filePath:
 
 async function listRepositoryCommits(
   repositoryId: string,
-  options: { startDate?: string; endDate?: string; branchName?: string } = {}
+  options: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number } = {}
 ): Promise<GitCommitRecord[]> {
   const repository = listRepositories().find((item) => item.id === repositoryId)
 
@@ -6386,12 +6442,20 @@ async function listRepositoryCommits(
   }
 
   const since = options.startDate ? `${options.startDate}T00:00:00.000Z` : undefined
-  const output = await runGitLog(repository.localPath, { sinceDate: since, branchName: options.branchName, allRefs: !options.branchName })
-  const endTime = options.endDate ? new Date(`${options.endDate}T23:59:59.999Z`).getTime() : Number.POSITIVE_INFINITY
+  const until = options.endDate ? `${options.endDate}T23:59:59.999Z` : undefined
+  const offset = Number.isFinite(options.offset) ? Math.max(0, Math.floor(options.offset as number)) : undefined
+  const limit = Number.isFinite(options.limit) ? Math.min(1000, Math.max(1, Math.floor(options.limit as number))) : undefined
+  const output = await runGitLog(repository.localPath, {
+    sinceDate: since,
+    untilDate: until,
+    branchName: options.branchName,
+    allRefs: !options.branchName,
+    offset,
+    limit
+  })
   const authorLookup = buildGitAuthorLookup(listProjectPeople(repository.projectId))
 
   const commits = parseGitLog(output)
-    .filter((commit) => new Date(commit.committedAt).getTime() <= endTime)
     .map((commit) =>
       mapCommitRecord({
         ...commit,
@@ -7043,13 +7107,13 @@ registerGitIpc('repository:detail', async (_event, repositoryId: string): Promis
 
 registerGitIpc(
   'repository:commits',
-  async (_event, repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }): Promise<GitCommitRecord[]> =>
+  async (_event, repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number }): Promise<GitCommitRecord[]> =>
     listRepositoryCommits(repositoryId, options)
 )
 
 registerGitIpc(
   'repository:commit-graph',
-  async (_event, repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string }): Promise<GitCommitRecord[]> =>
+  async (_event, repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number }): Promise<GitCommitRecord[]> =>
     listRepositoryCommits(repositoryId, options)
 )
 
@@ -7075,6 +7139,12 @@ registerGitIpc('repository:tag-sync-status', async (_event, repositoryId: string
 
 registerGitIpc('repository:tag:push', async (_event, repositoryId: string, input: GitTagPushInput): Promise<RepositoryTagSyncSnapshot> =>
   pushRepositoryTag(repositoryId, input)
+)
+
+registerGitIpc(
+  'repository:tags:push-missing',
+  async (_event, repositoryId: string, input?: { tagName?: string }): Promise<RepositoryTagPushBatchResult> =>
+    pushRepositoryMissingTags(repositoryId, input)
 )
 
 registerGitIpc('repository:remote:save', async (_event, input: RepositoryRemoteInput): Promise<RepositoryRecord> => saveRepositoryRemote(input))

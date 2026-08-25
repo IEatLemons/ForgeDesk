@@ -175,6 +175,7 @@ import type {
   RepositoryReleasePublishTask,
   RepositoryReleaseSuggestion,
   RepositoryReleaseTagRecommendation,
+  RepositoryTagPushBatchResult,
   RepositoryTagSyncSnapshot,
   RepositoryTagSyncTag,
   RsaPrivateKeyRecord,
@@ -287,9 +288,11 @@ import {
   createGraphRows,
   currentBranchRefColor,
   defaultGitLogRefreshPreferences,
+  gitLogMaxLoadedCommitBounds,
   gitLogRefreshIntervalBounds,
   gitLogRefreshPreferenceChangedEvent,
   gitLogRefreshPreferenceStorageKey,
+  gitLogScrollLoadBatchSize,
   getWorkspaceFileChangeStatus,
   getCommitAuthorDisplay,
   getCommitAuthorFilterValue,
@@ -297,7 +300,7 @@ import {
   getGitGraphColumnWidth,
   getGraphLaneColor,
   isWorkingTreeCommit,
-  getNextVisibleCommitCount,
+  mergeGitLogCommitWindow,
   normalizeGitLogRefreshPreferences,
   getRefColor,
   getRefCopyText,
@@ -1556,8 +1559,6 @@ const graphRowHeight = 46
 const graphRowMiddle = graphRowHeight / 2
 const graphLineOverflow = 2
 const graphCurveOffset = 12
-const commitGraphBatchSize = 60
-
 type RepositoryLogCommit = GitCommit & {
   isWorkingTreeCommit?: boolean
   worktreeFiles?: GitCommitFileChange[]
@@ -5420,7 +5421,7 @@ function SettingsPanel({
           type={gitLogRefreshPreferences.autoRefreshEnabled ? 'success' : 'info'}
           showIcon
           message={gitLogRefreshPreferences.autoRefreshEnabled ? `已开启，每 ${gitLogRefreshPreferences.intervalSeconds} 秒刷新` : '自动刷新未开启'}
-          description="自动刷新只重读本地仓库详情、提交图谱和工作区状态，不会自动 Fetch 远端。"
+          description="自动刷新只重读本地仓库详情、提交图谱和工作区状态，不会自动 Fetch 远端。Log 树仅保留当前窗口内的提交，滚动时会自动加载相邻历史。"
         />
         <div className="settings-management-form log-refresh-settings-form">
           <label className="log-refresh-setting-field">
@@ -5441,6 +5442,18 @@ function SettingsPanel({
               className="full-width-control"
               onChange={(value) => saveGitLogRefreshPreferencePatch({ intervalSeconds: Number(value ?? defaultGitLogRefreshPreferences.intervalSeconds) })}
             />
+          </label>
+          <label className="log-refresh-setting-field">
+            <span>最大加载提交数</span>
+            <InputNumber
+              min={gitLogMaxLoadedCommitBounds.minCommits}
+              max={gitLogMaxLoadedCommitBounds.maxCommits}
+              step={gitLogMaxLoadedCommitBounds.step}
+              value={gitLogRefreshPreferences.maxLoadedCommits}
+              className="full-width-control"
+              onChange={(value) => saveGitLogRefreshPreferencePatch({ maxLoadedCommits: Number(value ?? defaultGitLogRefreshPreferences.maxLoadedCommits) })}
+            />
+            <Typography.Text type="secondary">内存中最多保留这些提交和图谱行；默认加载最近 100 条，滚动会自动衔接上下历史。</Typography.Text>
           </label>
           <Button icon={<ReloadOutlined />} onClick={() => setGitLogRefreshPreferences(defaultGitLogRefreshPreferences)}>
             恢复默认
@@ -18748,7 +18761,9 @@ function RepositoryLogTree({
   const [selectedFile, setSelectedFile] = useState<GitCommitFileChange | null>(null)
   const [commitDiff, setCommitDiff] = useState<GitCommitDiff | null>(null)
   const [diffModalOpen, setDiffModalOpen] = useState(false)
-  const [visibleCommitCount, setVisibleCommitCount] = useState(commitGraphBatchSize)
+  const [commitWindowStart, setCommitWindowStart] = useState(0)
+  const [hasOlderCommits, setHasOlderCommits] = useState(false)
+  const [loadingMoreCommits, setLoadingMoreCommits] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [loadingFiles, setLoadingFiles] = useState(false)
   const [loadingDiff, setLoadingDiff] = useState(false)
@@ -18761,8 +18776,13 @@ function RepositoryLogTree({
   const [tagSyncDrawerOpen, setTagSyncDrawerOpen] = useState(false)
   const [tagSyncLoading, setTagSyncLoading] = useState(false)
   const [pushingTagKey, setPushingTagKey] = useState('')
+  const [pushingMissingTags, setPushingMissingTags] = useState(false)
+  const commitLoadPreviousRef = useRef<HTMLDivElement | null>(null)
   const commitLoadMoreRef = useRef<HTMLDivElement | null>(null)
   const repositoryRefreshInFlightRef = useRef(false)
+  const commitWindowRequestRef = useRef(0)
+  const commitWindowLoadingRef = useRef(false)
+  const maxLoadedCommitsRef = useRef(gitLogRefreshPreferences.maxLoadedCommits)
   const activeProjectId = (detailRepository ?? repository)?.projectId ?? ''
   const activeRepositoryForLog = detailRepository ?? repository
   const remoteNames = useMemo(() => activeRepositoryForLog?.remotes.map((remote) => remote.name).filter(Boolean) ?? [], [activeRepositoryForLog?.remotes])
@@ -18820,9 +18840,9 @@ function RepositoryLogTree({
   const activeBranchName = workspaceStatus?.branch || activeRepositoryForLog?.currentBranch || ''
   const graphRows = useMemo(() => createGraphRows(graphCommits), [graphCommits])
   const coloredGraphRows = useMemo(() => applyBranchColorsToGraphRows(graphRows, branchTags, activeBranchName, remoteNames), [activeBranchName, branchTags, graphRows, remoteNames])
-  const visibleGraphRows = useMemo(() => coloredGraphRows.slice(0, visibleCommitCount), [coloredGraphRows, visibleCommitCount])
+  const visibleGraphRows = coloredGraphRows
   const graphColumnWidth = useMemo(() => getGitGraphColumnWidth(visibleGraphRows), [visibleGraphRows])
-  const hasMoreCommits = visibleCommitCount < graphRows.length
+  const hasNewerCommits = commitWindowStart > 0
   const isEmptyRepositoryHistory = activeRepositoryForLog?.latestCommit.trim() === 'No commits yet' && commits.length === 0 && (workspaceStatus?.files.length ?? 0) === 0
   const authorOptions = useMemo(
     () =>
@@ -18832,9 +18852,11 @@ function RepositoryLogTree({
     [commits]
   )
 
-  useEffect(() => {
-    setVisibleCommitCount(commitGraphBatchSize)
-  }, [commitAuthor, commitBranch, commitRange.startDate, commitRange.endDate, commits])
+  function cancelPendingCommitWindow(): void {
+    commitWindowRequestRef.current += 1
+    commitWindowLoadingRef.current = false
+    setLoadingMoreCommits(false)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -18867,34 +18889,6 @@ function RepositoryLogTree({
   }, [activeProjectId, branchTagRefreshToken])
 
   useEffect(() => {
-    if (view !== 'log' || !hasMoreCommits) {
-      return
-    }
-
-    const node = commitLoadMoreRef.current
-
-    if (!node) {
-      return
-    }
-
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        setVisibleCommitCount((current) =>
-          getNextVisibleCommitCount({
-            current,
-            total: graphRows.length,
-            batchSize: commitGraphBatchSize
-          })
-        )
-      }
-    }, { rootMargin: '220px 0px' })
-
-    observer.observe(node)
-
-    return () => observer.disconnect()
-  }, [graphRows.length, hasMoreCommits, view])
-
-  useEffect(() => {
     let cancelled = false
 
     async function loadRepositoryDetail(): Promise<void> {
@@ -18907,6 +18901,7 @@ function RepositoryLogTree({
       }
 
       setDetailRepository(repository)
+      cancelPendingCommitWindow()
       setLoadingDetail(true)
       setCommitBranch('')
       setCommitAuthor('')
@@ -18917,7 +18912,8 @@ function RepositoryLogTree({
       setSelectedFile(null)
       setCommitDiff(null)
       setDiffModalOpen(false)
-      setVisibleCommitCount(commitGraphBatchSize)
+      setCommitWindowStart(0)
+      setHasOlderCommits(false)
       setGitError(null)
 
       try {
@@ -18935,7 +18931,7 @@ function RepositoryLogTree({
           }
 
           const [nextCommits, nextWorkspaceStatus, nextTagSyncSnapshot] = await Promise.all([
-            window.forgeDesk.getRepositoryCommitGraph(detail.id),
+            window.forgeDesk.getRepositoryCommitGraph(detail.id, { limit: gitLogRefreshPreferences.maxLoadedCommits }),
             window.forgeDesk.getRepositoryWorkspaceStatus(detail.id),
             window.forgeDesk.getRepositoryTagSyncStatus(detail.id).catch(() => null)
           ])
@@ -18947,6 +18943,8 @@ function RepositoryLogTree({
           updateRepository(detail)
           setDetailRepository(detail)
           setCommits(nextCommits)
+          setCommitWindowStart(0)
+          setHasOlderCommits(nextCommits.length === gitLogRefreshPreferences.maxLoadedCommits)
           setWorkspaceStatus(nextWorkspaceStatus)
           setTagSyncSnapshot(nextTagSyncSnapshot)
           onCommitCountChange?.(detail.id, nextCommits.length)
@@ -18974,12 +18972,14 @@ function RepositoryLogTree({
     targetRepository = detailRepository,
     nextRange = commitRange,
     nextBranch = commitBranch,
+    windowOffset = 0,
     showSuccess = false,
     context = '刷新 Log 树'
   }: {
     targetRepository?: Repository | null
     nextRange?: { startDate: string; endDate: string }
     nextBranch?: string
+    windowOffset?: number
     showSuccess?: boolean
     context?: string
   } = {}): Promise<void> {
@@ -18988,13 +18988,14 @@ function RepositoryLogTree({
     }
 
     repositoryRefreshInFlightRef.current = true
+    cancelPendingCommitWindow()
     setLoadingDetail(true)
     setSelectedCommit(null)
     setCommitFiles([])
     setSelectedFile(null)
     setCommitDiff(null)
     setDiffModalOpen(false)
-    setVisibleCommitCount(commitGraphBatchSize)
+    setHasOlderCommits(false)
 
     try {
       const detail = await window.forgeDesk.getRepositoryDetail(targetRepository.id)
@@ -19012,7 +19013,9 @@ function RepositoryLogTree({
       const [nextCommits, nextWorkspaceStatus, nextTagSyncSnapshot] = await Promise.all([
         window.forgeDesk.getRepositoryCommitGraph(detail.id, {
           ...nextRange,
-          branchName: nextBranch || undefined
+          branchName: nextBranch || undefined,
+          offset: windowOffset,
+          limit: gitLogRefreshPreferences.maxLoadedCommits
         }),
         window.forgeDesk.getRepositoryWorkspaceStatus(detail.id),
         window.forgeDesk.getRepositoryTagSyncStatus(detail.id).catch(() => null)
@@ -19021,6 +19024,8 @@ function RepositoryLogTree({
       updateRepository(detail)
       setDetailRepository(detail)
       setCommits(nextCommits)
+      setCommitWindowStart(windowOffset)
+      setHasOlderCommits(nextCommits.length === gitLogRefreshPreferences.maxLoadedCommits)
       setWorkspaceStatus(nextWorkspaceStatus)
       setTagSyncSnapshot(nextTagSyncSnapshot)
       onCommitCountChange?.(detail.id, nextCommits.length)
@@ -19043,23 +19048,28 @@ function RepositoryLogTree({
     }
 
     setLoadingDetail(true)
+    cancelPendingCommitWindow()
     setSelectedCommit(null)
     setCommitFiles([])
     setSelectedFile(null)
     setCommitDiff(null)
     setDiffModalOpen(false)
-    setVisibleCommitCount(commitGraphBatchSize)
+    setCommitWindowStart(0)
+    setHasOlderCommits(false)
 
     try {
       const [nextCommits, nextWorkspaceStatus] = await Promise.all([
         window.forgeDesk.getRepositoryCommitGraph(targetRepository.id, {
           ...nextRange,
-          branchName: nextBranch || undefined
+          branchName: nextBranch || undefined,
+          limit: gitLogRefreshPreferences.maxLoadedCommits
         }),
         window.forgeDesk.getRepositoryWorkspaceStatus(targetRepository.id)
       ])
 
       setCommits(nextCommits)
+      setCommitWindowStart(0)
+      setHasOlderCommits(nextCommits.length === gitLogRefreshPreferences.maxLoadedCommits)
       setWorkspaceStatus(nextWorkspaceStatus)
       onCommitCountChange?.(targetRepository.id, nextCommits.length)
       setGitError(null)
@@ -19069,6 +19079,146 @@ function RepositoryLogTree({
       setLoadingDetail(false)
     }
   }
+
+  useEffect(() => {
+    if (maxLoadedCommitsRef.current === gitLogRefreshPreferences.maxLoadedCommits) {
+      return
+    }
+
+    maxLoadedCommitsRef.current = gitLogRefreshPreferences.maxLoadedCommits
+    void refreshRepositorySnapshot({ context: '更新 Log 树加载上限' })
+  }, [gitLogRefreshPreferences.maxLoadedCommits])
+
+  function captureCommitScrollAnchor(): { id: string; top: number } | null {
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('.source-tree-table .ant-table-row[data-row-key]'))
+    const row = rows.find((item) => {
+      const rect = item.getBoundingClientRect()
+      return rect.bottom >= 0 && rect.top <= window.innerHeight
+    })
+
+    return row?.dataset.rowKey ? { id: row.dataset.rowKey, top: row.getBoundingClientRect().top } : null
+  }
+
+  function restoreCommitScrollAnchor(anchor: { id: string; top: number } | null): void {
+    if (!anchor) {
+      return
+    }
+
+    window.requestAnimationFrame(() => {
+      const row = Array.from(document.querySelectorAll<HTMLElement>('.source-tree-table .ant-table-row[data-row-key]')).find((item) => item.dataset.rowKey === anchor.id)
+
+      if (row) {
+        window.scrollBy({ top: row.getBoundingClientRect().top - anchor.top })
+      }
+    })
+  }
+
+  async function shiftCommitWindow(direction: 'older' | 'newer'): Promise<void> {
+    if (
+      !detailRepository ||
+      !detailRepository.available ||
+      !window.forgeDesk ||
+      commitWindowLoadingRef.current ||
+      (direction === 'older' && !hasOlderCommits) ||
+      (direction === 'newer' && !hasNewerCommits)
+    ) {
+      return
+    }
+
+    const currentCommits = commits
+    const maxLoadedCommits = gitLogRefreshPreferences.maxLoadedCommits
+    const pageSize = Math.min(gitLogScrollLoadBatchSize, maxLoadedCommits)
+    const pageSizeForRequest = direction === 'newer' ? Math.min(pageSize, commitWindowStart) : pageSize
+
+    if (pageSizeForRequest === 0) {
+      return
+    }
+
+    const requestOffset = direction === 'older'
+      ? commitWindowStart + currentCommits.length
+      : Math.max(0, commitWindowStart - pageSizeForRequest)
+    const anchor = captureCommitScrollAnchor()
+    const requestId = ++commitWindowRequestRef.current
+    commitWindowLoadingRef.current = true
+    setLoadingMoreCommits(true)
+
+    try {
+      const page = await window.forgeDesk.getRepositoryCommitGraph(detailRepository.id, {
+        ...commitRange,
+        branchName: commitBranch || undefined,
+        offset: requestOffset,
+        limit: pageSizeForRequest
+      })
+
+      if (requestId !== commitWindowRequestRef.current) {
+        return
+      }
+
+      const nextWindow = mergeGitLogCommitWindow({
+        current: currentCommits,
+        page,
+        windowStart: commitWindowStart,
+        maxLoadedCommits,
+        direction
+      })
+      const nextCommits = nextWindow.commits
+      const nextWindowStart = nextWindow.windowStart
+
+      setCommits(nextCommits)
+      setCommitWindowStart(nextWindowStart)
+      setHasOlderCommits(direction === 'older' ? page.length === pageSizeForRequest : hasOlderCommits)
+
+      if (selectedCommit && !nextCommits.some((commit) => commit.hash === selectedCommit.hash)) {
+        setSelectedCommit(null)
+        setCommitFiles([])
+        setSelectedFile(null)
+        setCommitDiff(null)
+        setDiffModalOpen(false)
+      }
+
+      restoreCommitScrollAnchor(anchor)
+      setGitError(null)
+    } catch (error) {
+      if (requestId === commitWindowRequestRef.current) {
+        setGitError(createGitErrorGuidance(error, direction === 'older' ? '加载更早提交' : '加载更新提交'))
+      }
+    } finally {
+      if (requestId === commitWindowRequestRef.current) {
+        commitWindowLoadingRef.current = false
+        setLoadingMoreCommits(false)
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (view !== 'log' || typeof IntersectionObserver === 'undefined') {
+      return
+    }
+
+    const observers: IntersectionObserver[] = []
+    const observe = (node: HTMLDivElement | null, onIntersect: () => void): void => {
+      if (!node) {
+        return
+      }
+
+      const observer = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          onIntersect()
+        }
+      }, { rootMargin: '280px 0px' })
+      observer.observe(node)
+      observers.push(observer)
+    }
+
+    if (hasNewerCommits) {
+      observe(commitLoadPreviousRef.current, () => void shiftCommitWindow('newer'))
+    }
+    if (hasOlderCommits) {
+      observe(commitLoadMoreRef.current, () => void shiftCommitWindow('older'))
+    }
+
+    return () => observers.forEach((observer) => observer.disconnect())
+  }, [commitWindowStart, commits, hasNewerCommits, hasOlderCommits, loadingMoreCommits, view])
 
   async function refreshTagSyncStatus(targetRepository = detailRepository, showError = true): Promise<void> {
     if (!targetRepository || !window.forgeDesk) return
@@ -19106,6 +19256,48 @@ function RepositoryLogTree({
     }
   }
 
+  function getMissingTagPushCount(snapshot = tagSyncSnapshot, tagName?: string): number {
+    return snapshot?.tags
+      .filter((tag) => !tagName || tag.name === tagName)
+      .flatMap((tag) => tag.remotes.filter((remote) => Boolean(tag.localCommit && remote.state === 'missing')))
+      .length ?? 0
+  }
+
+  async function pushMissingTags(tagName?: string): Promise<void> {
+    if (!detailRepository || !window.forgeDesk || pushingMissingTags) {
+      return
+    }
+
+    const targetCount = getMissingTagPushCount(tagSyncSnapshot, tagName)
+
+    if (targetCount === 0) {
+      message.info(tagName ? `${tagName} 没有可推送的远端` : '当前没有可同步的 Tag')
+      return
+    }
+
+    setPushingMissingTags(true)
+
+    try {
+      const result: RepositoryTagPushBatchResult = await window.forgeDesk.pushRepositoryMissingTags(
+        detailRepository.id,
+        tagName ? { tagName } : undefined
+      )
+      setTagSyncSnapshot(result.snapshot)
+
+      if (result.pushed.length > 0) {
+        message.success(`已同步 ${result.pushed.length} 个 Tag 推送目标`)
+      }
+      if (result.failed.length > 0) {
+        const failedTargets = result.failed.map((item) => `${item.remoteName}（${item.tagNames.join('、')}）`).join('；')
+        message.warning(`部分 Tag 未同步：${failedTargets}`)
+      }
+    } catch (error) {
+      message.error(`批量同步 Tag 失败：${getErrorMessage(error)}`)
+    } finally {
+      setPushingMissingTags(false)
+    }
+  }
+
   useEffect(() => {
     if (!gitLogRefreshPreferences.autoRefreshEnabled || !activeRepositoryForLog || !window.forgeDesk) {
       return
@@ -19113,7 +19305,11 @@ function RepositoryLogTree({
 
     const intervalId = window.setInterval(() => {
       if (!loadingDetail) {
-        void refreshRepositorySnapshot({ targetRepository: activeRepositoryForLog, context: '自动刷新 Log 树' })
+        void refreshRepositorySnapshot({
+          targetRepository: activeRepositoryForLog,
+          windowOffset: commitWindowStart,
+          context: '自动刷新 Log 树'
+        })
       }
     }, gitLogRefreshPreferences.intervalSeconds * 1000)
 
@@ -19123,6 +19319,7 @@ function RepositoryLogTree({
     commitBranch,
     commitRange.endDate,
     commitRange.startDate,
+    commitWindowStart,
     gitLogRefreshPreferences.autoRefreshEnabled,
     gitLogRefreshPreferences.intervalSeconds,
     loadingDetail
@@ -19149,7 +19346,6 @@ function RepositoryLogTree({
       setCommitAuthor('')
       setCommitRange({ startDate: '', endDate: '' })
       setDiffModalOpen(false)
-      setVisibleCommitCount(commitGraphBatchSize)
       await refreshCommits({ startDate: '', endDate: '' }, '', synced)
       await refreshTagSyncStatus(synced, false)
       const summary = await window.forgeDesk.analyzeProjectGit(synced.projectId)
@@ -19259,7 +19455,17 @@ function RepositoryLogTree({
       dataIndex: 'name',
       key: 'name',
       width: 180,
-      render: (name: string, tag) => <Space direction="vertical" size={2}><Typography.Text strong>{name}</Typography.Text><Typography.Text type="secondary">本地：{tag.localCommit ? tag.localCommit.slice(0, 10) : '无'}</Typography.Text></Space>
+      render: (name: string, tag) => {
+        const missingCount = getMissingTagPushCount({ repositoryId: '', checkedAt: '', tags: [tag] })
+
+        return (
+          <Space direction="vertical" size={2}>
+            <Typography.Text strong>{name}</Typography.Text>
+            <Typography.Text type="secondary">本地：{tag.localCommit ? tag.localCommit.slice(0, 10) : '无'}</Typography.Text>
+            {missingCount > 1 && <Button size="small" type="link" loading={pushingMissingTags} onClick={() => void pushMissingTags(tag.name)}>推送全部可用远端（{missingCount}）</Button>}
+          </Space>
+        )
+      }
     },
     {
       title: '全部远端',
@@ -19360,6 +19566,7 @@ function RepositoryLogTree({
               />
             </Space>
           </div>
+          {hasNewerCommits && <div ref={commitLoadPreviousRef} className="commit-load-more commit-load-previous"><Typography.Text type="secondary">{loadingMoreCommits ? '正在加载较新提交…' : '继续向上滚动以加载较新提交'}</Typography.Text></div>}
           <Table
             rowKey="id"
             loading={loadingDetail}
@@ -19449,13 +19656,10 @@ function RepositoryLogTree({
           />
           {graphRows.length > 0 && (
             <div ref={commitLoadMoreRef} className="commit-load-more">
-              {hasMoreCommits ? (
-                <Typography.Text type="secondary">
-                  已显示 {formatNumber(visibleGraphRows.length)} / {formatNumber(graphRows.length)}
-                </Typography.Text>
-              ) : (
-                <Typography.Text type="secondary">已显示全部 {formatNumber(graphRows.length)} 条提交</Typography.Text>
-              )}
+              <Typography.Text type="secondary">
+                已加载第 {formatNumber(commitWindowStart + 1)}–{formatNumber(commitWindowStart + commits.length)} 条 · 窗口上限 {formatNumber(gitLogRefreshPreferences.maxLoadedCommits)} 条
+                {loadingMoreCommits ? ' · 正在加载…' : hasOlderCommits ? ' · 继续向下滚动加载较早提交' : ' · 已到最早提交'}
+              </Typography.Text>
             </div>
           )}
         </div>
@@ -19528,13 +19732,27 @@ function RepositoryLogTree({
       </Drawer>
       <Drawer
         title={<Space><span>Tag 同步</span>{tagSyncSnapshot && <Tag>{new Date(tagSyncSnapshot.checkedAt).toLocaleString()}</Tag>}</Space>}
-        extra={<Button size="small" icon={<ReloadOutlined />} loading={tagSyncLoading} onClick={() => void refreshTagSyncStatus()}>刷新状态</Button>}
+        extra={
+          <Space size={8}>
+            <Button
+              size="small"
+              type="primary"
+              icon={<UploadOutlined />}
+              loading={pushingMissingTags}
+              disabled={getMissingTagPushCount() === 0}
+              onClick={() => void pushMissingTags()}
+            >
+              一键同步可推送（{getMissingTagPushCount()}）
+            </Button>
+            <Button size="small" icon={<ReloadOutlined />} loading={tagSyncLoading} disabled={pushingMissingTags} onClick={() => void refreshTagSyncStatus()}>刷新状态</Button>
+          </Space>
+        }
         open={tagSyncDrawerOpen}
         width={720}
         onClose={() => setTagSyncDrawerOpen(false)}
       >
         <Typography.Paragraph type="secondary">
-          对比本地 Tag 与全部远端；只有目标远端缺失的本地 Tag 可以推送。同名 Tag 指向不同提交时仅提示，不会覆盖远端。
+          对比本地 Tag 与全部远端；“一键同步可推送”会把所有本地存在、目标远端缺失的 Tag 按远端批量推送。同名 Tag 指向不同提交时仅提示，不会覆盖远端。
         </Typography.Paragraph>
         <Table
           rowKey="name"
