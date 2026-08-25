@@ -60,18 +60,25 @@ module.exports = async function afterPack(context) {
 
   const appName = `${context.packager.appInfo.productFilename}.app`
   const resourcesDir = join(context.appOutDir, appName, 'Contents', 'Resources')
-  const archName = context.arch === 3 || context.appOutDir.includes('arm64') ? 'arm64' : 'x64'
+  const isUniversalBuild = context.appOutDir.includes('universal')
+  const archNames = isUniversalBuild
+    ? ['arm64', 'x64']
+    : [context.arch === 3 || context.appOutDir.includes('arm64') ? 'arm64' : 'x64']
   const nodePtyRoots = [
     join(resourcesDir, 'app.asar.unpacked', 'node_modules', 'node-pty'),
     join(resourcesDir, 'app', 'node_modules', 'node-pty')
   ]
 
   for (const root of nodePtyRoots) {
-    pruneUnusedNodePtyPrebuilds(root, archName)
-    makeExecutable(join(root, 'prebuilds', `darwin-${archName}`, 'spawn-helper'))
+    if (!isUniversalBuild) {
+      pruneUnusedNodePtyPrebuilds(root, archNames[0])
+    }
+    for (const archName of archNames) {
+      makeExecutable(join(root, 'prebuilds', `darwin-${archName}`, 'spawn-helper'))
+      signIfExists(join(root, 'prebuilds', `darwin-${archName}`, 'pty.node'))
+      signIfExists(join(root, 'prebuilds', `darwin-${archName}`, 'spawn-helper'))
+    }
     makeExecutable(join(root, 'build', 'Release', 'spawn-helper'))
-    signIfExists(join(root, 'prebuilds', `darwin-${archName}`, 'pty.node'))
-    signIfExists(join(root, 'prebuilds', `darwin-${archName}`, 'spawn-helper'))
     signIfExists(join(root, 'build', 'Release', 'pty.node'))
     signIfExists(join(root, 'build', 'Release', 'spawn-helper'))
   }

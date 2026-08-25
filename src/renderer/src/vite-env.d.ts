@@ -607,7 +607,7 @@ type CommitMessageSuggestion = {
   message: string
 }
 
-type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'package:android' | 'build:android' | 'build' | ''
+type ReleaseScriptName = 'publish:github' | 'publish:mac' | 'package:mac' | 'package:android' | 'build:android' | 'build' | ''
 type ReleasePublishProvider = 'github' | 'codemagic' | 'firebase' | 'nextjs-pm2'
 type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
 

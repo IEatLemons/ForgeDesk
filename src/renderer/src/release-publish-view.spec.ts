@@ -8,14 +8,14 @@ import {
 } from './release-publish-view.js'
 
 describe('release publish view model', () => {
-  it('enables publishing only when checks are clean and a token is present', () => {
+  it('enables publishing when GitHub Actions release checks are clean', () => {
     const view = createReleasePublishViewModel({
       plan: {
         repositoryName: 'ForgeDesk',
         currentVersion: '1.0.2',
         suggestedVersion: '1.0.3',
         suggestedTagName: 'v1.0.3',
-        selectedScript: 'publish:mac',
+        selectedScript: 'publish:github',
         needsVersionBump: true,
         canPublish: true,
         issues: [],
@@ -23,7 +23,7 @@ describe('release publish view model', () => {
         availableActions: [],
         documentationSources: ['README.md']
       },
-      githubToken: 'github_pat_123'
+      githubToken: ''
     })
 
     assert.equal(view.primaryLabel, '发布 v1.0.3')
@@ -55,14 +55,14 @@ describe('release publish view model', () => {
     assert.equal(view.issueCount, 1)
   })
 
-  it('requires a GitHub token for GitHub release publishing', () => {
+  it('does not require a personal token when GitHub Actions publishes the release', () => {
     const view = createReleasePublishViewModel({
       plan: {
         repositoryName: 'ForgeDesk',
         currentVersion: '1.0.2',
         suggestedVersion: '1.0.3',
         suggestedTagName: 'v1.0.3',
-        selectedScript: 'publish:mac',
+        selectedScript: 'publish:github',
         needsVersionBump: true,
         canPublish: true,
         issues: [],
@@ -73,8 +73,8 @@ describe('release publish view model', () => {
       githubToken: ''
     })
 
-    assert.equal(view.primaryLabel, '选择 GitHub Token')
-    assert.equal(view.primaryDisabled, true)
+    assert.equal(view.primaryLabel, '发布 v1.0.3')
+    assert.equal(view.primaryDisabled, false)
   })
 
   it('shows GitHub Releases as the first integrated release platform', () => {

@@ -10430,6 +10430,10 @@ function createDefaultNextjsPm2AppName(repositoryName: string): string {
 }
 
 function getReleaseScriptLabel(scriptName: string): string {
+  if (scriptName === 'publish:github') {
+    return '触发 GitHub Actions 三平台发布'
+  }
+
   if (scriptName === 'publish:mac') {
     return '发布到 GitHub Releases'
   }
@@ -11106,7 +11110,9 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
                 ? `将构建 ${firebaseSettings?.artifactPath || '项目产物'} 并分发到 Firebase App Distribution：${firebaseSettings?.appId || '未配置 App ID'}。`
               : releaseProvider === 'nextjs-pm2'
                 ? `将本地构建并打包 Next.js，然后部署到 ${nextjsPm2SshHost || '未填写 SSH 目标'}:${nextjsPm2RemotePath || '未填写部署目录'}，PM2 应用：${nextjsPm2AppName || '未命名'}。`
-                : `将按当前仓库 package.json 中的 ${preparation?.plan.selectedScript || '发布'} 脚本执行。`}
+                : preparation?.plan.selectedScript === 'publish:github'
+                  ? '将推送版本 Tag；GitHub Actions 会构建并验证 macOS、Windows、Linux 安装包，全部成功后才公开 Release。'
+                  : `将按当前仓库 package.json 中的 ${preparation?.plan.selectedScript || '发布'} 脚本执行。`}
           </Typography.Text>
           {targetVersion !== preparation?.plan.currentVersion ? (
             <Typography.Text type="warning">
@@ -11272,12 +11278,20 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
           <Col xs={24} md={12}>
             <Input value={tagName} addonBefore="Tag" placeholder="v1.0.3" onChange={(event) => setTagName(event.target.value)} />
           </Col>
-          <Col xs={24}>
-            <Input value={releaseTitle} addonBefore="标题" placeholder="ForgeDesk v1.0.3" onChange={(event) => setReleaseTitle(event.target.value)} />
-          </Col>
-          <Col xs={24}>
-            <Input.TextArea value={releaseNotes} rows={5} placeholder="发布说明" onChange={(event) => setReleaseNotes(event.target.value)} />
-          </Col>
+          {releaseProvider === 'github' && plan?.selectedScript === 'publish:github' ? (
+            <Col xs={24}>
+              <Alert type="info" showIcon message="发布说明由 GitHub 自动生成" description="版本 Tag 推送后，GitHub Actions 会在所有平台构建成功后生成正式 Release 与发布说明。" />
+            </Col>
+          ) : (
+            <>
+              <Col xs={24}>
+                <Input value={releaseTitle} addonBefore="标题" placeholder="ForgeDesk v1.0.3" onChange={(event) => setReleaseTitle(event.target.value)} />
+              </Col>
+              <Col xs={24}>
+                <Input.TextArea value={releaseNotes} rows={5} placeholder="发布说明" onChange={(event) => setReleaseNotes(event.target.value)} />
+              </Col>
+            </>
+          )}
           <Col xs={24}>
             <Input value={releaseCommitMessage} addonBefore="版本提交" placeholder="chore: release v1.0.3" onChange={(event) => setReleaseCommitMessage(event.target.value)} />
           </Col>
@@ -11493,7 +11507,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
               <Typography.Text type="secondary">当前步骤：{activePublishTaskView.phase}</Typography.Text>
               {activePublishTask.externalBuildUrl ? (
                 <Button size="small" icon={<LinkOutlined />} href={activePublishTask.externalBuildUrl} target="_blank" rel="noreferrer">
-                  打开 Codemagic Build
+                  {activePublishTask.provider === 'github' ? '打开 GitHub Actions' : '打开 Codemagic Build'}
                 </Button>
               ) : null}
               <Alert type={activePublishTask.status === 'failed' ? 'error' : activePublishTask.status === 'cancelled' ? 'warning' : 'info'} showIcon message={activePublishTaskView.hint} />
@@ -12766,6 +12780,10 @@ function getReleaseTaskPlatformLabel(provider: ReleasePublishProvider): string {
 }
 
 function getReleaseTaskDetailLabel(provider: ReleasePublishProvider): string {
+  if (provider === 'github') {
+    return 'GitHub Workflow'
+  }
+
   if (provider === 'codemagic') {
     return 'Workflow'
   }
@@ -12782,6 +12800,10 @@ function getReleaseTaskDetailLabel(provider: ReleasePublishProvider): string {
 }
 
 function getReleaseTaskDetailValue(task: RepositoryReleasePublishTask): string {
+  if (task.provider === 'github') {
+    return task.externalWorkflow || task.selectedScript || task.plan?.selectedScript || '-'
+  }
+
   if (task.provider === 'codemagic' || task.provider === 'firebase' || task.provider === 'nextjs-pm2') {
     return task.externalWorkflow || '-'
   }
@@ -12984,7 +13006,7 @@ function ReleasePublishTaskDock(): JSX.Element | null {
                 <Progress percent={activeTaskView.progressPercent} status={activeTask.status === 'failed' || activeTask.status === 'cancelled' ? 'exception' : activeTask.status === 'succeeded' ? 'success' : 'active'} />
                 {activeTask.externalBuildUrl ? (
                   <Button size="small" icon={<LinkOutlined />} href={activeTask.externalBuildUrl} target="_blank" rel="noreferrer">
-                    打开 Codemagic Build
+                    {activeTask.provider === 'github' ? '打开 GitHub Actions' : '打开 Codemagic Build'}
                   </Button>
                 ) : null}
                 {activeTask.artifacts?.length ? (

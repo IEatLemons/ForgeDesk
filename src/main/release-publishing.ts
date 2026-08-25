@@ -1,5 +1,5 @@
 export type ReleaseVersionBump = 'patch' | 'minor' | 'major'
-export type ReleaseScriptName = 'publish:mac' | 'package:mac' | 'package:android' | 'build:android' | 'build' | ''
+export type ReleaseScriptName = 'publish:github' | 'publish:mac' | 'package:mac' | 'package:android' | 'build:android' | 'build' | ''
 export type ReleasePublishProvider = 'github' | 'codemagic' | 'firebase' | 'nextjs-pm2'
 export type ReleasePublishActionKey = 'commit-workspace-changes' | 'replace-local-tag'
 
@@ -139,6 +139,10 @@ export function createReleaseVersionRecommendation(input: ReleaseVersionRecommen
 }
 
 export function selectReleaseScript(scripts: PackageScripts): ReleaseScriptName {
+  if (scripts['publish:github']) {
+    return 'publish:github'
+  }
+
   if (scripts['publish:mac']) {
     return 'publish:mac'
   }
@@ -209,9 +213,11 @@ export function createReleasePlan(input: ReleasePlanInput): ReleasePlan {
   }
 
   if (!selectedScript && provider === 'github') {
-    issues.push('没有找到可用于发布的脚本，请在 package.json scripts 中配置 publish:mac 或 package:mac')
-  } else if (selectedScript && selectedScript !== 'publish:mac' && provider === 'github') {
-    warnings.push(`将使用 ${selectedScript} 脚本打包；如果要上传 GitHub Releases，建议配置 publish:mac`)
+    issues.push('没有找到可用于发布的脚本，请在 package.json scripts 中配置 publish:github')
+  } else if (selectedScript === 'publish:github' && provider === 'github') {
+    warnings.push('将推送版本 Tag，由 GitHub Actions 构建 macOS、Windows 和 Linux 安装包并生成发布说明')
+  } else if (selectedScript && provider === 'github') {
+    warnings.push(`将使用 ${selectedScript} 脚本执行本地发布；建议改用 publish:github 触发 GitHub Actions 三平台构建`)
   } else if (provider === 'codemagic') {
     warnings.push('将触发 Codemagic 远程构建，不会执行本地发布脚本')
   } else if (provider === 'firebase') {
@@ -245,9 +251,13 @@ export function createReleasePlan(input: ReleasePlanInput): ReleasePlan {
       })
     }
 
-    if (normalizedRemoteTagCommit && normalizedRemoteTagCommit !== normalizedHead) {
-      needsVersionBump = true
-      issues.push(`远端 ${suggestedTagName} 已存在，但不是当前提交。请确认版本号后再发布。`)
+    if (normalizedRemoteTagCommit) {
+      if (normalizedRemoteTagCommit !== normalizedHead) {
+        needsVersionBump = true
+        issues.push(`远端 ${suggestedTagName} 已存在，但不是当前提交。请确认版本号后再发布。`)
+      } else if (provider === 'github' && selectedScript === 'publish:github') {
+        issues.push(`远端 ${suggestedTagName} 已存在；请在 GitHub Actions 中重跑该标签的发布任务，或提高版本号后重新发布。`)
+      }
     }
   }
 

@@ -42,11 +42,27 @@ describe('release publishing planning', () => {
     assert.equal(recommendation.suggestedTagName, 'v1.2.1')
   })
 
-  it('prefers the repository mac publish script over generic packaging scripts', () => {
+  it('prefers the GitHub Actions trigger over local packaging scripts', () => {
+    assert.equal(selectReleaseScript({ build: 'vite build', 'package:mac': 'electron-builder --mac', 'publish:mac': 'node scripts/publish-mac.mjs', 'publish:github': 'node scripts/trigger-github-release.mjs' }), 'publish:github')
     assert.equal(selectReleaseScript({ build: 'vite build', 'package:mac': 'electron-builder --mac', 'publish:mac': 'node scripts/publish-mac.mjs' }), 'publish:mac')
     assert.equal(selectReleaseScript({ build: 'vite build', 'package:mac': 'electron-builder --mac' }), 'package:mac')
     assert.equal(selectReleaseScript({ build: 'vite build' }), 'build')
     assert.equal(selectReleaseScript({ test: 'node --test' }), '')
+  })
+
+  it('requires a new GitHub tag instead of pretending an existing tag retriggers Actions', () => {
+    const plan = createReleasePlan({
+      repositoryName: 'ForgeDesk',
+      currentVersion: '1.1.1',
+      headCommit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      statusFileCount: 0,
+      localTagCommit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      remoteTagCommit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      scripts: { 'publish:github': 'node scripts/trigger-github-release.mjs' }
+    })
+
+    assert.equal(plan.canPublish, false)
+    assert.match(plan.issues.join('\n'), /GitHub Actions/)
   })
 
   it('suggests the next patch version when the current remote tag belongs to another commit', () => {

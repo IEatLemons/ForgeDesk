@@ -43,16 +43,33 @@ mkdirSync(dirname(outputPlistPath), { recursive: true })
 mkdirSync(moduleCachePath, { recursive: true })
 cpSync(plistPath, outputPlistPath)
 
-run('swiftc', [
-  sourcePath,
-  '-O',
-  '-framework',
-  'AppKit',
-  '-framework',
-  'ApplicationServices',
-  '-o',
-  executablePath
-])
+if (process.env.FORGEDESK_MAC_UNIVERSAL === '1') {
+  const arm64Path = `${executablePath}.arm64`
+  const x64Path = `${executablePath}.x64`
+
+  for (const [triple, outputPath] of [['arm64-apple-macos11.0', arm64Path], ['x86_64-apple-macos11.0', x64Path]]) {
+    run('swiftc', [
+      sourcePath,
+      '-O',
+      '-target', triple,
+      '-framework', 'AppKit',
+      '-framework', 'ApplicationServices',
+      '-o', outputPath
+    ])
+  }
+
+  run('lipo', ['-create', arm64Path, x64Path, '-output', executablePath])
+  rmSync(arm64Path, { force: true })
+  rmSync(x64Path, { force: true })
+} else {
+  run('swiftc', [
+    sourcePath,
+    '-O',
+    '-framework', 'AppKit',
+    '-framework', 'ApplicationServices',
+    '-o', executablePath
+  ])
+}
 
 chmodSync(executablePath, 0o755)
 console.log(`Built ForgeDesk menu bar helper at ${appPath}`)

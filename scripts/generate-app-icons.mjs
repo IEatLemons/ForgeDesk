@@ -267,6 +267,31 @@ function writeIcns(path, entries) {
   writeFileSync(path, Buffer.concat([header, ...chunks], totalLength))
 }
 
+function writeIco(path, entries) {
+  const header = Buffer.alloc(6 + entries.length * 16)
+  header.writeUInt16LE(0, 0)
+  header.writeUInt16LE(1, 2)
+  header.writeUInt16LE(entries.length, 4)
+
+  let offset = header.length
+  const payload = []
+  entries.forEach(([size, data], index) => {
+    const entryOffset = 6 + index * 16
+    header[entryOffset] = size === 256 ? 0 : size
+    header[entryOffset + 1] = size === 256 ? 0 : size
+    header[entryOffset + 2] = 0
+    header[entryOffset + 3] = 0
+    header.writeUInt16LE(1, entryOffset + 4)
+    header.writeUInt16LE(32, entryOffset + 6)
+    header.writeUInt32LE(data.length, entryOffset + 8)
+    header.writeUInt32LE(offset, entryOffset + 12)
+    payload.push(data)
+    offset += data.length
+  })
+
+  writeFileSync(path, Buffer.concat([header, ...payload]))
+}
+
 const svg = createSvg()
 const iconsetRoot = mkdtempSync(join(tmpdir(), 'forgedesk-icons-'))
 const iconsetDir = join(iconsetRoot, 'forgedesk.iconset')
@@ -299,6 +324,12 @@ try {
     ['ic14', iconPngs.get('icon_256x256@2x.png')],
     ['ic09', iconPngs.get('icon_512x512.png')],
     ['ic10', iconPngs.get('icon_512x512@2x.png')]
+  ])
+  writeIco(join('resources', 'forgedesk.ico'), [
+    [16, iconPngs.get('icon_16x16.png')],
+    [32, iconPngs.get('icon_32x32.png')],
+    [48, renderIcon(48)],
+    [256, iconPngs.get('icon_256x256.png')]
   ])
 } finally {
   if (keepIconset) {

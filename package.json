@@ -16,7 +16,8 @@
     "build": "node scripts/build-menu-bar-helper.mjs && node scripts/rebuild-native.mjs && tsc --noEmit && electron-vite build",
     "package:android": "node scripts/build-android.mjs",
     "package:mac": "node scripts/build-menu-bar-helper.mjs && node scripts/rebuild-native.mjs && tsc --noEmit && electron-vite build && electron-builder --mac --publish never",
-    "publish:mac": "node scripts/publish-mac.mjs",
+    "package:desktop": "node scripts/package-desktop.mjs",
+    "publish:github": "node scripts/trigger-github-release.mjs",
     "package:mac:legacy": "node scripts/package-mac.mjs",
     "preview": "node scripts/build-menu-bar-helper.mjs && node scripts/rebuild-native.mjs && electron-vite preview",
     "test": "node scripts/run-tests.mjs",
@@ -84,17 +85,13 @@
       {
         "from": "resources/forgedesk.png",
         "to": "forgedesk.png"
-      },
-      {
-        "from": "resources/MenuBarHelper",
-        "to": "MenuBarHelper"
       }
     ],
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
       "node_modules/node-pty/**/*"
     ],
-    "npmRebuild": false,
+    "npmRebuild": true,
     "afterSign": "scripts/after-sign.cjs",
     "mac": {
       "category": "public.app-category.developer-tools",
@@ -103,13 +100,41 @@
         {
           "target": "dmg",
           "arch": [
-            "arm64"
+            "universal"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "arm64"
+            "universal"
+          ]
+        }
+      ],
+      "extraResources": [
+        {
+          "from": "resources/MenuBarHelper",
+          "to": "MenuBarHelper"
+        }
+      ]
+    },
+    "win": {
+      "icon": "resources/forgedesk.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "icon": "resources/forgedesk.png",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
           ]
         }
       ]
