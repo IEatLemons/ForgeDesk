@@ -1,4 +1,12 @@
-import type { Project, Repository } from './data'
+import type { Project, ProjectGroup, Repository } from './data'
+
+export type ProjectListGroupFilter = 'all' | 'favorites' | 'ungrouped' | `group:${string}`
+
+export type ProjectListGroupFilterOption = {
+  key: ProjectListGroupFilter
+  label: string
+  projectCount: number
+}
 
 type ProjectRepositoryScopeSource = Pick<Repository, 'id' | 'projectId' | 'localPath' | 'parentRepositoryId' | 'relativePath'>
 
@@ -34,6 +42,47 @@ export function sortProjectsForDisplay(projects: Project[]): Project[] {
     const createdAtDifference = right.createdAt.localeCompare(left.createdAt)
     return createdAtDifference !== 0 ? createdAtDifference : right.id.localeCompare(left.id)
   })
+}
+
+export function sortProjectsByGroupForDisplay(projects: Project[], groups: ProjectGroup[]): Project[] {
+  const groupRanks = new Map(groups.map((group, index) => [group.id, index]))
+
+  return sortProjectsForDisplay(projects).sort(
+    (left, right) => (groupRanks.get(left.groupId ?? '') ?? Number.MAX_SAFE_INTEGER) - (groupRanks.get(right.groupId ?? '') ?? Number.MAX_SAFE_INTEGER)
+  )
+}
+
+export function createProjectListGroupFilterOptions(
+  projects: Project[],
+  groups: ProjectGroup[]
+): ProjectListGroupFilterOption[] {
+  return [
+    { key: 'all', label: '全部', projectCount: projects.length },
+    { key: 'favorites', label: '已收藏', projectCount: projects.filter((project) => project.isFavorite).length },
+    { key: 'ungrouped', label: '未分组', projectCount: projects.filter((project) => !project.groupId).length },
+    ...groups.map((group) => ({
+      key: `group:${group.id}` as ProjectListGroupFilter,
+      label: group.name,
+      projectCount: projects.filter((project) => project.groupId === group.id).length
+    }))
+  ]
+}
+
+export function filterProjectsByGroup(projects: Project[], filter: ProjectListGroupFilter): Project[] {
+  if (filter === 'all') {
+    return projects
+  }
+
+  if (filter === 'favorites') {
+    return projects.filter((project) => project.isFavorite)
+  }
+
+  if (filter === 'ungrouped') {
+    return projects.filter((project) => !project.groupId)
+  }
+
+  const groupId = filter.slice('group:'.length)
+  return projects.filter((project) => project.groupId === groupId)
 }
 
 export function getProjectRepositoriesForDisplay<T extends ProjectRepositoryScopeSource>(

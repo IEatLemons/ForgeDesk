@@ -390,7 +390,13 @@ import {
 } from './service-monitor-view'
 import { createEmptySshConfigEntry, parseSshConfigEntries, serializeSshConfigEntries, type SshConfigEntry } from './ssh-config-model'
 import { useForgeDeskStore } from './store'
-import { getProjectRepositoriesForDisplay, sortProjectsForDisplay } from './project-list-view'
+import {
+  createProjectListGroupFilterOptions,
+  filterProjectsByGroup,
+  getProjectRepositoriesForDisplay,
+  sortProjectsByGroupForDisplay,
+  type ProjectListGroupFilter
+} from './project-list-view'
 import { TerminalWorkspace } from './terminal-panel'
 import type { TerminalOpenRequest } from './terminal-panel-events'
 import { TerminalRemoteShortcuts } from './terminal-remote-shortcuts'
@@ -15431,11 +15437,25 @@ function ProjectOverview({
   const [projectGroupModalOpen, setProjectGroupModalOpen] = useState(false)
   const [editingProjectGroupId, setEditingProjectGroupId] = useState<string | null>(null)
   const [projectGroupName, setProjectGroupName] = useState('')
-  const sortedProjects = useMemo(() => {
-    const groupRanks = new Map(projectGroups.map((group, index) => [group.id, index]))
-    return sortProjectsForDisplay(projects).sort((left, right) => (groupRanks.get(left.groupId ?? '') ?? 9999) - (groupRanks.get(right.groupId ?? '') ?? 9999))
-  }, [projectGroups, projects])
+  const [projectListGroupFilter, setProjectListGroupFilter] = useState<ProjectListGroupFilter>('all')
+  const sortedProjects = useMemo(
+    () => sortProjectsByGroupForDisplay(projects, projectGroups),
+    [projectGroups, projects]
+  )
   const favoriteProjectCount = projects.filter((project) => project.isFavorite).length
+  const projectListGroupOptions = useMemo(
+    () => createProjectListGroupFilterOptions(projects, projectGroups),
+    [projectGroups, projects]
+  )
+  const activeProjectListGroupFilter = projectListGroupOptions.some((option) => option.key === projectListGroupFilter)
+    ? projectListGroupFilter
+    : 'all'
+  const activeProjectListGroupOption = projectListGroupOptions.find((option) => option.key === activeProjectListGroupFilter)
+    ?? projectListGroupOptions[0]
+  const visibleProjects = useMemo(
+    () => filterProjectsByGroup(sortedProjects, activeProjectListGroupFilter),
+    [activeProjectListGroupFilter, sortedProjects]
+  )
   const selectedProject = projects.find((project) => project.id === detailProjectId) ?? null
   const selectedProjectRows = projects.filter((project) => selectedProjectRowIds.includes(project.id))
   const listCommitProject = projects.find((project) => project.id === listCommitProjectId) ?? null
@@ -15587,6 +15607,18 @@ function ProjectOverview({
       }
     })
   }, [])
+
+  useEffect(() => {
+    if (activeProjectListGroupFilter !== projectListGroupFilter) {
+      setProjectListGroupFilter('all')
+      setSelectedProjectRowIds([])
+    }
+  }, [activeProjectListGroupFilter, projectListGroupFilter])
+
+  function selectProjectListGroupFilter(filter: ProjectListGroupFilter): void {
+    setProjectListGroupFilter(filter)
+    setSelectedProjectRowIds([])
+  }
 
   async function persistProjectGitTaskLog(log: ProjectGitTaskLog): Promise<void> {
     if (!window.forgeDesk) {
@@ -16107,6 +16139,7 @@ function ProjectOverview({
       await window.forgeDesk.setProjectGroup({ groupId, projectId })
       await loadWorkspace()
       setProjectGroups(await window.forgeDesk.listProjectGroups())
+      setSelectedProjectRowIds([])
     } catch (error) {
       message.error(getErrorMessage(error, '更新项目分组失败'))
     }
@@ -16719,16 +16752,17 @@ function ProjectOverview({
           <div className="project-list-panel">
             <div className="project-list-heading">
               <div>
-                <Typography.Title level={4}>项目列表</Typography.Title>
+                <Typography.Title level={4}>
+                  项目列表 · {activeProjectListGroupOption?.label ?? '全部'}
+                </Typography.Title>
                 <Space size={8} wrap>
                   <Typography.Text type="secondary">
-                    {isSimpleMode ? '点击项目直接进入工作台，更多操作收在项目菜单中。' : '选中多个项目后，可以并发 Fetch 或推送。'}
+                    {activeProjectListGroupOption?.projectCount ?? 0} 个项目 · {isSimpleMode ? '点击项目直接进入工作台，更多操作收在项目菜单中。' : '选中多个项目后，可以并发 Fetch 或推送。'}
                   </Typography.Text>
                   {favoriteProjectCount > 0 ? <Tag color="gold">已收藏 {favoriteProjectCount}</Tag> : null}
                 </Space>
               </div>
               <Space wrap>
-                <Button icon={<FolderOpenOutlined />} onClick={() => openProjectGroupEditor()}>管理分组</Button>
                 {!isSimpleMode ? (
                   <>
                     <Button
@@ -16752,33 +16786,71 @@ function ProjectOverview({
                 <Button size="small" icon={<PlusOutlined />} onClick={onCreateProject} />
               </Space>
             </div>
-            <Table<Project>
-              className={`project-list-table${isSimpleMode ? ' simple-project-list-table' : ''}`}
-              rowKey="id"
-              size="middle"
-              tableLayout="fixed"
-              columns={isSimpleMode ? simpleProjectListColumns : projectListColumns}
-              dataSource={sortedProjects}
-              pagination={false}
-              rowSelection={
-                isSimpleMode
-                  ? undefined
-                  : {
-                      selectedRowKeys: selectedProjectRowIds,
-                      onChange: (keys) => setSelectedProjectRowIds(keys.map(String))
-                    }
-              }
-              onRow={(project) => ({
-                className: 'project-list-clickable-row',
-                onClick: (event) => {
-                  if (isProjectListInteractiveTarget(event.target)) {
-                    return
-                  }
-
-                  openProjectDetail(project)
+            <div className="project-group-filter" aria-label="项目分组筛选">
+              {projectListGroupOptions.map((option) => (
+                <Button
+                  key={option.key}
+                  size="small"
+                  type={option.key === activeProjectListGroupFilter ? 'primary' : 'default'}
+                  className="project-group-filter-option"
+                  onClick={() => selectProjectListGroupFilter(option.key)}
+                >
+                  {option.label} <span>{option.projectCount}</span>
+                </Button>
+              ))}
+              <Button
+                size="small"
+                icon={<FolderOpenOutlined />}
+                className="project-group-filter-manage"
+                onClick={() => openProjectGroupEditor()}
+              >
+                管理分组
+              </Button>
+            </div>
+            {visibleProjects.length > 0 ? (
+              <Table<Project>
+                className={`project-list-table${isSimpleMode ? ' simple-project-list-table' : ''}`}
+                rowKey="id"
+                size="middle"
+                tableLayout="fixed"
+                columns={isSimpleMode ? simpleProjectListColumns : projectListColumns}
+                dataSource={visibleProjects}
+                pagination={false}
+                rowSelection={
+                  isSimpleMode
+                    ? undefined
+                    : {
+                        selectedRowKeys: selectedProjectRowIds,
+                        onChange: (keys) => setSelectedProjectRowIds(keys.map(String))
+                      }
                 }
-              })}
-            />
+                onRow={(project) => ({
+                  className: 'project-list-clickable-row',
+                  onClick: (event) => {
+                    if (isProjectListInteractiveTarget(event.target)) {
+                      return
+                    }
+
+                    openProjectDetail(project)
+                  }
+                })}
+              />
+            ) : (
+              <div className="project-group-filter-empty">
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={activeProjectListGroupFilter === 'favorites'
+                    ? '还没有收藏项目'
+                    : activeProjectListGroupFilter === 'ungrouped'
+                      ? '所有项目都已归入分组'
+                      : `“${activeProjectListGroupOption?.label ?? '当前'}”分组还没有项目`}
+                >
+                  <Button icon={<FolderOpenOutlined />} onClick={() => openProjectGroupEditor()}>
+                    管理分组
+                  </Button>
+                </Empty>
+              </div>
+            )}
             {listCommitProject && (
               <GitCommitModal
                 open={Boolean(listCommitProject)}

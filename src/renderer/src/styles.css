@@ -5308,6 +5308,39 @@ button.app-status-bar-item:hover {
   margin-top: 12px;
 }
 
+.project-group-filter {
+  display: flex;
+  gap: 8px;
+  margin: 2px -2px 0;
+  padding: 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.project-group-filter-option {
+  flex: 0 0 auto;
+  border-radius: 999px;
+}
+
+.project-group-filter-option span {
+  margin-left: 4px;
+  opacity: 0.76;
+}
+
+.project-group-filter-manage {
+  flex: 0 0 auto;
+  margin-left: 4px;
+}
+
+.project-group-filter-empty {
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  margin-top: 12px;
+  border: 1px dashed var(--app-border);
+  border-radius: 8px;
+}
+
 .project-list-table .ant-table,
 .project-list-table .ant-table-container,
 .project-list-table .ant-table-content {
