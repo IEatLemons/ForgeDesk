@@ -35,12 +35,13 @@ describe('app navigation', () => {
     )
   })
 
-  it('exposes projects and AI tools in simple mode', () => {
-    assert.deepEqual(getNavigationItemsForMode('simple').map((item) => item.key), ['projects', 'ai-tools'])
-    assert.deepEqual(getNavigationSectionsForMode('simple').map((section) => section.key), ['work'])
+  it('exposes tasks, projects, AI tools, and settings in simple mode', () => {
+    assert.deepEqual(getNavigationItemsForMode('simple').map((item) => item.key), ['settings', 'tasks', 'projects', 'ai-tools'])
+    assert.deepEqual(getNavigationSectionsForMode('simple').map((section) => section.key), ['system', 'life', 'work'])
+    assert.equal(isNavigationKeyVisible('simple', 'tasks'), true)
     assert.equal(isNavigationKeyVisible('simple', 'projects'), true)
     assert.equal(isNavigationKeyVisible('simple', 'ai-tools'), true)
-    assert.equal(isNavigationKeyVisible('simple', 'settings'), false)
+    assert.equal(isNavigationKeyVisible('simple', 'settings'), true)
   })
 
   it('keeps the complete navigation in full mode', () => {
