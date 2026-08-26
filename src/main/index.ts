@@ -79,6 +79,8 @@ import {
 import {
   CodexSessionService,
   type CodexSessionEvent,
+  type CodexSessionBatchActionInput,
+  type CodexSessionBatchActionResult,
   type CodexSessionMessageInput,
   type CodexSessionDetail,
   type CodexSessionSummary,
@@ -8260,6 +8262,24 @@ ipcMain.handle('codex:sessions:list', async (): Promise<CodexSessionsSnapshot> =
 ipcMain.handle('codex:sessions:get', async (_event, sessionId: string): Promise<CodexSessionDetail> => codexSessionService.get(sessionId))
 
 ipcMain.handle('codex:sessions:pin', async (_event, sessionId: string): Promise<CodexSessionSummary> => codexSessionService.togglePin(sessionId))
+
+ipcMain.handle('codex:sessions:archive', async (_event, input: CodexSessionBatchActionInput): Promise<CodexSessionBatchActionResult> => {
+  const result = await codexSessionService.archive(input)
+  void refreshCodexProjectMonitor()
+  return result
+})
+
+ipcMain.handle('codex:sessions:unarchive', async (_event, input: CodexSessionBatchActionInput): Promise<CodexSessionBatchActionResult> => {
+  const result = await codexSessionService.unarchive(input)
+  void refreshCodexProjectMonitor()
+  return result
+})
+
+ipcMain.handle('codex:sessions:delete', async (_event, input: CodexSessionBatchActionInput): Promise<CodexSessionBatchActionResult> => {
+  const result = await codexSessionService.delete(input)
+  void refreshCodexProjectMonitor()
+  return result
+})
 
 ipcMain.handle('codex:sessions:send', async (_event, input: CodexSessionMessageInput): Promise<CodexSessionDetail> => codexSessionService.sendMessage(input))
 

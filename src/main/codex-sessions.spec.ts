@@ -197,4 +197,68 @@ describe('codex session service', () => {
       await rm(directory, { force: true, recursive: true })
     }
   })
+
+  it('archives, restores, and deletes sessions through the native Codex CLI one at a time', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'forgedesk-codex-archive-'))
+    const firstPath = join(directory, 'first.jsonl')
+    const secondPath = join(directory, 'second.jsonl')
+    const calls: Array<{ args: string[]; codexHome: string }> = []
+    const rows = createStateRows([
+      { cwd: '/tmp/ForgeDesk', filePath: firstPath, id: 'session-old', title: '已完成会话' },
+      { cwd: '/tmp/ForgeDesk', filePath: secondPath, id: 'session-running', title: '运行中会话' }
+    ])
+
+    class SuccessfulProcess extends EventEmitter {
+      stdout = new EventEmitter()
+      stderr = new EventEmitter()
+      constructor(onClose: () => void) {
+        super()
+        queueMicrotask(() => {
+          onClose()
+          this.emit('close', 0, null)
+        })
+      }
+      kill(): boolean { return true }
+    }
+
+    try {
+      await writeFile(firstPath, [response('user', [{ type: 'input_text', text: '归档测试' }]), event('task_complete')].join('\n'))
+      await writeFile(secondPath, [response('user', [{ type: 'input_text', text: '执行中测试' }]), event('task_started')].join('\n'))
+      const service = new CodexSessionService({
+        codexHome: directory,
+        findCodexCommand: async () => '/usr/local/bin/codex',
+        readStateRows: async () => rows,
+        resolveCodexHome: async () => directory,
+        sessionsDirectory: directory,
+        spawnCodex: (file, args, options) => {
+          calls.push({ args, codexHome: options.env.CODEX_HOME || '' })
+          return new SuccessfulProcess(() => {
+            const row = rows.find((item) => item.id === args.at(-1))
+            if (!row) return
+            if (args[0] === 'archive') row.archived = 1
+            if (args[0] === 'unarchive') row.archived = 0
+            if (args[0] === 'delete') rows.splice(rows.indexOf(row), 1)
+          }) as never
+        }
+      })
+
+      const archived = await service.archive({ sessionIds: ['session-old', 'session-running'] })
+      assert.deepEqual(archived.succeededIds, ['session-old'])
+      assert.deepEqual(archived.failures, [{ sessionId: 'session-running', error: '进行中的 Codex 会话不能归档' }])
+      assert.equal(archived.snapshot.sessions.find((session) => session.id === 'session-old')?.archived, true)
+      assert.deepEqual(calls, [{ args: ['archive', 'session-old'], codexHome: directory }])
+
+      const restored = await service.unarchive({ sessionIds: ['session-old'] })
+      assert.deepEqual(restored.succeededIds, ['session-old'])
+      assert.deepEqual(calls.at(-1), { args: ['unarchive', 'session-old'], codexHome: directory })
+
+      await service.archive({ sessionIds: ['session-old'] })
+      const deleted = await service.delete({ sessionIds: ['session-old'] })
+      assert.deepEqual(deleted.succeededIds, ['session-old'])
+      assert.equal(deleted.snapshot.sessions.some((session) => session.id === 'session-old'), false)
+      assert.deepEqual(calls.at(-1), { args: ['delete', '--force', 'session-old'], codexHome: directory })
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  })
 })

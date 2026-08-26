@@ -1960,6 +1960,24 @@ type CodexSessionDetail = CodexSessionSummary & {
   items: CodexConversationItem[]
 }
 
+type CodexSessionBatchAction = 'archive' | 'unarchive' | 'delete'
+
+type CodexSessionBatchActionInput = {
+  sessionIds: string[]
+}
+
+type CodexSessionBatchActionFailure = {
+  sessionId: string
+  error: string
+}
+
+type CodexSessionBatchActionResult = {
+  action: CodexSessionBatchAction
+  succeededIds: string[]
+  failures: CodexSessionBatchActionFailure[]
+  snapshot: CodexSessionsSnapshot
+}
+
 type CodexProjectRecord = {
   key: string
   name: string
@@ -3038,6 +3056,9 @@ interface Window {
     listCodexSessions: () => Promise<CodexSessionsSnapshot>
     getCodexSession: (sessionId: string) => Promise<CodexSessionDetail>
     toggleCodexSessionPin: (sessionId: string) => Promise<CodexSessionSummary>
+    archiveCodexSessions: (input: CodexSessionBatchActionInput) => Promise<CodexSessionBatchActionResult>
+    unarchiveCodexSessions: (input: CodexSessionBatchActionInput) => Promise<CodexSessionBatchActionResult>
+    deleteCodexSessions: (input: CodexSessionBatchActionInput) => Promise<CodexSessionBatchActionResult>
     sendCodexSessionMessage: (input: CodexSessionMessageInput) => Promise<CodexSessionDetail>
     cancelCodexSession: (sessionId: string) => Promise<CodexSessionDetail>
     onCodexSessionEvent: (listener: (event: CodexSessionEvent) => void) => () => void

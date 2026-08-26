@@ -2183,6 +2183,24 @@ export type CodexSessionDetail = CodexSessionSummary & {
   items: CodexConversationItem[]
 }
 
+export type CodexSessionBatchAction = 'archive' | 'unarchive' | 'delete'
+
+export type CodexSessionBatchActionInput = {
+  sessionIds: string[]
+}
+
+export type CodexSessionBatchActionFailure = {
+  sessionId: string
+  error: string
+}
+
+export type CodexSessionBatchActionResult = {
+  action: CodexSessionBatchAction
+  succeededIds: string[]
+  failures: CodexSessionBatchActionFailure[]
+  snapshot: CodexSessionsSnapshot
+}
+
 export type CodexProjectRecord = {
   key: string
   name: string
