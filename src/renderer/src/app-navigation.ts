@@ -13,7 +13,6 @@ export type AppNavigationKey =
   | 'tools'
   | 'system-monitor'
   | 'system-info'
-  | 'codex-sessions'
   | 'ai-chat'
   | 'terminal'
   | 'settings'
@@ -55,7 +54,6 @@ export const APP_NAVIGATION_ITEMS: AppNavigationItem[] = [
   { key: 'tools', label: '工具', section: 'work' },
   { key: 'system-monitor', label: '电脑监控', section: 'computer' },
   { key: 'system-info', label: '系统信息', section: 'computer' },
-  { key: 'codex-sessions', label: 'Codex 会话', section: 'computer' },
   { key: 'ai-chat', label: 'AI 对话', section: 'computer' },
   { key: 'terminal', label: '命令行', section: 'computer' }
 ]

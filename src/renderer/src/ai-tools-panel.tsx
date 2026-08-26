@@ -33,12 +33,23 @@ import {
   UserAddOutlined
 } from '@ant-design/icons'
 import { useEffect, useMemo, useState } from 'react'
+import type { CodexUncommittedAlert } from './data'
+import { CodexSessionManagerPanel } from './codex-session-manager-panel'
 import { getErrorMessage } from './error-messages'
+
+export type CodexWorkspaceTarget = {
+  id: number
+  focusAlert?: CodexUncommittedAlert | null
+  focusSessionId?: string
+  tab?: 'accounts' | 'projects'
+}
 
 type AiToolsPanelProps = {
   projectId: string | null
   projectPath: string
   onOpenTerminal?: () => void
+  codexWorkspaceTarget?: CodexWorkspaceTarget | null
+  onCodexWorkspaceTargetHandled?: () => void
 }
 
 function formatDate(value: string): string {
@@ -139,7 +150,7 @@ function AccountUsageSummary({ quota, compact = false }: { quota: QuotaSnapshot 
   )
 }
 
-export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiToolsPanelProps): JSX.Element {
+export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWorkspaceTarget, onCodexWorkspaceTargetHandled }: AiToolsPanelProps): JSX.Element {
   const [provider, setProvider] = useState<AiProviderRuntimeSnapshot | null>(null)
   const [accounts, setAccounts] = useState<CodexAccountRegistryView | null>(null)
   const [apiService, setApiService] = useState<CodexApiServiceView | null>(null)
@@ -156,6 +167,8 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
   const [importName, setImportName] = useState('')
   const [importPath, setImportPath] = useState('')
   const [codexDetailsOpen, setCodexDetailsOpen] = useState(false)
+  const [codexTab, setCodexTab] = useState<'accounts' | 'projects'>('projects')
+  const [activeCodexTarget, setActiveCodexTarget] = useState<CodexWorkspaceTarget | null>(null)
 
   const activeAccount = useMemo(
     () => accounts?.accounts.find((account) => account.active) ?? null,
@@ -224,6 +237,26 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
   useEffect(() => {
     void refreshAll()
   }, [projectId])
+
+  useEffect(() => {
+    if (!codexWorkspaceTarget) return
+    setCodexDetailsOpen(true)
+    setCodexTab(codexWorkspaceTarget.tab ?? 'projects')
+    setActiveCodexTarget(codexWorkspaceTarget)
+    onCodexWorkspaceTargetHandled?.()
+  }, [codexWorkspaceTarget, onCodexWorkspaceTargetHandled])
+
+  function openCodexWorkspace(tab: 'accounts' | 'projects' = 'projects'): void {
+    setCodexDetailsOpen(true)
+    setCodexTab(tab)
+  }
+
+  function renderCodexTabs(): JSX.Element {
+    return <Space.Compact>
+      <Button type={codexTab === 'projects' ? 'primary' : 'default'} onClick={() => setCodexTab('projects')}>项目与会话</Button>
+      <Button type={codexTab === 'accounts' ? 'primary' : 'default'} onClick={() => setCodexTab('accounts')}>账户与设置</Button>
+    </Space.Compact>
+  }
 
   async function openCodex(): Promise<void> {
     if (!window.forgeDesk) return
@@ -427,7 +460,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
         </div>
 
         <div className="ai-provider-catalog-grid">
-          <Card className="ai-provider-catalog-card" hoverable onClick={() => setCodexDetailsOpen(true)}>
+          <Card className="ai-provider-catalog-card" hoverable onClick={() => openCodexWorkspace()}>
             <div className="ai-provider-catalog-leading">
               <div className="ai-provider-icon"><SafetyCertificateOutlined /></div>
               <div>
@@ -444,7 +477,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
                 </Space>
               </div>
             </div>
-            <Button type="primary" onClick={(event) => { event.stopPropagation(); setCodexDetailsOpen(true) }}>
+            <Button type="primary" onClick={(event) => { event.stopPropagation(); openCodexWorkspace() }}>
               查看 Codex 详情
             </Button>
           </Card>
@@ -464,6 +497,30 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
     )
   }
 
+  if (codexTab === 'projects') {
+    return (
+      <section className="workspace-section ai-tools-shell ai-codex-workspace-shell">
+        <div className="workspace-section-header">
+          <div>
+            <Button type="link" icon={<ArrowLeftOutlined />} onClick={() => setCodexDetailsOpen(false)}>返回 AI 工具</Button>
+            <Typography.Title level={2}>Codex</Typography.Title>
+            <Typography.Paragraph type="secondary">从项目集合进入具体项目，集中管理活动与已归档会话。</Typography.Paragraph>
+            <div className="ai-codex-tabs">{renderCodexTabs()}</div>
+          </div>
+          <Button icon={<ReloadOutlined />} loading={refreshing} onClick={() => void refreshAll(true)}>刷新状态</Button>
+        </div>
+        <CodexSessionManagerPanel
+          embedded
+          focusAlert={activeCodexTarget?.focusAlert ?? null}
+          focusSessionId={activeCodexTarget?.focusSessionId || ''}
+          onBack={() => setCodexDetailsOpen(false)}
+          onFocusSessionHandled={() => setActiveCodexTarget(null)}
+          usesCustomTitleBar={false}
+        />
+      </section>
+    )
+  }
+
   return (
     <section className="workspace-section ai-tools-shell">
       <div className="workspace-section-header">
@@ -471,6 +528,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal }: AiTools
           <Button type="link" icon={<ArrowLeftOutlined />} onClick={() => setCodexDetailsOpen(false)}>返回 AI 工具</Button>
           <Typography.Title level={2}>Codex</Typography.Title>
           <Typography.Paragraph type="secondary">账户、配额与本机 API 服务集中在账户管理区，软件状态提供快捷入口，项目绑定位于底部。</Typography.Paragraph>
+          <div className="ai-codex-tabs">{renderCodexTabs()}</div>
         </div>
         <Button icon={<ReloadOutlined />} loading={refreshing} onClick={() => void refreshAll(true)}>刷新状态</Button>
       </div>

@@ -12,7 +12,7 @@ describe('app navigation', () => {
   it('organizes the workspace around life, study, work, and computer areas', () => {
     assert.deepEqual(
       APP_NAVIGATION_ITEMS.map((item) => item.key),
-      ['overview', 'market-news', 'settings', 'tasks', 'docs', 'projects', 'ai-tools', 'services', 'data-sources', 'docker', 'tools', 'system-monitor', 'system-info', 'codex-sessions', 'ai-chat', 'terminal']
+      ['overview', 'market-news', 'settings', 'tasks', 'docs', 'projects', 'ai-tools', 'services', 'data-sources', 'docker', 'tools', 'system-monitor', 'system-info', 'ai-chat', 'terminal']
     )
     assert.deepEqual(
       APP_NAVIGATION_SECTIONS.filter((section) => section.placement === 'main').map((section) => section.key),
@@ -31,7 +31,7 @@ describe('app navigation', () => {
   it('keeps AI chat beside the computer tools', () => {
     assert.deepEqual(
       APP_NAVIGATION_ITEMS.filter((item) => item.section === 'computer').map((item) => item.key),
-      ['system-monitor', 'system-info', 'codex-sessions', 'ai-chat', 'terminal']
+      ['system-monitor', 'system-info', 'ai-chat', 'terminal']
     )
   })
 

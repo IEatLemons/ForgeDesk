@@ -38,6 +38,7 @@ import { useForgeDeskStore } from './store'
 
 type CodexSessionManagerPanelProps = {
   backLabel?: string
+  embedded?: boolean
   focusSessionId?: string
   onBack: () => void
   onFocusSessionHandled?: () => void
@@ -460,7 +461,7 @@ function ConversationActivity({ items }: { items: CodexConversationItem[] }): JS
   )
 }
 
-export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAlert, focusSessionId, onBack, onFocusSessionHandled, onOpenForgeProject, usesCustomTitleBar }: CodexSessionManagerPanelProps): JSX.Element {
+export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded = false, focusAlert, focusSessionId, onBack, onFocusSessionHandled, onOpenForgeProject, usesCustomTitleBar }: CodexSessionManagerPanelProps): JSX.Element {
   const forgeProjects = useForgeDeskStore((state) => state.projects)
   const [snapshot, setSnapshot] = useState<CodexSessionsSnapshot>(() => emptySnapshot())
   const [monitorSnapshot, setMonitorSnapshot] = useState<CodexProjectMonitorSnapshot | null>(null)
@@ -489,7 +490,7 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
   const detailRequestIdRef = useRef(0)
   const selectedSessionIdRef = useRef('')
   selectedSessionIdRef.current = selectedSessionId
-  const shellClassName = `codex-session-shell${usesCustomTitleBar ? ' codex-session-shell-with-titlebar' : ''}`
+  const shellClassName = `codex-session-shell${usesCustomTitleBar && !embedded ? ' codex-session-shell-with-titlebar' : ''}${embedded ? ' is-embedded' : ''}`
 
   const filteredProjects = useMemo<CodexProjectGroup[]>(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase()
@@ -522,6 +523,9 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
   const selectableSessions = selectedProjectSessions.filter((session) => sessionListMode === 'archived' || session.status !== 'running')
   const selectedVisibleSessionIds = selectableSessions.filter((session) => selectedSessionIds.has(session.id)).map((session) => session.id)
   const allVisibleSelected = selectableSessions.length > 0 && selectedVisibleSessionIds.length === selectableSessions.length
+  const projectCompletedCount = selectedProjectSessions.filter((session) => session.status === 'completed').length
+  const projectRunningCount = selectedProjectSessions.filter((session) => session.status === 'running').length
+  const projectArchivedCount = snapshot.sessions.filter((session) => session.projectKey === selectedProject?.key && session.archived).length
   const modelOptions = useMemo(() => [
     { label: '默认模型', value: CODEX_DEFAULT_MODEL_VALUE },
     ...(configuredModel ? [{ label: configuredModel, value: configuredModel }] : [])
@@ -636,6 +640,7 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
     if (!focusAlert) return
     setSelectedProjectKey(focusAlert.codexKey)
     setViewMode('monitor')
+    onFocusSessionHandled?.()
   }, [focusAlert])
 
   useEffect(() => {
@@ -873,9 +878,9 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
 
   const renderProjectRail = (): JSX.Element => (
     <aside className="codex-session-projects">
-      <div className="module-back-row codex-session-back-row">
+      {!embedded ? <div className="module-back-row codex-session-back-row">
         <ModuleBackButton label={backLabel} onClick={onBack} />
-      </div>
+      </div> : null}
       <div className="codex-session-brand-row">
         <div>
           <Typography.Text className="codex-session-brand">Codex</Typography.Text>
@@ -888,8 +893,8 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
         <Typography.Text type="secondary">{filteredProjects.length}</Typography.Text>
       </div>
       <div className="codex-session-project-list">
-        {loading && filteredProjects.length === 0 ? <div className="codex-session-list-empty"><Spin size="small" /></div> : filteredProjects.length > 0 ? filteredProjects.map(({ project, sessions }) => (
-          <button className={`codex-session-project-row${viewMode === 'conversation' && project.key === selectedProject?.key ? ' is-active' : ''}`} key={project.key} type="button" onClick={() => { setSelectedProjectKey(project.key); setSelectedSessionId(sessions[0]?.id || '') }}>
+        {loading && filteredProjects.length === 0 ? <div className="codex-session-list-empty"><Spin size="small" /></div> : filteredProjects.length > 0 ? filteredProjects.map(({ project }) => (
+          <button className={`codex-session-project-row${viewMode === 'conversation' && project.key === selectedProject?.key ? ' is-active' : ''}`} key={project.key} type="button" onClick={() => { setSelectedProjectKey(project.key); setSelectedSessionId(''); setViewMode('conversation') }}>
             <span className="codex-session-project-row-title">{project.name}</span>
             <span className="codex-session-project-row-path" title={project.cwd}>{project.cwd || '未记录工作目录'}</span>
             <span className="codex-session-project-row-meta"><span>{project.sessionCount} 个会话</span>{project.runningCount > 0 ? <Badge status="processing" text={`${project.runningCount} 进行中`} /> : null}</span>
@@ -915,10 +920,6 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
             <Button type="text" icon={<ReloadOutlined />} loading={refreshing} onClick={() => refresh()} />
           </Tooltip>
         </div>
-        <Space.Compact block>
-          <Button block type={sessionListMode === 'active' ? 'primary' : 'default'} onClick={() => setSessionListMode('active')}>活动</Button>
-          <Button block icon={<InboxOutlined />} type={sessionListMode === 'archived' ? 'primary' : 'default'} onClick={() => setSessionListMode('archived')}>已归档</Button>
-        </Space.Compact>
         <Input allowClear className="codex-session-search" prefix={<SearchOutlined />} placeholder="搜索会话或项目" value={query} onChange={(event) => setQuery(event.target.value)} />
         <Select
           aria-label="按状态筛选 Codex 会话"
@@ -933,13 +934,6 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
           value={statusFilter}
           onChange={(value: SessionStatusFilter) => setStatusFilter(value)}
         />
-        <div className="codex-session-selection-toolbar">
-          <Button size="small" type={selectionMode ? 'default' : 'text'} onClick={() => { setSelectionMode((current) => !current); setSelectedSessionIds(new Set()) }}>{selectionMode ? '取消选择' : '批量选择'}</Button>
-          {selectionMode ? <Space size={4} wrap>
-            <Checkbox checked={allVisibleSelected} disabled={selectableSessions.length === 0} indeterminate={selectedVisibleSessionIds.length > 0 && !allVisibleSelected} onChange={toggleVisibleSelection}>全选筛选结果</Checkbox>
-            <Typography.Text type="secondary">{selectedVisibleSessionIds.length} 项</Typography.Text>
-          </Space> : null}
-        </div>
         <div className="codex-session-list">
           {selectedProjectSessions.length > 0 ? selectedProjectSessions.map((session) => (
             <div className={`codex-session-row${session.id === selectedSummary?.id ? ' is-active' : ''}${session.status === 'running' ? ' is-running' : ''}`} key={session.id} role="button" tabIndex={0} onClick={() => setSelectedSessionId(session.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedSessionId(session.id) } }}>
@@ -949,12 +943,6 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
             </div>
           )) : <div className="codex-session-list-empty">暂无匹配会话</div>}
         </div>
-        {selectionMode && selectedVisibleSessionIds.length > 0 ? <div className="codex-session-batch-actions">
-          {sessionListMode === 'active' ? <Button block icon={<InboxOutlined />} onClick={() => requestBatchAction('archive')}>归档已选 {selectedVisibleSessionIds.length} 项</Button> : <Space direction="vertical" size={6} style={{ width: '100%' }}>
-            <Button block icon={<UndoOutlined />} onClick={() => requestBatchAction('unarchive')}>恢复已选 {selectedVisibleSessionIds.length} 项</Button>
-            <Button block danger icon={<DeleteOutlined />} onClick={() => requestBatchAction('delete')}>删除已选 {selectedVisibleSessionIds.length} 项</Button>
-          </Space>}
-        </div> : null}
       </aside>
 
       <main className="codex-session-main">
@@ -962,12 +950,12 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
           <div className="codex-session-main-heading">
             <MessageOutlined />
             <div>
-              <Typography.Title level={3}>{detail?.title || selectedSummary?.title || 'Codex 会话'}</Typography.Title>
-              <Typography.Text type="secondary" title={detail?.cwd || selectedSummary?.cwd}><FolderOpenOutlined /> {detail?.cwd || selectedSummary?.cwd || '未记录工作目录'}</Typography.Text>
+              <Typography.Title level={3}>{detail?.title || selectedSummary?.title || selectedProject?.name || 'Codex 项目'}</Typography.Title>
+              <Typography.Text type="secondary" title={detail?.cwd || selectedSummary?.cwd || selectedProject?.cwd}><FolderOpenOutlined /> {detail?.cwd || selectedSummary?.cwd || selectedProject?.cwd || '未记录工作目录'}</Typography.Text>
             </div>
           </div>
           <Space wrap>
-            <Button icon={<DashboardOutlined />} onClick={openProjectMonitor}>项目监控</Button>
+            <Button icon={<DashboardOutlined />} onClick={openProjectMonitor}>全部项目</Button>
             <Button icon={<GlobalOutlined />} onClick={() => setSitesOpen(true)}>Sites</Button>
             <Badge status={snapshot.available ? 'success' : 'error'} text={snapshot.available ? `已连接 · ${snapshot.running} 个进行中` : '会话目录不可用'} />
             {selectedSummary ? <Button icon={<CopyOutlined />} onClick={() => copyValue(selectedSummary.filePath, '会话路径已复制')}>复制路径</Button> : null}
@@ -975,6 +963,23 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
         </header>
 
         {snapshot.error ? <div className="codex-session-alert">{snapshot.error}</div> : null}
+
+        {selectedProject ? <div className="codex-project-management-toolbar">
+          <div className="codex-project-management-heading">
+            <Typography.Text strong>会话管理</Typography.Text>
+            <Typography.Text type="secondary">{selectedProjectSessions.length} 个{sessionListMode === 'archived' ? '已归档' : '活动'}会话 · {projectRunningCount} 进行中 · {projectArchivedCount} 已归档</Typography.Text>
+          </div>
+          <Space wrap>
+            <Space.Compact>
+              <Button type={sessionListMode === 'active' ? 'primary' : 'default'} onClick={() => setSessionListMode('active')}>活动</Button>
+              <Button icon={<InboxOutlined />} type={sessionListMode === 'archived' ? 'primary' : 'default'} onClick={() => setSessionListMode('archived')}>已归档</Button>
+            </Space.Compact>
+            <Button onClick={() => { setSelectionMode((current) => !current); setSelectedSessionIds(new Set()) }}>{selectionMode ? '取消选择' : '批量管理'}</Button>
+            {selectionMode ? <Checkbox checked={allVisibleSelected} disabled={selectableSessions.length === 0} indeterminate={selectedVisibleSessionIds.length > 0 && !allVisibleSelected} onChange={toggleVisibleSelection}>全选筛选结果</Checkbox> : null}
+            {selectionMode && selectedVisibleSessionIds.length > 0 && sessionListMode === 'active' ? <Button icon={<InboxOutlined />} type="primary" onClick={() => requestBatchAction('archive')}>归档 {selectedVisibleSessionIds.length} 项</Button> : null}
+            {selectionMode && selectedVisibleSessionIds.length > 0 && sessionListMode === 'archived' ? <><Button icon={<UndoOutlined />} onClick={() => requestBatchAction('unarchive')}>恢复 {selectedVisibleSessionIds.length} 项</Button><Button danger icon={<DeleteOutlined />} onClick={() => requestBatchAction('delete')}>删除 {selectedVisibleSessionIds.length} 项</Button></> : null}
+          </Space>
+        </div> : null}
 
         {detail ? (
           <>
@@ -1027,8 +1032,13 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
               </footer>
             )}
           </>
+        ) : selectedProject ? (
+          <div className="codex-project-session-empty">
+            <div><Typography.Title level={4}>{selectedProject.name}</Typography.Title><Typography.Text type="secondary">已进入项目详情。在左侧选择一个会话查看完整对话；上方工具栏可筛选、批量归档、恢复或删除会话。</Typography.Text></div>
+            <div className="codex-project-session-metrics"><span><strong>{selectedProjectSessions.length}</strong> 当前列表会话</span><span><strong>{projectCompletedCount}</strong> 已完成</span><span><strong>{projectRunningCount}</strong> 进行中</span><span><strong>{projectArchivedCount}</strong> 已归档</span></div>
+          </div>
         ) : (
-          <div className="codex-session-empty-stage"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={requestedSessionId ? '正在定位此任务的 Codex 对话；如果它刚创建，请稍后刷新。' : snapshot.available ? '选择一个 Codex 会话查看完整内容' : '尚未读取到本机 Codex 会话'} /></div>
+          <div className="codex-session-empty-stage"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={requestedSessionId ? '正在定位此任务的 Codex 对话；如果它刚创建，请稍后刷新。' : snapshot.available ? '从左侧选择一个 Codex 项目进入会话管理' : '尚未读取到本机 Codex 会话'} /></div>
         )}
       </main>
       </>}
