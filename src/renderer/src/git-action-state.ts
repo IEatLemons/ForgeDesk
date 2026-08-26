@@ -94,6 +94,16 @@ export function canPushSelection(selectedRemote: string, pushTargets: PushTarget
   return pushableTargets.some((target) => target.remote === selectedRemote)
 }
 
+export function canPushBranchSelection(
+  selectedRemote: string,
+  remotes: RemoteLike[],
+  sourceBranch: string,
+  targetBranch: string
+): boolean {
+  const remoteNames = resolveSelectedPushRemoteNames(selectedRemote, remotes)
+  return remoteNames.length > 0 && remoteNames.every((name) => remotes.some((remote) => remote.name === name)) && Boolean(sourceBranch.trim() && targetBranch.trim())
+}
+
 export function getCurrentBranchName(repository: RepositoryLike | null | undefined, status: WorkspaceStatusLike | null | undefined): string {
   return status?.branch || repository?.currentBranch || ''
 }

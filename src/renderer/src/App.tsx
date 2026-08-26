@@ -259,7 +259,7 @@ import {
 import {
   PUSH_ALL_REMOTES_VALUE,
   canCommitSelection,
-  canPushSelection,
+  canPushBranchSelection,
   createPushRemoteOptions,
   getCurrentBranchName,
   getPushableTargets,
@@ -390,7 +390,13 @@ import {
 } from './service-monitor-view'
 import { createEmptySshConfigEntry, parseSshConfigEntries, serializeSshConfigEntries, type SshConfigEntry } from './ssh-config-model'
 import { useForgeDeskStore } from './store'
-import { getProjectRepositoriesForDisplay, sortProjectsForDisplay } from './project-list-view'
+import {
+  createProjectListGroupFilterOptions,
+  filterProjectsByGroup,
+  getProjectRepositoriesForDisplay,
+  sortProjectsByGroupForDisplay,
+  type ProjectListGroupFilter
+} from './project-list-view'
 import { TerminalWorkspace } from './terminal-panel'
 import type { TerminalOpenRequest } from './terminal-panel-events'
 import { TerminalRemoteShortcuts } from './terminal-remote-shortcuts'
@@ -9931,8 +9937,14 @@ function getPreferredPushTarget(repository: Repository | null, status: GitWorksp
   return getRepositoryDefaultPushTarget(repository, status?.branch)
 }
 
-function createGitPushInput(remoteNames: string[], branch: string, tagNames: string[] = []): GitPushInput {
-  const input = remoteNames.length > 1 ? { remotes: remoteNames, branch } : { remote: remoteNames[0], branch }
+function createGitPushInput(remoteNames: string[], branch: string, tagNames: string[] = [], targetBranch = branch): GitPushInput {
+  const input: GitPushInput = remoteNames.length > 1 ? { remotes: remoteNames, branch } : { remote: remoteNames[0], branch }
+  const normalizedTargetBranch = targetBranch.trim()
+
+  if (normalizedTargetBranch && normalizedTargetBranch !== branch.trim()) {
+    input.targetBranch = normalizedTargetBranch
+  }
+
   return tagNames.length > 0 ? { ...input, tagNames } : input
 }
 
@@ -11562,7 +11574,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
 
 function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChanged, onStartTask }: GitActionModalProps & {
   initialRepositoryId?: string
-  onStartTask?: (input: { repository: Repository; remoteNames: string[]; branch: string; tagNames: string[] }) => void
+  onStartTask?: (input: { repository: Repository; remoteNames: string[]; branch: string; targetBranch: string; tagNames: string[] }) => void
 }): JSX.Element {
   const { updateRepository } = useForgeDeskStore()
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
@@ -11570,6 +11582,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
   const [status, setStatus] = useState<GitWorkspaceStatus | null>(null)
   const [pushRemote, setPushRemote] = useState('origin')
   const [pushBranch, setPushBranch] = useState('')
+  const [pushTargetBranch, setPushTargetBranch] = useState('')
   const [pushTagNames, setPushTagNames] = useState<string[]>([])
   const [tagRecommendation, setTagRecommendation] = useState<RepositoryReleaseTagRecommendation | null>(null)
   const [loadingStatus, setLoadingStatus] = useState(false)
@@ -11580,7 +11593,8 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
   const pushableTargets = getPushableTargets(pushTargets)
   const remoteOptions = createPushRemoteOptions(selectedRepository?.remotes ?? [], pushTargets)
   const currentBranch = getCurrentBranchName(selectedRepository, status)
-  const pushReady = Boolean(selectedRepository && pushBranch.trim() && (canPushSelection(pushRemote, pushTargets) || pushTagNames.length > 0))
+  const localBranches = createBranchOptions([...(selectedRepository?.branches ?? []), currentBranch])
+  const pushReady = Boolean(selectedRepository && canPushBranchSelection(pushRemote, selectedRepository.remotes, pushBranch, pushTargetBranch))
   const tagOptions = createReleaseTagOptions(tagRecommendation)
 
   useEffect(() => {
@@ -11644,6 +11658,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
       setStatus(nextStatus)
       setPushRemote(target.remote)
       setPushBranch(target.branch)
+      setPushTargetBranch(target.branch)
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
@@ -11660,6 +11675,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
     setStatus(null)
     setPushRemote(target.remote)
     setPushBranch(target.branch)
+    setPushTargetBranch(target.branch)
     refreshWorkspaceStatus()
   }, [open, selectedRepository?.id])
 
@@ -11671,16 +11687,17 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
 
     const remote = pushRemote.trim()
     const branch = pushBranch.trim()
+    const targetBranch = pushTargetBranch.trim()
 
     const remoteNames = resolveSelectedPushRemoteNames(remote, selectedRepository.remotes)
 
-    if (remoteNames.length === 0 || !branch) {
-      message.warning('请选择远端并填写分支')
+    if (remoteNames.length === 0 || !branch || !targetBranch) {
+      message.warning('请选择远端、源分支并填写目标分支')
       return
     }
 
     if (onStartTask) {
-      onStartTask({ repository: selectedRepository, remoteNames, branch, tagNames: pushTagNames })
+      onStartTask({ repository: selectedRepository, remoteNames, branch, targetBranch, tagNames: pushTagNames })
       onClose()
       return
     }
@@ -11688,7 +11705,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
     setWorking(true)
 
     try {
-      const result = await window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, branch, pushTagNames))
+      const result = await window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, branch, pushTagNames, targetBranch))
       updateRepository(result.repository)
       setStatus(result.status)
 
@@ -11734,12 +11751,23 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
             options={createRepositorySelectOptions(repositories)}
             onChange={setRepositoryId}
           />
-          {selectedRepository && <Tag color={pushableTargets.length > 0 ? 'orange' : 'default'}>{pushableTargets.reduce((sum, target) => sum + target.ahead, 0)} 个未推送提交</Tag>}
+          {selectedRepository && <Tag color={pushableTargets.length > 0 ? 'orange' : 'default'}>当前分支 {pushableTargets.reduce((sum, target) => sum + target.ahead, 0)} 个未推送提交</Tag>}
           <Tag color={currentBranch ? 'blue' : 'default'}>当前分支：{currentBranch || '未检测'}</Tag>
         </Space>
         <Space.Compact className="git-operation-compact">
           <Select value={pushRemote} options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]} onChange={setPushRemote} />
-          <Input value={pushBranch} placeholder={currentBranch || 'main'} onChange={(event) => setPushBranch(event.target.value)} />
+          <Select
+            showSearch
+            optionFilterProp="label"
+            value={pushBranch || undefined}
+            placeholder="源分支"
+            options={localBranches}
+            onChange={(branch) => {
+              setPushBranch(branch)
+              setPushTargetBranch(branch)
+            }}
+          />
+          <Input value={pushTargetBranch} placeholder="目标分支" onChange={(event) => setPushTargetBranch(event.target.value)} />
         </Space.Compact>
         <Select
           mode="tags"
@@ -11756,8 +11784,8 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
           showIcon
           message={
             pushReady
-              ? `将推送 ${selectedRepository?.name} 的 ${pushBranch || currentBranch}${pushTagNames.length > 0 ? `，以及版本 Tag：${pushTagNames.join('、')}` : ''} 到 ${pushRemote === PUSH_ALL_REMOTES_VALUE ? '所有远端' : pushRemote || 'origin'}`
-              : '当前分支没有待推送提交；选择版本 Tag 后仍可单独推送版本'
+              ? `将推送 ${selectedRepository?.name} 的 ${pushBranch} → ${pushRemote === PUSH_ALL_REMOTES_VALUE ? '所有远端' : pushRemote || 'origin'}/${pushTargetBranch}${pushTagNames.length > 0 ? `，以及版本 Tag：${pushTagNames.join('、')}` : ''}`
+              : '请选择远端和本地源分支，并填写目标分支'
           }
           description="版本 Tag 会明确列出后单独推送，不会推送全部本地标签。"
         />
@@ -12231,6 +12259,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
   const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
   const [pushRemote, setPushRemote] = useState('origin')
   const [pushBranch, setPushBranch] = useState('')
+  const [pushTargetBranch, setPushTargetBranch] = useState('')
   const [pushTagNames, setPushTagNames] = useState<string[]>([])
   const [mergeSource, setMergeSource] = useState('')
   const [working, setWorking] = useState(false)
@@ -12271,6 +12300,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
       const target = getPreferredPushTarget(selectedRepository, nextStatus)
       setStatus(nextStatus)
       setPushBranch((current) => current || target.branch)
+      setPushTargetBranch((current) => current || target.branch)
       setPushRemote((current) => current || target.remote)
     } catch (error) {
       message.error(getErrorMessage(error))
@@ -12363,6 +12393,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
     const target = getPreferredPushTarget(selectedRepository)
     setPushRemote(target.remote)
     setPushBranch(target.branch)
+    setPushTargetBranch(target.branch)
 
     if (selectedRepository) {
       void refreshWorkspaceAiSettings()
@@ -12381,6 +12412,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
       setSelectedPaths([])
       const target = getPreferredPushTarget(result.repository, result.status)
       setPushBranch(target.branch)
+      setPushTargetBranch(target.branch)
       setPushRemote(target.remote)
 
       if (result.ok) {
@@ -12401,14 +12433,16 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
     }
 
     const remoteNames = resolveSelectedPushRemoteNames(pushRemote, selectedRepository.remotes)
+    const branch = pushBranch.trim()
+    const targetBranch = pushTargetBranch.trim()
 
-    if (remoteNames.length === 0) {
-      message.warning('请选择远端')
+    if (remoteNames.length === 0 || !branch || !targetBranch) {
+      message.warning('请选择远端、源分支并填写目标分支')
       return
     }
 
     await runGitWrite(
-      () => window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, pushBranch, pushTagNames)),
+      () => window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, branch, pushTagNames, targetBranch)),
       pushTagNames.length > 0
         ? remoteNames.length > 1 ? `分支和 ${pushTagNames.length} 个版本 Tag 已推送到所有远端` : `分支和 ${pushTagNames.length} 个版本 Tag 已推送`
         : remoteNames.length > 1 ? '分支已推送到所有远端' : '分支已推送'
@@ -12506,9 +12540,10 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
   const pushTargets = status?.pushTargets ?? selectedRepository?.pushTargets ?? []
   const remoteOptions = createPushRemoteOptions(selectedRepository?.remotes ?? [], pushTargets)
   const currentBranch = getCurrentBranchName(selectedRepository, status)
+  const localBranches = createBranchOptions([...(selectedRepository?.branches ?? []), currentBranch])
   const commitReady = canCommitSelection(files, files.map((file) => file.path), commitMessage) ||
     (isLocalCodexAutoCommitEnabled(aiSettings) && files.length > 0)
-  const pushReady = Boolean(selectedRepository && pushBranch.trim() && (canPushSelection(pushRemote, pushTargets) || pushTagNames.length > 0))
+  const pushReady = Boolean(selectedRepository && canPushBranchSelection(pushRemote, selectedRepository.remotes, pushBranch, pushTargetBranch))
 
   async function commitWorkspaceChanges(): Promise<void> {
     if (!selectedRepository || !window.forgeDesk) {
@@ -12642,7 +12677,18 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
             <Typography.Text strong>推送</Typography.Text>
             <Space.Compact className="git-operation-compact">
               <Select value={pushRemote} options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]} onChange={setPushRemote} />
-              <Input value={pushBranch} placeholder={currentBranch || 'main'} onChange={(event) => setPushBranch(event.target.value)} />
+              <Select
+                showSearch
+                optionFilterProp="label"
+                value={pushBranch || undefined}
+                placeholder="源分支"
+                options={localBranches}
+                onChange={(branch) => {
+                  setPushBranch(branch)
+                  setPushTargetBranch(branch)
+                }}
+              />
+              <Input value={pushTargetBranch} placeholder="目标分支" onChange={(event) => setPushTargetBranch(event.target.value)} />
               <Button loading={working} disabled={!pushReady} onClick={pushSelectedBranch}>
                 推送
               </Button>
@@ -14334,6 +14380,7 @@ type ProjectGitPushRequest = {
   repositoryId: string
   remoteNames: string[]
   branch: string
+  targetBranch: string
   tagNames: string[]
 }
 
@@ -14363,7 +14410,7 @@ function formatGitTaskOutput(value?: string): string {
   return text.length > 220 ? `${text.slice(0, 220)}...` : text
 }
 
-function groupPushTargetsByBranch(pushTargets: Repository['pushTargets']): Array<{ branch: string; remotes: string[] }> {
+function groupPushTargetsByBranch(pushTargets: Repository['pushTargets']): Array<{ branch: string; targetBranch: string; remotes: string[] }> {
   const grouped = new Map<string, Set<string>>()
 
   getPushableTargets(pushTargets).forEach((target) => {
@@ -14381,7 +14428,7 @@ function groupPushTargetsByBranch(pushTargets: Repository['pushTargets']): Array
     grouped.get(branch)?.add(remote)
   })
 
-  return Array.from(grouped.entries()).map(([branch, remotes]) => ({ branch, remotes: Array.from(remotes) }))
+  return Array.from(grouped.entries()).map(([branch, remotes]) => ({ branch, targetBranch: branch, remotes: Array.from(remotes) }))
 }
 
 function createProjectGitTaskLogId(projectId: string, action: ProjectGitListAction): string {
@@ -15390,11 +15437,25 @@ function ProjectOverview({
   const [projectGroupModalOpen, setProjectGroupModalOpen] = useState(false)
   const [editingProjectGroupId, setEditingProjectGroupId] = useState<string | null>(null)
   const [projectGroupName, setProjectGroupName] = useState('')
-  const sortedProjects = useMemo(() => {
-    const groupRanks = new Map(projectGroups.map((group, index) => [group.id, index]))
-    return sortProjectsForDisplay(projects).sort((left, right) => (groupRanks.get(left.groupId ?? '') ?? 9999) - (groupRanks.get(right.groupId ?? '') ?? 9999))
-  }, [projectGroups, projects])
+  const [projectListGroupFilter, setProjectListGroupFilter] = useState<ProjectListGroupFilter>('all')
+  const sortedProjects = useMemo(
+    () => sortProjectsByGroupForDisplay(projects, projectGroups),
+    [projectGroups, projects]
+  )
   const favoriteProjectCount = projects.filter((project) => project.isFavorite).length
+  const projectListGroupOptions = useMemo(
+    () => createProjectListGroupFilterOptions(projects, projectGroups),
+    [projectGroups, projects]
+  )
+  const activeProjectListGroupFilter = projectListGroupOptions.some((option) => option.key === projectListGroupFilter)
+    ? projectListGroupFilter
+    : 'all'
+  const activeProjectListGroupOption = projectListGroupOptions.find((option) => option.key === activeProjectListGroupFilter)
+    ?? projectListGroupOptions[0]
+  const visibleProjects = useMemo(
+    () => filterProjectsByGroup(sortedProjects, activeProjectListGroupFilter),
+    [activeProjectListGroupFilter, sortedProjects]
+  )
   const selectedProject = projects.find((project) => project.id === detailProjectId) ?? null
   const selectedProjectRows = projects.filter((project) => selectedProjectRowIds.includes(project.id))
   const listCommitProject = projects.find((project) => project.id === listCommitProjectId) ?? null
@@ -15547,6 +15608,18 @@ function ProjectOverview({
     })
   }, [])
 
+  useEffect(() => {
+    if (activeProjectListGroupFilter !== projectListGroupFilter) {
+      setProjectListGroupFilter('all')
+      setSelectedProjectRowIds([])
+    }
+  }, [activeProjectListGroupFilter, projectListGroupFilter])
+
+  function selectProjectListGroupFilter(filter: ProjectListGroupFilter): void {
+    setProjectListGroupFilter(filter)
+    setSelectedProjectRowIds([])
+  }
+
   async function persistProjectGitTaskLog(log: ProjectGitTaskLog): Promise<void> {
     if (!window.forgeDesk) {
       return
@@ -15631,7 +15704,7 @@ function ProjectOverview({
     return Promise.all(
       pushableRepositories.map(async (repository) => {
         const branchGroups = request
-          ? [{ branch: request.branch, remotes: request.remoteNames }]
+          ? [{ branch: request.branch, targetBranch: request.targetBranch, remotes: request.remoteNames }]
           : groupPushTargetsByBranch(repository.pushTargets)
         const pushResults: ProjectGitRepositoryTaskResult[] = []
         let currentRepository = repository
@@ -15648,27 +15721,28 @@ function ProjectOverview({
               // One IPC call per remote makes both the execution and the task
               // log independent: a failed remote must not hide or stop the
               // remaining push targets.
-              const result = await window.forgeDesk.gitPushTask(repository.id, createGitPushInput([remoteName], group.branch, request?.tagNames), taskId)
+              const result = await window.forgeDesk.gitPushTask(repository.id, createGitPushInput([remoteName], group.branch, request?.tagNames, group.targetBranch), taskId)
               const pushedTarget = result.pushTargets.find((target) => target.remote === remoteName && target.branch === group.branch)
-              currentRepository = mergeRepositoryWorkspaceStatus(currentRepository, {
-                branch: result.branch,
-                // The task IPC intentionally avoids a full rescan, so its
-                // untouched targets can still contain their original ahead
-                // counts. Preserve prior successful targets and replace only
-                // the remote that just finished.
-                pushTargets: currentRepository.pushTargets.map((target) =>
-                  target.remote === remoteName && target.branch === group.branch && pushedTarget ? pushedTarget : target
-                )
-              })
+              const updatesCurrentTrackingBranch = group.branch === currentRepository.currentBranch && group.targetBranch === group.branch
+
+              if (updatesCurrentTrackingBranch && pushedTarget) {
+                currentRepository = mergeRepositoryWorkspaceStatus(currentRepository, {
+                  pushTargets: currentRepository.pushTargets.map((target) =>
+                    target.remote === remoteName && target.branch === group.branch ? pushedTarget : target
+                  )
+                })
+              }
               updateRepository(currentRepository)
+
+              const branchLabel = group.targetBranch === group.branch ? group.branch : `${group.branch} → ${group.targetBranch}`
 
               pushResult = {
                 repositoryId: repository.id,
                 repositoryName: repository.name,
                 remoteName,
-                branch: group.branch,
+                branch: branchLabel,
                 ok: result.ok,
-                message: result.ok ? `${[group.branch, ...(request?.tagNames ?? [])].join('、')} -> ${remoteName}` : formatGitTaskOutput(result.stderr || result.stdout || `${group.branch} -> ${remoteName} 推送失败`),
+                message: result.ok ? `${[branchLabel, ...(request?.tagNames ?? [])].join('、')} → ${remoteName}` : formatGitTaskOutput(result.stderr || result.stdout || `${branchLabel} → ${remoteName} 推送失败`),
                 stdout: formatGitTaskOutput(result.stdout),
                 stderr: formatGitTaskOutput(result.stderr)
               }
@@ -15677,9 +15751,9 @@ function ProjectOverview({
                 repositoryId: repository.id,
                 repositoryName: repository.name,
                 remoteName,
-                branch: group.branch,
+                branch: group.targetBranch === group.branch ? group.branch : `${group.branch} → ${group.targetBranch}`,
                 ok: false,
-                message: formatGitTaskOutput(getErrorMessage(error, `${project.name} / ${repository.name} 推送到 ${remoteName} 失败`)),
+                message: formatGitTaskOutput(getErrorMessage(error, `${project.name} / ${repository.name} ${group.branch} → ${group.targetBranch} 推送到 ${remoteName} 失败`)),
                 stderr: formatGitTaskOutput(getErrorMessage(error))
               }
             }
@@ -16065,6 +16139,7 @@ function ProjectOverview({
       await window.forgeDesk.setProjectGroup({ groupId, projectId })
       await loadWorkspace()
       setProjectGroups(await window.forgeDesk.listProjectGroups())
+      setSelectedProjectRowIds([])
     } catch (error) {
       message.error(getErrorMessage(error, '更新项目分组失败'))
     }
@@ -16677,16 +16752,17 @@ function ProjectOverview({
           <div className="project-list-panel">
             <div className="project-list-heading">
               <div>
-                <Typography.Title level={4}>项目列表</Typography.Title>
+                <Typography.Title level={4}>
+                  项目列表 · {activeProjectListGroupOption?.label ?? '全部'}
+                </Typography.Title>
                 <Space size={8} wrap>
                   <Typography.Text type="secondary">
-                    {isSimpleMode ? '点击项目直接进入工作台，更多操作收在项目菜单中。' : '选中多个项目后，可以并发 Fetch 或推送。'}
+                    {activeProjectListGroupOption?.projectCount ?? 0} 个项目 · {isSimpleMode ? '点击项目直接进入工作台，更多操作收在项目菜单中。' : '选中多个项目后，可以并发 Fetch 或推送。'}
                   </Typography.Text>
                   {favoriteProjectCount > 0 ? <Tag color="gold">已收藏 {favoriteProjectCount}</Tag> : null}
                 </Space>
               </div>
               <Space wrap>
-                <Button icon={<FolderOpenOutlined />} onClick={() => openProjectGroupEditor()}>管理分组</Button>
                 {!isSimpleMode ? (
                   <>
                     <Button
@@ -16710,33 +16786,71 @@ function ProjectOverview({
                 <Button size="small" icon={<PlusOutlined />} onClick={onCreateProject} />
               </Space>
             </div>
-            <Table<Project>
-              className={`project-list-table${isSimpleMode ? ' simple-project-list-table' : ''}`}
-              rowKey="id"
-              size="middle"
-              tableLayout="fixed"
-              columns={isSimpleMode ? simpleProjectListColumns : projectListColumns}
-              dataSource={sortedProjects}
-              pagination={false}
-              rowSelection={
-                isSimpleMode
-                  ? undefined
-                  : {
-                      selectedRowKeys: selectedProjectRowIds,
-                      onChange: (keys) => setSelectedProjectRowIds(keys.map(String))
-                    }
-              }
-              onRow={(project) => ({
-                className: 'project-list-clickable-row',
-                onClick: (event) => {
-                  if (isProjectListInteractiveTarget(event.target)) {
-                    return
-                  }
-
-                  openProjectDetail(project)
+            <div className="project-group-filter" aria-label="项目分组筛选">
+              {projectListGroupOptions.map((option) => (
+                <Button
+                  key={option.key}
+                  size="small"
+                  type={option.key === activeProjectListGroupFilter ? 'primary' : 'default'}
+                  className="project-group-filter-option"
+                  onClick={() => selectProjectListGroupFilter(option.key)}
+                >
+                  {option.label} <span>{option.projectCount}</span>
+                </Button>
+              ))}
+              <Button
+                size="small"
+                icon={<FolderOpenOutlined />}
+                className="project-group-filter-manage"
+                onClick={() => openProjectGroupEditor()}
+              >
+                管理分组
+              </Button>
+            </div>
+            {visibleProjects.length > 0 ? (
+              <Table<Project>
+                className={`project-list-table${isSimpleMode ? ' simple-project-list-table' : ''}`}
+                rowKey="id"
+                size="middle"
+                tableLayout="fixed"
+                columns={isSimpleMode ? simpleProjectListColumns : projectListColumns}
+                dataSource={visibleProjects}
+                pagination={false}
+                rowSelection={
+                  isSimpleMode
+                    ? undefined
+                    : {
+                        selectedRowKeys: selectedProjectRowIds,
+                        onChange: (keys) => setSelectedProjectRowIds(keys.map(String))
+                      }
                 }
-              })}
-            />
+                onRow={(project) => ({
+                  className: 'project-list-clickable-row',
+                  onClick: (event) => {
+                    if (isProjectListInteractiveTarget(event.target)) {
+                      return
+                    }
+
+                    openProjectDetail(project)
+                  }
+                })}
+              />
+            ) : (
+              <div className="project-group-filter-empty">
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={activeProjectListGroupFilter === 'favorites'
+                    ? '还没有收藏项目'
+                    : activeProjectListGroupFilter === 'ungrouped'
+                      ? '所有项目都已归入分组'
+                      : `“${activeProjectListGroupOption?.label ?? '当前'}”分组还没有项目`}
+                >
+                  <Button icon={<FolderOpenOutlined />} onClick={() => openProjectGroupEditor()}>
+                    管理分组
+                  </Button>
+                </Empty>
+              </div>
+            )}
             {listCommitProject && (
               <GitCommitModal
                 open={Boolean(listCommitProject)}
@@ -16895,9 +17009,9 @@ function ProjectOverview({
               repositories={projectRepositories}
               initialRepositoryId={selectedProjectGitRepository?.id}
               onClose={() => setPushModalOpen(false)}
-              onStartTask={({ repository, remoteNames, branch, tagNames }) => {
+              onStartTask={({ repository, remoteNames, branch, targetBranch, tagNames }) => {
                 if (selectedProject) {
-                  void runProjectGitTask(selectedProject, 'push', { repositoryId: repository.id, remoteNames, branch, tagNames })
+                  void runProjectGitTask(selectedProject, 'push', { repositoryId: repository.id, remoteNames, branch, targetBranch, tagNames })
                 }
               }}
               onChanged={(repository) => selectedProject && refreshProjectGitData(selectedProject.id, repository)}
@@ -17946,6 +18060,8 @@ function ProjectBranchTagSettings({ project, repositories, onChanged }: { projec
   const [loadingBranchTags, setLoadingBranchTags] = useState(false)
   const [savingBranchTag, setSavingBranchTag] = useState(false)
   const [testBranchName, setTestBranchName] = useState('develop')
+  const [testRemoteName, setTestRemoteName] = useState('origin')
+  const [productionRemoteName, setProductionRemoteName] = useState('origin')
   const [loadingCommitStatusConfig, setLoadingCommitStatusConfig] = useState(false)
   const [savingCommitStatusConfig, setSavingCommitStatusConfig] = useState(false)
   const [branchTagForm] = Form.useForm<BranchTagForm>()
@@ -17986,6 +18102,8 @@ function ProjectBranchTagSettings({ project, repositories, onChanged }: { projec
         const config = await window.forgeDesk.getProjectCommitStatusConfig(project.id)
         if (!cancelled) {
           setTestBranchName(config.testBranchName)
+          setTestRemoteName(config.testRemoteName)
+          setProductionRemoteName(config.productionRemoteName)
         }
       } catch (error) {
         if (!cancelled) {
@@ -18010,9 +18128,16 @@ function ProjectBranchTagSettings({ project, repositories, onChanged }: { projec
     setSavingCommitStatusConfig(true)
 
     try {
-      const config = await window.forgeDesk.saveProjectCommitStatusConfig({ projectId: project.id, testBranchName })
+      const config = await window.forgeDesk.saveProjectCommitStatusConfig({
+        projectId: project.id,
+        testBranchName,
+        testRemoteName,
+        productionRemoteName
+      })
       setTestBranchName(config.testBranchName)
-      message.success('测试分支已保存，提交状态已刷新')
+      setTestRemoteName(config.testRemoteName)
+      setProductionRemoteName(config.productionRemoteName)
+      message.success('生命周期远端配置已保存，提交状态已刷新')
       onChanged()
     } catch (error) {
       message.error(getErrorMessage(error))
@@ -18128,8 +18253,18 @@ function ProjectBranchTagSettings({ project, repositories, onChanged }: { projec
     }
   ]
 
-  const matchingRepositories = repositories.filter((repository) =>
-    repository.branches.includes(testBranchName) || repository.remoteBranches.some((branch) => branch.split('/').slice(1).join('/') === testBranchName)
+  const remoteNames = Array.from(new Set([
+    'origin',
+    testRemoteName,
+    productionRemoteName,
+    ...repositories.flatMap((repository) => repository.remotes.map((remote) => remote.name))
+  ].filter(Boolean))).sort()
+  const remoteOptions = remoteNames.map((remoteName) => ({ label: remoteName, value: remoteName }))
+  const matchingTestRepositories = repositories.filter((repository) =>
+    repository.remoteBranches.includes(`${testRemoteName}/${testBranchName}`)
+  )
+  const matchingProductionRepositories = repositories.filter((repository) =>
+    repository.remoteBranches.includes(`${productionRemoteName}/main`)
   )
 
   return (
@@ -18138,10 +18273,18 @@ function ProjectBranchTagSettings({ project, repositories, onChanged }: { projec
         <div>
           <Typography.Text strong>提交生命周期</Typography.Text>
           <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0' }}>
-            合入 <Typography.Text code>main</Typography.Text> 自动标记为已上线；合入测试分支后可标记测试通过或不通过。
+            仅以配置的远端追踪引用判断状态；本地 <Typography.Text code>main</Typography.Text> 或测试分支不会触发上线或测试状态。
           </Typography.Paragraph>
         </div>
         <Space wrap>
+          <Select
+            aria-label="测试远端"
+            value={testRemoteName}
+            disabled={loadingCommitStatusConfig}
+            options={remoteOptions}
+            onChange={setTestRemoteName}
+            style={{ width: 140 }}
+          />
           <Input
             aria-label="测试分支"
             value={testBranchName}
@@ -18150,16 +18293,34 @@ function ProjectBranchTagSettings({ project, repositories, onChanged }: { projec
             onChange={(event) => setTestBranchName(event.target.value)}
             style={{ width: 180 }}
           />
+          <Select
+            aria-label="线上远端"
+            value={productionRemoteName}
+            disabled={loadingCommitStatusConfig}
+            options={remoteOptions}
+            onChange={setProductionRemoteName}
+            style={{ width: 140 }}
+          />
+          <Typography.Text code>main</Typography.Text>
           <Button type="primary" loading={savingCommitStatusConfig || loadingCommitStatusConfig} onClick={() => void saveCommitStatusConfig()}>
-            保存测试分支
+            保存生命周期配置
           </Button>
         </Space>
-        <Typography.Text type={matchingRepositories.length ? 'secondary' : 'warning'}>
-          {matchingRepositories.length ? `当前 ${matchingRepositories.length} 个仓库存在 ${testBranchName} 引用。` : `当前项目没有找到 ${testBranchName} 引用；提交会保持等待提测。`}
-        </Typography.Text>
+        <Space direction="vertical" size={2}>
+          <Typography.Text type={matchingTestRepositories.length ? 'secondary' : 'warning'}>
+            {matchingTestRepositories.length
+              ? `测试引用 ${testRemoteName}/${testBranchName} 已存在于 ${matchingTestRepositories.length} 个仓库。`
+              : `当前项目没有找到测试远端引用 ${testRemoteName}/${testBranchName}；提交会保持等待提测。`}
+          </Typography.Text>
+          <Typography.Text type={matchingProductionRepositories.length ? 'secondary' : 'warning'}>
+            {matchingProductionRepositories.length
+              ? `线上引用 ${productionRemoteName}/main 已存在于 ${matchingProductionRepositories.length} 个仓库。`
+              : `当前项目没有找到线上远端引用 ${productionRemoteName}/main；提交不会标记为已上线。`}
+          </Typography.Text>
+        </Space>
       </div>
       <div className="branch-tag-settings-toolbar">
-        <Typography.Text type="secondary">填写短分支名即可匹配本地和远端同名分支。</Typography.Text>
+        <Typography.Text type="secondary">填写短分支名即可设置标签规则，不影响提交生命周期的远端判断。</Typography.Text>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => openBranchTagModal()}>
           新增规则
         </Button>

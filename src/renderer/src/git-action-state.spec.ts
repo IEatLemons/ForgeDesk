@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import {
   PUSH_ALL_REMOTES_VALUE,
   canCommitSelection,
+  canPushBranchSelection,
   canPushSelection,
   createPushRemoteOptions,
   getCurrentBranchName,
@@ -59,6 +60,12 @@ describe('git action state helpers', () => {
     assert.equal(canPushSelection('origin', repository.pushTargets), false)
     assert.equal(canPushSelection('backup', repository.pushTargets), true)
     assert.equal(canPushSelection(PUSH_ALL_REMOTES_VALUE, repository.pushTargets), true)
+  })
+
+  it('allows an explicitly selected source and target branch without depending on the current branch ahead state', () => {
+    assert.equal(canPushBranchSelection('origin', repository.remotes, 'feature/release', 'release/candidate'), true)
+    assert.equal(canPushBranchSelection('origin', repository.remotes, '', 'release/candidate'), false)
+    assert.equal(canPushBranchSelection('missing', repository.remotes, 'feature/release', 'release/candidate'), false)
   })
 
   it('uses the freshly detected workspace branch before the repository fallback', () => {
