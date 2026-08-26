@@ -15,7 +15,7 @@
     "dev": "node scripts/build-menu-bar-helper.mjs && node scripts/rebuild-native.mjs && electron-vite dev",
     "build": "node scripts/build-menu-bar-helper.mjs && node scripts/rebuild-native.mjs && tsc --noEmit && electron-vite build",
     "package:android": "node scripts/build-android.mjs",
-    "package:mac": "node scripts/build-menu-bar-helper.mjs && node scripts/rebuild-native.mjs && tsc --noEmit && electron-vite build && electron-builder --mac --publish never",
+    "package:mac": "node scripts/package-desktop.mjs",
     "package:desktop": "node scripts/package-desktop.mjs",
     "publish:github": "node scripts/trigger-github-release.mjs",
     "package:mac:legacy": "node scripts/package-mac.mjs",
@@ -96,6 +96,7 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "resources/forgedesk.icns",
+      "x64ArchFiles": "**/node_modules/{better-sqlite3,node-pty}/prebuilds/**/*",
       "target": [
         {
           "target": "dmg",
