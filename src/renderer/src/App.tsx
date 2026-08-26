@@ -493,6 +493,11 @@ type SettingsOverviewCategory = {
   keys: SettingsOverviewModuleKey[]
 }
 
+type SettingsSidebarProps = {
+  activeModule: SettingsModuleKey
+  onSelectModule: (module: SettingsModuleKey) => void
+}
+
 const settingsOverviewCategories: SettingsOverviewCategory[] = [
   {
     key: 'system',
@@ -620,6 +625,50 @@ const settingsModuleDefinitions: SettingsModuleDefinition[] = [
     icon: <DownloadOutlined />
   }
 ]
+
+function SettingsSidebar({ activeModule, onSelectModule }: SettingsSidebarProps): JSX.Element {
+  return (
+    <div className="settings-sidebar-navigation" aria-label="设置分类">
+      <div className="settings-sidebar-heading">
+        <Typography.Text strong>设置分类</Typography.Text>
+        <Typography.Text type="secondary">选择一个模块管理配置</Typography.Text>
+      </div>
+      <nav>
+        {settingsOverviewCategories.map((category) => (
+          <section className="settings-sidebar-section" key={category.key}>
+            <div className="settings-sidebar-category">
+              <span>{category.title}</span>
+              <Typography.Text type="secondary">{category.description}</Typography.Text>
+            </div>
+            <div className="settings-sidebar-list">
+              {category.keys.map((key) => {
+                const module = settingsModuleDefinitions.find((definition) => definition.key === key)
+                const isActive = activeModule === key
+
+                return module ? (
+                  <button
+                    className={`settings-entry-row settings-sidebar-entry${isActive ? ' is-active' : ''}`}
+                    key={module.key}
+                    type="button"
+                    aria-current={isActive ? 'page' : undefined}
+                    onClick={() => onSelectModule(module.key)}
+                  >
+                    <span className="settings-entry-icon">{module.icon}</span>
+                    <span className="settings-entry-copy">
+                      <span className="settings-entry-title">{module.title}</span>
+                      <span className="settings-entry-description">{module.description}</span>
+                    </span>
+                    <ArrowRightOutlined className="settings-entry-arrow" />
+                  </button>
+                ) : null
+              })}
+            </div>
+          </section>
+        ))}
+      </nav>
+    </div>
+  )
+}
 
 type AppProps = {
   themePreference: ThemePreference
@@ -3720,7 +3769,9 @@ function OaDocsPanel({ onOpenSettings }: OaDocsPanelProps): JSX.Element {
 }
 
 function SettingsPanel({
-  initialModule = 'overview',
+  activeModule,
+  onActiveModuleChange,
+  onBack,
   themePreference,
   resolvedTheme,
   onThemePreferenceChange,
@@ -3730,7 +3781,9 @@ function SettingsPanel({
   onDeploymentRefreshActiveChange,
   onOpenSystemLog
 }: {
-  initialModule?: SettingsModuleKey
+  activeModule: SettingsModuleKey
+  onActiveModuleChange: (module: SettingsModuleKey) => void
+  onBack: () => void
   themePreference: ThemePreference
   resolvedTheme: ResolvedTheme
   onThemePreferenceChange: (preference: ThemePreference) => void
@@ -3763,7 +3816,8 @@ function SettingsPanel({
   const [planeTestResult, setPlaneTestResult] = useState<PlaneConnectionTestResult | null>(null)
   const [oaSettings, setOaSettings] = useState<OaSettingsView | null>(null)
   const [sshConfigContent, setSshConfigContent] = useState('')
-  const [activeSettingsModule, setActiveSettingsModule] = useState<SettingsModuleKey>(initialModule)
+  const activeSettingsModule = activeModule
+  const setActiveSettingsModule = onActiveModuleChange
   const [sshConfigMode, setSshConfigMode] = useState<SshConfigMode>('guided')
   const [sshConfigEntries, setSshConfigEntries] = useState<SshConfigEntry[]>([])
   const [sshImportKind, setSshImportKind] = useState<SshKeyKind>('private')
@@ -3808,10 +3862,6 @@ function SettingsPanel({
   const [savingMenuBarSettings, setSavingMenuBarSettings] = useState(false)
   const [workingMenuBarAction, setWorkingMenuBarAction] = useState<string | null>(null)
   const [refreshingSettingsOverview, setRefreshingSettingsOverview] = useState(false)
-
-  useEffect(() => {
-    setActiveSettingsModule(initialModule)
-  }, [initialModule])
 
   useEffect(() => {
     if (!window.forgeDesk) {
@@ -5231,7 +5281,6 @@ function SettingsPanel({
     ...definition,
     ...resolveSettingsModuleState(definition.key)
   }))
-  const settingsModuleByKey = new Map(settingsModules.map((module) => [module.key, module]))
   const settingsAttentionModules = settingsModules.filter((module) => ['not-configured', 'attention', 'error'].includes(module.status.kind))
 
   function renderSettingsStatus(status: SettingsModuleStatus): JSX.Element {
@@ -6350,33 +6399,6 @@ function SettingsPanel({
     )
   }
 
-  function renderSettingsNavigation(): JSX.Element {
-    return (
-      <aside className="settings-navigation" aria-label="设置分类">
-        <div className="settings-navigation-heading">
-          <Typography.Text strong>设置分类</Typography.Text>
-          <Typography.Text type="secondary">选择一个模块管理配置</Typography.Text>
-        </div>
-        <nav>
-          {settingsOverviewCategories.map((category) => (
-            <section className="settings-navigation-section" key={category.key}>
-              <div className="settings-navigation-category">
-                <span>{category.title}</span>
-                <Typography.Text type="secondary">{category.description}</Typography.Text>
-              </div>
-              <div className="settings-navigation-list">
-                {category.keys.map((key) => {
-                  const module = settingsModuleByKey.get(key)
-                  return module ? renderSettingsEntry(module) : null
-                })}
-              </div>
-            </section>
-          ))}
-        </nav>
-      </aside>
-    )
-  }
-
   function renderOverview(): JSX.Element {
     const attentionCount = settingsAttentionModules.length
     const configuredCount = settingsModules.filter((module) => ['saved', 'verified'].includes(module.status.kind)).length
@@ -6470,6 +6492,9 @@ function SettingsPanel({
     <section className="workspace-section settings-workspace">
       <div className="section-heading">
         <div>
+          <div className="settings-page-back">
+            <ModuleBackButton label="返回" onClick={onBack} />
+          </div>
           <Typography.Title level={2}>设置</Typography.Title>
           <Typography.Text type="secondary">管理界面、开发环境凭据和外部服务集成。</Typography.Text>
         </div>
@@ -6481,7 +6506,6 @@ function SettingsPanel({
       </div>
 
       <div className="settings-layout">
-        {renderSettingsNavigation()}
         <main className="settings-main">{renderActiveSettingsModule()}</main>
       </div>
 
@@ -22361,7 +22385,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const [chromePreferences, setChromePreferences] = useState<AppChromePreferences>(() => readStoredAppChromePreferences())
   const [activeKey, setActiveKey] = useState<AppActiveKey>(() => (readStoredAppMode() === 'simple' ? 'projects' : 'overview'))
   const usesCustomTitleBar = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
-  const [settingsInitialModule, setSettingsInitialModule] = useState<SettingsModuleKey>('overview')
+  const [settingsActiveModule, setSettingsActiveModule] = useState<SettingsModuleKey>('overview')
+  const [settingsBackKey, setSettingsBackKey] = useState<AppActiveKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
   const [initialization, setInitialization] = useState<InitializationSnapshot | null>(null)
   const [initializationLoading, setInitializationLoading] = useState(true)
@@ -22703,7 +22728,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     }
 
     if (key === 'settings') {
-      setSettingsInitialModule('overview')
+      setSettingsBackKey(activeKey === 'settings' ? 'overview' : activeKey)
+      setSettingsActiveModule('overview')
     }
 
     if (key === 'codex-sessions') {
@@ -22748,8 +22774,16 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   }
 
   function openSettingsModule(module: SettingsModuleKey): void {
-    setSettingsInitialModule(module)
+    if (activeKey !== 'settings') {
+      setSettingsBackKey(activeKey)
+    }
+    setSettingsActiveModule(module)
     setActiveKey('settings')
+  }
+
+  function closeSettings(): void {
+    setSettingsActiveModule('overview')
+    setActiveKey(settingsBackKey)
   }
 
   function openGlobalTerminalRequest(request: Omit<TerminalOpenRequest, 'requestId'>): void {
@@ -23133,30 +23167,36 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       {appUpdateBanner}
       <Layout className={`app-shell${usesCustomTitleBar ? ' app-shell-with-titlebar' : ''}${isSimpleMode ? ' app-shell-simple' : ''}`}>
         {appChromeControlsFallback}
-        <Layout.Sider width={236} theme={resolvedTheme} className="sidebar">
+        <Layout.Sider width={activeKey === 'settings' ? 292 : 236} theme={resolvedTheme} className={`sidebar${activeKey === 'settings' ? ' settings-sidebar' : ''}`}>
           <div className="sidebar-inner">
-            <div className="brand">
-              <div className="brand-mark">
-                <img src={forgedeskLogoUrl} alt="ForgeDesk" />
-              </div>
-              <div className="brand-copy">
-                <div className="brand-heading">
-                  <Typography.Title level={4}>ForgeDesk</Typography.Title>
+            {activeKey === 'settings' ? (
+              <SettingsSidebar activeModule={settingsActiveModule} onSelectModule={setSettingsActiveModule} />
+            ) : (
+              <>
+                <div className="brand">
+                  <div className="brand-mark">
+                    <img src={forgedeskLogoUrl} alt="ForgeDesk" />
+                  </div>
+                  <div className="brand-copy">
+                    <div className="brand-heading">
+                      <Typography.Title level={4}>ForgeDesk</Typography.Title>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-            <Menu className="sidebar-nav" mode="inline" selectedKeys={activeKeyInFooter ? [] : [activeKey]} items={menuItems} onClick={({ key }) => openNavigationKey(key as AppNavigationKey)} />
-            {footerMenuItems.length > 0 ? (
-              <div className="sidebar-footer">
-                <Menu
-                  className="sidebar-footer-menu"
-                  mode="inline"
-                  selectedKeys={activeKeyInFooter ? [activeKey] : []}
-                  items={footerMenuItems}
-                  onClick={({ key }) => openNavigationKey(key as AppNavigationKey)}
-                />
-              </div>
-            ) : null}
+                <Menu className="sidebar-nav" mode="inline" selectedKeys={activeKeyInFooter ? [] : [activeKey]} items={menuItems} onClick={({ key }) => openNavigationKey(key as AppNavigationKey)} />
+                {footerMenuItems.length > 0 ? (
+                  <div className="sidebar-footer">
+                    <Menu
+                      className="sidebar-footer-menu"
+                      mode="inline"
+                      selectedKeys={activeKeyInFooter ? [activeKey] : []}
+                      items={footerMenuItems}
+                      onClick={({ key }) => openNavigationKey(key as AppNavigationKey)}
+                    />
+                  </div>
+                ) : null}
+              </>
+            )}
           </div>
         </Layout.Sider>
         <Layout className="app-main">
@@ -23168,7 +23208,9 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             )}
             {!loadingWorkspace && activeKey === 'settings' && (
               <SettingsPanel
-                initialModule={settingsInitialModule}
+                activeModule={settingsActiveModule}
+                onActiveModuleChange={setSettingsActiveModule}
+                onBack={closeSettings}
                 themePreference={themePreference}
                 resolvedTheme={resolvedTheme}
                 onThemePreferenceChange={onThemePreferenceChange}
