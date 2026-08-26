@@ -96,6 +96,24 @@ export type CodexSessionMessageInput = {
   accountId?: string
 }
 
+export type CodexSessionBatchAction = 'archive' | 'unarchive' | 'delete'
+
+export type CodexSessionBatchActionInput = {
+  sessionIds: string[]
+}
+
+export type CodexSessionBatchActionFailure = {
+  sessionId: string
+  error: string
+}
+
+export type CodexSessionBatchActionResult = {
+  action: CodexSessionBatchAction
+  succeededIds: string[]
+  failures: CodexSessionBatchActionFailure[]
+  snapshot: CodexSessionsSnapshot
+}
+
 export type CodexSessionStateThread = {
   id?: unknown
   rollout_path?: unknown
@@ -862,6 +880,94 @@ export class CodexSessionService {
       this.emit?.({ session, sessionId, type: 'cancelled' })
     }
     return this.get(sessionId)
+  }
+
+  async archive(input: CodexSessionBatchActionInput): Promise<CodexSessionBatchActionResult> {
+    return this.runBatchAction('archive', input)
+  }
+
+  async unarchive(input: CodexSessionBatchActionInput): Promise<CodexSessionBatchActionResult> {
+    return this.runBatchAction('unarchive', input)
+  }
+
+  async delete(input: CodexSessionBatchActionInput): Promise<CodexSessionBatchActionResult> {
+    return this.runBatchAction('delete', input)
+  }
+
+  private async runBatchAction(action: CodexSessionBatchAction, input: CodexSessionBatchActionInput): Promise<CodexSessionBatchActionResult> {
+    const sessionIds = [...new Set((input?.sessionIds ?? []).map((sessionId) => sessionId.trim()).filter(Boolean))]
+    const codexHome = await this.resolveCodexHome()
+    const summaries = await this.readSummaries(codexHome)
+    const sessionsById = new Map(summaries.map((session) => [session.id, session]))
+    const succeededIds: string[] = []
+    const failures: CodexSessionBatchActionFailure[] = []
+
+    for (const sessionId of sessionIds) {
+      const session = sessionsById.get(sessionId)
+      if (!session) {
+        failures.push({ sessionId, error: 'Codex 会话不存在或已被删除' })
+        continue
+      }
+      if (action === 'archive' && session.status === 'running') {
+        failures.push({ sessionId, error: '进行中的 Codex 会话不能归档' })
+        continue
+      }
+      if (action === 'archive' && session.archived) {
+        failures.push({ sessionId, error: '该 Codex 会话已经归档' })
+        continue
+      }
+      if (action === 'unarchive' && !session.archived) {
+        failures.push({ sessionId, error: '该 Codex 会话未归档' })
+        continue
+      }
+      if (action === 'delete' && !session.archived) {
+        failures.push({ sessionId, error: '只能删除已归档的 Codex 会话' })
+        continue
+      }
+
+      try {
+        await this.runNativeSessionCommand(action, session, codexHome)
+        succeededIds.push(sessionId)
+        this.cache.delete(sessionId)
+        this.summaryCache.delete(sessionId)
+      } catch (error) {
+        failures.push({ sessionId, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+
+    const snapshot = await this.list()
+    return { action, failures, snapshot, succeededIds }
+  }
+
+  private async runNativeSessionCommand(action: CodexSessionBatchAction, session: CodexSessionSummary, codexHome: string): Promise<void> {
+    const environment = { ...process.env, CODEX_HOME: codexHome, NO_COLOR: '1' }
+    const command = await this.findCodexCommand(environment)
+    if (!command) throw new Error('未检测到 Codex CLI')
+    const args = [action, ...(action === 'delete' ? ['--force'] : []), session.id]
+
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      let child: ChildProcessWithoutNullStreams
+      try {
+        child = this.spawnCodex(command, args, { cwd: session.cwd || process.cwd(), env: environment })
+      } catch (error) {
+        rejectPromise(error)
+        return
+      }
+
+      let output = ''
+      const append = (chunk: Buffer | string): void => { output = `${output}${String(chunk)}`.slice(-8000) }
+      child.stdout.on('data', append)
+      child.stderr.on('data', append)
+      child.once('error', rejectPromise)
+      child.once('close', (code, signal) => {
+        if (code === 0) {
+          resolvePromise()
+          return
+        }
+        const detail = output.trim()
+        rejectPromise(new Error(detail || `Codex ${action} 失败（退出码 ${code ?? 'unknown'}${signal ? `，信号 ${signal}` : ''}）`))
+      })
+    })
   }
 
   private async readSummaries(codexHome = this.codexHome): Promise<CodexSessionSummary[]> {

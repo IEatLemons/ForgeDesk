@@ -2009,6 +2009,41 @@
   gap: 3px;
 }
 
+.codex-session-sidebar > .ant-space-compact,
+.codex-session-status-filter {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.codex-session-selection-toolbar,
+.codex-session-batch-actions {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.codex-session-selection-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.codex-session-selection-toolbar .ant-checkbox-wrapper,
+.codex-session-selection-toolbar .ant-typography {
+  font-size: 11px;
+}
+
+.codex-session-batch-actions {
+  padding-top: 10px;
+  border-top: 1px solid var(--app-border-soft);
+}
+
+.codex-session-row-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .codex-session-row-preview {
   display: -webkit-box;
   overflow: hidden;

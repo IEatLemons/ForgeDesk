@@ -1,6 +1,7 @@
 import {
   AudioOutlined,
   CheckCircleOutlined,
+  DeleteOutlined,
   CloseCircleOutlined,
   CloseOutlined,
   CodeOutlined,
@@ -10,6 +11,7 @@ import {
   FolderOpenOutlined,
   GlobalOutlined,
   HistoryOutlined,
+  InboxOutlined,
   MessageOutlined,
   PlusOutlined,
   PushpinFilled,
@@ -20,13 +22,14 @@ import {
   StopOutlined,
   ThunderboltOutlined,
   ToolOutlined,
+  UndoOutlined,
   ZoomInOutlined,
   ZoomOutOutlined
 } from '@ant-design/icons'
-import { Badge, Button, Empty, Input, Layout, Select, Space, Spin, Tag, Tooltip, Typography, message } from 'antd'
+import { Badge, Button, Checkbox, Empty, Input, Layout, Modal, Select, Space, Spin, Tag, Tooltip, Typography, message } from 'antd'
 import type { ClipboardEvent as ReactClipboardEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { CodexConversationItem, CodexProjectMonitorSnapshot, CodexSessionDetail, CodexSessionEvent, CodexSessionSummary, CodexSessionsSnapshot, CodexUncommittedAlert } from './data'
+import type { CodexConversationItem, CodexProjectMonitorSnapshot, CodexSessionBatchAction, CodexSessionDetail, CodexSessionEvent, CodexSessionSummary, CodexSessionsSnapshot, CodexUncommittedAlert } from './data'
 import { CodexProjectMonitor, type CodexProjectGroup } from './codex-project-monitor'
 import { CodexSitesPanel } from './codex-sites-panel'
 import { getErrorMessage } from './error-messages'
@@ -41,6 +44,15 @@ type CodexSessionManagerPanelProps = {
   usesCustomTitleBar: boolean
   onOpenForgeProject?: (projectId: string) => void
   focusAlert?: CodexUncommittedAlert | null
+}
+
+type SessionListMode = 'active' | 'archived'
+
+type SessionStatusFilter = 'all' | CodexSessionSummary['status']
+
+type BatchConfirmation = {
+  action: CodexSessionBatchAction
+  sessionIds: string[]
 }
 
 const statusLabels: Record<CodexSessionSummary['status'], string> = {
@@ -457,6 +469,12 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
   const [selectedSessionId, setSelectedSessionId] = useState('')
   const [requestedSessionId, setRequestedSessionId] = useState(() => focusSessionId?.trim() || '')
   const [query, setQuery] = useState('')
+  const [sessionListMode, setSessionListMode] = useState<SessionListMode>('active')
+  const [statusFilter, setStatusFilter] = useState<SessionStatusFilter>('all')
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set())
+  const [batchConfirmation, setBatchConfirmation] = useState<BatchConfirmation | null>(null)
+  const [batchActionBusy, setBatchActionBusy] = useState(false)
   const [draft, setDraft] = useState('')
   const [imageAttachments, setImageAttachments] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -475,22 +493,35 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
 
   const filteredProjects = useMemo<CodexProjectGroup[]>(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase()
+    const archived = sessionListMode === 'archived'
     return snapshot.projects.map((project) => {
       const sessions = snapshot.sessions.filter((session) => {
         if (session.projectKey !== project.key) return false
+        if (session.archived !== archived) return false
+        if (statusFilter !== 'all' && session.status !== statusFilter) return false
         if (!normalizedQuery) return true
         return [session.title, session.cwd, session.preview, session.id].some((value) => value.toLocaleLowerCase().includes(normalizedQuery))
           || project.name.toLocaleLowerCase().includes(normalizedQuery)
           || project.cwd.toLocaleLowerCase().includes(normalizedQuery)
       })
-        return { project, sessions: sortSessions(sessions) }
-    }).filter(({ sessions, project }) => !normalizedQuery || sessions.length > 0 || project.name.toLocaleLowerCase().includes(normalizedQuery) || project.cwd.toLocaleLowerCase().includes(normalizedQuery))
-  }, [query, snapshot.projects, snapshot.sessions])
+      return {
+        project: {
+          ...project,
+          runningCount: sessions.filter((session) => session.status === 'running').length,
+          sessionCount: sessions.length
+        },
+        sessions: sortSessions(sessions)
+      }
+    }).filter(({ sessions }) => sessions.length > 0)
+  }, [query, sessionListMode, snapshot.projects, snapshot.sessions, statusFilter])
 
   const selectedProject = filteredProjects.find(({ project }) => project.key === selectedProjectKey)?.project ?? filteredProjects[0]?.project ?? null
   const selectedProjectSessions = filteredProjects.find(({ project }) => project.key === selectedProject?.key)?.sessions ?? []
   const selectedSummary = selectedProjectSessions.find((session) => session.id === selectedSessionId) ?? null
   const isRunning = detail ? detail.status === 'running' : selectedSummary?.status === 'running'
+  const selectableSessions = selectedProjectSessions.filter((session) => sessionListMode === 'archived' || session.status !== 'running')
+  const selectedVisibleSessionIds = selectableSessions.filter((session) => selectedSessionIds.has(session.id)).map((session) => session.id)
+  const allVisibleSelected = selectableSessions.length > 0 && selectedVisibleSessionIds.length === selectableSessions.length
   const modelOptions = useMemo(() => [
     { label: '默认模型', value: CODEX_DEFAULT_MODEL_VALUE },
     ...(configuredModel ? [{ label: configuredModel, value: configuredModel }] : [])
@@ -570,6 +601,11 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
     if (selectedSummary && selectedSummary.projectKey !== selectedProjectKey) setSelectedProjectKey(selectedSummary.projectKey)
     if (!selectedSummary && selectedSessionId) setSelectedSessionId('')
   }, [selectedProjectKey, selectedSessionId, selectedSummary])
+
+  useEffect(() => {
+    setSelectedSessionIds(new Set())
+    setSelectionMode(false)
+  }, [sessionListMode])
 
   useEffect(() => {
     if (selectedSessionId) loadDetail(selectedSessionId).catch(() => undefined)
@@ -714,6 +750,64 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
     }
   }
 
+  function toggleSessionSelection(sessionId: string): void {
+    setSelectedSessionIds((current) => {
+      const next = new Set(current)
+      if (next.has(sessionId)) next.delete(sessionId)
+      else next.add(sessionId)
+      return next
+    })
+  }
+
+  function toggleVisibleSelection(): void {
+    setSelectedSessionIds((current) => {
+      const next = new Set(current)
+      if (allVisibleSelected) selectableSessions.forEach((session) => next.delete(session.id))
+      else selectableSessions.forEach((session) => next.add(session.id))
+      return next
+    })
+  }
+
+  function requestBatchAction(action: CodexSessionBatchAction): void {
+    if (selectedVisibleSessionIds.length === 0) return
+    setBatchConfirmation({ action, sessionIds: selectedVisibleSessionIds })
+  }
+
+  async function performBatchAction(): Promise<void> {
+    if (!window.forgeDesk || !batchConfirmation) return
+    const confirmation = batchConfirmation
+    setBatchActionBusy(true)
+    try {
+      const result = confirmation.action === 'archive'
+        ? await window.forgeDesk.archiveCodexSessions({ sessionIds: confirmation.sessionIds })
+        : confirmation.action === 'unarchive'
+          ? await window.forgeDesk.unarchiveCodexSessions({ sessionIds: confirmation.sessionIds })
+          : await window.forgeDesk.deleteCodexSessions({ sessionIds: confirmation.sessionIds })
+      setSnapshot(result.snapshot)
+      setSelectedSessionIds(new Set())
+      setSelectionMode(false)
+      setBatchConfirmation(null)
+      if (detail && (confirmation.action === 'delete' || !result.snapshot.sessions.some((session) => session.id === detail.id && session.archived === detail.archived))) setDetail(null)
+      try {
+        const nextMonitorSnapshot = await window.forgeDesk.getCodexProjectMonitorSnapshot()
+        setMonitorSnapshot(nextMonitorSnapshot)
+      } catch {
+        // The batch response already carries the refreshed native Codex snapshot.
+      }
+      if (result.failures.length > 0) {
+        const firstFailure = result.failures[0]
+        message.warning(`已完成 ${result.succeededIds.length} 个会话；${result.failures.length} 个失败：${firstFailure?.error || '请刷新后重试'}`)
+      } else {
+        const labels: Record<CodexSessionBatchAction, string> = { archive: '已归档', delete: '已永久删除', unarchive: '已恢复' }
+        message.success(`${result.succeededIds.length} 个 Codex 会话${labels[confirmation.action]}`)
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error, '批量管理 Codex 会话失败'))
+    } finally {
+      setBatchActionBusy(false)
+    }
+  }
+
   async function selectImage(): Promise<void> {
     if (!window.forgeDesk || isRunning || sending) return
     try {
@@ -791,16 +885,16 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
       </div>
       <div className="codex-session-project-heading">
         <Typography.Text type="secondary">项目</Typography.Text>
-        <Typography.Text type="secondary">{snapshot.projects.length}</Typography.Text>
+        <Typography.Text type="secondary">{filteredProjects.length}</Typography.Text>
       </div>
       <div className="codex-session-project-list">
-        {loading && snapshot.projects.length === 0 ? <div className="codex-session-list-empty"><Spin size="small" /></div> : filteredProjects.length > 0 ? filteredProjects.map(({ project, sessions }) => (
+        {loading && filteredProjects.length === 0 ? <div className="codex-session-list-empty"><Spin size="small" /></div> : filteredProjects.length > 0 ? filteredProjects.map(({ project, sessions }) => (
           <button className={`codex-session-project-row${viewMode === 'conversation' && project.key === selectedProject?.key ? ' is-active' : ''}`} key={project.key} type="button" onClick={() => { setSelectedProjectKey(project.key); setSelectedSessionId(sessions[0]?.id || '') }}>
             <span className="codex-session-project-row-title">{project.name}</span>
             <span className="codex-session-project-row-path" title={project.cwd}>{project.cwd || '未记录工作目录'}</span>
             <span className="codex-session-project-row-meta"><span>{project.sessionCount} 个会话</span>{project.runningCount > 0 ? <Badge status="processing" text={`${project.runningCount} 进行中`} /> : null}</span>
           </button>
-        )) : <div className="codex-session-list-empty">暂无 Codex 项目</div>}
+        )) : <div className="codex-session-list-empty">{sessionListMode === 'archived' ? '暂无已归档 Codex 项目' : '暂无 Codex 项目'}</div>}
       </div>
     </aside>
   )
@@ -821,16 +915,46 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
             <Button type="text" icon={<ReloadOutlined />} loading={refreshing} onClick={() => refresh()} />
           </Tooltip>
         </div>
+        <Space.Compact block>
+          <Button block type={sessionListMode === 'active' ? 'primary' : 'default'} onClick={() => setSessionListMode('active')}>活动</Button>
+          <Button block icon={<InboxOutlined />} type={sessionListMode === 'archived' ? 'primary' : 'default'} onClick={() => setSessionListMode('archived')}>已归档</Button>
+        </Space.Compact>
         <Input allowClear className="codex-session-search" prefix={<SearchOutlined />} placeholder="搜索会话或项目" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <Select
+          aria-label="按状态筛选 Codex 会话"
+          className="codex-session-status-filter"
+          options={[
+            { label: '全部状态', value: 'all' },
+            { label: '进行中', value: 'running' },
+            { label: '已完成', value: 'completed' },
+            { label: '已中止', value: 'aborted' },
+            { label: '空闲', value: 'idle' }
+          ]}
+          value={statusFilter}
+          onChange={(value: SessionStatusFilter) => setStatusFilter(value)}
+        />
+        <div className="codex-session-selection-toolbar">
+          <Button size="small" type={selectionMode ? 'default' : 'text'} onClick={() => { setSelectionMode((current) => !current); setSelectedSessionIds(new Set()) }}>{selectionMode ? '取消选择' : '批量选择'}</Button>
+          {selectionMode ? <Space size={4} wrap>
+            <Checkbox checked={allVisibleSelected} disabled={selectableSessions.length === 0} indeterminate={selectedVisibleSessionIds.length > 0 && !allVisibleSelected} onChange={toggleVisibleSelection}>全选筛选结果</Checkbox>
+            <Typography.Text type="secondary">{selectedVisibleSessionIds.length} 项</Typography.Text>
+          </Space> : null}
+        </div>
         <div className="codex-session-list">
           {selectedProjectSessions.length > 0 ? selectedProjectSessions.map((session) => (
             <div className={`codex-session-row${session.id === selectedSummary?.id ? ' is-active' : ''}${session.status === 'running' ? ' is-running' : ''}`} key={session.id} role="button" tabIndex={0} onClick={() => setSelectedSessionId(session.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedSessionId(session.id) } }}>
-              <span className="codex-session-row-heading"><span className="codex-session-row-title">{session.pinned ? <PushpinFilled className="codex-session-pin-icon" /> : null}{session.title}</span><span className="codex-session-row-actions"><Badge status={statusTone(session.status)} text={statusLabels[session.status]} /><Tooltip title={session.pinned ? '取消 Codex 原生置顶' : '使用 Codex 原生置顶'}><span className="codex-session-pin-button" role="button" tabIndex={0} aria-label={session.pinned ? `取消 Codex 原生置顶 ${session.title}` : `使用 Codex 原生置顶 ${session.title}`} onClick={(event) => { event.stopPropagation(); togglePinSession(session).catch(() => undefined) }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); togglePinSession(session).catch(() => undefined) } }}>{session.pinned ? <PushpinFilled /> : <PushpinOutlined />}</span></Tooltip></span></span>
+              <span className="codex-session-row-heading"><span className="codex-session-row-title">{selectionMode ? <Checkbox checked={selectedSessionIds.has(session.id)} disabled={sessionListMode === 'active' && session.status === 'running'} onClick={(event) => event.stopPropagation()} onChange={() => toggleSessionSelection(session.id)} /> : null}{session.pinned ? <PushpinFilled className="codex-session-pin-icon" /> : null}{session.title}</span><span className="codex-session-row-actions"><Badge status={statusTone(session.status)} text={statusLabels[session.status]} /><Tooltip title={session.pinned ? '取消 Codex 原生置顶' : '使用 Codex 原生置顶'}><span className="codex-session-pin-button" role="button" tabIndex={0} aria-label={session.pinned ? `取消 Codex 原生置顶 ${session.title}` : `使用 Codex 原生置顶 ${session.title}`} onClick={(event) => { event.stopPropagation(); togglePinSession(session).catch(() => undefined) }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); togglePinSession(session).catch(() => undefined) } }}>{session.pinned ? <PushpinFilled /> : <PushpinOutlined />}</span></Tooltip></span></span>
               <span className="codex-session-row-preview">{session.preview || '暂无用户消息'}</span>
               <span className="codex-session-row-meta"><span>{session.archived ? '已归档' : formatRelativeTime(session.updatedAt)}</span><span>{shortenPath(session.id, 18)}</span></span>
             </div>
           )) : <div className="codex-session-list-empty">暂无匹配会话</div>}
         </div>
+        {selectionMode && selectedVisibleSessionIds.length > 0 ? <div className="codex-session-batch-actions">
+          {sessionListMode === 'active' ? <Button block icon={<InboxOutlined />} onClick={() => requestBatchAction('archive')}>归档已选 {selectedVisibleSessionIds.length} 项</Button> : <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            <Button block icon={<UndoOutlined />} onClick={() => requestBatchAction('unarchive')}>恢复已选 {selectedVisibleSessionIds.length} 项</Button>
+            <Button block danger icon={<DeleteOutlined />} onClick={() => requestBatchAction('delete')}>删除已选 {selectedVisibleSessionIds.length} 项</Button>
+          </Space>}
+        </div> : null}
       </aside>
 
       <main className="codex-session-main">
@@ -939,6 +1063,23 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', focusAler
         />
       ) : null}
       </Layout>
+      <Modal
+        cancelText="取消"
+        okButtonProps={{ danger: batchConfirmation?.action === 'delete', loading: batchActionBusy }}
+        okText={batchConfirmation?.action === 'archive' ? '确认归档' : batchConfirmation?.action === 'unarchive' ? '确认恢复' : '确认永久删除'}
+        onCancel={() => { if (!batchActionBusy) setBatchConfirmation(null) }}
+        onOk={() => performBatchAction().catch(() => undefined)}
+        open={Boolean(batchConfirmation)}
+        title={batchConfirmation?.action === 'archive' ? '归档 Codex 会话' : batchConfirmation?.action === 'unarchive' ? '恢复 Codex 会话' : '永久删除 Codex 会话'}
+      >
+        <Typography.Paragraph>
+          {batchConfirmation?.action === 'archive'
+            ? `将归档 ${batchConfirmation.sessionIds.length} 个已选会话。归档后仍可在 ForgeDesk 的“已归档”中查看和恢复。`
+            : batchConfirmation?.action === 'unarchive'
+              ? `将恢复 ${batchConfirmation.sessionIds.length} 个已选会话到活动列表。`
+              : `将永久删除 ${batchConfirmation?.sessionIds.length ?? 0} 个已归档会话及其原生 Codex 记录，此操作无法撤销。`}
+        </Typography.Paragraph>
+      </Modal>
       <CodexSitesPanel open={sitesOpen} onClose={() => setSitesOpen(false)} selectedSession={selectedSummary} sessionRunning={Boolean(isRunning)} />
     </>
   )
