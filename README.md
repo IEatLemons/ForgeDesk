@@ -66,6 +66,10 @@ npm run dev
 
 已安装的 ForgeDesk 会在启动后自动检查 GitHub Releases，并每小时轮询一次。macOS、Windows 和 Linux AppImage 版本都会下载对应系统的更新包；下载完成后在应用内提示“重启安装”。开发模式不会连接更新源；请使用打包后的应用测试更新流程。
 
+正式发版使用稳定语义化版本（例如 `1.2.3`）和标签 `v1.2.3`。GitHub Actions 会在三个系统完成构建及更新清单校验后，再公开 Release；该 Release 会成为稳定客户端的更新来源。
+
+要验证完整的 GitHub Release → ForgeDesk 热更新链路，请使用预发布版本（例如 `1.2.4-beta.1`）和标签 `v1.2.4-beta.1`。工作流会创建 GitHub prerelease，且不会覆盖 GitHub 的 Latest Release。带预发布版本号的 ForgeDesk 会自动订阅预发布更新；稳定版始终只接收稳定更新。测试时，先安装 `1.2.4-beta.1`，再发布更高版本如 `1.2.4-beta.2`，即可在应用内看到下载进度与“重启安装”。
+
 发布新版本时，在 ForgeDesk 的“发布版本”页面选择 GitHub Releases，或在命令行更新并提交 `package.json` 的版本号后执行：
 
 ```bash

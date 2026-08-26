@@ -95,9 +95,17 @@ jobs:
       - name: Verify complete release set
         run: node scripts/validate-release-assets.mjs --platform all --dir release-assets
 
+      - name: Resolve release channel
+        id: channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "name=$(node scripts/release-channel.mjs "${GITHUB_REF_NAME}")" >> "$GITHUB_OUTPUT"
+
       - name: Create draft, upload assets, and publish
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_CHANNEL: ${{ steps.channel.outputs.name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -112,7 +120,11 @@ jobs:
             fi
             echo "Reusing draft release ${TAG}."
           else
-            gh release create "${TAG}" --draft --title "ForgeDesk v${VERSION}" --generate-notes
+            if [ "${RELEASE_CHANNEL}" = "prerelease" ]; then
+              gh release create "${TAG}" --draft --prerelease --title "ForgeDesk v${VERSION}" --generate-notes
+            else
+              gh release create "${TAG}" --draft --title "ForgeDesk v${VERSION}" --generate-notes
+            fi
           fi
 
           gh release upload "${TAG}" release-assets/* --clobber
@@ -124,4 +136,8 @@ jobs:
             fi
           done
 
-          gh release edit "${TAG}" --draft=false --latest
+          if [ "${RELEASE_CHANNEL}" = "prerelease" ]; then
+            gh release edit "${TAG}" --draft=false --prerelease
+          else
+            gh release edit "${TAG}" --draft=false --latest
+          fi
