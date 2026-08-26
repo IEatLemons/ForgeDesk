@@ -62,7 +62,12 @@ export const APP_NAVIGATION_ITEMS: AppNavigationItem[] = [
 
 export function getNavigationItemsForMode(mode: AppMode): AppNavigationItem[] {
   if (mode === 'simple') {
-    return APP_NAVIGATION_ITEMS.filter((item) => item.key === 'projects' || item.key === 'ai-tools')
+    return APP_NAVIGATION_ITEMS.filter((item) => (
+      item.key === 'projects'
+      || item.key === 'ai-tools'
+      || item.key === 'tasks'
+      || item.key === 'settings'
+    ))
   }
 
   return APP_NAVIGATION_ITEMS
