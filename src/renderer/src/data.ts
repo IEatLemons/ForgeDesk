@@ -1147,11 +1147,13 @@ export type ManualCommitTestStatus = 'passed' | 'failed'
 
 export type CommitLifecycleStatus = 'pending-test' | 'testing' | 'test-passed' | 'test-failed' | 'online'
 
-export type CommitLifecycleSource = 'pending-test' | 'testing-branch' | 'manual-test-result' | 'main'
+export type CommitLifecycleSource = 'pending-test' | 'testing-remote-branch' | 'manual-test-result' | 'production-remote'
 
 export type ProjectCommitStatusConfig = {
   projectId: string
   testBranchName: string
+  testRemoteName: string
+  productionRemoteName: string
 }
 
 export type RepositoryCommitTestStatus = {

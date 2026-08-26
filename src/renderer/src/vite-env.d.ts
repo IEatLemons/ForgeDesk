@@ -923,11 +923,13 @@ type ManualCommitTestStatus = 'passed' | 'failed'
 
 type CommitLifecycleStatus = 'pending-test' | 'testing' | 'test-passed' | 'test-failed' | 'online'
 
-type CommitLifecycleSource = 'pending-test' | 'testing-branch' | 'manual-test-result' | 'main'
+type CommitLifecycleSource = 'pending-test' | 'testing-remote-branch' | 'manual-test-result' | 'production-remote'
 
 type ProjectCommitStatusConfig = {
   projectId: string
   testBranchName: string
+  testRemoteName: string
+  productionRemoteName: string
 }
 
 type RepositoryCommitTestStatus = {

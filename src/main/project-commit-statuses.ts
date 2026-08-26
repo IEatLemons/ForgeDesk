@@ -2,7 +2,7 @@ export type ManualCommitTestStatus = 'passed' | 'failed'
 
 export type CommitLifecycleStatus = 'pending-test' | 'testing' | 'test-passed' | 'test-failed' | 'online'
 
-export type CommitLifecycleSource = 'pending-test' | 'testing-branch' | 'manual-test-result' | 'main'
+export type CommitLifecycleSource = 'pending-test' | 'testing-remote-branch' | 'manual-test-result' | 'production-remote'
 
 export type CommitLifecycle = {
   status: CommitLifecycleStatus
@@ -13,6 +13,8 @@ export type CommitLifecycle = {
 export type ProjectCommitStatusConfig = {
   projectId: string
   testBranchName: string
+  testRemoteName: string
+  productionRemoteName: string
 }
 
 export type RepositoryCommitTestStatus = {
@@ -34,6 +36,7 @@ type DatabaseLike = {
 }
 
 const defaultTestBranchName = 'develop'
+const defaultRemoteName = 'origin'
 
 function createId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
@@ -49,13 +52,22 @@ export function normalizeLifecycleBranchName(branchName: string): string {
   return value
 }
 
-export function matchesLifecycleBranchRef(ref: string, branchName: string): boolean {
-  if (ref === `refs/heads/${branchName}`) {
-    return true
+export function normalizeLifecycleRemoteName(remoteName: string): string {
+  const value = remoteName.trim()
+
+  if (!value) {
+    throw new Error('请输入远端名称')
   }
 
-  const remoteMatch = ref.match(/^refs\/remotes\/[^/]+\/(.+)$/)
-  return remoteMatch?.[1] === branchName
+  if (!/^[A-Za-z0-9._-]+$/.test(value)) {
+    throw new Error('远端名称只能包含字母、数字、点、下划线和连字符')
+  }
+
+  return value
+}
+
+export function matchesLifecycleRemoteBranchRef(ref: string, remoteName: string, branchName: string): boolean {
+  return ref === `refs/remotes/${remoteName}/${branchName}`
 }
 
 function assertProjectExists(db: DatabaseLike, projectId: string): string {
@@ -72,7 +84,9 @@ function assertProjectExists(db: DatabaseLike, projectId: string): string {
 function mapConfigRow(row: Record<string, unknown>): ProjectCommitStatusConfig {
   return {
     projectId: String(row.project_id),
-    testBranchName: String(row.test_branch_name || defaultTestBranchName)
+    testBranchName: String(row.test_branch_name || defaultTestBranchName),
+    testRemoteName: String(row.test_remote_name || defaultRemoteName),
+    productionRemoteName: String(row.production_remote_name || defaultRemoteName)
   }
 }
 
@@ -90,6 +104,8 @@ export function migrateProjectCommitStatusTables(db: DatabaseLike): void {
     CREATE TABLE IF NOT EXISTS project_commit_status_configs (
       project_id TEXT PRIMARY KEY,
       test_branch_name TEXT NOT NULL DEFAULT 'develop',
+      test_remote_name TEXT NOT NULL DEFAULT 'origin',
+      production_remote_name TEXT NOT NULL DEFAULT 'origin',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
@@ -106,6 +122,19 @@ export function migrateProjectCommitStatusTables(db: DatabaseLike): void {
       FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE
     );
   `)
+
+  const configColumns = new Set(
+    (db.prepare('PRAGMA table_info(project_commit_status_configs)').all() as Array<{ name?: unknown }>)
+      .map((column) => String(column.name ?? ''))
+  )
+
+  if (!configColumns.has('test_remote_name')) {
+    db.exec("ALTER TABLE project_commit_status_configs ADD COLUMN test_remote_name TEXT NOT NULL DEFAULT 'origin'")
+  }
+
+  if (!configColumns.has('production_remote_name')) {
+    db.exec("ALTER TABLE project_commit_status_configs ADD COLUMN production_remote_name TEXT NOT NULL DEFAULT 'origin'")
+  }
 }
 
 function ensureProjectConfig(db: DatabaseLike, projectId: string): void {
@@ -117,8 +146,8 @@ function ensureProjectConfig(db: DatabaseLike, projectId: string): void {
 
   const now = new Date().toISOString()
   db.prepare(
-    'INSERT INTO project_commit_status_configs (project_id, test_branch_name, created_at, updated_at) VALUES (?, ?, ?, ?)'
-  ).run(projectId, defaultTestBranchName, now, now)
+    'INSERT INTO project_commit_status_configs (project_id, test_branch_name, test_remote_name, production_remote_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(projectId, defaultTestBranchName, defaultRemoteName, defaultRemoteName, now, now)
 }
 
 export function getProjectCommitStatusConfig(db: DatabaseLike, projectId: string): ProjectCommitStatusConfig {
@@ -136,9 +165,12 @@ export function getProjectCommitStatusConfig(db: DatabaseLike, projectId: string
 export function saveProjectCommitStatusConfig(db: DatabaseLike, input: ProjectCommitStatusConfig): ProjectCommitStatusConfig {
   const projectId = assertProjectExists(db, input.projectId)
   const testBranchName = normalizeLifecycleBranchName(input.testBranchName)
+  const testRemoteName = normalizeLifecycleRemoteName(input.testRemoteName)
+  const productionRemoteName = normalizeLifecycleRemoteName(input.productionRemoteName)
   const now = new Date().toISOString()
   ensureProjectConfig(db, projectId)
-  db.prepare('UPDATE project_commit_status_configs SET test_branch_name = ?, updated_at = ? WHERE project_id = ?').run(testBranchName, now, projectId)
+  db.prepare('UPDATE project_commit_status_configs SET test_branch_name = ?, test_remote_name = ?, production_remote_name = ?, updated_at = ? WHERE project_id = ?')
+    .run(testBranchName, testRemoteName, productionRemoteName, now, projectId)
   return getProjectCommitStatusConfig(db, projectId)
 }
 
@@ -187,12 +219,12 @@ export function saveRepositoryCommitTestStatus(db: DatabaseLike, input: { reposi
   return mapTestStatusRow(row)
 }
 
-export function resolveCommitLifecycle(input: { inMain: boolean; inTestBranch: boolean; manualStatus?: ManualCommitTestStatus }): CommitLifecycle {
-  if (input.inMain) {
-    return { status: 'online', source: 'main', editable: false }
+export function resolveCommitLifecycle(input: { inProductionRemote: boolean; inTestRemoteBranch: boolean; manualStatus?: ManualCommitTestStatus }): CommitLifecycle {
+  if (input.inProductionRemote) {
+    return { status: 'online', source: 'production-remote', editable: false }
   }
 
-  if (!input.inTestBranch) {
+  if (!input.inTestRemoteBranch) {
     return { status: 'pending-test', source: 'pending-test', editable: false }
   }
 
@@ -204,10 +236,10 @@ export function resolveCommitLifecycle(input: { inMain: boolean; inTestBranch: b
     return { status: 'test-failed', source: 'manual-test-result', editable: true }
   }
 
-  return { status: 'testing', source: 'testing-branch', editable: true }
+  return { status: 'testing', source: 'testing-remote-branch', editable: true }
 }
 
-export function assertCommitLifecycleEditable(lifecycle: CommitLifecycle, testBranchName: string): void {
+export function assertCommitLifecycleEditable(lifecycle: CommitLifecycle, testRemoteName: string, testBranchName: string): void {
   if (lifecycle.editable) {
     return
   }
@@ -216,5 +248,5 @@ export function assertCommitLifecycleEditable(lifecycle: CommitLifecycle, testBr
     throw new Error('已上线的提交不可修改状态')
   }
 
-  throw new Error(`提交尚未合入测试分支 ${testBranchName}，不能标记测试结果`)
+  throw new Error(`提交尚未合入测试远端 ${testRemoteName}/${testBranchName}，不能标记测试结果`)
 }

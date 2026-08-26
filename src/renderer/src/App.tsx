@@ -17988,6 +17988,8 @@ function ProjectBranchTagSettings({ project, repositories, onChanged }: { projec
   const [loadingBranchTags, setLoadingBranchTags] = useState(false)
   const [savingBranchTag, setSavingBranchTag] = useState(false)
   const [testBranchName, setTestBranchName] = useState('develop')
+  const [testRemoteName, setTestRemoteName] = useState('origin')
+  const [productionRemoteName, setProductionRemoteName] = useState('origin')
   const [loadingCommitStatusConfig, setLoadingCommitStatusConfig] = useState(false)
   const [savingCommitStatusConfig, setSavingCommitStatusConfig] = useState(false)
   const [branchTagForm] = Form.useForm<BranchTagForm>()
@@ -18028,6 +18030,8 @@ function ProjectBranchTagSettings({ project, repositories, onChanged }: { projec
         const config = await window.forgeDesk.getProjectCommitStatusConfig(project.id)
         if (!cancelled) {
           setTestBranchName(config.testBranchName)
+          setTestRemoteName(config.testRemoteName)
+          setProductionRemoteName(config.productionRemoteName)
         }
       } catch (error) {
         if (!cancelled) {
@@ -18052,9 +18056,16 @@ function ProjectBranchTagSettings({ project, repositories, onChanged }: { projec
     setSavingCommitStatusConfig(true)
 
     try {
-      const config = await window.forgeDesk.saveProjectCommitStatusConfig({ projectId: project.id, testBranchName })
+      const config = await window.forgeDesk.saveProjectCommitStatusConfig({
+        projectId: project.id,
+        testBranchName,
+        testRemoteName,
+        productionRemoteName
+      })
       setTestBranchName(config.testBranchName)
-      message.success('测试分支已保存，提交状态已刷新')
+      setTestRemoteName(config.testRemoteName)
+      setProductionRemoteName(config.productionRemoteName)
+      message.success('生命周期远端配置已保存，提交状态已刷新')
       onChanged()
     } catch (error) {
       message.error(getErrorMessage(error))
@@ -18170,8 +18181,18 @@ function ProjectBranchTagSettings({ project, repositories, onChanged }: { projec
     }
   ]
 
-  const matchingRepositories = repositories.filter((repository) =>
-    repository.branches.includes(testBranchName) || repository.remoteBranches.some((branch) => branch.split('/').slice(1).join('/') === testBranchName)
+  const remoteNames = Array.from(new Set([
+    'origin',
+    testRemoteName,
+    productionRemoteName,
+    ...repositories.flatMap((repository) => repository.remotes.map((remote) => remote.name))
+  ].filter(Boolean))).sort()
+  const remoteOptions = remoteNames.map((remoteName) => ({ label: remoteName, value: remoteName }))
+  const matchingTestRepositories = repositories.filter((repository) =>
+    repository.remoteBranches.includes(`${testRemoteName}/${testBranchName}`)
+  )
+  const matchingProductionRepositories = repositories.filter((repository) =>
+    repository.remoteBranches.includes(`${productionRemoteName}/main`)
   )
 
   return (
@@ -18180,10 +18201,18 @@ function ProjectBranchTagSettings({ project, repositories, onChanged }: { projec
         <div>
           <Typography.Text strong>提交生命周期</Typography.Text>
           <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0' }}>
-            合入 <Typography.Text code>main</Typography.Text> 自动标记为已上线；合入测试分支后可标记测试通过或不通过。
+            仅以配置的远端追踪引用判断状态；本地 <Typography.Text code>main</Typography.Text> 或测试分支不会触发上线或测试状态。
           </Typography.Paragraph>
         </div>
         <Space wrap>
+          <Select
+            aria-label="测试远端"
+            value={testRemoteName}
+            disabled={loadingCommitStatusConfig}
+            options={remoteOptions}
+            onChange={setTestRemoteName}
+            style={{ width: 140 }}
+          />
           <Input
             aria-label="测试分支"
             value={testBranchName}
@@ -18192,16 +18221,34 @@ function ProjectBranchTagSettings({ project, repositories, onChanged }: { projec
             onChange={(event) => setTestBranchName(event.target.value)}
             style={{ width: 180 }}
           />
+          <Select
+            aria-label="线上远端"
+            value={productionRemoteName}
+            disabled={loadingCommitStatusConfig}
+            options={remoteOptions}
+            onChange={setProductionRemoteName}
+            style={{ width: 140 }}
+          />
+          <Typography.Text code>main</Typography.Text>
           <Button type="primary" loading={savingCommitStatusConfig || loadingCommitStatusConfig} onClick={() => void saveCommitStatusConfig()}>
-            保存测试分支
+            保存生命周期配置
           </Button>
         </Space>
-        <Typography.Text type={matchingRepositories.length ? 'secondary' : 'warning'}>
-          {matchingRepositories.length ? `当前 ${matchingRepositories.length} 个仓库存在 ${testBranchName} 引用。` : `当前项目没有找到 ${testBranchName} 引用；提交会保持等待提测。`}
-        </Typography.Text>
+        <Space direction="vertical" size={2}>
+          <Typography.Text type={matchingTestRepositories.length ? 'secondary' : 'warning'}>
+            {matchingTestRepositories.length
+              ? `测试引用 ${testRemoteName}/${testBranchName} 已存在于 ${matchingTestRepositories.length} 个仓库。`
+              : `当前项目没有找到测试远端引用 ${testRemoteName}/${testBranchName}；提交会保持等待提测。`}
+          </Typography.Text>
+          <Typography.Text type={matchingProductionRepositories.length ? 'secondary' : 'warning'}>
+            {matchingProductionRepositories.length
+              ? `线上引用 ${productionRemoteName}/main 已存在于 ${matchingProductionRepositories.length} 个仓库。`
+              : `当前项目没有找到线上远端引用 ${productionRemoteName}/main；提交不会标记为已上线。`}
+          </Typography.Text>
+        </Space>
       </div>
       <div className="branch-tag-settings-toolbar">
-        <Typography.Text type="secondary">填写短分支名即可匹配本地和远端同名分支。</Typography.Text>
+        <Typography.Text type="secondary">填写短分支名即可设置标签规则，不影响提交生命周期的远端判断。</Typography.Text>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => openBranchTagModal()}>
           新增规则
         </Button>

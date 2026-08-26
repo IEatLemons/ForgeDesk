@@ -337,7 +337,7 @@ import {
   assertCommitLifecycleEditable,
   getProjectCommitStatusConfig,
   listRepositoryCommitTestStatuses,
-  matchesLifecycleBranchRef,
+  matchesLifecycleRemoteBranchRef,
   migrateProjectCommitStatusTables,
   resolveCommitLifecycle,
   saveProjectCommitStatusConfig,
@@ -3671,12 +3671,12 @@ function mapCommitRecord(
   }
 }
 
-async function listLifecycleBranchRefs(localPath: string, branchName: string): Promise<string[]> {
-  const output = await runGitInPathOptional(localPath, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes'])
+async function listLifecycleRemoteBranchRefs(localPath: string, remoteName: string, branchName: string): Promise<string[]> {
+  const output = await runGitInPathOptional(localPath, ['for-each-ref', '--format=%(refname)', `refs/remotes/${remoteName}/${branchName}`])
   return output
     .split(/\r?\n/)
     .map((ref) => ref.trim())
-    .filter((ref) => matchesLifecycleBranchRef(ref, branchName))
+    .filter((ref) => matchesLifecycleRemoteBranchRef(ref, remoteName, branchName))
 }
 
 async function listReachableCommitHashes(localPath: string, refs: string[]): Promise<Set<string>> {
@@ -3694,20 +3694,20 @@ async function enrichCommitLifecycles(repository: RepositoryRecord, commits: Git
   }
 
   const config = getProjectCommitStatusConfig(getDatabase(), repository.projectId)
-  const [mainRefs, testBranchRefs, manualStatuses] = await Promise.all([
-    listLifecycleBranchRefs(repository.localPath, 'main'),
-    listLifecycleBranchRefs(repository.localPath, config.testBranchName),
+  const [productionRefs, testBranchRefs, manualStatuses] = await Promise.all([
+    listLifecycleRemoteBranchRefs(repository.localPath, config.productionRemoteName, 'main'),
+    listLifecycleRemoteBranchRefs(repository.localPath, config.testRemoteName, config.testBranchName),
     Promise.resolve(listRepositoryCommitTestStatuses(getDatabase(), repository.id, commits.map((commit) => commit.hash)))
   ])
-  const [mainCommitHashes, testBranchCommitHashes] = await Promise.all([
-    listReachableCommitHashes(repository.localPath, mainRefs),
+  const [productionCommitHashes, testBranchCommitHashes] = await Promise.all([
+    listReachableCommitHashes(repository.localPath, productionRefs),
     listReachableCommitHashes(repository.localPath, testBranchRefs)
   ])
 
   return commits.map((commit) => {
     const lifecycle = resolveCommitLifecycle({
-      inMain: mainCommitHashes.has(commit.hash),
-      inTestBranch: testBranchCommitHashes.has(commit.hash),
+      inProductionRemote: productionCommitHashes.has(commit.hash),
+      inTestRemoteBranch: testBranchCommitHashes.has(commit.hash),
       manualStatus: manualStatuses.get(commit.hash)?.status
     })
 
@@ -6508,22 +6508,22 @@ async function setRepositoryCommitTestStatus(
   }
 
   const config = getProjectCommitStatusConfig(getDatabase(), repository.projectId)
-  const [mainRefs, testBranchRefs, manualStatuses] = await Promise.all([
-    listLifecycleBranchRefs(repository.localPath, 'main'),
-    listLifecycleBranchRefs(repository.localPath, config.testBranchName),
+  const [productionRefs, testBranchRefs, manualStatuses] = await Promise.all([
+    listLifecycleRemoteBranchRefs(repository.localPath, config.productionRemoteName, 'main'),
+    listLifecycleRemoteBranchRefs(repository.localPath, config.testRemoteName, config.testBranchName),
     Promise.resolve(listRepositoryCommitTestStatuses(getDatabase(), repository.id, [resolvedHash]))
   ])
-  const [mainCommitHashes, testBranchCommitHashes] = await Promise.all([
-    listReachableCommitHashes(repository.localPath, mainRefs),
+  const [productionCommitHashes, testBranchCommitHashes] = await Promise.all([
+    listReachableCommitHashes(repository.localPath, productionRefs),
     listReachableCommitHashes(repository.localPath, testBranchRefs)
   ])
   const lifecycle = resolveCommitLifecycle({
-    inMain: mainCommitHashes.has(resolvedHash),
-    inTestBranch: testBranchCommitHashes.has(resolvedHash),
+    inProductionRemote: productionCommitHashes.has(resolvedHash),
+    inTestRemoteBranch: testBranchCommitHashes.has(resolvedHash),
     manualStatus: manualStatuses.get(resolvedHash)?.status
   })
 
-  assertCommitLifecycleEditable(lifecycle, config.testBranchName)
+  assertCommitLifecycleEditable(lifecycle, config.testRemoteName, config.testBranchName)
 
   return saveRepositoryCommitTestStatus(getDatabase(), { repositoryId: repository.id, commitHash: resolvedHash, status: input.status })
 }
