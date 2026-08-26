@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import electronUpdater from 'electron-updater'
+import { getAppUpdateChannel, shouldAllowPrereleaseUpdates } from './app-update-channel'
 
 const { autoUpdater } = electronUpdater
 
@@ -147,7 +148,9 @@ export function registerAppUpdateIpc(): void {
   registered = true
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = false
-  autoUpdater.allowPrerelease = false
+  autoUpdater.allowPrerelease = shouldAllowPrereleaseUpdates(app.getVersion())
+
+  console.info(`ForgeDesk update channel: ${getAppUpdateChannel(app.getVersion())}`)
 
   autoUpdater.on('checking-for-update', () => {
     publishSnapshot({
