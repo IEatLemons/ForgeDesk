@@ -259,7 +259,7 @@ import {
 import {
   PUSH_ALL_REMOTES_VALUE,
   canCommitSelection,
-  canPushSelection,
+  canPushBranchSelection,
   createPushRemoteOptions,
   getCurrentBranchName,
   getPushableTargets,
@@ -9931,8 +9931,14 @@ function getPreferredPushTarget(repository: Repository | null, status: GitWorksp
   return getRepositoryDefaultPushTarget(repository, status?.branch)
 }
 
-function createGitPushInput(remoteNames: string[], branch: string, tagNames: string[] = []): GitPushInput {
-  const input = remoteNames.length > 1 ? { remotes: remoteNames, branch } : { remote: remoteNames[0], branch }
+function createGitPushInput(remoteNames: string[], branch: string, tagNames: string[] = [], targetBranch = branch): GitPushInput {
+  const input: GitPushInput = remoteNames.length > 1 ? { remotes: remoteNames, branch } : { remote: remoteNames[0], branch }
+  const normalizedTargetBranch = targetBranch.trim()
+
+  if (normalizedTargetBranch && normalizedTargetBranch !== branch.trim()) {
+    input.targetBranch = normalizedTargetBranch
+  }
+
   return tagNames.length > 0 ? { ...input, tagNames } : input
 }
 
@@ -11562,7 +11568,7 @@ function RepositoryReleaseModal({ open, repositories, initialRepositoryId, onClo
 
 function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChanged, onStartTask }: GitActionModalProps & {
   initialRepositoryId?: string
-  onStartTask?: (input: { repository: Repository; remoteNames: string[]; branch: string; tagNames: string[] }) => void
+  onStartTask?: (input: { repository: Repository; remoteNames: string[]; branch: string; targetBranch: string; tagNames: string[] }) => void
 }): JSX.Element {
   const { updateRepository } = useForgeDeskStore()
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
@@ -11570,6 +11576,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
   const [status, setStatus] = useState<GitWorkspaceStatus | null>(null)
   const [pushRemote, setPushRemote] = useState('origin')
   const [pushBranch, setPushBranch] = useState('')
+  const [pushTargetBranch, setPushTargetBranch] = useState('')
   const [pushTagNames, setPushTagNames] = useState<string[]>([])
   const [tagRecommendation, setTagRecommendation] = useState<RepositoryReleaseTagRecommendation | null>(null)
   const [loadingStatus, setLoadingStatus] = useState(false)
@@ -11580,7 +11587,8 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
   const pushableTargets = getPushableTargets(pushTargets)
   const remoteOptions = createPushRemoteOptions(selectedRepository?.remotes ?? [], pushTargets)
   const currentBranch = getCurrentBranchName(selectedRepository, status)
-  const pushReady = Boolean(selectedRepository && pushBranch.trim() && (canPushSelection(pushRemote, pushTargets) || pushTagNames.length > 0))
+  const localBranches = createBranchOptions([...(selectedRepository?.branches ?? []), currentBranch])
+  const pushReady = Boolean(selectedRepository && canPushBranchSelection(pushRemote, selectedRepository.remotes, pushBranch, pushTargetBranch))
   const tagOptions = createReleaseTagOptions(tagRecommendation)
 
   useEffect(() => {
@@ -11644,6 +11652,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
       setStatus(nextStatus)
       setPushRemote(target.remote)
       setPushBranch(target.branch)
+      setPushTargetBranch(target.branch)
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
@@ -11660,6 +11669,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
     setStatus(null)
     setPushRemote(target.remote)
     setPushBranch(target.branch)
+    setPushTargetBranch(target.branch)
     refreshWorkspaceStatus()
   }, [open, selectedRepository?.id])
 
@@ -11671,16 +11681,17 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
 
     const remote = pushRemote.trim()
     const branch = pushBranch.trim()
+    const targetBranch = pushTargetBranch.trim()
 
     const remoteNames = resolveSelectedPushRemoteNames(remote, selectedRepository.remotes)
 
-    if (remoteNames.length === 0 || !branch) {
-      message.warning('请选择远端并填写分支')
+    if (remoteNames.length === 0 || !branch || !targetBranch) {
+      message.warning('请选择远端、源分支并填写目标分支')
       return
     }
 
     if (onStartTask) {
-      onStartTask({ repository: selectedRepository, remoteNames, branch, tagNames: pushTagNames })
+      onStartTask({ repository: selectedRepository, remoteNames, branch, targetBranch, tagNames: pushTagNames })
       onClose()
       return
     }
@@ -11688,7 +11699,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
     setWorking(true)
 
     try {
-      const result = await window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, branch, pushTagNames))
+      const result = await window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, branch, pushTagNames, targetBranch))
       updateRepository(result.repository)
       setStatus(result.status)
 
@@ -11734,12 +11745,23 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
             options={createRepositorySelectOptions(repositories)}
             onChange={setRepositoryId}
           />
-          {selectedRepository && <Tag color={pushableTargets.length > 0 ? 'orange' : 'default'}>{pushableTargets.reduce((sum, target) => sum + target.ahead, 0)} 个未推送提交</Tag>}
+          {selectedRepository && <Tag color={pushableTargets.length > 0 ? 'orange' : 'default'}>当前分支 {pushableTargets.reduce((sum, target) => sum + target.ahead, 0)} 个未推送提交</Tag>}
           <Tag color={currentBranch ? 'blue' : 'default'}>当前分支：{currentBranch || '未检测'}</Tag>
         </Space>
         <Space.Compact className="git-operation-compact">
           <Select value={pushRemote} options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]} onChange={setPushRemote} />
-          <Input value={pushBranch} placeholder={currentBranch || 'main'} onChange={(event) => setPushBranch(event.target.value)} />
+          <Select
+            showSearch
+            optionFilterProp="label"
+            value={pushBranch || undefined}
+            placeholder="源分支"
+            options={localBranches}
+            onChange={(branch) => {
+              setPushBranch(branch)
+              setPushTargetBranch(branch)
+            }}
+          />
+          <Input value={pushTargetBranch} placeholder="目标分支" onChange={(event) => setPushTargetBranch(event.target.value)} />
         </Space.Compact>
         <Select
           mode="tags"
@@ -11756,8 +11778,8 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
           showIcon
           message={
             pushReady
-              ? `将推送 ${selectedRepository?.name} 的 ${pushBranch || currentBranch}${pushTagNames.length > 0 ? `，以及版本 Tag：${pushTagNames.join('、')}` : ''} 到 ${pushRemote === PUSH_ALL_REMOTES_VALUE ? '所有远端' : pushRemote || 'origin'}`
-              : '当前分支没有待推送提交；选择版本 Tag 后仍可单独推送版本'
+              ? `将推送 ${selectedRepository?.name} 的 ${pushBranch} → ${pushRemote === PUSH_ALL_REMOTES_VALUE ? '所有远端' : pushRemote || 'origin'}/${pushTargetBranch}${pushTagNames.length > 0 ? `，以及版本 Tag：${pushTagNames.join('、')}` : ''}`
+              : '请选择远端和本地源分支，并填写目标分支'
           }
           description="版本 Tag 会明确列出后单独推送，不会推送全部本地标签。"
         />
@@ -12231,6 +12253,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
   const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
   const [pushRemote, setPushRemote] = useState('origin')
   const [pushBranch, setPushBranch] = useState('')
+  const [pushTargetBranch, setPushTargetBranch] = useState('')
   const [pushTagNames, setPushTagNames] = useState<string[]>([])
   const [mergeSource, setMergeSource] = useState('')
   const [working, setWorking] = useState(false)
@@ -12271,6 +12294,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
       const target = getPreferredPushTarget(selectedRepository, nextStatus)
       setStatus(nextStatus)
       setPushBranch((current) => current || target.branch)
+      setPushTargetBranch((current) => current || target.branch)
       setPushRemote((current) => current || target.remote)
     } catch (error) {
       message.error(getErrorMessage(error))
@@ -12363,6 +12387,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
     const target = getPreferredPushTarget(selectedRepository)
     setPushRemote(target.remote)
     setPushBranch(target.branch)
+    setPushTargetBranch(target.branch)
 
     if (selectedRepository) {
       void refreshWorkspaceAiSettings()
@@ -12381,6 +12406,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
       setSelectedPaths([])
       const target = getPreferredPushTarget(result.repository, result.status)
       setPushBranch(target.branch)
+      setPushTargetBranch(target.branch)
       setPushRemote(target.remote)
 
       if (result.ok) {
@@ -12401,14 +12427,16 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
     }
 
     const remoteNames = resolveSelectedPushRemoteNames(pushRemote, selectedRepository.remotes)
+    const branch = pushBranch.trim()
+    const targetBranch = pushTargetBranch.trim()
 
-    if (remoteNames.length === 0) {
-      message.warning('请选择远端')
+    if (remoteNames.length === 0 || !branch || !targetBranch) {
+      message.warning('请选择远端、源分支并填写目标分支')
       return
     }
 
     await runGitWrite(
-      () => window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, pushBranch, pushTagNames)),
+      () => window.forgeDesk.gitPush(selectedRepository.id, createGitPushInput(remoteNames, branch, pushTagNames, targetBranch)),
       pushTagNames.length > 0
         ? remoteNames.length > 1 ? `分支和 ${pushTagNames.length} 个版本 Tag 已推送到所有远端` : `分支和 ${pushTagNames.length} 个版本 Tag 已推送`
         : remoteNames.length > 1 ? '分支已推送到所有远端' : '分支已推送'
@@ -12506,9 +12534,10 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
   const pushTargets = status?.pushTargets ?? selectedRepository?.pushTargets ?? []
   const remoteOptions = createPushRemoteOptions(selectedRepository?.remotes ?? [], pushTargets)
   const currentBranch = getCurrentBranchName(selectedRepository, status)
+  const localBranches = createBranchOptions([...(selectedRepository?.branches ?? []), currentBranch])
   const commitReady = canCommitSelection(files, files.map((file) => file.path), commitMessage) ||
     (isLocalCodexAutoCommitEnabled(aiSettings) && files.length > 0)
-  const pushReady = Boolean(selectedRepository && pushBranch.trim() && (canPushSelection(pushRemote, pushTargets) || pushTagNames.length > 0))
+  const pushReady = Boolean(selectedRepository && canPushBranchSelection(pushRemote, selectedRepository.remotes, pushBranch, pushTargetBranch))
 
   async function commitWorkspaceChanges(): Promise<void> {
     if (!selectedRepository || !window.forgeDesk) {
@@ -12642,7 +12671,18 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
             <Typography.Text strong>推送</Typography.Text>
             <Space.Compact className="git-operation-compact">
               <Select value={pushRemote} options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]} onChange={setPushRemote} />
-              <Input value={pushBranch} placeholder={currentBranch || 'main'} onChange={(event) => setPushBranch(event.target.value)} />
+              <Select
+                showSearch
+                optionFilterProp="label"
+                value={pushBranch || undefined}
+                placeholder="源分支"
+                options={localBranches}
+                onChange={(branch) => {
+                  setPushBranch(branch)
+                  setPushTargetBranch(branch)
+                }}
+              />
+              <Input value={pushTargetBranch} placeholder="目标分支" onChange={(event) => setPushTargetBranch(event.target.value)} />
               <Button loading={working} disabled={!pushReady} onClick={pushSelectedBranch}>
                 推送
               </Button>
@@ -14334,6 +14374,7 @@ type ProjectGitPushRequest = {
   repositoryId: string
   remoteNames: string[]
   branch: string
+  targetBranch: string
   tagNames: string[]
 }
 
@@ -14363,7 +14404,7 @@ function formatGitTaskOutput(value?: string): string {
   return text.length > 220 ? `${text.slice(0, 220)}...` : text
 }
 
-function groupPushTargetsByBranch(pushTargets: Repository['pushTargets']): Array<{ branch: string; remotes: string[] }> {
+function groupPushTargetsByBranch(pushTargets: Repository['pushTargets']): Array<{ branch: string; targetBranch: string; remotes: string[] }> {
   const grouped = new Map<string, Set<string>>()
 
   getPushableTargets(pushTargets).forEach((target) => {
@@ -14381,7 +14422,7 @@ function groupPushTargetsByBranch(pushTargets: Repository['pushTargets']): Array
     grouped.get(branch)?.add(remote)
   })
 
-  return Array.from(grouped.entries()).map(([branch, remotes]) => ({ branch, remotes: Array.from(remotes) }))
+  return Array.from(grouped.entries()).map(([branch, remotes]) => ({ branch, targetBranch: branch, remotes: Array.from(remotes) }))
 }
 
 function createProjectGitTaskLogId(projectId: string, action: ProjectGitListAction): string {
@@ -15631,7 +15672,7 @@ function ProjectOverview({
     return Promise.all(
       pushableRepositories.map(async (repository) => {
         const branchGroups = request
-          ? [{ branch: request.branch, remotes: request.remoteNames }]
+          ? [{ branch: request.branch, targetBranch: request.targetBranch, remotes: request.remoteNames }]
           : groupPushTargetsByBranch(repository.pushTargets)
         const pushResults: ProjectGitRepositoryTaskResult[] = []
         let currentRepository = repository
@@ -15648,27 +15689,28 @@ function ProjectOverview({
               // One IPC call per remote makes both the execution and the task
               // log independent: a failed remote must not hide or stop the
               // remaining push targets.
-              const result = await window.forgeDesk.gitPushTask(repository.id, createGitPushInput([remoteName], group.branch, request?.tagNames), taskId)
+              const result = await window.forgeDesk.gitPushTask(repository.id, createGitPushInput([remoteName], group.branch, request?.tagNames, group.targetBranch), taskId)
               const pushedTarget = result.pushTargets.find((target) => target.remote === remoteName && target.branch === group.branch)
-              currentRepository = mergeRepositoryWorkspaceStatus(currentRepository, {
-                branch: result.branch,
-                // The task IPC intentionally avoids a full rescan, so its
-                // untouched targets can still contain their original ahead
-                // counts. Preserve prior successful targets and replace only
-                // the remote that just finished.
-                pushTargets: currentRepository.pushTargets.map((target) =>
-                  target.remote === remoteName && target.branch === group.branch && pushedTarget ? pushedTarget : target
-                )
-              })
+              const updatesCurrentTrackingBranch = group.branch === currentRepository.currentBranch && group.targetBranch === group.branch
+
+              if (updatesCurrentTrackingBranch && pushedTarget) {
+                currentRepository = mergeRepositoryWorkspaceStatus(currentRepository, {
+                  pushTargets: currentRepository.pushTargets.map((target) =>
+                    target.remote === remoteName && target.branch === group.branch ? pushedTarget : target
+                  )
+                })
+              }
               updateRepository(currentRepository)
+
+              const branchLabel = group.targetBranch === group.branch ? group.branch : `${group.branch} → ${group.targetBranch}`
 
               pushResult = {
                 repositoryId: repository.id,
                 repositoryName: repository.name,
                 remoteName,
-                branch: group.branch,
+                branch: branchLabel,
                 ok: result.ok,
-                message: result.ok ? `${[group.branch, ...(request?.tagNames ?? [])].join('、')} -> ${remoteName}` : formatGitTaskOutput(result.stderr || result.stdout || `${group.branch} -> ${remoteName} 推送失败`),
+                message: result.ok ? `${[branchLabel, ...(request?.tagNames ?? [])].join('、')} → ${remoteName}` : formatGitTaskOutput(result.stderr || result.stdout || `${branchLabel} → ${remoteName} 推送失败`),
                 stdout: formatGitTaskOutput(result.stdout),
                 stderr: formatGitTaskOutput(result.stderr)
               }
@@ -15677,9 +15719,9 @@ function ProjectOverview({
                 repositoryId: repository.id,
                 repositoryName: repository.name,
                 remoteName,
-                branch: group.branch,
+                branch: group.targetBranch === group.branch ? group.branch : `${group.branch} → ${group.targetBranch}`,
                 ok: false,
-                message: formatGitTaskOutput(getErrorMessage(error, `${project.name} / ${repository.name} 推送到 ${remoteName} 失败`)),
+                message: formatGitTaskOutput(getErrorMessage(error, `${project.name} / ${repository.name} ${group.branch} → ${group.targetBranch} 推送到 ${remoteName} 失败`)),
                 stderr: formatGitTaskOutput(getErrorMessage(error))
               }
             }
@@ -16895,9 +16937,9 @@ function ProjectOverview({
               repositories={projectRepositories}
               initialRepositoryId={selectedProjectGitRepository?.id}
               onClose={() => setPushModalOpen(false)}
-              onStartTask={({ repository, remoteNames, branch, tagNames }) => {
+              onStartTask={({ repository, remoteNames, branch, targetBranch, tagNames }) => {
                 if (selectedProject) {
-                  void runProjectGitTask(selectedProject, 'push', { repositoryId: repository.id, remoteNames, branch, tagNames })
+                  void runProjectGitTask(selectedProject, 'push', { repositoryId: repository.id, remoteNames, branch, targetBranch, tagNames })
                 }
               }}
               onChanged={(repository) => selectedProject && refreshProjectGitData(selectedProject.id, repository)}

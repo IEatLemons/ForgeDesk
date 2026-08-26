@@ -841,6 +841,7 @@ export type GitPushInput = {
   remote?: string
   remotes?: string[]
   branch: string
+  targetBranch?: string
   tagNames?: string[]
 }
 

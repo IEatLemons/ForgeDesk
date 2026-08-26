@@ -4330,15 +4330,24 @@ async function commitRepositoryChanges(repositoryId: string, input: GitCommitInp
   }
 }
 
+async function assertLocalPushSourceBranch(repository: RepositoryRecord, branch: string): Promise<void> {
+  const result = await runGitInPathResult(repository.localPath, buildGitVerifyRefArgs(`refs/heads/${branch.trim()}`))
+
+  if (!result.ok) {
+    throw new Error(`找不到本地源分支：${branch.trim()}`)
+  }
+}
+
 async function pushRepositoryChanges(repositoryId: string, input: GitPushInput, operationId?: string): Promise<GitOperationResult> {
   return withSavedSshPassphrases(async (env) => {
     const operationArgs = buildGitPushOperationArgs(input)
+    const repository = getRepositoryOrThrow(repositoryId)
+    await assertLocalPushSourceBranch(repository, input.branch)
 
     if (operationArgs.length === 1) {
       return runRepositoryWriteOperation(repositoryId, operationArgs[0], { env, operationId })
     }
 
-    const repository = getRepositoryOrThrow(repositoryId)
     const results = []
 
     for (const args of operationArgs) {
@@ -4379,6 +4388,7 @@ async function pushRepositoryTaskChanges(repositoryId: string, input: GitPushInp
   return withSavedSshPassphrases(async (env) => {
     const repository = getRepositoryOrThrow(repositoryId)
     const operationArgs = buildGitPushOperationArgs(input)
+    await assertLocalPushSourceBranch(repository, input.branch)
     const results: GitCommandResult[] = []
 
     for (const args of operationArgs) {
