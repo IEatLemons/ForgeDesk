@@ -9295,12 +9295,8 @@ button.app-status-bar-item:hover {
 }
 
 .settings-layout {
-  display: grid;
-  grid-template-columns: minmax(250px, 292px) minmax(0, 1fr);
   height: calc(100vh - var(--app-status-bar-height) - 150px);
   min-height: 480px;
-  gap: 20px;
-  align-items: stretch;
   overflow: hidden;
 }
 
@@ -9308,61 +9304,14 @@ button.app-status-bar-item:hover {
   height: calc(100vh - var(--app-titlebar-height) - var(--app-status-bar-height) - 150px);
 }
 
-.settings-navigation {
-  position: relative;
-  top: auto;
-  display: grid;
-  gap: 18px;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  padding: 16px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  border: 1px solid var(--app-border);
-  border-radius: 12px;
-  background: var(--subtle-bg);
-  scrollbar-gutter: stable;
-}
-
-.settings-navigation-heading,
-.settings-navigation-category,
 .settings-overview-section-heading {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
-.settings-navigation-heading {
-  padding: 2px 4px 10px;
-  border-bottom: 1px solid var(--app-border);
-}
-
-.settings-navigation-heading .ant-typography-secondary,
-.settings-navigation-category .ant-typography-secondary {
-  font-size: 11px;
-  line-height: 16px;
-}
-
-.settings-navigation-section {
-  display: grid;
-  gap: 8px;
-}
-
-.settings-navigation-category {
-  padding: 0 4px;
-}
-
-.settings-navigation-category > span:first-child {
-  color: var(--app-text);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 18px;
-}
-
-.settings-navigation-list {
-  display: grid;
-  gap: 4px;
+.settings-page-back {
+  margin-bottom: 8px;
 }
 
 .settings-entry-row {
@@ -9511,6 +9460,64 @@ button.app-status-bar-item:hover {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+}
+
+.settings-sidebar .sidebar-inner {
+  padding-bottom: var(--app-status-bar-height);
+}
+
+.settings-sidebar-navigation {
+  display: grid;
+  gap: 18px;
+  height: 100%;
+  min-height: 0;
+  padding: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.settings-sidebar-navigation nav {
+  display: grid;
+  gap: 18px;
+}
+
+.settings-sidebar-heading,
+.settings-sidebar-category {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-sidebar-heading .ant-typography-secondary,
+.settings-sidebar-category .ant-typography-secondary {
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.settings-sidebar-section {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-sidebar-category {
+  padding: 0 4px;
+}
+
+.settings-sidebar-category > span:first-child {
+  color: var(--app-text);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+}
+
+.settings-sidebar-list {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-sidebar-entry {
+  grid-template-columns: 32px minmax(0, 1fr) 14px;
 }
 
 .settings-overview-content {
@@ -13539,14 +13546,12 @@ button.app-status-bar-item:hover {
   }
 
   .settings-layout {
-    grid-template-columns: 1fr;
     height: auto;
     min-height: 0;
     overflow: visible;
   }
 
-  .settings-navigation {
-    position: static;
+  .settings-sidebar-navigation {
     height: auto;
     overflow: visible;
     scrollbar-gutter: auto;
@@ -13556,10 +13561,6 @@ button.app-status-bar-item:hover {
     height: auto;
     overflow: visible;
     scrollbar-gutter: auto;
-  }
-
-  .settings-navigation-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .settings-overview-summary {
@@ -13669,10 +13670,6 @@ button.app-status-bar-item:hover {
 }
 
 @media (max-width: 620px) {
-  .settings-navigation-list {
-    grid-template-columns: 1fr;
-  }
-
   .settings-entry-row {
     grid-template-columns: 32px minmax(0, 1fr) 14px;
   }
