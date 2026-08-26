@@ -58,7 +58,6 @@ import {
   FileExcelOutlined,
   FolderOpenOutlined,
   GithubOutlined,
-  HistoryOutlined,
   InfoCircleOutlined,
   KeyOutlined,
   LinkOutlined,
@@ -98,7 +97,6 @@ import type {
   AiRuntimeStatus,
   CodexAccountRegistryView,
   CodexApiServiceView,
-  CodexUncommittedAlert,
   AiConflictSuggestion,
   CliEnvironmentIssue,
   CliEnvironmentRepairResult,
@@ -199,10 +197,9 @@ import {
   type AppNavigationKey
 } from './app-navigation'
 import { AiChatPanel } from './ai-chat-panel'
-import { AiToolsPanel } from './ai-tools-panel'
+import { AiToolsPanel, type CodexWorkspaceTarget } from './ai-tools-panel'
 import { CodexProjectBindingSettings } from './codex-project-binding-settings'
 import { CodexWorkPanel } from './codex-work-panel'
-import { CodexSessionManagerPanel } from './codex-session-manager-panel'
 import { DataSourcePanel } from './data-source-panel'
 import { DockerPanel } from './docker-panel'
 import { LarkBitableGantt } from './lark-bitable-gantt'
@@ -22219,10 +22216,9 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const [appUpdateActionBusy, setAppUpdateActionBusy] = useState(false)
   const [appRuntimeInfo, setAppRuntimeInfo] = useState<AppRuntimeInfo | null>(null)
   const [quickBuildState, setQuickBuildState] = useState<QuickBuildState>(() => createInitialQuickBuildState())
-  const [codexMonitorFocusAlert, setCodexMonitorFocusAlert] = useState<CodexUncommittedAlert | null>(null)
-  const [pendingCodexSessionId, setPendingCodexSessionId] = useState('')
-  const [codexSessionBackKey, setCodexSessionBackKey] = useState<AppActiveKey>('overview')
+  const [codexWorkspaceTarget, setCodexWorkspaceTarget] = useState<CodexWorkspaceTarget | null>(null)
   const terminalOpenRequestIdRef = useRef(0)
+  const codexWorkspaceRequestIdRef = useRef(0)
   const quickBuildStateRef = useRef(quickBuildState)
   const systemLogSummary = useMemo(() => createSystemLogSummary(systemLogs), [systemLogs])
   const projectGitTaskRunningCount = useMemo(() => countRunningProjectGitTaskLogs(projectGitTaskLogs), [projectGitTaskLogs])
@@ -22288,10 +22284,10 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   useEffect(() => {
     if (!window.forgeDesk) return undefined
     return window.forgeDesk.onCodexMonitorFocus((alert) => {
-      setCodexMonitorFocusAlert(alert)
-      setCodexSessionBackKey('overview')
       if (appMode === 'simple') setAppMode(writeStoredAppMode('full'))
-      setActiveKey('codex-sessions')
+      codexWorkspaceRequestIdRef.current += 1
+      setCodexWorkspaceTarget({ focusAlert: alert, id: codexWorkspaceRequestIdRef.current, tab: 'projects' })
+      setActiveKey('ai-tools')
     })
   }, [appMode])
 
@@ -22476,7 +22472,6 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     tools: <ToolOutlined />,
     'system-monitor': <DesktopOutlined />,
     'system-info': <InfoCircleOutlined />,
-    'codex-sessions': <HistoryOutlined />,
     'ai-chat': <RobotOutlined />,
     terminal: <CodeOutlined />,
     settings: <SettingOutlined />
@@ -22545,11 +22540,6 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       setSettingsInitialModule('overview')
     }
 
-    if (key === 'codex-sessions') {
-      setCodexSessionBackKey('overview')
-      setPendingCodexSessionId('')
-    }
-
     setActiveKey(key)
   }
 
@@ -22565,20 +22555,21 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   }
 
   function openCodex(): void {
+    codexWorkspaceRequestIdRef.current += 1
+    setCodexWorkspaceTarget({ id: codexWorkspaceRequestIdRef.current, tab: 'projects' })
     setActiveKey('ai-tools')
   }
 
   function openCodexMonitor(): void {
-    setCodexSessionBackKey('overview')
     if (appMode === 'simple') setAppMode(writeStoredAppMode('full'))
-    setActiveKey('codex-sessions')
+    openCodex()
   }
 
   function openManagedTaskCodexConversation(sessionId: string): void {
-    setCodexSessionBackKey('tasks')
     if (appMode === 'simple') setAppMode(writeStoredAppMode('full'))
-    setPendingCodexSessionId(sessionId)
-    setActiveKey('codex-sessions')
+    codexWorkspaceRequestIdRef.current += 1
+    setCodexWorkspaceTarget({ focusSessionId: sessionId, id: codexWorkspaceRequestIdRef.current, tab: 'projects' })
+    setActiveKey('ai-tools')
   }
 
   function openForgeProjectFromCodex(projectId: string): void {
@@ -22900,20 +22891,6 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     )
   }
 
-  if (activeKey === 'codex-sessions') {
-    return (
-      <>
-        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} showAppModeSwitcher={chromePreferences.appModeSwitcher === 'top'} showCodexStatus={chromePreferences.codexStatus === 'top'} />
-        {appUpdateBanner}
-        {appChromeControlsFallback}
-        <CodexSessionManagerPanel backLabel={codexSessionBackKey === 'tasks' ? '返回任务' : '返回总览'} focusAlert={codexMonitorFocusAlert} focusSessionId={pendingCodexSessionId} onFocusSessionHandled={() => setPendingCodexSessionId('')} usesCustomTitleBar={usesCustomTitleBar} onBack={() => setActiveKey(codexSessionBackKey)} onOpenForgeProject={openForgeProjectFromCodex} />
-        {systemLogDrawer}
-        {projectGitTaskDrawer}
-        {appStatusBar}
-      </>
-    )
-  }
-
   if (activeKey === 'terminal') {
     return (
       <>
@@ -23058,6 +23035,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             )}
             {!loadingWorkspace && activeKey === 'ai-tools' && (
               <AiToolsPanel
+                codexWorkspaceTarget={codexWorkspaceTarget}
+                onCodexWorkspaceTargetHandled={() => setCodexWorkspaceTarget(null)}
                 projectId={selectedProjectId}
                 projectPath={projects.find((project) => project.id === selectedProjectId)?.workspacePath ?? ''}
                 onOpenTerminal={() => setActiveKey('terminal')}

@@ -13670,6 +13670,86 @@ button.app-status-bar-item:hover {
   grid-template-columns: 250px minmax(0, 1fr);
 }
 
+.codex-session-shell.is-embedded {
+  min-height: 680px;
+  height: min(820px, calc(100vh - 230px));
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+}
+
+.ai-codex-tabs {
+  margin-top: 10px;
+}
+
+.ai-codex-workspace-shell {
+  max-width: none;
+}
+
+.codex-session-shell.is-embedded .codex-session-projects {
+  padding-top: 18px;
+}
+
+.codex-project-management-toolbar {
+  position: sticky;
+  top: -28px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 -2px 18px;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-bg);
+}
+
+.codex-project-management-heading {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.codex-project-management-heading .ant-typography-secondary {
+  font-size: 12px;
+}
+
+.codex-project-session-empty {
+  display: grid;
+  gap: 28px;
+  min-height: 320px;
+  place-content: center;
+  padding: 32px;
+  text-align: center;
+}
+
+.codex-project-session-empty h4 {
+  margin-bottom: 8px;
+}
+
+.codex-project-session-metrics {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.codex-project-session-metrics span {
+  display: grid;
+  gap: 3px;
+  min-width: 120px;
+  padding: 12px;
+  color: var(--app-muted);
+  font-size: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--panel-bg);
+}
+
+.codex-project-session-metrics strong {
+  color: var(--app-text);
+  font-size: 20px;
+}
+
 .codex-monitor-main {
   min-width: 0;
   padding: 32px 38px 48px;
