@@ -321,7 +321,7 @@ import {
   type ProjectDetailTabAvailability,
   type ProjectDetailTabKey
 } from './project-detail-view'
-import { createQuickBuildCompletionPrompt } from './quick-build-view'
+import { createQuickBuildCompletionPrompt, shouldSelectQuickBuildDirectory } from './quick-build-view'
 import {
   closeProjectSettingsModule,
   createInitialProjectSettingsView,
@@ -22842,7 +22842,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
     let cwd = appRuntimeInfo?.projectRoot || quickBuildState.cwd
 
-    if (appRuntimeInfo?.canQuickBuild === false) {
+    if (shouldSelectQuickBuildDirectory(appRuntimeInfo?.canQuickBuild, quickBuildState.status)) {
       const selectedPath = await window.forgeDesk.selectDirectory()
 
       if (!selectedPath) {
@@ -22889,6 +22889,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       message.success('快速构建已在后台开始')
     } catch (error) {
       const errorMessage = getErrorMessage(error, '快速构建启动失败')
+      setAppRuntimeInfo((current) => current ? { ...current, canQuickBuild: false } : current)
       const nextState: QuickBuildState = {
         ...runningState,
         finishedAt: new Date().toISOString(),

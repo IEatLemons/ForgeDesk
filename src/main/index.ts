@@ -1552,8 +1552,14 @@ function appendQuickBuildOutput(task: QuickBuildTaskSnapshot, stream: 'stdout' |
 function resolveQuickBuildCwd(input: QuickBuildStartInput = {}): string {
   const requestedCwd = input.cwd?.trim()
 
-  if (requestedCwd && hasForgeDeskPackage(requestedCwd)) {
-    return resolve(requestedCwd)
+  if (requestedCwd) {
+    const requestedProjectRoot = findForgeDeskProjectRoot(requestedCwd)
+
+    if (requestedProjectRoot) {
+      return requestedProjectRoot
+    }
+
+    throw new Error('所选目录不是 ForgeDesk 源码目录，请重新选择包含 package.json 的 ForgeDesk 项目目录')
   }
 
   const projectRoot = resolveForgeDeskProjectRoot()
