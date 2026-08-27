@@ -10,6 +10,7 @@ function readRendererSource(fileName: string): string {
 describe('global settings layout', () => {
   it('groups settings entries by a single navigation model', () => {
     const source = readRendererSource('App.tsx')
+    const settingsPanelSource = source.match(/function SettingsPanel\([\s\S]*?\n}\n\nfunction /)?.[0] ?? ''
 
     assert.match(source, /type SettingsOverviewCategory/)
     assert.match(source, /title: '界面与系统'[\s\S]*keys: \['appearance', 'menu-bar', 'log-refresh'\]/)
@@ -18,9 +19,15 @@ describe('global settings layout', () => {
     assert.match(source, /title: '应用维护'[\s\S]*keys: \['updates'\]/)
     assert.match(source, /const settingsModuleDefinitions: SettingsModuleDefinition\[\]/)
     assert.match(source, /type SettingsStatusKind = 'loading'/)
-    assert.match(source, /const settingsAttentionModules = settingsModules\.filter/)
     assert.match(source, /className="settings-navigation"/)
-    assert.match(source, /className="settings-overview-summary"/)
+    assert.match(source, /<ModuleBackButton label="返回" onClick=\{onBack\} \/>/)
+    assert.doesNotMatch(settingsPanelSource, /返回总览/)
+    assert.doesNotMatch(settingsPanelSource, /settings-overview-summary/)
+    assert.match(source, /type SettingsModuleKey =\s*\| 'appearance'/)
+    assert.match(source, /useState<SettingsModuleKey>\('appearance'\)/)
+    assert.match(source, /setSettingsBackKey\(activeKey\)/)
+    assert.match(source, /onActiveModuleChange=\{setSettingsInitialModule\}/)
+    assert.match(source, /setActiveKey\(isNavigationKeyVisible\(appMode, settingsBackKey\)[\s\S]*\? settingsBackKey : 'overview'\)/)
     assert.match(source, /刷新设置状态/)
   })
 
@@ -52,7 +59,8 @@ describe('global settings layout', () => {
     assert.match(styles, /\.settings-main \{[\s\S]*height: 100%;[\s\S]*overflow-y: auto;/)
     assert.match(styles, /\.settings-entry-row \{[\s\S]*grid-template-columns: 32px minmax\(0, 1fr\) auto 14px;/)
     assert.match(styles, /\.settings-status-verified \{[\s\S]*var\(--success-text\)/)
-    assert.match(styles, /\.settings-overview-summary \{[\s\S]*grid-template-columns: 42px minmax\(0, 1fr\) auto;/)
+    assert.match(styles, /\.settings-page-heading-copy \{[\s\S]*display: flex;/)
+    assert.doesNotMatch(styles, /\.settings-overview-summary/)
     assert.match(styles, /\.oa-guide-panel \{[\s\S]*display: grid;[\s\S]*gap: 14px;/)
     assert.match(styles, /\.oa-guide-steps \{[\s\S]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\);/)
   })

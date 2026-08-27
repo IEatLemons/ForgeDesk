@@ -445,7 +445,6 @@ type SshPassphraseForm = {
 }
 
 type SettingsModuleKey =
-  | 'overview'
   | 'appearance'
   | 'git'
   | 'github'
@@ -461,7 +460,7 @@ type SettingsModuleKey =
   | 'updates'
   | 'log-refresh'
   | 'menu-bar'
-type SettingsOverviewModuleKey = Exclude<SettingsModuleKey, 'overview'>
+type SettingsOverviewModuleKey = SettingsModuleKey
 type SettingsCategoryKey = 'system' | 'development' | 'integrations' | 'maintenance'
 type SettingsStatusKind = 'loading' | 'not-configured' | 'saved' | 'verified' | 'attention' | 'error' | 'disabled'
 type SettingsModuleStatus = {
@@ -2251,10 +2250,9 @@ type AiSettingsSectionProps = {
   onCheck?: () => void | Promise<void>
   onRefresh: () => void | Promise<unknown>
   onSave: () => void | Promise<void>
-  onBack?: () => void
 }
 
-function AiSettingsSection({ form, settings, loading, saving, status, checking, onCheck, onRefresh, onSave, onBack }: AiSettingsSectionProps): JSX.Element {
+function AiSettingsSection({ form, settings, loading, saving, status, checking, onCheck, onRefresh, onSave }: AiSettingsSectionProps): JSX.Element {
   const aiReady = isAiSettingsReady(settings)
   const provider = Form.useWatch('provider', form) ?? settings?.provider ?? 'openai-compatible'
   const providerPreset = AI_PROVIDER_PRESETS[provider]
@@ -2511,11 +2509,6 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
 
   return (
     <div className="panel settings-module-panel">
-      {onBack ? (
-        <div className="module-back-row">
-          <ModuleBackButton label="返回总览" onClick={onBack} />
-        </div>
-      ) : null}
       <div className="settings-module-header">
         <Space direction="vertical" size={2}>
           <Typography.Title level={3}>AI 助手</Typography.Title>
@@ -2760,19 +2753,13 @@ type PlaneSettingsSectionProps = {
   onSave: () => void | Promise<void>
   onTest: () => void | Promise<void>
   onOpen: () => void | Promise<void>
-  onBack?: () => void
 }
 
-function PlaneSettingsSection({ form, settings, loading, saving, testing, testResult, onRefresh, onSave, onTest, onOpen, onBack }: PlaneSettingsSectionProps): JSX.Element {
+function PlaneSettingsSection({ form, settings, loading, saving, testing, testResult, onRefresh, onSave, onTest, onOpen }: PlaneSettingsSectionProps): JSX.Element {
   const planeReady = isPlaneSettingsReady(settings)
 
   return (
     <div className="panel settings-module-panel">
-      {onBack ? (
-        <div className="module-back-row">
-          <ModuleBackButton label="返回总览" onClick={onBack} />
-        </div>
-      ) : null}
       <div className="settings-module-header">
         <Space direction="vertical" size={2}>
           <Typography.Title level={3}>Plane 集成</Typography.Title>
@@ -2881,10 +2868,9 @@ type OaSettingsSectionProps = {
   onRefresh: () => void | Promise<unknown>
   onSave: () => void | Promise<void>
   onOpenDocs: () => void | Promise<void>
-  onBack?: () => void
 }
 
-function OaSettingsSection({ form, settings, loading, saving, onRefresh, onSave, onOpenDocs, onBack }: OaSettingsSectionProps): JSX.Element {
+function OaSettingsSection({ form, settings, loading, saving, onRefresh, onSave, onOpenDocs }: OaSettingsSectionProps): JSX.Element {
   const oaReady = isOaSettingsReady(settings)
   const developerConsoleUrl = settings?.docsHomeUrl.includes('larksuite') ? larkDeveloperConsoleUrl : feishuDeveloperConsoleUrl
   const developerDocsUrl = settings?.docsHomeUrl.includes('larksuite') ? larkDeveloperDocsUrl : feishuDeveloperDocsUrl
@@ -2911,11 +2897,6 @@ function OaSettingsSection({ form, settings, loading, saving, onRefresh, onSave,
 
   return (
     <div className="panel settings-module-panel">
-      {onBack ? (
-        <div className="module-back-row">
-          <ModuleBackButton label="返回总览" onClick={onBack} />
-        </div>
-      ) : null}
       <div className="settings-module-header">
         <Space direction="vertical" size={2}>
           <Typography.Title level={3}>OA / Lark 文档</Typography.Title>
@@ -3714,7 +3695,9 @@ function OaDocsPanel({ onOpenSettings }: OaDocsPanelProps): JSX.Element {
 }
 
 function SettingsPanel({
-  initialModule = 'overview',
+  initialModule = 'appearance',
+  onBack,
+  onActiveModuleChange,
   themePreference,
   resolvedTheme,
   onThemePreferenceChange,
@@ -3725,6 +3708,8 @@ function SettingsPanel({
   onOpenSystemLog
 }: {
   initialModule?: SettingsModuleKey
+  onBack: () => void
+  onActiveModuleChange: (module: SettingsModuleKey) => void
   themePreference: ThemePreference
   resolvedTheme: ResolvedTheme
   onThemePreferenceChange: (preference: ThemePreference) => void
@@ -3806,6 +3791,11 @@ function SettingsPanel({
   useEffect(() => {
     setActiveSettingsModule(initialModule)
   }, [initialModule])
+
+  function selectSettingsModule(module: SettingsModuleKey): void {
+    setActiveSettingsModule(module)
+    onActiveModuleChange(module)
+  }
 
   useEffect(() => {
     if (!window.forgeDesk) {
@@ -5226,8 +5216,6 @@ function SettingsPanel({
     ...resolveSettingsModuleState(definition.key)
   }))
   const settingsModuleByKey = new Map(settingsModules.map((module) => [module.key, module]))
-  const settingsAttentionModules = settingsModules.filter((module) => ['not-configured', 'attention', 'error'].includes(module.status.kind))
-
   function renderSettingsStatus(status: SettingsModuleStatus): JSX.Element {
     const icon = status.kind === 'loading' ? <Spin size="small" /> : status.kind === 'verified' || status.kind === 'saved' ? <CheckCircleOutlined /> : status.kind === 'error' ? <CloseCircleOutlined /> : status.kind === 'attention' ? <InfoCircleOutlined /> : status.kind === 'disabled' ? <StopOutlined /> : <SettingOutlined />
 
@@ -5248,7 +5236,7 @@ function SettingsPanel({
         key={module.key}
         type="button"
         aria-current={isActive ? 'page' : undefined}
-        onClick={() => setActiveSettingsModule(module.key)}
+        onClick={() => selectSettingsModule(module.key)}
       >
         <span className="settings-entry-icon">{module.icon}</span>
         <span className="settings-entry-copy">
@@ -5264,18 +5252,13 @@ function SettingsPanel({
 
   function renderModuleHeader(title: string, description: string, actions?: JSX.Element): JSX.Element {
     return (
-      <>
-        <div className="module-back-row">
-          <ModuleBackButton label="返回总览" onClick={() => setActiveSettingsModule('overview')} />
-        </div>
-        <div className="settings-module-header">
-          <Space direction="vertical" size={2}>
-            <Typography.Title level={3}>{title}</Typography.Title>
-            <Typography.Text type="secondary">{description}</Typography.Text>
-          </Space>
-          <Space wrap>{actions}</Space>
-        </div>
-      </>
+      <div className="settings-module-header">
+        <Space direction="vertical" size={2}>
+          <Typography.Title level={3}>{title}</Typography.Title>
+          <Typography.Text type="secondary">{description}</Typography.Text>
+        </Space>
+        <Space wrap>{actions}</Space>
+      </div>
     )
   }
 
@@ -6250,7 +6233,6 @@ function SettingsPanel({
         onCheck={checkAiRuntime}
         onRefresh={refreshAiSettings}
         onSave={saveAiSettings}
-        onBack={() => setActiveSettingsModule('overview')}
       />
     )
   }
@@ -6258,7 +6240,7 @@ function SettingsPanel({
   function renderServicesModule(): JSX.Element {
     return (
       <GlobalServiceCenterPanel
-        onBack={() => setActiveSettingsModule('overview')}
+        initialView="services"
         onSystemLog={onSystemLog}
         onDeploymentRefreshActiveChange={onDeploymentRefreshActiveChange}
         onOpenSystemLog={onOpenSystemLog}
@@ -6279,7 +6261,6 @@ function SettingsPanel({
         onSave={savePlaneSettings}
         onTest={testPlaneSettings}
         onOpen={openPlaneHome}
-        onBack={() => setActiveSettingsModule('overview')}
       />
     )
   }
@@ -6295,7 +6276,6 @@ function SettingsPanel({
           onRefresh={refreshOaSettings}
           onSave={saveOaSettings}
           onOpenDocs={openOaDocs}
-          onBack={() => setActiveSettingsModule('overview')}
         />
         <LarkBotPanel serviceReady={isLarkBotServiceReady(oaSettings)} />
       </div>
@@ -6371,58 +6351,6 @@ function SettingsPanel({
     )
   }
 
-  function renderOverview(): JSX.Element {
-    const attentionCount = settingsAttentionModules.length
-    const configuredCount = settingsModules.filter((module) => ['saved', 'verified'].includes(module.status.kind)).length
-
-    return (
-      <div className="settings-overview-content">
-        <div className="settings-overview-summary">
-          <div className={`settings-overview-summary-icon${attentionCount > 0 ? ' is-attention' : ' is-ready'}`}>
-            {attentionCount > 0 ? <InfoCircleOutlined /> : <CheckCircleOutlined />}
-          </div>
-          <div className="settings-overview-summary-copy">
-            <Typography.Title level={3}>{attentionCount > 0 ? `${attentionCount} 项设置需要处理` : '设置状态正常'}</Typography.Title>
-            <Typography.Text type="secondary">
-              {attentionCount > 0 ? '优先处理下面的配置或授权问题，其他设置可以按需调整。' : '当前已配置的模块可以继续使用，也可以从左侧进入任意设置。'}
-            </Typography.Text>
-          </div>
-          <div className="settings-overview-summary-metrics">
-            <span>
-              <strong>{configuredCount}</strong>
-              已配置
-            </span>
-            <span>
-              <strong>{attentionCount}</strong>
-              待处理
-            </span>
-            <span>
-              <strong>{settingsModules.length}</strong>
-              个模块
-            </span>
-          </div>
-        </div>
-
-        <section className="settings-overview-attention">
-          <div className="settings-overview-section-heading">
-            <div>
-              <Typography.Title level={4}>待处理事项</Typography.Title>
-              <Typography.Text type="secondary">只显示未配置、配置不完整或检测失败的模块。</Typography.Text>
-            </div>
-          </div>
-          {attentionCount > 0 ? (
-            <div className="settings-overview-entry-list">{settingsAttentionModules.map(renderSettingsEntry)}</div>
-          ) : (
-            <div className="settings-overview-empty">
-              <CheckCircleOutlined />
-              <span>暂时没有需要处理的设置</span>
-            </div>
-          )}
-        </section>
-      </div>
-    )
-  }
-
   function renderActiveSettingsModule(): JSX.Element {
     switch (activeSettingsModule) {
       case 'appearance':
@@ -6456,16 +6384,19 @@ function SettingsPanel({
       case 'updates':
         return renderUpdatesModule()
       default:
-        return renderOverview()
+        return renderAppearanceModule()
     }
   }
 
   return (
     <section className="workspace-section settings-workspace">
       <div className="section-heading">
-        <div>
-          <Typography.Title level={2}>设置</Typography.Title>
-          <Typography.Text type="secondary">管理界面、开发环境凭据和外部服务集成。</Typography.Text>
+        <div className="settings-page-heading-copy">
+          <ModuleBackButton label="返回" onClick={onBack} />
+          <div>
+            <Typography.Title level={2}>设置</Typography.Title>
+            <Typography.Text type="secondary">管理界面、开发环境凭据和外部服务集成。</Typography.Text>
+          </div>
         </div>
         <Space>
           <Button icon={<ReloadOutlined />} loading={refreshingSettingsOverview} onClick={() => void refreshSettingsOverview()}>
@@ -9230,17 +9161,17 @@ function ServiceDetailDrawer({
 type ServiceCenterView = 'deployments' | 'services'
 
 function GlobalServiceCenterPanel({
-  onBack,
+  initialView = 'deployments',
   onSystemLog,
   onDeploymentRefreshActiveChange,
   onOpenSystemLog
 }: {
-  onBack?: () => void
+  initialView?: ServiceCenterView
   onSystemLog?: SystemLogHandler
   onDeploymentRefreshActiveChange?: (active: boolean) => void
   onOpenSystemLog?: () => void
 }): JSX.Element {
-  const [centerView, setCenterView] = useState<ServiceCenterView>(onBack ? 'services' : 'deployments')
+  const [centerView, setCenterView] = useState<ServiceCenterView>(initialView)
   const [services, setServices] = useState<ProjectService[]>([])
   const [deploymentsByServiceId, setDeploymentsByServiceId] = useState<Record<string, ServiceDeploymentSummary[]>>({})
   const [deploymentFilters, setDeploymentFilters] = useState<DeploymentDashboardFilters>({})
@@ -9625,11 +9556,6 @@ function GlobalServiceCenterPanel({
   }
   return (
     <div className="panel settings-module-panel">
-      {onBack ? (
-        <div className="module-back-row">
-          <ModuleBackButton label="返回总览" onClick={onBack} />
-        </div>
-      ) : null}
       <div className="settings-module-header">
         <Space direction="vertical" size={2}>
           <Typography.Title level={3}>服务中心</Typography.Title>
@@ -22200,7 +22126,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const [chromePreferences, setChromePreferences] = useState<AppChromePreferences>(() => readStoredAppChromePreferences())
   const [activeKey, setActiveKey] = useState<AppActiveKey>(() => (readStoredAppMode() === 'simple' ? 'projects' : 'overview'))
   const usesCustomTitleBar = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
-  const [settingsInitialModule, setSettingsInitialModule] = useState<SettingsModuleKey>('overview')
+  const [settingsInitialModule, setSettingsInitialModule] = useState<SettingsModuleKey>('appearance')
+  const [settingsBackKey, setSettingsBackKey] = useState<AppActiveKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
   const [initialization, setInitialization] = useState<InitializationSnapshot | null>(null)
   const [initializationLoading, setInitializationLoading] = useState(true)
@@ -22542,7 +22469,9 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     }
 
     if (key === 'settings') {
-      setSettingsInitialModule('overview')
+      if (activeKey !== 'settings') {
+        setSettingsBackKey(activeKey)
+      }
     }
 
     if (key === 'codex-sessions') {
@@ -22587,8 +22516,15 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   }
 
   function openSettingsModule(module: SettingsModuleKey): void {
+    if (activeKey !== 'settings') {
+      setSettingsBackKey(activeKey)
+    }
     setSettingsInitialModule(module)
     setActiveKey('settings')
+  }
+
+  function closeSettings(): void {
+    setActiveKey(isNavigationKeyVisible(appMode, settingsBackKey) && settingsBackKey !== 'settings' ? settingsBackKey : 'overview')
   }
 
   function openGlobalTerminalRequest(request: Omit<TerminalOpenRequest, 'requestId'>): void {
@@ -23008,6 +22944,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             {!loadingWorkspace && activeKey === 'settings' && (
               <SettingsPanel
                 initialModule={settingsInitialModule}
+                onBack={closeSettings}
+                onActiveModuleChange={setSettingsInitialModule}
                 themePreference={themePreference}
                 resolvedTheme={resolvedTheme}
                 onThemePreferenceChange={onThemePreferenceChange}
@@ -23048,7 +22986,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
                 mode={appMode}
                 focusProjectId={selectedProjectId}
                 onCreateProject={() => setCreatingProject(true)}
-                onOpenSettings={() => openSettingsModule('overview')}
+                onOpenSettings={() => openNavigationKey('settings')}
                 onOpenAiTools={() => setActiveKey('ai-tools')}
                 onOpenTerminalRequest={openTerminalRequest}
                 resolvedTheme={resolvedTheme}

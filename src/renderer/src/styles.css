@@ -9226,6 +9226,17 @@ button.app-status-bar-item:hover {
   min-height: 0;
 }
 
+.settings-page-heading-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.settings-page-heading-copy > div {
+  min-width: 0;
+}
+
 .settings-layout {
   display: grid;
   grid-template-columns: minmax(250px, 292px) minmax(0, 1fr);
@@ -9258,8 +9269,7 @@ button.app-status-bar-item:hover {
 }
 
 .settings-navigation-heading,
-.settings-navigation-category,
-.settings-overview-section-heading {
+.settings-navigation-category {
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -9443,124 +9453,6 @@ button.app-status-bar-item:hover {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-}
-
-.settings-overview-content {
-  display: grid;
-  gap: 20px;
-}
-
-.settings-overview-summary {
-  display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
-  padding: 18px 20px;
-  border: 1px solid var(--app-border);
-  border-radius: 12px;
-  background: var(--panel-bg);
-  box-shadow: var(--app-shadow);
-}
-
-.settings-overview-summary-icon {
-  display: grid;
-  place-items: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 10px;
-  font-size: 20px;
-}
-
-.settings-overview-summary-icon.is-ready {
-  color: var(--success-text);
-  background: color-mix(in srgb, var(--success-border) 12%, var(--panel-bg));
-}
-
-.settings-overview-summary-icon.is-attention {
-  color: var(--warning-text);
-  background: var(--warning-soft-bg);
-}
-
-.settings-overview-summary-copy {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.settings-overview-summary-copy h3,
-.settings-overview-section-heading h4 {
-  margin: 0;
-}
-
-.settings-overview-summary-copy h3 {
-  font-size: 18px;
-  line-height: 24px;
-}
-
-.settings-overview-summary-metrics {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  color: var(--app-muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.settings-overview-summary-metrics span {
-  display: grid;
-  gap: 1px;
-  text-align: right;
-}
-
-.settings-overview-summary-metrics strong {
-  color: var(--app-text);
-  font-size: 16px;
-  line-height: 20px;
-}
-
-.settings-overview-attention {
-  display: grid;
-  gap: 12px;
-  padding: 20px;
-  border: 1px solid var(--app-border);
-  border-radius: 12px;
-  background: var(--panel-bg);
-  box-shadow: var(--app-shadow);
-}
-
-.settings-overview-section-heading {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-}
-
-.settings-overview-section-heading h4 {
-  font-size: 15px;
-  line-height: 22px;
-}
-
-.settings-overview-entry-list {
-  display: grid;
-  gap: 6px;
-}
-
-.settings-overview-entry-list .settings-entry-row {
-  border-color: var(--app-border-soft);
-  background: var(--subtle-bg);
-}
-
-.settings-overview-entry-list .settings-entry-row:hover,
-.settings-overview-entry-list .settings-entry-row:focus-visible {
-  background: color-mix(in srgb, var(--primary) 7%, var(--panel-bg));
-}
-
-.settings-overview-empty {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 64px;
-  padding: 0 4px;
-  color: var(--success-text);
-  font-size: 12px;
 }
 
 .settings-category-list,
@@ -13494,21 +13386,6 @@ button.app-status-bar-item:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .settings-overview-summary {
-    grid-template-columns: 42px minmax(0, 1fr);
-  }
-
-  .settings-overview-summary-metrics {
-    grid-column: 1 / -1;
-    justify-content: flex-start;
-    padding-top: 4px;
-    border-top: 1px solid var(--app-border);
-  }
-
-  .settings-overview-summary-metrics span {
-    text-align: left;
-  }
-
   .settings-entry-row {
     grid-template-columns: 32px minmax(0, 1fr) auto 14px;
   }
@@ -13620,14 +13497,6 @@ button.app-status-bar-item:hover {
     grid-row: 1 / span 2;
   }
 
-  .settings-overview-summary,
-  .settings-overview-attention {
-    padding: 16px;
-  }
-
-  .settings-overview-summary-metrics {
-    gap: 12px;
-  }
 }
 
 /* Codex project monitor: the monitoring surface is the default view; conversations remain one click away. */
