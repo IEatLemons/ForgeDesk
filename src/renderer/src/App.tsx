@@ -11738,7 +11738,14 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
           <Tag color={currentBranch ? 'blue' : 'default'}>当前分支：{currentBranch || '未检测'}</Tag>
         </Space>
         <Space.Compact className="git-operation-compact">
-          <Select value={pushRemote} options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]} onChange={setPushRemote} />
+          <Select
+            className="git-push-remote-select"
+            popupClassName="git-push-remote-select-popup"
+            popupMatchSelectWidth={320}
+            value={pushRemote}
+            options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]}
+            onChange={setPushRemote}
+          />
           <Input value={pushBranch} placeholder={currentBranch || 'main'} onChange={(event) => setPushBranch(event.target.value)} />
         </Space.Compact>
         <Select
@@ -12641,7 +12648,14 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
           <div className="git-operation-box">
             <Typography.Text strong>推送</Typography.Text>
             <Space.Compact className="git-operation-compact">
-              <Select value={pushRemote} options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]} onChange={setPushRemote} />
+              <Select
+                className="git-push-remote-select"
+                popupClassName="git-push-remote-select-popup"
+                popupMatchSelectWidth={320}
+                value={pushRemote}
+                options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]}
+                onChange={setPushRemote}
+              />
               <Input value={pushBranch} placeholder={currentBranch || 'main'} onChange={(event) => setPushBranch(event.target.value)} />
               <Button loading={working} disabled={!pushReady} onClick={pushSelectedBranch}>
                 推送
