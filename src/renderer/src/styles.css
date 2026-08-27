@@ -11134,6 +11134,22 @@ button.app-status-bar-item:hover {
   width: 100%;
 }
 
+.git-operation-compact .git-push-remote-select {
+  flex: 0 1 320px;
+  width: 320px;
+  min-width: 0;
+}
+
+.git-operation-compact .git-push-remote-select + .ant-input {
+  flex: 1 1 0;
+  width: auto;
+}
+
+.git-push-remote-select-popup.ant-select-dropdown {
+  width: min(320px, calc(100vw - 48px)) !important;
+  min-width: 0;
+}
+
 .git-operation-compact .ant-input {
   min-width: 0;
 }
