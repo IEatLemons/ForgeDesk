@@ -2009,6 +2009,41 @@
   gap: 3px;
 }
 
+.codex-session-sidebar > .ant-space-compact,
+.codex-session-status-filter {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.codex-session-selection-toolbar,
+.codex-session-batch-actions {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.codex-session-selection-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.codex-session-selection-toolbar .ant-checkbox-wrapper,
+.codex-session-selection-toolbar .ant-typography {
+  font-size: 11px;
+}
+
+.codex-session-batch-actions {
+  padding-top: 10px;
+  border-top: 1px solid var(--app-border-soft);
+}
+
+.codex-session-row-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .codex-session-row-preview {
   display: -webkit-box;
   overflow: hidden;
@@ -5306,6 +5341,39 @@ button.app-status-bar-item:hover {
 
 .project-list-table {
   margin-top: 12px;
+}
+
+.project-group-filter {
+  display: flex;
+  gap: 8px;
+  margin: 2px -2px 0;
+  padding: 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.project-group-filter-option {
+  flex: 0 0 auto;
+  border-radius: 999px;
+}
+
+.project-group-filter-option span {
+  margin-left: 4px;
+  opacity: 0.76;
+}
+
+.project-group-filter-manage {
+  flex: 0 0 auto;
+  margin-left: 4px;
+}
+
+.project-group-filter-empty {
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  margin-top: 12px;
+  border: 1px dashed var(--app-border);
+  border-radius: 8px;
 }
 
 .project-list-table .ant-table,
@@ -9226,24 +9294,9 @@ button.app-status-bar-item:hover {
   min-height: 0;
 }
 
-.settings-page-heading-copy {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  min-width: 0;
-}
-
-.settings-page-heading-copy > div {
-  min-width: 0;
-}
-
 .settings-layout {
-  display: grid;
-  grid-template-columns: minmax(250px, 292px) minmax(0, 1fr);
   height: calc(100vh - var(--app-status-bar-height) - 150px);
   min-height: 480px;
-  gap: 20px;
-  align-items: stretch;
   overflow: hidden;
 }
 
@@ -9251,60 +9304,8 @@ button.app-status-bar-item:hover {
   height: calc(100vh - var(--app-titlebar-height) - var(--app-status-bar-height) - 150px);
 }
 
-.settings-navigation {
-  position: relative;
-  top: auto;
-  display: grid;
-  gap: 18px;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  padding: 16px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  border: 1px solid var(--app-border);
-  border-radius: 12px;
-  background: var(--subtle-bg);
-  scrollbar-gutter: stable;
-}
-
-.settings-navigation-heading,
-.settings-navigation-category {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.settings-navigation-heading {
-  padding: 2px 4px 10px;
-  border-bottom: 1px solid var(--app-border);
-}
-
-.settings-navigation-heading .ant-typography-secondary,
-.settings-navigation-category .ant-typography-secondary {
-  font-size: 11px;
-  line-height: 16px;
-}
-
-.settings-navigation-section {
-  display: grid;
-  gap: 8px;
-}
-
-.settings-navigation-category {
-  padding: 0 4px;
-}
-
-.settings-navigation-category > span:first-child {
-  color: var(--app-text);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 18px;
-}
-
-.settings-navigation-list {
-  display: grid;
-  gap: 4px;
+.settings-page-back {
+  margin-bottom: 8px;
 }
 
 .settings-entry-row {
@@ -9453,6 +9454,64 @@ button.app-status-bar-item:hover {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+}
+
+.settings-sidebar .sidebar-inner {
+  padding-bottom: var(--app-status-bar-height);
+}
+
+.settings-sidebar-navigation {
+  display: grid;
+  gap: 18px;
+  height: 100%;
+  min-height: 0;
+  padding: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.settings-sidebar-navigation nav {
+  display: grid;
+  gap: 18px;
+}
+
+.settings-sidebar-heading,
+.settings-sidebar-category {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-sidebar-heading .ant-typography-secondary,
+.settings-sidebar-category .ant-typography-secondary {
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.settings-sidebar-section {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-sidebar-category {
+  padding: 0 4px;
+}
+
+.settings-sidebar-category > span:first-child {
+  color: var(--app-text);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+}
+
+.settings-sidebar-list {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-sidebar-entry {
+  grid-template-columns: 32px minmax(0, 1fr) 14px;
 }
 
 .settings-category-list,
@@ -10949,6 +11008,22 @@ button.app-status-bar-item:hover {
 
 .git-operation-compact {
   width: 100%;
+}
+
+.git-operation-compact .git-push-remote-select {
+  flex: 0 1 320px;
+  width: 320px;
+  min-width: 0;
+}
+
+.git-operation-compact .git-push-remote-select + .ant-input {
+  flex: 1 1 0;
+  width: auto;
+}
+
+.git-push-remote-select-popup.ant-select-dropdown {
+  width: min(320px, calc(100vw - 48px)) !important;
+  min-width: 0;
 }
 
 .git-operation-compact .ant-input {
@@ -13363,14 +13438,12 @@ button.app-status-bar-item:hover {
   }
 
   .settings-layout {
-    grid-template-columns: 1fr;
     height: auto;
     min-height: 0;
     overflow: visible;
   }
 
-  .settings-navigation {
-    position: static;
+  .settings-sidebar-navigation {
     height: auto;
     overflow: visible;
     scrollbar-gutter: auto;
@@ -13380,10 +13453,6 @@ button.app-status-bar-item:hover {
     height: auto;
     overflow: visible;
     scrollbar-gutter: auto;
-  }
-
-  .settings-navigation-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .settings-entry-row {
@@ -13478,10 +13547,6 @@ button.app-status-bar-item:hover {
 }
 
 @media (max-width: 620px) {
-  .settings-navigation-list {
-    grid-template-columns: 1fr;
-  }
-
   .settings-entry-row {
     grid-template-columns: 32px minmax(0, 1fr) 14px;
   }
@@ -13502,6 +13567,86 @@ button.app-status-bar-item:hover {
 /* Codex project monitor: the monitoring surface is the default view; conversations remain one click away. */
 .codex-session-shell.is-monitor {
   grid-template-columns: 250px minmax(0, 1fr);
+}
+
+.codex-session-shell.is-embedded {
+  min-height: 680px;
+  height: min(820px, calc(100vh - 230px));
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+}
+
+.ai-codex-tabs {
+  margin-top: 10px;
+}
+
+.ai-codex-workspace-shell {
+  max-width: none;
+}
+
+.codex-session-shell.is-embedded .codex-session-projects {
+  padding-top: 18px;
+}
+
+.codex-project-management-toolbar {
+  position: sticky;
+  top: -28px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 -2px 18px;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-bg);
+}
+
+.codex-project-management-heading {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.codex-project-management-heading .ant-typography-secondary {
+  font-size: 12px;
+}
+
+.codex-project-session-empty {
+  display: grid;
+  gap: 28px;
+  min-height: 320px;
+  place-content: center;
+  padding: 32px;
+  text-align: center;
+}
+
+.codex-project-session-empty h4 {
+  margin-bottom: 8px;
+}
+
+.codex-project-session-metrics {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.codex-project-session-metrics span {
+  display: grid;
+  gap: 3px;
+  min-width: 120px;
+  padding: 12px;
+  color: var(--app-muted);
+  font-size: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--panel-bg);
+}
+
+.codex-project-session-metrics strong {
+  color: var(--app-text);
+  font-size: 20px;
 }
 
 .codex-monitor-main {

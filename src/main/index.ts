@@ -79,6 +79,8 @@ import {
 import {
   CodexSessionService,
   type CodexSessionEvent,
+  type CodexSessionBatchActionInput,
+  type CodexSessionBatchActionResult,
   type CodexSessionMessageInput,
   type CodexSessionDetail,
   type CodexSessionSummary,
@@ -337,7 +339,7 @@ import {
   assertCommitLifecycleEditable,
   getProjectCommitStatusConfig,
   listRepositoryCommitTestStatuses,
-  matchesLifecycleBranchRef,
+  matchesLifecycleRemoteBranchRef,
   migrateProjectCommitStatusTables,
   resolveCommitLifecycle,
   saveProjectCommitStatusConfig,
@@ -1550,8 +1552,14 @@ function appendQuickBuildOutput(task: QuickBuildTaskSnapshot, stream: 'stdout' |
 function resolveQuickBuildCwd(input: QuickBuildStartInput = {}): string {
   const requestedCwd = input.cwd?.trim()
 
-  if (requestedCwd && hasForgeDeskPackage(requestedCwd)) {
-    return resolve(requestedCwd)
+  if (requestedCwd) {
+    const requestedProjectRoot = findForgeDeskProjectRoot(requestedCwd)
+
+    if (requestedProjectRoot) {
+      return requestedProjectRoot
+    }
+
+    throw new Error('所选目录不是 ForgeDesk 源码目录，请重新选择包含 package.json 的 ForgeDesk 项目目录')
   }
 
   const projectRoot = resolveForgeDeskProjectRoot()
@@ -3671,12 +3679,12 @@ function mapCommitRecord(
   }
 }
 
-async function listLifecycleBranchRefs(localPath: string, branchName: string): Promise<string[]> {
-  const output = await runGitInPathOptional(localPath, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes'])
+async function listLifecycleRemoteBranchRefs(localPath: string, remoteName: string, branchName: string): Promise<string[]> {
+  const output = await runGitInPathOptional(localPath, ['for-each-ref', '--format=%(refname)', `refs/remotes/${remoteName}/${branchName}`])
   return output
     .split(/\r?\n/)
     .map((ref) => ref.trim())
-    .filter((ref) => matchesLifecycleBranchRef(ref, branchName))
+    .filter((ref) => matchesLifecycleRemoteBranchRef(ref, remoteName, branchName))
 }
 
 async function listReachableCommitHashes(localPath: string, refs: string[]): Promise<Set<string>> {
@@ -3694,20 +3702,20 @@ async function enrichCommitLifecycles(repository: RepositoryRecord, commits: Git
   }
 
   const config = getProjectCommitStatusConfig(getDatabase(), repository.projectId)
-  const [mainRefs, testBranchRefs, manualStatuses] = await Promise.all([
-    listLifecycleBranchRefs(repository.localPath, 'main'),
-    listLifecycleBranchRefs(repository.localPath, config.testBranchName),
+  const [productionRefs, testBranchRefs, manualStatuses] = await Promise.all([
+    listLifecycleRemoteBranchRefs(repository.localPath, config.productionRemoteName, 'main'),
+    listLifecycleRemoteBranchRefs(repository.localPath, config.testRemoteName, config.testBranchName),
     Promise.resolve(listRepositoryCommitTestStatuses(getDatabase(), repository.id, commits.map((commit) => commit.hash)))
   ])
-  const [mainCommitHashes, testBranchCommitHashes] = await Promise.all([
-    listReachableCommitHashes(repository.localPath, mainRefs),
+  const [productionCommitHashes, testBranchCommitHashes] = await Promise.all([
+    listReachableCommitHashes(repository.localPath, productionRefs),
     listReachableCommitHashes(repository.localPath, testBranchRefs)
   ])
 
   return commits.map((commit) => {
     const lifecycle = resolveCommitLifecycle({
-      inMain: mainCommitHashes.has(commit.hash),
-      inTestBranch: testBranchCommitHashes.has(commit.hash),
+      inProductionRemote: productionCommitHashes.has(commit.hash),
+      inTestRemoteBranch: testBranchCommitHashes.has(commit.hash),
       manualStatus: manualStatuses.get(commit.hash)?.status
     })
 
@@ -4330,15 +4338,24 @@ async function commitRepositoryChanges(repositoryId: string, input: GitCommitInp
   }
 }
 
+async function assertLocalPushSourceBranch(repository: RepositoryRecord, branch: string): Promise<void> {
+  const result = await runGitInPathResult(repository.localPath, buildGitVerifyRefArgs(`refs/heads/${branch.trim()}`))
+
+  if (!result.ok) {
+    throw new Error(`找不到本地源分支：${branch.trim()}`)
+  }
+}
+
 async function pushRepositoryChanges(repositoryId: string, input: GitPushInput, operationId?: string): Promise<GitOperationResult> {
   return withSavedSshPassphrases(async (env) => {
     const operationArgs = buildGitPushOperationArgs(input)
+    const repository = getRepositoryOrThrow(repositoryId)
+    await assertLocalPushSourceBranch(repository, input.branch)
 
     if (operationArgs.length === 1) {
       return runRepositoryWriteOperation(repositoryId, operationArgs[0], { env, operationId })
     }
 
-    const repository = getRepositoryOrThrow(repositoryId)
     const results = []
 
     for (const args of operationArgs) {
@@ -4379,6 +4396,7 @@ async function pushRepositoryTaskChanges(repositoryId: string, input: GitPushInp
   return withSavedSshPassphrases(async (env) => {
     const repository = getRepositoryOrThrow(repositoryId)
     const operationArgs = buildGitPushOperationArgs(input)
+    await assertLocalPushSourceBranch(repository, input.branch)
     const results: GitCommandResult[] = []
 
     for (const args of operationArgs) {
@@ -6498,22 +6516,22 @@ async function setRepositoryCommitTestStatus(
   }
 
   const config = getProjectCommitStatusConfig(getDatabase(), repository.projectId)
-  const [mainRefs, testBranchRefs, manualStatuses] = await Promise.all([
-    listLifecycleBranchRefs(repository.localPath, 'main'),
-    listLifecycleBranchRefs(repository.localPath, config.testBranchName),
+  const [productionRefs, testBranchRefs, manualStatuses] = await Promise.all([
+    listLifecycleRemoteBranchRefs(repository.localPath, config.productionRemoteName, 'main'),
+    listLifecycleRemoteBranchRefs(repository.localPath, config.testRemoteName, config.testBranchName),
     Promise.resolve(listRepositoryCommitTestStatuses(getDatabase(), repository.id, [resolvedHash]))
   ])
-  const [mainCommitHashes, testBranchCommitHashes] = await Promise.all([
-    listReachableCommitHashes(repository.localPath, mainRefs),
+  const [productionCommitHashes, testBranchCommitHashes] = await Promise.all([
+    listReachableCommitHashes(repository.localPath, productionRefs),
     listReachableCommitHashes(repository.localPath, testBranchRefs)
   ])
   const lifecycle = resolveCommitLifecycle({
-    inMain: mainCommitHashes.has(resolvedHash),
-    inTestBranch: testBranchCommitHashes.has(resolvedHash),
+    inProductionRemote: productionCommitHashes.has(resolvedHash),
+    inTestRemoteBranch: testBranchCommitHashes.has(resolvedHash),
     manualStatus: manualStatuses.get(resolvedHash)?.status
   })
 
-  assertCommitLifecycleEditable(lifecycle, config.testBranchName)
+  assertCommitLifecycleEditable(lifecycle, config.testRemoteName, config.testBranchName)
 
   return saveRepositoryCommitTestStatus(getDatabase(), { repositoryId: repository.id, commitHash: resolvedHash, status: input.status })
 }
@@ -8250,6 +8268,24 @@ ipcMain.handle('codex:sessions:list', async (): Promise<CodexSessionsSnapshot> =
 ipcMain.handle('codex:sessions:get', async (_event, sessionId: string): Promise<CodexSessionDetail> => codexSessionService.get(sessionId))
 
 ipcMain.handle('codex:sessions:pin', async (_event, sessionId: string): Promise<CodexSessionSummary> => codexSessionService.togglePin(sessionId))
+
+ipcMain.handle('codex:sessions:archive', async (_event, input: CodexSessionBatchActionInput): Promise<CodexSessionBatchActionResult> => {
+  const result = await codexSessionService.archive(input)
+  void refreshCodexProjectMonitor()
+  return result
+})
+
+ipcMain.handle('codex:sessions:unarchive', async (_event, input: CodexSessionBatchActionInput): Promise<CodexSessionBatchActionResult> => {
+  const result = await codexSessionService.unarchive(input)
+  void refreshCodexProjectMonitor()
+  return result
+})
+
+ipcMain.handle('codex:sessions:delete', async (_event, input: CodexSessionBatchActionInput): Promise<CodexSessionBatchActionResult> => {
+  const result = await codexSessionService.delete(input)
+  void refreshCodexProjectMonitor()
+  return result
+})
 
 ipcMain.handle('codex:sessions:send', async (_event, input: CodexSessionMessageInput): Promise<CodexSessionDetail> => codexSessionService.sendMessage(input))
 

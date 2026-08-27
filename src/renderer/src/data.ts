@@ -841,6 +841,7 @@ export type GitPushInput = {
   remote?: string
   remotes?: string[]
   branch: string
+  targetBranch?: string
   tagNames?: string[]
 }
 
@@ -1146,11 +1147,13 @@ export type ManualCommitTestStatus = 'passed' | 'failed'
 
 export type CommitLifecycleStatus = 'pending-test' | 'testing' | 'test-passed' | 'test-failed' | 'online'
 
-export type CommitLifecycleSource = 'pending-test' | 'testing-branch' | 'manual-test-result' | 'main'
+export type CommitLifecycleSource = 'pending-test' | 'testing-remote-branch' | 'manual-test-result' | 'production-remote'
 
 export type ProjectCommitStatusConfig = {
   projectId: string
   testBranchName: string
+  testRemoteName: string
+  productionRemoteName: string
 }
 
 export type RepositoryCommitTestStatus = {
@@ -2178,6 +2181,24 @@ export type CodexSessionSummary = {
 
 export type CodexSessionDetail = CodexSessionSummary & {
   items: CodexConversationItem[]
+}
+
+export type CodexSessionBatchAction = 'archive' | 'unarchive' | 'delete'
+
+export type CodexSessionBatchActionInput = {
+  sessionIds: string[]
+}
+
+export type CodexSessionBatchActionFailure = {
+  sessionId: string
+  error: string
+}
+
+export type CodexSessionBatchActionResult = {
+  action: CodexSessionBatchAction
+  succeededIds: string[]
+  failures: CodexSessionBatchActionFailure[]
+  snapshot: CodexSessionsSnapshot
 }
 
 export type CodexProjectRecord = {

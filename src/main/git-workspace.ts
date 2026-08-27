@@ -26,6 +26,7 @@ export type GitPushInput = {
   remote?: string
   remotes?: string[]
   branch: string
+  targetBranch?: string
   tagNames?: string[]
 }
 
@@ -83,6 +84,16 @@ function assertSafeRef(value: string, label: string): string {
   }
 
   return trimmed
+}
+
+function assertSafeBranchName(value: string, label: string): string {
+  const branch = assertSafeRef(value, label)
+
+  if (branch.includes(':') || branch.startsWith('refs/')) {
+    throw new Error(`不支持的${label}：${value}`)
+  }
+
+  return branch
 }
 
 function assertRemoteName(value: string): string {
@@ -147,15 +158,17 @@ export function buildGitPushArgs(input: GitPushInput): string[] {
 
 export function buildGitPushOperationArgs(input: GitPushInput): string[][] {
   const branch = assertSafeRef(input.branch, '分支')
+  const targetBranch = input.targetBranch?.trim() ? assertSafeBranchName(input.targetBranch, '目标分支') : branch
   const remoteNames = input.remotes?.length ? input.remotes : input.remote ? [input.remote] : []
   const uniqueRemoteNames = Array.from(new Set(remoteNames.map(assertRemoteName)))
   const tagRefs = Array.from(new Set((input.tagNames ?? []).map((tagName) => `refs/tags/${assertSafeRef(tagName, '版本 Tag')}`)))
+  const branchRef = targetBranch === branch ? branch : `${branch}:refs/heads/${targetBranch}`
 
   if (uniqueRemoteNames.length === 0) {
     throw new Error('请选择要推送的远端')
   }
 
-  return uniqueRemoteNames.map((remote) => ['push', remote, branch, ...tagRefs])
+  return uniqueRemoteNames.map((remote) => ['push', remote, branchRef, ...tagRefs])
 }
 
 export function buildGitPushTagArgs(input: GitTagPushInput): string[] {

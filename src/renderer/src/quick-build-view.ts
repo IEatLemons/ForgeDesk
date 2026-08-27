@@ -8,6 +8,10 @@ export type QuickBuildCompletionPrompt = {
   cancelText: string
 }
 
+export function shouldSelectQuickBuildDirectory(canQuickBuild: boolean | undefined, status: 'idle' | 'running' | 'success' | 'error' | 'cancelled'): boolean {
+  return canQuickBuild === false || status === 'error'
+}
+
 export function createQuickBuildCompletionPrompt(task: Pick<QuickBuildTask, 'command' | 'cwd' | 'status'>): QuickBuildCompletionPrompt | null {
   if (task.status !== 'succeeded') {
     return null

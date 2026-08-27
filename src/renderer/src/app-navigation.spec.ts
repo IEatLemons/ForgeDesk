@@ -12,7 +12,7 @@ describe('app navigation', () => {
   it('organizes the workspace around life, study, work, and computer areas', () => {
     assert.deepEqual(
       APP_NAVIGATION_ITEMS.map((item) => item.key),
-      ['overview', 'market-news', 'settings', 'tasks', 'docs', 'projects', 'ai-tools', 'services', 'data-sources', 'docker', 'tools', 'system-monitor', 'system-info', 'codex-sessions', 'ai-chat', 'terminal']
+      ['overview', 'market-news', 'settings', 'tasks', 'docs', 'projects', 'ai-tools', 'services', 'data-sources', 'docker', 'tools', 'system-monitor', 'system-info', 'ai-chat', 'terminal']
     )
     assert.deepEqual(
       APP_NAVIGATION_SECTIONS.filter((section) => section.placement === 'main').map((section) => section.key),
@@ -31,16 +31,17 @@ describe('app navigation', () => {
   it('keeps AI chat beside the computer tools', () => {
     assert.deepEqual(
       APP_NAVIGATION_ITEMS.filter((item) => item.section === 'computer').map((item) => item.key),
-      ['system-monitor', 'system-info', 'codex-sessions', 'ai-chat', 'terminal']
+      ['system-monitor', 'system-info', 'ai-chat', 'terminal']
     )
   })
 
-  it('exposes projects and AI tools in simple mode', () => {
-    assert.deepEqual(getNavigationItemsForMode('simple').map((item) => item.key), ['projects', 'ai-tools'])
-    assert.deepEqual(getNavigationSectionsForMode('simple').map((section) => section.key), ['work'])
+  it('exposes tasks, projects, AI tools, and settings in simple mode', () => {
+    assert.deepEqual(getNavigationItemsForMode('simple').map((item) => item.key), ['settings', 'tasks', 'projects', 'ai-tools'])
+    assert.deepEqual(getNavigationSectionsForMode('simple').map((section) => section.key), ['system', 'life', 'work'])
+    assert.equal(isNavigationKeyVisible('simple', 'tasks'), true)
     assert.equal(isNavigationKeyVisible('simple', 'projects'), true)
     assert.equal(isNavigationKeyVisible('simple', 'ai-tools'), true)
-    assert.equal(isNavigationKeyVisible('simple', 'settings'), false)
+    assert.equal(isNavigationKeyVisible('simple', 'settings'), true)
   })
 
   it('keeps the complete navigation in full mode', () => {

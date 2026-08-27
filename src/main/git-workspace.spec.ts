@@ -48,6 +48,9 @@ describe('git workspace operations', () => {
       ['push', 'origin', 'main'],
       ['push', 'backup', 'main']
     ])
+    assert.deepEqual(buildGitPushOperationArgs({ remote: 'origin', branch: 'feature/a', targetBranch: 'release/a' }), [
+      ['push', 'origin', 'feature/a:refs/heads/release/a']
+    ])
     assert.deepEqual(buildGitPushOperationArgs({ remote: 'origin', branch: 'main', tagNames: ['v2.3.0', 'v2.3.0'] }), [
       ['push', 'origin', 'main', 'refs/tags/v2.3.0']
     ])
@@ -63,6 +66,8 @@ describe('git workspace operations', () => {
     assert.throws(() => buildGitPushTagsArgs({ remoteName: 'origin', tagNames: [] }), /至少一个 Tag/)
     assert.throws(() => buildGitFetchRemoteArgs('bad/name'), /远端名称/)
     assert.throws(() => buildGitPushArgs({ remote: 'origin', branch: 'main', tagNames: ['v2.3.0;rm'] }), /不支持的版本 Tag/)
+    assert.throws(() => buildGitPushArgs({ remote: 'origin', branch: 'main', targetBranch: 'release bad' }), /不支持的目标分支/)
+    assert.throws(() => buildGitPushArgs({ remote: 'origin', branch: 'main', targetBranch: 'release:overwrite' }), /不支持的目标分支/)
     assert.throws(() => buildGitPushOperationArgs({ remotes: [], branch: 'main' }), /请选择要推送的远端/)
     assert.throws(() => buildGitMergeArgs({ source: 'main;rm' }), /不支持的分支/)
   })

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { createQuickBuildCompletionPrompt } from './quick-build-view.js'
+import { createQuickBuildCompletionPrompt, shouldSelectQuickBuildDirectory } from './quick-build-view.js'
 
 describe('quick build view model', () => {
   it('offers to restart into the new app after a successful quick build', () => {
@@ -21,5 +21,11 @@ describe('quick build view model', () => {
     assert.equal(createQuickBuildCompletionPrompt({ command: 'pnpm package:mac:legacy', cwd: '/tmp/ForgeDesk', status: 'running' }), null)
     assert.equal(createQuickBuildCompletionPrompt({ command: 'pnpm package:mac:legacy', cwd: '/tmp/ForgeDesk', status: 'failed' }), null)
     assert.equal(createQuickBuildCompletionPrompt({ command: 'pnpm package:mac:legacy', cwd: '/tmp/ForgeDesk', status: 'cancelled' }), null)
+  })
+
+  it('allows replacing an invalid quick build directory after an error', () => {
+    assert.equal(shouldSelectQuickBuildDirectory(true, 'error'), true)
+    assert.equal(shouldSelectQuickBuildDirectory(false, 'idle'), true)
+    assert.equal(shouldSelectQuickBuildDirectory(true, 'success'), false)
   })
 })

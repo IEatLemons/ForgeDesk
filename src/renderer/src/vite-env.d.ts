@@ -585,6 +585,7 @@ type GitPushInput = {
   remote?: string
   remotes?: string[]
   branch: string
+  targetBranch?: string
   tagNames?: string[]
 }
 
@@ -922,11 +923,13 @@ type ManualCommitTestStatus = 'passed' | 'failed'
 
 type CommitLifecycleStatus = 'pending-test' | 'testing' | 'test-passed' | 'test-failed' | 'online'
 
-type CommitLifecycleSource = 'pending-test' | 'testing-branch' | 'manual-test-result' | 'main'
+type CommitLifecycleSource = 'pending-test' | 'testing-remote-branch' | 'manual-test-result' | 'production-remote'
 
 type ProjectCommitStatusConfig = {
   projectId: string
   testBranchName: string
+  testRemoteName: string
+  productionRemoteName: string
 }
 
 type RepositoryCommitTestStatus = {
@@ -1955,6 +1958,24 @@ type CodexSessionSummary = {
 
 type CodexSessionDetail = CodexSessionSummary & {
   items: CodexConversationItem[]
+}
+
+type CodexSessionBatchAction = 'archive' | 'unarchive' | 'delete'
+
+type CodexSessionBatchActionInput = {
+  sessionIds: string[]
+}
+
+type CodexSessionBatchActionFailure = {
+  sessionId: string
+  error: string
+}
+
+type CodexSessionBatchActionResult = {
+  action: CodexSessionBatchAction
+  succeededIds: string[]
+  failures: CodexSessionBatchActionFailure[]
+  snapshot: CodexSessionsSnapshot
 }
 
 type CodexProjectRecord = {
@@ -3035,6 +3056,9 @@ interface Window {
     listCodexSessions: () => Promise<CodexSessionsSnapshot>
     getCodexSession: (sessionId: string) => Promise<CodexSessionDetail>
     toggleCodexSessionPin: (sessionId: string) => Promise<CodexSessionSummary>
+    archiveCodexSessions: (input: CodexSessionBatchActionInput) => Promise<CodexSessionBatchActionResult>
+    unarchiveCodexSessions: (input: CodexSessionBatchActionInput) => Promise<CodexSessionBatchActionResult>
+    deleteCodexSessions: (input: CodexSessionBatchActionInput) => Promise<CodexSessionBatchActionResult>
     sendCodexSessionMessage: (input: CodexSessionMessageInput) => Promise<CodexSessionDetail>
     cancelCodexSession: (sessionId: string) => Promise<CodexSessionDetail>
     onCodexSessionEvent: (listener: (event: CodexSessionEvent) => void) => () => void
