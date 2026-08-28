@@ -225,9 +225,15 @@ function booleanValue(value: unknown): boolean {
   return numberValue(value) === 1 || value === true
 }
 
-function runFile(file: string, args: string[], timeout = 10_000): Promise<ExecResult> {
+function runFile(
+  file: string,
+  args: string[],
+  options: number | { timeout?: number; signal?: AbortSignal } = 10_000
+): Promise<ExecResult> {
+  const { signal, timeout } = typeof options === 'number' ? { signal: undefined, timeout: options } : { signal: options.signal, timeout: options.timeout ?? 10_000 }
+
   return new Promise((resolveResult) => {
-    execFile(file, args, { maxBuffer: 16 * 1024 * 1024, timeout }, (error, stdout, stderr) => {
+    execFile(file, args, { maxBuffer: 16 * 1024 * 1024, signal, timeout }, (error, stdout, stderr) => {
       resolveResult({
         error: error ? String(stderr || error.message).trim() : '',
         stderr: String(stderr ?? ''),
@@ -397,12 +403,12 @@ export function parsePsProcessOutput(output: string, capturedAt = new Date()): R
   return processes
 }
 
-async function enrichProcessNetworkUsage(processes: ResourceProcess[]): Promise<void> {
+async function enrichProcessNetworkUsage(processes: ResourceProcess[], signal?: AbortSignal): Promise<void> {
   if (process.platform !== 'darwin' || processes.length === 0) return
   // Current macOS emits the process label (including PID) as the first CSV
   // field. Keep the selector list to columns supported across recent macOS
   // versions; invalid selectors make nettop exit with its usage text.
-  const result = await runFile('/usr/bin/nettop', ['-P', '-n', '-x', '-L', '1', '-J', 'bytes_in,bytes_out'], 15_000)
+  const result = await runFile('/usr/bin/nettop', ['-P', '-n', '-x', '-L', '1', '-J', 'bytes_in,bytes_out'], { signal, timeout: 15_000 })
   if (result.error) return
   const usage = parseNettopProcessOutput(result.stdout)
   for (const processInfo of processes) {
@@ -448,18 +454,21 @@ export function mergeTopProcessOutput(processes: ResourceProcess[], output: stri
   return processes
 }
 
-export async function collectResourceProcesses(): Promise<ResourceProcess[]> {
+export async function collectResourceProcesses(signal?: AbortSignal): Promise<ResourceProcess[]> {
   const capturedAt = new Date()
-  const ps = await runFile('/bin/ps', ['-ww', '-axo', 'pid=,ppid=,user=,%cpu=,rss=,vsz=,etime=,state=,command='])
+  const ps = await runFile('/bin/ps', ['-ww', '-axo', 'pid=,ppid=,user=,%cpu=,rss=,vsz=,etime=,state=,command='], { signal })
   if (ps.error) throw new Error(ps.error)
+  if (signal?.aborted) return []
   const processes = parsePsProcessOutput(ps.stdout, capturedAt)
 
   if (process.platform === 'darwin') {
-    const top = await runFile('/usr/bin/top', ['-l', '1', '-n', '100', '-o', 'mem', '-stats', 'pid,command,cpu,mem,threads,ports,state,time,user'], 15_000)
+    const top = await runFile('/usr/bin/top', ['-l', '1', '-n', '100', '-o', 'mem', '-stats', 'pid,command,cpu,mem,threads,ports,state,time,user'], { signal, timeout: 15_000 })
     if (!top.error) mergeTopProcessOutput(processes, top.stdout)
   }
 
-  await enrichProcessNetworkUsage(processes)
+  if (signal?.aborted) return []
+  await enrichProcessNetworkUsage(processes, signal)
+  if (signal?.aborted) return []
 
   const selected = new Map<number, ResourceProcess>()
   for (const process of [...processes].sort((left, right) => right.memoryBytes - left.memoryBytes).slice(0, processLimit / 2)) selected.set(process.pid, process)
@@ -596,20 +605,31 @@ export function recordResourceSample(db: ResourceDatabase, snapshot: {
   capturedAt: string; cpuPercent: number; memoryUsagePercent: number; memoryUsedBytes: number;
   swapUsedBytes: number; storageUsagePercent: number; processes: ResourceProcess[]
 }): void {
-  db.prepare('INSERT INTO system_resource_samples(captured_at, cpu_percent, memory_usage_percent, memory_used_bytes, swap_used_bytes, storage_usage_percent) VALUES(?, ?, ?, ?, ?, ?)')
-    .run(snapshot.capturedAt, snapshot.cpuPercent, snapshot.memoryUsagePercent, snapshot.memoryUsedBytes, snapshot.swapUsedBytes, snapshot.storageUsagePercent)
-  const statement = db.prepare(`INSERT INTO system_process_samples(
-    captured_at, identity_key, instance_key, pid, parent_pid, app_name, process_name, user_name,
-    cpu_percent, memory_bytes, private_memory_bytes, virtual_memory_bytes, thread_count, port_count,
-    page_ins, process_state, elapsed_seconds, executable_path, bundle_path, command_text,
-    network_received_bytes, network_sent_bytes
-  ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-  for (const process of snapshot.processes) {
-    statement.run(snapshot.capturedAt, process.identityKey, process.instanceKey, process.pid, process.parentPid,
-      process.appName, process.processName, process.user, process.cpuPercent, process.memoryBytes,
-      process.privateMemoryBytes, process.virtualMemoryBytes, process.threadCount, process.portCount,
-      process.pageIns, process.state, process.elapsedSeconds, process.executablePath, process.bundlePath, process.command,
-      process.networkReceivedBytes, process.networkSentBytes)
+  db.exec('BEGIN')
+  try {
+    db.prepare('INSERT INTO system_resource_samples(captured_at, cpu_percent, memory_usage_percent, memory_used_bytes, swap_used_bytes, storage_usage_percent) VALUES(?, ?, ?, ?, ?, ?)')
+      .run(snapshot.capturedAt, snapshot.cpuPercent, snapshot.memoryUsagePercent, snapshot.memoryUsedBytes, snapshot.swapUsedBytes, snapshot.storageUsagePercent)
+    const statement = db.prepare(`INSERT INTO system_process_samples(
+      captured_at, identity_key, instance_key, pid, parent_pid, app_name, process_name, user_name,
+      cpu_percent, memory_bytes, private_memory_bytes, virtual_memory_bytes, thread_count, port_count,
+      page_ins, process_state, elapsed_seconds, executable_path, bundle_path, command_text,
+      network_received_bytes, network_sent_bytes
+    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    for (const process of snapshot.processes) {
+      statement.run(snapshot.capturedAt, process.identityKey, process.instanceKey, process.pid, process.parentPid,
+        process.appName, process.processName, process.user, process.cpuPercent, process.memoryBytes,
+        process.privateMemoryBytes, process.virtualMemoryBytes, process.threadCount, process.portCount,
+        process.pageIns, process.state, process.elapsedSeconds, process.executablePath, process.bundlePath, process.command,
+        process.networkReceivedBytes, process.networkSentBytes)
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      // If SQLite has already rolled the transaction back, preserve the original error.
+    }
+    throw error
   }
 }
 
@@ -1232,19 +1252,26 @@ export class ResourceMonitorService {
   private timer: NodeJS.Timeout | null = null
   private retentionTimer: NodeJS.Timeout | null = null
   private running = false
+  private activeSampleController: AbortController | null = null
 
   constructor(
     private readonly getDatabase: () => ResourceDatabase,
-    private readonly collectLightweightSnapshot: () => Promise<{ capturedAt: string; memoryUsagePercent: number; memoryUsedBytes: number; swapUsedBytes: number; storageUsagePercent: number }>
+    private readonly collectLightweightSnapshot: (signal?: AbortSignal) => Promise<{ capturedAt: string; memoryUsagePercent: number; memoryUsedBytes: number; swapUsedBytes: number; storageUsagePercent: number }>
   ) {}
 
   async sample(): Promise<void> {
     if (this.running) return
     this.running = true
+    const controller = new AbortController()
+    this.activeSampleController = controller
     try {
-      const [snapshot, processes] = await Promise.all([this.collectLightweightSnapshot(), collectResourceProcesses()])
+      const [snapshot, processes] = await Promise.all([this.collectLightweightSnapshot(controller.signal), collectResourceProcesses(controller.signal)])
+      if (controller.signal.aborted) return
       recordResourceSample(this.getDatabase(), { ...snapshot, cpuPercent: readCpuUsagePercent(), processes })
+    } catch (error) {
+      if (!controller.signal.aborted) throw error
     } finally {
+      if (this.activeSampleController === controller) this.activeSampleController = null
       this.running = false
     }
   }
@@ -1262,6 +1289,7 @@ export class ResourceMonitorService {
   stop(): void {
     if (this.timer) clearInterval(this.timer)
     if (this.retentionTimer) clearInterval(this.retentionTimer)
+    this.activeSampleController?.abort()
     this.timer = null; this.retentionTimer = null
   }
 }
