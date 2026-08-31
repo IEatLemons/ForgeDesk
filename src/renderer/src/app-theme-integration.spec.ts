@@ -70,7 +70,11 @@ describe('app theme integration', () => {
       '.commit-expanded-detail-row',
       '.commit-expanded-graph-cell',
       '.source-tree-table .commit-inline-detail',
-      '.commit-load-more'
+      '.commit-load-more',
+      '.commit-status-config',
+      '.codex-work-summary',
+      '.codex-work-project-list',
+      '.codex-work-project-heading'
     ]
 
     for (const selector of themedSurfaceSelectors) {
