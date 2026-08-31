@@ -11,6 +11,7 @@ import {
   buildGitMergeTreeArgs,
   buildGitPushArgs,
   buildGitPushOperationArgs,
+  describeGitPushOperation,
   buildGitPushTagArgs,
   buildGitPushTagsArgs,
   buildGitPushTargetCommitCountArgs,
@@ -54,6 +55,15 @@ describe('git workspace operations', () => {
     assert.deepEqual(buildGitPushOperationArgs({ remote: 'origin', branch: 'main', tagNames: ['v2.3.0', 'v2.3.0'] }), [
       ['push', 'origin', 'main', 'refs/tags/v2.3.0']
     ])
+    assert.deepEqual(buildGitPushOperationArgs({ mode: 'all-local-refs', remotes: ['origin', 'backup'] }), [
+      ['push', 'origin', '--all'],
+      ['push', 'origin', '--tags'],
+      ['push', 'backup', '--all'],
+      ['push', 'backup', '--tags']
+    ])
+    assert.equal(describeGitPushOperation(['push', 'origin', '--all']), 'all-local-branches')
+    assert.equal(describeGitPushOperation(['push', 'origin', '--tags']), 'all-local-tags')
+    assert.equal(describeGitPushOperation(['push', 'origin', 'main']), 'branch')
     assert.deepEqual(buildGitPushTagArgs({ remoteName: 'origin', tagName: 'v2.3.0' }), ['push', 'origin', 'refs/tags/v2.3.0'])
     assert.deepEqual(buildGitPushTagsArgs({ remoteName: 'origin', tagNames: ['v2.3.0', 'v2.4.0', 'v2.3.0'] }), ['push', 'origin', 'refs/tags/v2.3.0', 'refs/tags/v2.4.0'])
     assert.deepEqual(buildGitFetchRemoteArgs('origin'), ['fetch', 'origin', '--prune', '--tags'])
@@ -69,6 +79,7 @@ describe('git workspace operations', () => {
     assert.throws(() => buildGitPushArgs({ remote: 'origin', branch: 'main', targetBranch: 'release bad' }), /不支持的目标分支/)
     assert.throws(() => buildGitPushArgs({ remote: 'origin', branch: 'main', targetBranch: 'release:overwrite' }), /不支持的目标分支/)
     assert.throws(() => buildGitPushOperationArgs({ remotes: [], branch: 'main' }), /请选择要推送的远端/)
+    assert.throws(() => buildGitPushOperationArgs({ mode: 'all-local-refs', remotes: [] }), /请选择要推送的远端/)
     assert.throws(() => buildGitMergeArgs({ source: 'main;rm' }), /不支持的分支/)
   })
 

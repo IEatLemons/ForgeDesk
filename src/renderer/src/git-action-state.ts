@@ -104,6 +104,15 @@ export function canPushBranchSelection(
   return remoteNames.length > 0 && remoteNames.every((name) => remotes.some((remote) => remote.name === name)) && Boolean(sourceBranch.trim() && targetBranch.trim())
 }
 
+export function canPushAllLocalRefsSelection(
+  selectedRemote: string,
+  remotes: RemoteLike[],
+  localBranchCount: number
+): boolean {
+  const remoteNames = resolveSelectedPushRemoteNames(selectedRemote, remotes)
+  return localBranchCount > 0 && remoteNames.length > 0 && remoteNames.every((name) => remotes.some((remote) => remote.name === name))
+}
+
 export function getCurrentBranchName(repository: RepositoryLike | null | undefined, status: WorkspaceStatusLike | null | undefined): string {
   return status?.branch || repository?.currentBranch || ''
 }

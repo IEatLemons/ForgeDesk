@@ -28,6 +28,7 @@ export type ReleaseVersionRecommendation = {
   suggestedVersion: string
   suggestedTagName: string
   historicalTags: ReleaseTagHistoryEntry[]
+  localTagCount: number
 }
 
 export type ReleasePlanInput = {
@@ -134,7 +135,8 @@ export function createReleaseVersionRecommendation(input: ReleaseVersionRecommen
     currentVersion,
     suggestedVersion,
     suggestedTagName: suggestedVersion ? createReleaseTagName(suggestedVersion) : '',
-    historicalTags: parsedHistoricalTags.slice(0, historyLimit).map((tag) => ({ tagName: tag.tagName, version: tag.version }))
+    historicalTags: parsedHistoricalTags.slice(0, historyLimit).map((tag) => ({ tagName: tag.tagName, version: tag.version })),
+    localTagCount: input.tagNames.map((tagName) => tagName.trim()).filter(Boolean).length
   }
 }
 

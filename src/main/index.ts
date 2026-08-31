@@ -310,6 +310,7 @@ import {
   buildGitSwitchBranchArgs,
   buildGitTagArgs,
   buildGitVerifyRefArgs,
+  describeGitPushOperation,
   isEmptyRepositoryHeadError,
   parsePorcelainStatus,
   type GitAddInput,
@@ -318,6 +319,7 @@ import {
   type GitMergeAnalysisInput,
   type GitMergeInput,
   type GitPushInput,
+  type GitPushOperationKind,
   type GitTagPushInput,
   type GitPushTarget,
   type GitStatusFile
@@ -670,6 +672,13 @@ type GitPushTaskResult = {
   ok: boolean
   branch: string
   pushTargets: GitPushTarget[]
+  operationResults: Array<{
+    remote: string
+    kind: GitPushOperationKind
+    ok: boolean
+    stdout: string
+    stderr: string
+  }>
   stdout: string
   stderr: string
 }
@@ -4330,7 +4339,18 @@ async function commitRepositoryChanges(repositoryId: string, input: GitCommitInp
   }
 }
 
-async function assertLocalPushSourceBranch(repository: RepositoryRecord, branch: string): Promise<void> {
+async function assertLocalPushSourceBranch(repository: RepositoryRecord, input: GitPushInput): Promise<void> {
+  if (input.mode === 'all-local-refs') {
+    const result = await runGitInPathResult(repository.localPath, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads'])
+
+    if (!result.ok || !result.stdout.trim()) {
+      throw new Error('当前仓库没有可推送的本地分支')
+    }
+
+    return
+  }
+
+  const branch = input.branch
   const result = await runGitInPathResult(repository.localPath, buildGitVerifyRefArgs(`refs/heads/${branch.trim()}`))
 
   if (!result.ok) {
@@ -4342,7 +4362,7 @@ async function pushRepositoryChanges(repositoryId: string, input: GitPushInput, 
   return withSavedSshPassphrases(async (env) => {
     const operationArgs = buildGitPushOperationArgs(input)
     const repository = getRepositoryOrThrow(repositoryId)
-    await assertLocalPushSourceBranch(repository, input.branch)
+    await assertLocalPushSourceBranch(repository, input)
 
     if (operationArgs.length === 1) {
       return runRepositoryWriteOperation(repositoryId, operationArgs[0], { env, operationId })
@@ -4388,7 +4408,7 @@ async function pushRepositoryTaskChanges(repositoryId: string, input: GitPushInp
   return withSavedSshPassphrases(async (env) => {
     const repository = getRepositoryOrThrow(repositoryId)
     const operationArgs = buildGitPushOperationArgs(input)
-    await assertLocalPushSourceBranch(repository, input.branch)
+    await assertLocalPushSourceBranch(repository, input)
     const results: GitCommandResult[] = []
 
     for (const args of operationArgs) {
@@ -4404,15 +4424,23 @@ async function pushRepositoryTaskChanges(repositoryId: string, input: GitPushInp
     }
 
     const failedResult = results.find((result) => !result.ok)
+    const operationResults = results.map((result) => ({
+      remote: String(result.args[1] ?? ''),
+      kind: describeGitPushOperation(result.args),
+      ok: result.ok,
+      stdout: result.stdout,
+      stderr: result.stderr
+    }))
     return {
       ok: results.every((result) => result.ok),
-      branch: input.branch,
+      branch: input.mode === 'all-local-refs' ? '全部本地引用' : input.branch,
       pushTargets: repository.pushTargets.map((target) => ({
         remote: target.remote,
         branch: target.branch,
-        ahead: target.branch === input.branch && operationArgs.some((args) => args[1] === target.remote) && !failedResult ? 0 : target.ahead,
+        ahead: input.mode !== 'all-local-refs' && target.branch === input.branch && operationArgs.some((args) => args[1] === target.remote) && !failedResult ? 0 : target.ahead,
         hasRemoteBranch: target.hasRemoteBranch
       })),
+      operationResults,
       stdout: results.map((result) => result.stdout).filter(Boolean).join('\n'),
       stderr: failedResult ? failedResult.stderr || failedResult.stdout || '部分远端推送失败' : results.map((result) => result.stderr).filter(Boolean).join('\n')
     }

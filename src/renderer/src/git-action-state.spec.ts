@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import {
   PUSH_ALL_REMOTES_VALUE,
   canCommitSelection,
+  canPushAllLocalRefsSelection,
   canPushBranchSelection,
   canPushSelection,
   createPushRemoteOptions,
@@ -66,6 +67,13 @@ describe('git action state helpers', () => {
     assert.equal(canPushBranchSelection('origin', repository.remotes, 'feature/release', 'release/candidate'), true)
     assert.equal(canPushBranchSelection('origin', repository.remotes, '', 'release/candidate'), false)
     assert.equal(canPushBranchSelection('missing', repository.remotes, 'feature/release', 'release/candidate'), false)
+  })
+
+  it('enables all-local-ref push only when a real remote and local branch exist', () => {
+    assert.equal(canPushAllLocalRefsSelection('origin', repository.remotes, 3), true)
+    assert.equal(canPushAllLocalRefsSelection(PUSH_ALL_REMOTES_VALUE, repository.remotes, 3), true)
+    assert.equal(canPushAllLocalRefsSelection('missing', repository.remotes, 3), false)
+    assert.equal(canPushAllLocalRefsSelection('origin', repository.remotes, 0), false)
   })
 
   it('uses the freshly detected workspace branch before the repository fallback', () => {
