@@ -656,6 +656,7 @@ export function CodexStatusControl({
 
 export function AppTitleBar({
   appMode,
+  breadcrumbs,
   onAppModeChange,
   onOpenCodex,
   onOpenCodexMonitor,
@@ -664,6 +665,7 @@ export function AppTitleBar({
   showCodexStatus
 }: {
   appMode: AppMode
+  breadcrumbs: string[]
   onAppModeChange: (mode: AppMode) => void
   onOpenCodex: () => void
   onOpenCodexMonitor: () => void
@@ -675,7 +677,14 @@ export function AppTitleBar({
 
   return (
     <header className="app-titlebar">
-      <div className="app-titlebar-title">ForgeDesk</div>
+      <nav className="app-titlebar-title app-titlebar-breadcrumb" aria-label="当前位置">
+        {breadcrumbs.map((item, index) => (
+          <span className={`app-titlebar-breadcrumb-item${index === breadcrumbs.length - 1 ? ' is-current' : ''}`} key={`${item}-${index}`}>
+            {index > 0 ? <span className="app-titlebar-breadcrumb-separator" aria-hidden="true">›</span> : null}
+            <span className="app-titlebar-breadcrumb-label">{item}</span>
+          </span>
+        ))}
+      </nav>
       {showCodexStatus ? <CodexStatusControl placement="top" onOpenCodex={onOpenCodex} onOpenCodexMonitor={onOpenCodexMonitor} onOpenForgeProject={onOpenForgeProject} /> : null}
       {showAppModeSwitcher ? <div className="app-titlebar-actions"><AppModeSwitcher mode={appMode} onChange={onAppModeChange} /></div> : null}
     </header>

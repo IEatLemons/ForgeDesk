@@ -1045,7 +1045,7 @@ let closeGuardPrompt: Promise<boolean> | null = null
 let forceQuitRequested = false
 const confirmedWindowCloseIds = new Set<number>()
 let menuBarManagerService: MenuBarManagerService | null = null
-const resourceMonitorService = new ResourceMonitorService(() => getDatabase(), collectLightweightResourceSnapshot)
+const resourceMonitorService = new ResourceMonitorService(() => getDatabase(), () => collectLightweightResourceSnapshot())
 let storageGovernanceTimer: NodeJS.Timeout | null = null
 
 function getPrimaryWindow(): BrowserWindow | null {

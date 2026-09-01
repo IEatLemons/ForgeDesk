@@ -85,7 +85,7 @@ import {
   UserAddOutlined
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
-import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react'
 import type { MenuProps } from 'antd'
 import type { FormInstance } from 'antd/es/form'
 import forgedeskLogoUrl from './assets/forgedesk-logo.svg'
@@ -196,6 +196,7 @@ import {
   type AppNavigationItem,
   type AppNavigationKey
 } from './app-navigation'
+import { createAppTitlebarBreadcrumbs, type AppTitlebarProjectLocation } from './app-titlebar-breadcrumb'
 import { AiChatPanel } from './ai-chat-panel'
 import { AiToolsPanel, type CodexWorkspaceTarget } from './ai-tools-panel'
 import { CodexProjectBindingSettings } from './codex-project-binding-settings'
@@ -15315,7 +15316,8 @@ function ProjectOverview({
   onOpenTerminalRequest,
   resolvedTheme,
   onOpenProjectGitTasks,
-  onRefreshProjectGitTasks
+  onRefreshProjectGitTasks,
+  onTitlebarProjectLocationChange
 }: {
   mode: AppMode
   focusProjectId: string | null
@@ -15326,6 +15328,7 @@ function ProjectOverview({
   resolvedTheme: ResolvedTheme
   onOpenProjectGitTasks: () => void
   onRefreshProjectGitTasks: () => Promise<void>
+  onTitlebarProjectLocationChange: (location: AppTitlebarProjectLocation) => void
 }): JSX.Element {
   const {
     projects,
@@ -15428,6 +15431,7 @@ function ProjectOverview({
   const activeProjectDetailTab = visibleProjectDetailTabs.some((tab) => tab.key === projectDetailTab)
     ? projectDetailTab
     : visibleProjectDetailTabs[0]?.key ?? DEFAULT_PROJECT_DETAIL_TAB
+  const activeProjectDetailTabLabel = visibleProjectDetailTabs.find((tab) => tab.key === activeProjectDetailTab)?.label
   const selectedProjectGitRepository = projectRepositories.find((repository) => repository.id === projectGitRepositoryId)
     ?? sortRepositoriesHierarchically(projectRepositories)[0]?.repository
     ?? null
@@ -15447,6 +15451,12 @@ function ProjectOverview({
   const dailyDates = summary?.dailyMetrics.map((metric) => metric.date) ?? []
   const hasGitData = Boolean(summary && summary.totalCommits > 0)
   const selectedProjectTerminalRequest = selectedProject ? createProjectTerminalOpenRequest(selectedProject) : null
+
+  useEffect(() => {
+    onTitlebarProjectLocationChange(selectedProject
+      ? { name: selectedProject.name, tabLabel: activeProjectDetailTabLabel }
+      : null)
+  }, [activeProjectDetailTabLabel, onTitlebarProjectLocationChange, selectedProject?.id, selectedProject?.name])
 
   useEffect(() => {
     if (!window.forgeDesk || !selectedProject) {
@@ -22331,12 +22341,30 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const [appRuntimeInfo, setAppRuntimeInfo] = useState<AppRuntimeInfo | null>(null)
   const [quickBuildState, setQuickBuildState] = useState<QuickBuildState>(() => createInitialQuickBuildState())
   const [codexWorkspaceTarget, setCodexWorkspaceTarget] = useState<CodexWorkspaceTarget | null>(null)
+  const [titlebarProjectLocation, setTitlebarProjectLocation] = useState<AppTitlebarProjectLocation>(null)
   const terminalOpenRequestIdRef = useRef(0)
   const codexWorkspaceRequestIdRef = useRef(0)
   const quickBuildStateRef = useRef(quickBuildState)
   const systemLogSummary = useMemo(() => createSystemLogSummary(systemLogs), [systemLogs])
   const projectGitTaskRunningCount = useMemo(() => countRunningProjectGitTaskLogs(projectGitTaskLogs), [projectGitTaskLogs])
   const isSimpleMode = !isFullAppMode(appMode)
+  const activeSettingsModuleTitle = settingsModuleDefinitions.find((module) => module.key === settingsActiveModule)?.title
+  const titlebarBreadcrumbs = useMemo(() => createAppTitlebarBreadcrumbs({
+    activeKey,
+    projectLocation: titlebarProjectLocation,
+    settingsModuleTitle: activeSettingsModuleTitle
+  }), [activeKey, activeSettingsModuleTitle, titlebarProjectLocation])
+  const handleTitlebarProjectLocationChange = useCallback((location: AppTitlebarProjectLocation): void => {
+    setTitlebarProjectLocation((current) => (
+      current?.name === location?.name && current?.tabLabel === location?.tabLabel ? current : location
+    ))
+  }, [])
+
+  useEffect(() => {
+    if (activeKey !== 'projects') {
+      setTitlebarProjectLocation((current) => current ? null : current)
+    }
+  }, [activeKey])
 
   useEffect(() => {
     if (!window.forgeDesk) {
@@ -23000,7 +23028,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   if (activeKey === 'ai-chat') {
     return (
       <>
-        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} showAppModeSwitcher={chromePreferences.appModeSwitcher === 'top'} showCodexStatus={chromePreferences.codexStatus === 'top'} />
+        <AppTitleBar appMode={appMode} breadcrumbs={titlebarBreadcrumbs} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} showAppModeSwitcher={chromePreferences.appModeSwitcher === 'top'} showCodexStatus={chromePreferences.codexStatus === 'top'} />
         {appUpdateBanner}
         {appChromeControlsFallback}
         <AiChatPanel
@@ -23018,7 +23046,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   if (activeKey === 'terminal') {
     return (
       <>
-        <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} showAppModeSwitcher={chromePreferences.appModeSwitcher === 'top'} showCodexStatus={chromePreferences.codexStatus === 'top'} />
+        <AppTitleBar appMode={appMode} breadcrumbs={titlebarBreadcrumbs} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} showAppModeSwitcher={chromePreferences.appModeSwitcher === 'top'} showCodexStatus={chromePreferences.codexStatus === 'top'} />
         {appUpdateBanner}
         {appChromeControlsFallback}
         <Layout className={`terminal-mode-shell${usesCustomTitleBar ? ' terminal-mode-shell-with-titlebar' : ''}`}>
@@ -23069,7 +23097,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
   return (
     <>
-      <AppTitleBar appMode={appMode} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} showAppModeSwitcher={chromePreferences.appModeSwitcher === 'top'} showCodexStatus={chromePreferences.codexStatus === 'top'} />
+      <AppTitleBar appMode={appMode} breadcrumbs={titlebarBreadcrumbs} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} showAppModeSwitcher={chromePreferences.appModeSwitcher === 'top'} showCodexStatus={chromePreferences.codexStatus === 'top'} />
       {appUpdateBanner}
       <Layout className={`app-shell${usesCustomTitleBar ? ' app-shell-with-titlebar' : ''}${isSimpleMode ? ' app-shell-simple' : ''}`}>
         {appChromeControlsFallback}
@@ -23163,6 +23191,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
                 resolvedTheme={resolvedTheme}
                 onOpenProjectGitTasks={() => setProjectGitTaskDrawerOpen(true)}
                 onRefreshProjectGitTasks={refreshProjectGitTaskLogs}
+                onTitlebarProjectLocationChange={handleTitlebarProjectLocationChange}
               />
             )}
             {!loadingWorkspace && activeKey === 'ai-tools' && (
