@@ -156,7 +156,6 @@ import {
   migrateResourceGovernanceTables,
   pauseStorageScan,
   previewCleanup,
-  runResourceRetention,
   saveStorageRoot,
   setCleanupCategoryAuthorization,
   signalResourceProcess,
@@ -8950,8 +8949,6 @@ app.on('will-quit', () => {
   void menuBarManagerService?.shutdown().catch((error) => console.warn('Failed to stop menu bar helper', error))
   resourceMonitorService.stop()
   if (storageGovernanceTimer) clearInterval(storageGovernanceTimer)
-  void stopCodexApiService(app.getPath('userData'), false).catch((error) => console.warn('Failed to stop Codex API service', error))
-  runResourceRetention(getDatabase())
 })
 
 app.on('window-all-closed', () => {
