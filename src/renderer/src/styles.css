@@ -6494,9 +6494,9 @@ button.app-status-bar-item:hover {
   gap: 10px;
   padding: 14px;
   margin-bottom: 16px;
-  border: 1px solid var(--ant-color-border-secondary, #f0f0f0);
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: var(--ant-color-fill-quaternary, #fafafa);
+  background: var(--subtle-bg);
 }
 
 .source-tree-table .ant-table-tbody > tr.ant-table-row > td:not(.commit-graph-column) {
@@ -14677,9 +14677,9 @@ button.app-status-bar-item:hover {
   margin-bottom: 12px;
   color: var(--app-muted, #667085);
   font-size: 13px;
-  border: 1px solid var(--ant-color-border-secondary, #f0f0f0);
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: var(--ant-color-fill-quaternary, #fafafa);
+  background: var(--subtle-bg);
 }
 
 .codex-work-summary b {
@@ -14690,18 +14690,18 @@ button.app-status-bar-item:hover {
 
 .codex-work-project-list {
   overflow: hidden;
-  border: 1px solid var(--ant-color-border-secondary, #f0f0f0);
+  border: 1px solid var(--app-border-soft);
   border-radius: 10px;
 }
 
 .codex-work-project + .codex-work-project {
-  border-top: 1px solid var(--ant-color-border-secondary, #f0f0f0);
+  border-top: 1px solid var(--app-border-soft);
 }
 
 .codex-work-project-heading {
   min-height: 46px;
   padding: 0 14px;
-  background: var(--ant-color-fill-quaternary, #fafafa);
+  background: var(--subtle-bg);
 }
 
 .codex-work-project-path {
