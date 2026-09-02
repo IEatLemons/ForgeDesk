@@ -1061,6 +1061,18 @@ export type GitOperationResult = {
   stderr: string
 }
 
+export type GitBranchPruneResult = {
+  ok: boolean
+  repository: Repository
+  status: GitWorkspaceStatus
+  mainBranch: string
+  deletedLocalBranches: string[]
+  deletedRemoteBranches: Array<{ remote: string; branch: string }>
+  pushedBranches: Array<{ remote: string; branch: string }>
+  stdout: string
+  stderr: string
+}
+
 export type GitMergeAnalysis = {
   repositoryId: string
   ok: boolean

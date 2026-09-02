@@ -114,6 +114,7 @@ import type {
   DeploymentApprovalHistory,
   GitCommandResult,
   GitBranchSwitchInput,
+  GitBranchPruneResult,
   GitConflictFile,
   GitCommit,
   GitCommitDiff,
@@ -15087,6 +15088,7 @@ function ProjectOverview({
   const [projectSettingsInitialGitTab, setProjectSettingsInitialGitTab] = useState<'repositories' | 'remotes' | 'commands' | undefined>(undefined)
   const [projectGitRepositoryId, setProjectGitRepositoryId] = useState('')
   const [syncingProjectRepositoryId, setSyncingProjectRepositoryId] = useState<string | null>(null)
+  const [pruningProjectRepositoryId, setPruningProjectRepositoryId] = useState<string | null>(null)
   const [switchingProjectRepositoryId, setSwitchingProjectRepositoryId] = useState<string | null>(null)
   const [projectGitRefreshToken, setProjectGitRefreshToken] = useState(0)
   const [projectRepositoryCommitCounts, setProjectRepositoryCommitCounts] = useState<Record<string, number>>({})
@@ -15867,6 +15869,29 @@ function ProjectOverview({
     }
   }
 
+  async function pruneProjectRepositoryBranches(targetRepository: Repository): Promise<void> {
+    if (!window.forgeDesk || !selectedProject) return
+
+    setPruningProjectRepositoryId(targetRepository.id)
+    try {
+      const result: GitBranchPruneResult = await window.forgeDesk.pruneRepositoryBranches(targetRepository.id)
+      updateRepository(result.repository)
+      setProjectGitRepositoryId(targetRepository.id)
+      setProjectGitRefreshToken((current) => current + 1)
+      await refreshProjectAfterGitTask(selectedProject.id)
+      const summary = `本地删除 ${result.deletedLocalBranches.length} 个，远端删除 ${result.deletedRemoteBranches.length} 个，推送 ${result.pushedBranches.length} 次`
+      if (result.ok) {
+        message.success(`分支修剪完成：${summary}`)
+      } else {
+        message.warning(`分支修剪部分完成：${summary}。${formatGitTaskOutput(result.stderr)}`)
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error, '分支修剪失败'))
+    } finally {
+      setPruningProjectRepositoryId(null)
+    }
+  }
+
   async function rescanSelectedProject(project: Project): Promise<void> {
     setRescanningProjectId(project.id)
 
@@ -16552,6 +16577,24 @@ function ProjectOverview({
                   onClick={() => setPushModalOpen(true)}
                 >
                   推送
+                </Button>
+                <Button
+                  icon={<ToolOutlined />}
+                  loading={Boolean(selectedProjectGitRepository && pruningProjectRepositoryId === selectedProjectGitRepository.id)}
+                  disabled={!selectedProjectGitRepository || Boolean(pruningProjectRepositoryId)}
+                  onClick={() => {
+                    if (!selectedProjectGitRepository) return
+                    Modal.confirm({
+                      title: `修剪 ${selectedProjectGitRepository.name} 的分支？`,
+                      content: '会先 Fetch 全部远端，并切换到 main。随后删除已合并到 main 的本地及远端分支；未合并的本地分支会推送到每个远端。工作区必须干净。',
+                      okText: '执行修剪',
+                      okButtonProps: { danger: true },
+                      cancelText: '取消',
+                      onOk: () => pruneProjectRepositoryBranches(selectedProjectGitRepository)
+                    })
+                  }}
+                >
+                  分支修剪
                 </Button>
                 <Button icon={<BranchesOutlined />} disabled={projectRepositories.length === 0} onClick={() => setMergeModalOpen(true)}>
                   合并

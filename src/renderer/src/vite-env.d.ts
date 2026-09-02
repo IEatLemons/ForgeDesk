@@ -805,6 +805,18 @@ type GitOperationResult = {
   stderr: string
 }
 
+type GitBranchPruneResult = {
+  ok: boolean
+  repository: RepositoryRecord
+  status: GitWorkspaceStatus
+  mainBranch: string
+  deletedLocalBranches: string[]
+  deletedRemoteBranches: Array<{ remote: string; branch: string }>
+  pushedBranches: Array<{ remote: string; branch: string }>
+  stdout: string
+  stderr: string
+}
+
 type GitPushTaskResult = {
   ok: boolean
   branch: string
@@ -2800,6 +2812,7 @@ interface Window {
     saveRepositoryRemote: (input: RepositoryRemoteInput) => Promise<RepositoryRecord>
     deleteRepositoryRemote: (repositoryId: string, remoteName: string) => Promise<RepositoryRecord>
     fetchRepositoryRemote: (repositoryId: string, remoteName?: string, operationId?: string) => Promise<RepositoryRecord>
+    pruneRepositoryBranches: (repositoryId: string, operationId?: string) => Promise<GitBranchPruneResult>
     switchRepositoryBranch: (repositoryId: string, input: GitBranchSwitchInput) => Promise<RepositoryRecord>
     runRepositoryGitCommand: (input: GitCommandRequest) => Promise<GitCommandResult>
     getRepositoryWorkspaceStatus: (repositoryId: string) => Promise<GitWorkspaceStatus>

@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   saveRepositoryRemote: (input: RepositoryRemoteInput) => invokeGitIpc<RepositoryRecord>('repository:remote:save', input),
   deleteRepositoryRemote: (repositoryId: string, remoteName: string) => invokeGitIpc<RepositoryRecord>('repository:remote:delete', repositoryId, remoteName),
   fetchRepositoryRemote: (repositoryId: string, remoteName?: string, operationId?: string) => invokeGitIpc<RepositoryRecord>('repository:remote:fetch', repositoryId, remoteName, operationId),
+  pruneRepositoryBranches: (repositoryId: string, operationId?: string) => invokeGitIpc<GitBranchPruneResult>('repository:branch:prune', repositoryId, operationId),
   switchRepositoryBranch: (repositoryId: string, input: GitBranchSwitchInput) => invokeGitIpc<RepositoryRecord>('repository:branch:switch', repositoryId, input),
   runRepositoryGitCommand: (input: GitCommandRequest) => invokeGitIpc<GitCommandResult>('repository:git-command', input),
   getRepositoryWorkspaceStatus: (repositoryId: string) => invokeGitIpc<GitWorkspaceStatus>('repository:workspace-status', repositoryId),
