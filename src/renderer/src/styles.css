@@ -3799,6 +3799,27 @@ body {
   background: var(--sidebar-bg) !important;
 }
 
+.sidebar .ant-layout-sider-children {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.sidebar-collapse-trigger {
+  display: grid;
+  place-items: center;
+  height: 48px;
+  color: var(--app-muted);
+  font-size: 16px;
+  transition: color 0.2s, background-color 0.2s;
+}
+
+.sidebar-collapse-trigger:hover,
+.sidebar-collapse-trigger:focus-visible {
+  color: var(--app-text);
+  background: var(--table-row-hover-bg);
+}
+
 .app-shell-with-titlebar .sidebar {
   top: var(--app-titlebar-height);
   height: calc(100vh - var(--app-titlebar-height));
@@ -3808,7 +3829,8 @@ body {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
+  height: auto;
   min-height: 0;
   padding-bottom: var(--app-status-bar-height);
   overflow: hidden;
@@ -3918,6 +3940,15 @@ body {
 .panel h4,
 .workspace-section h3 {
   margin: 0;
+}
+
+.sidebar.ant-layout-sider-collapsed .brand {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.sidebar.ant-layout-sider-collapsed .brand-copy {
+  display: none;
 }
 
 .brand-copy {

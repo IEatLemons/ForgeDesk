@@ -1064,6 +1064,7 @@ let quickBuildTask: QuickBuildTaskSnapshot | null = null
 let quickBuildProcess: ChildProcessWithoutNullStreams | null = null
 let closeGuardPrompt: Promise<boolean> | null = null
 let forceQuitRequested = false
+let appQuitCleanupInProgress = false
 const confirmedWindowCloseIds = new Set<number>()
 let menuBarManagerService: MenuBarManagerService | null = null
 const resourceMonitorService = new ResourceMonitorService(() => getDatabase(), () => collectLightweightResourceSnapshot())
@@ -1118,8 +1119,37 @@ async function confirmCloseGuardAction(action: CloseGuardAction, ownerWindow: Br
   }
 }
 
-function stopRunningCloseGuardActivities(): void {
-  void menuBarManagerService?.shutdown().catch((error) => console.warn('Failed to stop menu bar helper while quitting', error))
+function withShutdownTimeout<T>(promise: Promise<T>, label: string, timeoutMs = 5000): Promise<T | undefined> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (value: T | undefined): void => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+
+    const timer = setTimeout(() => {
+      console.warn(`${label} timed out after ${timeoutMs}ms`)
+      finish(undefined)
+    }, timeoutMs)
+
+    void promise.then((value) => {
+      clearTimeout(timer)
+      finish(value)
+    }, (error) => {
+      clearTimeout(timer)
+      console.warn(label, error)
+      finish(undefined)
+    })
+  })
+}
+
+async function stopRunningCloseGuardActivities(): Promise<void> {
+  const cleanupTasks: Array<Promise<unknown>> = []
+
+  if (menuBarManagerService) {
+    cleanupTasks.push(withShutdownTimeout(menuBarManagerService.shutdown(), 'Failed to stop menu bar helper while quitting'))
+  }
 
   if (quickBuildTask?.status === 'running') {
     try {
@@ -1135,7 +1165,7 @@ function stopRunningCloseGuardActivities(): void {
     }
 
     try {
-      void cancelRepositoryReleasePublishTask(task.id).catch((error) => console.warn('Failed to cancel release task while quitting', error))
+      cleanupTasks.push(withShutdownTimeout(cancelRepositoryReleasePublishTask(task.id), `Failed to cancel release task ${task.id} while quitting`))
     } catch (error) {
       console.warn('Failed to cancel release task while quitting', error)
     }
@@ -1152,21 +1182,30 @@ function stopRunningCloseGuardActivities(): void {
       console.warn('Failed to close terminal session while quitting', error)
     }
   }
+
+  await Promise.all(cleanupTasks)
 }
 
 async function requestAppQuit(ownerWindow: BrowserWindow | null = getPrimaryWindow()): Promise<void> {
-  if (forceQuitRequested) {
+  if (forceQuitRequested || appQuitCleanupInProgress) {
     return
   }
+
+  appQuitCleanupInProgress = true
 
   const confirmed = await confirmCloseGuardAction('quit-app', ownerWindow)
 
   if (!confirmed) {
+    appQuitCleanupInProgress = false
     return
   }
 
   forceQuitRequested = true
-  stopRunningCloseGuardActivities()
+  await stopRunningCloseGuardActivities()
+  await withShutdownTimeout(
+    stopCodexApiService(app.getPath('userData'), false),
+    'Failed to stop Codex API service while quitting'
+  )
   app.quit()
 }
 
@@ -1773,7 +1812,7 @@ async function restartQuickBuildApp(input: QuickBuildRestartInput = {}, ownerWin
   await openMacAppInstance(appPath)
 
   forceQuitRequested = true
-  stopRunningCloseGuardActivities()
+  await stopRunningCloseGuardActivities()
   setTimeout(() => app.quit(), 100)
 
   return { appPath, restarted: true }
@@ -4069,6 +4108,8 @@ async function pushRepositoryMissingTags(repositoryId: string, input: { tagName?
     .filter((group) => group.tagNames.length > 0)
 
   return { snapshot: nextSnapshot, pushed, failed }
+}
+
 function formatGitBranchPruneFailure(remote: string, branch: string, result: GitCommandResult): string {
   return `${remote}/${branch}: ${result.stderr || result.stdout || 'Git 操作失败'}`
 }
@@ -9097,7 +9138,6 @@ app.on('before-quit', (event) => {
 
 app.on('will-quit', () => {
   releaseSingleProcessFileLock?.()
-  void menuBarManagerService?.shutdown().catch((error) => console.warn('Failed to stop menu bar helper', error))
   resourceMonitorService.stop()
   if (storageGovernanceTimer) clearInterval(storageGovernanceTimer)
 })

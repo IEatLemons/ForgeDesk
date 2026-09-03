@@ -64,6 +64,8 @@ import {
   LineChartOutlined,
   LockOutlined,
   DockerOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   MoreOutlined,
   MoonOutlined,
   PlusOutlined,
@@ -22495,6 +22497,7 @@ function PasswordGeneratorTool({ onBack }: { onBack: () => void }): JSX.Element 
 }
 
 function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppProps): JSX.Element {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const { loadingWorkspace, loadWorkspace, selectedProjectId, projects, setSelectedProjectId } = useForgeDeskStore()
   const [appMode, setAppMode] = useState<AppMode>(() => readStoredAppMode())
   const [chromePreferences, setChromePreferences] = useState<AppChromePreferences>(() => readStoredAppChromePreferences())
@@ -23281,7 +23284,22 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       {appUpdateBanner}
       <Layout className={`app-shell${usesCustomTitleBar ? ' app-shell-with-titlebar' : ''}${isSimpleMode ? ' app-shell-simple' : ''}`}>
         {appChromeControlsFallback}
-        <Layout.Sider width={activeKey === 'settings' ? 292 : 236} theme={resolvedTheme} className={`sidebar${activeKey === 'settings' ? ' settings-sidebar' : ''}`}>
+        <Layout.Sider
+          width={activeKey === 'settings' ? 292 : 236}
+          collapsedWidth={72}
+          theme={resolvedTheme}
+          className={`sidebar${activeKey === 'settings' ? ' settings-sidebar' : ''}`}
+          collapsible
+          collapsed={sidebarCollapsed}
+          onCollapse={setSidebarCollapsed}
+          trigger={
+            <Tooltip title={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'} placement="right">
+              <span className="sidebar-collapse-trigger" aria-label={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}>
+                {sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+              </span>
+            </Tooltip>
+          }
+        >
           <div className="sidebar-inner">
             {activeKey === 'settings' ? (
               <SettingsSidebar activeModule={settingsActiveModule} onSelectModule={setSettingsActiveModule} />
