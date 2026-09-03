@@ -669,6 +669,18 @@ type GitOperationResult = {
   stderr: string
 }
 
+type GitBranchPruneResult = {
+  ok: boolean
+  repository: RepositoryRecord
+  status: GitWorkspaceStatus
+  mainBranch: string
+  deletedLocalBranches: string[]
+  deletedRemoteBranches: Array<{ remote: string; branch: string }>
+  pushedBranches: Array<{ remote: string; branch: string }>
+  stdout: string
+  stderr: string
+}
+
 type GitPushTaskResult = {
   ok: boolean
   branch: string
@@ -4057,6 +4069,115 @@ async function pushRepositoryMissingTags(repositoryId: string, input: { tagName?
     .filter((group) => group.tagNames.length > 0)
 
   return { snapshot: nextSnapshot, pushed, failed }
+function formatGitBranchPruneFailure(remote: string, branch: string, result: GitCommandResult): string {
+  return `${remote}/${branch}: ${result.stderr || result.stdout || 'Git 操作失败'}`
+}
+
+async function pruneRepositoryBranches(repositoryId: string, operationId?: string): Promise<GitBranchPruneResult> {
+  return withSavedSshPassphrases(async (env) => {
+    const repository = getRepositoryOrThrow(repositoryId)
+    const mainBranch = 'main'
+    const initialStatus = await getRepositoryWorkspaceStatus(repositoryId)
+
+    if (initialStatus.files.length > 0) {
+      throw new Error('分支修剪前请先提交、暂存或还原当前工作区改动')
+    }
+
+    const mainExists = await runGitInPathResult(repository.localPath, ['show-ref', '--verify', '--quiet', `refs/heads/${mainBranch}`], { env, operationId })
+    if (!mainExists.ok) {
+      throw new Error('当前仓库没有本地 main 分支，无法执行分支修剪')
+    }
+
+    if (initialStatus.branch !== mainBranch) {
+      const switched = await runGitInPathResult(repository.localPath, ['switch', mainBranch], { env, operationId })
+      if (!switched.ok) throw new Error(switched.stderr || switched.stdout || '无法切换到 main 分支')
+    }
+
+    const remoteNames = await listGitRemoteNames(repository.localPath)
+    if (remoteNames.length === 0) throw new Error('当前仓库没有远端配置')
+
+    for (const remote of remoteNames) {
+      const fetched = await runGitInPathResult(repository.localPath, ['fetch', remote, '--prune'], { env, operationId })
+      if (!fetched.ok) throw new Error(`${remote} Fetch 失败：${fetched.stderr || fetched.stdout || 'Git 操作失败'}`)
+    }
+
+    const localBranches = parseBranchList(await runGitInPathStrict(repository.localPath, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'], { env, operationId }))
+    const remoteBranches = new Map<string, string[]>()
+    for (const remote of remoteNames) {
+      const branches = parseBranchList(await runGitInPathStrict(repository.localPath, ['for-each-ref', '--format=%(refname:strip=3)', `refs/remotes/${remote}/`], { env, operationId }))
+        .filter((branch) => branch && branch !== 'HEAD')
+      remoteBranches.set(remote, branches)
+    }
+
+    const deletedLocalBranches: string[] = []
+    const deletedRemoteBranches: Array<{ remote: string; branch: string }> = []
+    const pushedBranches: Array<{ remote: string; branch: string }> = []
+    const outputs: string[] = []
+    const errors: string[] = []
+    const unmergedLocalBranches = new Set<string>()
+
+    for (const branch of localBranches) {
+      if (branch === mainBranch) continue
+      const merged = await runGitInPathResult(repository.localPath, ['merge-base', '--is-ancestor', branch, mainBranch], { env, operationId })
+      if (!merged.ok && merged.exitCode !== 1) {
+        errors.push(`无法判断本地分支 ${branch} 是否已合并：${merged.stderr || merged.stdout}`)
+        continue
+      }
+      if (!merged.ok) {
+        unmergedLocalBranches.add(branch)
+        continue
+      }
+
+      const deleted = await runGitInPathResult(repository.localPath, ['branch', '-d', branch], { env, operationId })
+      if (deleted.ok) {
+        deletedLocalBranches.push(branch)
+        if (deleted.stdout) outputs.push(deleted.stdout)
+      } else {
+        errors.push(`删除本地分支 ${branch} 失败：${deleted.stderr || deleted.stdout}`)
+      }
+    }
+
+    for (const remote of remoteNames) {
+      for (const branch of remoteBranches.get(remote) ?? []) {
+        if (branch === mainBranch || unmergedLocalBranches.has(branch)) continue
+        const merged = await runGitInPathResult(repository.localPath, ['merge-base', '--is-ancestor', `refs/remotes/${remote}/${branch}`, mainBranch], { env, operationId })
+        if (!merged.ok && merged.exitCode !== 1) {
+          errors.push(`无法判断远端分支 ${remote}/${branch} 是否已合并：${merged.stderr || merged.stdout}`)
+          continue
+        }
+        if (!merged.ok) continue
+
+        const deleted = await runGitInPathResult(repository.localPath, ['push', remote, '--delete', branch], { env, operationId })
+        if (deleted.ok) {
+          deletedRemoteBranches.push({ remote, branch })
+          if (deleted.stdout) outputs.push(deleted.stdout)
+        } else {
+          errors.push(formatGitBranchPruneFailure(remote, branch, deleted))
+        }
+      }
+    }
+
+    for (const branch of unmergedLocalBranches) {
+      for (const remote of remoteNames) {
+        const pushed = await runGitInPathResult(repository.localPath, ['push', remote, branch], { env, operationId })
+        if (pushed.ok) {
+          pushedBranches.push({ remote, branch })
+          if (pushed.stdout) outputs.push(pushed.stdout)
+        } else {
+          errors.push(formatGitBranchPruneFailure(remote, branch, pushed))
+        }
+      }
+    }
+
+    for (const remote of remoteNames) {
+      const fetched = await runGitInPathResult(repository.localPath, ['fetch', remote, '--prune'], { env, operationId })
+      if (!fetched.ok) errors.push(`${remote} 最终 Fetch 失败：${fetched.stderr || fetched.stdout || 'Git 操作失败'}`)
+    }
+
+    const rescannedRepository = await rescanRepositoryRecord(repository)
+    const status = await getRepositoryWorkspaceStatus(repositoryId)
+    return { ok: errors.length === 0, repository: rescannedRepository, status, mainBranch, deletedLocalBranches, deletedRemoteBranches, pushedBranches, stdout: outputs.join('\n'), stderr: errors.join('\n') }
+  })
 }
 
 async function switchRepositoryBranch(repositoryId: string, input: GitBranchSwitchInput): Promise<RepositoryRecord> {
@@ -7209,6 +7330,8 @@ registerGitIpc('repository:remote:save', async (_event, input: RepositoryRemoteI
 registerGitIpc('repository:remote:delete', async (_event, repositoryId: string, remoteName: string): Promise<RepositoryRecord> => deleteRepositoryRemote(repositoryId, remoteName))
 
 registerGitIpc('repository:remote:fetch', async (_event, repositoryId: string, remoteName?: string, operationId?: string): Promise<RepositoryRecord> => fetchRepositoryRemote(repositoryId, remoteName, operationId))
+
+registerGitIpc('repository:branch:prune', async (_event, repositoryId: string, operationId?: string): Promise<GitBranchPruneResult> => pruneRepositoryBranches(repositoryId, operationId))
 
 registerGitIpc('repository:branch:switch', async (_event, repositoryId: string, input: GitBranchSwitchInput): Promise<RepositoryRecord> => switchRepositoryBranch(repositoryId, input))
 
