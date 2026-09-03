@@ -29,6 +29,7 @@ describe('release publishing planning', () => {
 
     assert.equal(recommendation.suggestedVersion, '1.0.5')
     assert.equal(recommendation.suggestedTagName, 'v1.0.5')
+    assert.equal(recommendation.localTagCount, 6)
     assert.deepEqual(recommendation.historicalTags.map((tag) => tag.tagName), ['v1.0.4', 'v1.0.3', '1.0.2', '1.0.1', 'v1.0.0'])
   })
 

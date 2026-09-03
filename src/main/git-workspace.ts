@@ -22,13 +22,21 @@ export type GitCommitInput = {
   tagName?: string
 }
 
-export type GitPushInput = {
+type GitPushRemoteInput = {
   remote?: string
   remotes?: string[]
+}
+
+export type GitPushInput = GitPushRemoteInput & ({
+  mode?: 'branch'
   branch: string
   targetBranch?: string
   tagNames?: string[]
-}
+} | {
+  mode: 'all-local-refs'
+})
+
+export type GitPushOperationKind = 'branch' | 'all-local-branches' | 'all-local-tags'
 
 export type GitTagPushInput = {
   remoteName: string
@@ -157,18 +165,38 @@ export function buildGitPushArgs(input: GitPushInput): string[] {
 }
 
 export function buildGitPushOperationArgs(input: GitPushInput): string[][] {
-  const branch = assertSafeRef(input.branch, '分支')
-  const targetBranch = input.targetBranch?.trim() ? assertSafeBranchName(input.targetBranch, '目标分支') : branch
   const remoteNames = input.remotes?.length ? input.remotes : input.remote ? [input.remote] : []
   const uniqueRemoteNames = Array.from(new Set(remoteNames.map(assertRemoteName)))
-  const tagRefs = Array.from(new Set((input.tagNames ?? []).map((tagName) => `refs/tags/${assertSafeRef(tagName, '版本 Tag')}`)))
-  const branchRef = targetBranch === branch ? branch : `${branch}:refs/heads/${targetBranch}`
 
   if (uniqueRemoteNames.length === 0) {
     throw new Error('请选择要推送的远端')
   }
 
+  if (input.mode === 'all-local-refs') {
+    return uniqueRemoteNames.flatMap((remote) => [
+      ['push', remote, '--all'],
+      ['push', remote, '--tags']
+    ])
+  }
+
+  const branch = assertSafeRef(input.branch, '分支')
+  const targetBranch = input.targetBranch?.trim() ? assertSafeBranchName(input.targetBranch, '目标分支') : branch
+  const tagRefs = Array.from(new Set((input.tagNames ?? []).map((tagName) => `refs/tags/${assertSafeRef(tagName, '版本 Tag')}`)))
+  const branchRef = targetBranch === branch ? branch : `${branch}:refs/heads/${targetBranch}`
+
   return uniqueRemoteNames.map((remote) => ['push', remote, branchRef, ...tagRefs])
+}
+
+export function describeGitPushOperation(args: string[]): GitPushOperationKind {
+  if (args[2] === '--all') {
+    return 'all-local-branches'
+  }
+
+  if (args[2] === '--tags') {
+    return 'all-local-tags'
+  }
+
+  return 'branch'
 }
 
 export function buildGitPushTagArgs(input: GitTagPushInput): string[] {

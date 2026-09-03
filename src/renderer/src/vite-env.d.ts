@@ -581,13 +581,19 @@ type GitCommitInput = {
   tagName?: string
 }
 
-type GitPushInput = {
+type GitPushRemoteInput = {
   remote?: string
   remotes?: string[]
+}
+
+type GitPushInput = GitPushRemoteInput & ({
+  mode?: 'branch'
   branch: string
   targetBranch?: string
   tagNames?: string[]
-}
+} | {
+  mode: 'all-local-refs'
+})
 
 type GitMergeInput = {
   source: string
@@ -662,6 +668,7 @@ type RepositoryReleaseTagRecommendation = {
   suggestedVersion: string
   suggestedTagName: string
   historicalTags: ReleaseTagHistoryEntry[]
+  localTagCount: number
 }
 
 type RepositoryReleaseSuggestion = {
@@ -811,6 +818,13 @@ type GitPushTaskResult = {
   ok: boolean
   branch: string
   pushTargets: GitPushTarget[]
+  operationResults: Array<{
+    remote: string
+    kind: 'branch' | 'all-local-branches' | 'all-local-tags'
+    ok: boolean
+    stdout: string
+    stderr: string
+  }>
   stdout: string
   stderr: string
 }

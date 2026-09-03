@@ -10745,6 +10745,35 @@ button.app-status-bar-item:hover {
   width: 260px;
 }
 
+.git-push-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+.git-push-fields > label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.git-push-fields .ant-select,
+.git-push-fields .ant-input {
+  width: 100%;
+}
+
+.git-push-all-refs-summary {
+  display: grid;
+  grid-column: span 2;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--primary-border-soft);
+  border-radius: 8px;
+  background: var(--primary-surface);
+}
+
 .release-publish-modal {
   width: 100%;
 }

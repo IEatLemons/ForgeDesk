@@ -837,13 +837,19 @@ export type GitCommitInput = {
   tagName?: string
 }
 
-export type GitPushInput = {
+type GitPushRemoteInput = {
   remote?: string
   remotes?: string[]
+}
+
+export type GitPushInput = GitPushRemoteInput & ({
+  mode?: 'branch'
   branch: string
   targetBranch?: string
   tagNames?: string[]
-}
+} | {
+  mode: 'all-local-refs'
+})
 
 export type GitMergeInput = {
   source: string
@@ -918,6 +924,7 @@ export type RepositoryReleaseTagRecommendation = {
   suggestedVersion: string
   suggestedTagName: string
   historicalTags: ReleaseTagHistoryEntry[]
+  localTagCount: number
 }
 
 export type RepositoryReleaseSuggestion = {
