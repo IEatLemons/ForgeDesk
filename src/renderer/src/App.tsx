@@ -15591,6 +15591,13 @@ function ProjectOverview({
     setPushModalOpen(true)
   }
 
+  function openProjectPushFromList(project: Project): void {
+    setSelectedProjectId(project.id)
+    setDetailProjectId(project.id)
+    setProjectDetailTab('log-tree')
+    setPushModalOpen(true)
+  }
+
   function openProjectRepositoryMerge(repository: Repository): void {
     setProjectGitRepositoryId(repository.id)
     setMergeModalOpen(true)
@@ -16499,8 +16506,10 @@ function ProjectOverview({
     })
   }
 
+  const selectedProjectsHavePushRepositories = selectedProjectRows.some((project) =>
+    getProjectRepositories(project).some((repository) => repository.available && repository.remotes.length > 0)
+  )
   const selectedProjectsHaveRepositories = selectedProjectRows.some((project) => getProjectRepositories(project).length > 0)
-  const selectedProjectsCanPush = selectedProjectRows.some((project) => hasProjectPushableTargets(getProjectRepositories(project)))
   const selectedProjectsFetching = selectedProjectRows.some((project) => isProjectGitTaskRunning(project.id, 'fetch'))
   const selectedProjectsPushing = selectedProjectRows.some((project) => isProjectGitTaskRunning(project.id, 'push'))
   const projectListColumns: ColumnsType<Project> = [
@@ -16600,7 +16609,7 @@ function ProjectOverview({
         const projectRepositories = getProjectRepositories(project)
         const hasRepositories = projectRepositories.length > 0
         const canCommitProject = hasProjectCommittableChanges(projectRepositories)
-        const canPushProject = hasProjectPushableTargets(projectRepositories)
+        const canPushProject = projectRepositories.some((repository) => repository.available && repository.remotes.length > 0)
 
         return (
           <Space size={8} wrap className="project-list-actions" onClick={(event) => event.stopPropagation()}>
@@ -16626,10 +16635,10 @@ function ProjectOverview({
               type={canPushProject ? 'primary' : 'default'}
               className={canPushProject ? 'project-action-attention project-action-push' : undefined}
               icon={<UploadOutlined />}
-              title={canPushProject ? '有未推送提交，可推送' : undefined}
+              title={canPushProject ? '选择分支并推送到远端' : undefined}
               loading={isProjectGitTaskRunning(project.id, 'push')}
               disabled={!canPushProject}
-              onClick={() => runProjectGitTask(project, 'push')}
+              onClick={() => openProjectPushFromList(project)}
             >
               推送
             </Button>
@@ -16721,7 +16730,7 @@ function ProjectOverview({
       render: (_, project) => {
         const projectRepositories = getProjectRepositories(project)
         const canCommitProject = hasProjectCommittableChanges(projectRepositories)
-        const canPushProject = hasProjectPushableTargets(projectRepositories)
+        const canPushProject = projectRepositories.some((repository) => repository.available && repository.remotes.length > 0)
 
         return (
           <Dropdown
@@ -16743,7 +16752,7 @@ function ProjectOverview({
                 } else if (key === 'merge') {
                   setListMergeProjectId(project.id)
                 } else if (key === 'push') {
-                  void runProjectGitTask(project, 'push')
+                  openProjectPushFromList(project)
                 } else if (key === 'delete') {
                   confirmDeleteProject(project)
                 }
@@ -16887,7 +16896,7 @@ function ProjectOverview({
                     <Button
                       icon={<UploadOutlined />}
                       loading={selectedProjectsPushing}
-                      disabled={selectedProjectRows.length === 0 || !selectedProjectsCanPush}
+                      disabled={selectedProjectRows.length === 0 || !selectedProjectsHavePushRepositories}
                       onClick={() => runSelectedProjectsGitTask('push')}
                     >
                       推送所选
@@ -18848,7 +18857,7 @@ function ProjectSubprojectSummary({
           const state = getRepositoryStateMeta(repository)
           const selected = selectedRepositoryId === repository.id
           const canCommitRepository = repository.available && repository.hasChanges
-          const canPushRepository = repository.available
+          const canPushRepository = repository.available && repository.remotes.length > 0
           const canFetchRepository = repository.available
           const canMergeRepository = repository.available
           const statusTags = [

@@ -179,6 +179,8 @@ describe('git log view helpers', () => {
     assert.equal(getRefColor('origin/main', branchTags), '#f5222d')
     assert.equal(getRefColor('company/main', branchTags), '#f5222d')
     assert.equal(getRefColor('origin/develop', branchTags), '#1d39c4')
+    assert.equal(getRefColor('refs/remotes/origin/develop', branchTags, '', ['origin']), '#1d39c4')
+    assert.equal(getRefColor('refs/heads/main', branchTags, '', ['origin']), '#f5222d')
     assert.equal(getRefColor('tag: v1.2.2', branchTags), 'gold')
     assert.equal(getRefColor('origin/feature/card-form', branchTags), 'cyan')
   })
