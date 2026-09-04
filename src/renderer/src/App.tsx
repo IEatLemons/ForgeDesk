@@ -1411,7 +1411,7 @@ function SystemLogDrawer({
                   </div>
                   <div className="system-log-item-body">
                     <Typography.Text strong>{log.title}</Typography.Text>
-                    <Typography.Text className="system-log-message" copyable={{ text: formatSystemLogCopyText(log) }}>
+                    <Typography.Text className="system-log-message" style={{ whiteSpace: 'pre-wrap' }} copyable={{ text: formatSystemLogCopyText(log) }}>
                       {log.message}
                     </Typography.Text>
                   </div>
@@ -22737,26 +22737,38 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       quickBuildStateRef.current = nextState
       setQuickBuildState(nextState)
 
-      if (!task || task.status === 'running' || previous.taskId !== task.id || previous.status !== 'running') {
+      if (!task) {
         return
       }
 
-      const resultTitle = getQuickBuildTaskResultTitle(task)
       const success = task.status === 'succeeded'
+      const level = task.status === 'running' ? 'info' : success ? 'success' : task.status === 'cancelled' ? 'warning' : 'error'
+      const title = task.status === 'running' ? '快速构建执行中' : getQuickBuildTaskResultTitle(task)
+      const taskLog = formatQuickBuildTaskLogMessage(task)
+      const taskMeta = {
+        command: task.command,
+        cwd: task.cwd,
+        exitCode: task.exitCode,
+        signal: task.signal,
+        taskId: task.id
+      }
 
-      appendSystemLog({
-        level: success ? 'success' : task.status === 'cancelled' ? 'warning' : 'error',
-        source: '快速构建',
-        title: resultTitle,
-        message: formatQuickBuildTaskLogMessage(task),
-        meta: {
-          command: task.command,
-          cwd: task.cwd,
-          exitCode: task.exitCode,
-          signal: task.signal,
-          taskId: task.id
+      setSystemLogs((current) => {
+        const existingIndex = current.findIndex((log) => log.source === '快速构建' && log.meta?.taskId === task.id)
+        const nextEntry = createSystemLogEntry({ level, source: '快速构建', title, message: taskLog, meta: taskMeta })
+
+        if (existingIndex === -1) {
+          return [nextEntry, ...current].slice(0, 300)
         }
+
+        const existing = current[existingIndex]
+        const updatedEntry = { ...nextEntry, id: existing.id, time: existing.time }
+        return current.map((log, index) => index === existingIndex ? updatedEntry : log)
       })
+
+      if (task.status === 'running' || previous.taskId !== task.id || previous.status !== 'running') {
+        return
+      }
 
       if (success) {
         const prompt = createQuickBuildCompletionPrompt(task)
@@ -22783,7 +22795,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       } else if (task.status === 'cancelled') {
         message.warning('快速构建已终止')
       } else {
-        message.error(resultTitle)
+        message.error(getQuickBuildTaskResultTitle(task))
       }
     })
 
@@ -23017,17 +23029,6 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
     quickBuildStateRef.current = runningState
     setQuickBuildState(runningState)
-    appendSystemLog({
-      level: 'info',
-      source: '快速构建',
-      title: '开始快速构建',
-      message: `正在执行 ${quickBuildCommand}`,
-      meta: {
-        command: quickBuildCommand,
-        cwd
-      }
-    })
-
     try {
       const task = await window.forgeDesk.startQuickBuild({ cwd })
       const nextState = createQuickBuildStateFromTask(task, cwd)
