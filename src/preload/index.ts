@@ -114,6 +114,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   deleteProjectPlaneBinding: (projectId: string) => ipcRenderer.invoke('plane:binding:delete', projectId),
   getPlaneProjectContent: (projectId: string) => ipcRenderer.invoke('plane:project-content:get', projectId),
   openPlane: (projectId?: string) => ipcRenderer.invoke('plane:open', projectId),
+  openProjectWindow: (projectId: string) => ipcRenderer.invoke('project:window:open', projectId),
   getProjectCloudflareSettings: (projectId: string) => ipcRenderer.invoke('project:cloudflare:settings:get', projectId),
   saveProjectCloudflareSettings: (input: ProjectCloudflareSettingsInput) => ipcRenderer.invoke('project:cloudflare:settings:save', input),
   deleteProjectCloudflareSettings: (projectId: string) => ipcRenderer.invoke('project:cloudflare:settings:delete', projectId),

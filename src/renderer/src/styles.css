@@ -5444,7 +5444,8 @@ button.app-status-bar-item:hover {
 }
 
 .project-list-table .ant-table-content {
-  overflow-x: hidden !important;
+  overflow-x: auto !important;
+  scrollbar-width: thin;
 }
 
 .project-list-table .ant-table-cell {
@@ -5829,7 +5830,7 @@ button.app-status-bar-item:hover {
   border-radius: 6px;
 }
 
-.project-git-task-output.is-error {
+.project-git-task-output .is-error-line {
   color: #cf1322;
 }
 
@@ -9535,6 +9536,18 @@ button.app-status-bar-item:hover {
   scrollbar-gutter: stable;
 }
 
+.settings-sidebar-back {
+  justify-self: start;
+  color: var(--app-muted);
+  padding-inline: 4px;
+}
+
+.settings-sidebar-back:hover,
+.settings-sidebar-back:focus-visible {
+  color: var(--app-text) !important;
+  background: var(--table-row-hover-bg) !important;
+}
+
 .settings-sidebar-navigation nav {
   display: grid;
   gap: 18px;
@@ -9576,6 +9589,44 @@ button.app-status-bar-item:hover {
 
 .settings-sidebar-entry {
   grid-template-columns: 32px minmax(0, 1fr) 14px;
+}
+
+.sidebar.ant-layout-sider-collapsed .settings-sidebar-navigation {
+  gap: 8px;
+  padding: 12px 8px;
+}
+
+.sidebar.ant-layout-sider-collapsed .settings-sidebar-back {
+  justify-self: center;
+  width: 40px;
+  padding-inline: 0;
+}
+
+.sidebar.ant-layout-sider-collapsed .settings-sidebar-back-label,
+.sidebar.ant-layout-sider-collapsed .settings-sidebar-heading,
+.sidebar.ant-layout-sider-collapsed .settings-sidebar-category,
+.sidebar.ant-layout-sider-collapsed .settings-entry-copy,
+.sidebar.ant-layout-sider-collapsed .settings-entry-arrow {
+  display: none;
+}
+
+.sidebar.ant-layout-sider-collapsed .settings-sidebar-navigation nav {
+  gap: 8px;
+}
+
+.sidebar.ant-layout-sider-collapsed .settings-sidebar-section {
+  gap: 4px;
+}
+
+.sidebar.ant-layout-sider-collapsed .settings-sidebar-list {
+  gap: 4px;
+}
+
+.sidebar.ant-layout-sider-collapsed .settings-sidebar-entry {
+  grid-template-columns: 32px;
+  justify-content: center;
+  min-height: 40px;
+  padding: 4px;
 }
 
 .settings-category-list,

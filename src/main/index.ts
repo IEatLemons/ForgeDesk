@@ -3102,7 +3102,7 @@ async function findAvailableSshKeyPath(): Promise<string> {
   }
 }
 
-function createWindow(show = true): void {
+function createWindow(show = true, projectId?: string): void {
   const mainWindow = new BrowserWindow({
     show,
     width: 1360,
@@ -3133,9 +3133,13 @@ function createWindow(show = true): void {
   })
 
   if (isDev && process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+    const rendererUrl = new URL(process.env.ELECTRON_RENDERER_URL)
+    if (projectId) {
+      rendererUrl.searchParams.set('projectId', projectId)
+    }
+    mainWindow.loadURL(rendererUrl.toString())
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'), projectId ? { query: { projectId } } : undefined)
   }
 }
 
@@ -9061,6 +9065,15 @@ ipcMain.handle('external:open-url', async (_event, url: string): Promise<void> =
   const parsed = new URL(url)
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new Error('只允许打开 HTTP 或 HTTPS 链接')
   await shell.openExternal(parsed.toString())
+})
+
+ipcMain.handle('project:window:open', (_event, projectId: string): void => {
+  const normalizedProjectId = String(projectId ?? '').trim()
+  if (!normalizedProjectId) {
+    throw new Error('缺少项目 ID')
+  }
+
+  createWindow(true, normalizedProjectId)
 })
 
 function startStorageGovernanceScheduler(): void {

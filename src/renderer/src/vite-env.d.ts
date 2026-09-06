@@ -2967,6 +2967,7 @@ interface Window {
     deleteProjectPlaneBinding: (projectId: string) => Promise<void>
     getPlaneProjectContent: (projectId: string) => Promise<PlaneProjectContent>
     openPlane: (projectId?: string) => Promise<void>
+    openProjectWindow: (projectId: string) => Promise<void>
     getProjectCloudflareSettings: (projectId: string) => Promise<ProjectCloudflareSettings | null>
     saveProjectCloudflareSettings: (input: ProjectCloudflareSettingsInput) => Promise<ProjectCloudflareSettings>
     deleteProjectCloudflareSettings: (projectId: string) => Promise<void>

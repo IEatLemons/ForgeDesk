@@ -54,6 +54,7 @@ import {
   DownloadOutlined,
   EditOutlined,
   ArrowLeftOutlined,
+  ExportOutlined,
   FileTextOutlined,
   FileExcelOutlined,
   FolderOpenOutlined,
@@ -290,11 +291,12 @@ import {
   createGraphRows,
   currentBranchRefColor,
   defaultGitLogRefreshPreferences,
-  gitLogMaxLoadedCommitBounds,
   gitLogRefreshIntervalBounds,
   gitLogRefreshPreferenceChangedEvent,
   gitLogRefreshPreferenceStorageKey,
   gitLogScrollLoadBatchSize,
+  gitLogScrollPrefetchCommitCount,
+  gitLogWindowSize,
   getWorkspaceFileChangeStatus,
   getCommitAuthorDisplay,
   getCommitAuthorFilterValue,
@@ -418,6 +420,7 @@ import { appModeChangedEvent, isFullAppMode, readStoredAppMode, writeStoredAppMo
 import { AppModeSwitcher } from './app-mode-switcher'
 import { ModuleBackButton } from './module-navigation'
 import { countRunningProjectGitTaskLogs, filterProjectGitTaskLogs, getProjectGitTaskStatusMeta } from './project-git-task-log-view'
+import { isProjectGitTaskErrorLine } from './project-git-task-output'
 import type { ResolvedTheme, ThemePreference } from './app-theme'
 
 type ImportForm = {
@@ -497,6 +500,7 @@ type SettingsOverviewCategory = {
 type SettingsSidebarProps = {
   activeModule: SettingsModuleKey
   onSelectModule: (module: SettingsModuleKey) => void
+  onBack: () => void
 }
 
 const settingsOverviewCategories: SettingsOverviewCategory[] = [
@@ -627,9 +631,19 @@ const settingsModuleDefinitions: SettingsModuleDefinition[] = [
   }
 ]
 
-function SettingsSidebar({ activeModule, onSelectModule }: SettingsSidebarProps): JSX.Element {
+function SettingsSidebar({ activeModule, onSelectModule, onBack }: SettingsSidebarProps): JSX.Element {
   return (
     <div className="settings-sidebar-navigation" aria-label="设置分类">
+      <Button
+        className="settings-sidebar-back"
+        type="text"
+        icon={<ArrowLeftOutlined />}
+        onClick={onBack}
+        aria-label="返回控制台"
+        title="返回控制台"
+      >
+        <span className="settings-sidebar-back-label">返回控制台</span>
+      </Button>
       <div className="settings-sidebar-heading">
         <Typography.Text strong>设置分类</Typography.Text>
         <Typography.Text type="secondary">选择一个模块管理配置</Typography.Text>
@@ -651,6 +665,7 @@ function SettingsSidebar({ activeModule, onSelectModule }: SettingsSidebarProps)
                     className={`settings-entry-row settings-sidebar-entry${isActive ? ' is-active' : ''}`}
                     key={module.key}
                     type="button"
+                    title={module.title}
                     aria-current={isActive ? 'page' : undefined}
                     onClick={() => onSelectModule(module.key)}
                   >
@@ -5475,16 +5490,9 @@ function SettingsPanel({
             />
           </label>
           <label className="log-refresh-setting-field">
-            <span>最大加载提交数</span>
-            <InputNumber
-              min={gitLogMaxLoadedCommitBounds.minCommits}
-              max={gitLogMaxLoadedCommitBounds.maxCommits}
-              step={gitLogMaxLoadedCommitBounds.step}
-              value={gitLogRefreshPreferences.maxLoadedCommits}
-              className="full-width-control"
-              onChange={(value) => saveGitLogRefreshPreferencePatch({ maxLoadedCommits: Number(value ?? defaultGitLogRefreshPreferences.maxLoadedCommits) })}
-            />
-            <Typography.Text type="secondary">内存中最多保留这些提交和图谱行；默认加载最近 100 条，滚动会自动衔接上下历史。</Typography.Text>
+            <span>Log 树窗口</span>
+            <Typography.Text>固定保留 100 条</Typography.Text>
+            <Typography.Text type="secondary">滚动接近上下边界时会提前加载相邻历史，内存中始终最多保留 100 条提交。</Typography.Text>
           </label>
           <Button icon={<ReloadOutlined />} onClick={() => setGitLogRefreshPreferences(defaultGitLogRefreshPreferences)}>
             恢复默认
@@ -14446,6 +14454,20 @@ function formatGitTaskOutput(value?: string): string {
   return text.length > 220 ? `${text.slice(0, 220)}...` : text
 }
 
+function ProjectGitTaskOutput({ value, errorOutput }: { value: string; errorOutput?: boolean }): JSX.Element {
+  const lines = value.split(/\r?\n/)
+
+  return (
+    <pre className="project-git-task-output">
+      {lines.map((line, index) => (
+        <span className={errorOutput && isProjectGitTaskErrorLine(line) ? 'is-error-line' : undefined} key={`${index}:${line}`}>
+          {line}{index < lines.length - 1 ? '\n' : ''}
+        </span>
+      ))}
+    </pre>
+  )
+}
+
 function groupPushTargetsByBranch(pushTargets: Repository['pushTargets']): ProjectGitPushPlan[] {
   const grouped = new Map<string, Set<string>>()
 
@@ -15409,6 +15431,7 @@ function ProjectOverview({
   resolvedTheme,
   onOpenProjectGitTasks,
   onRefreshProjectGitTasks,
+  onOpenProjectWindow,
   onTitlebarProjectLocationChange
 }: {
   mode: AppMode
@@ -15420,6 +15443,7 @@ function ProjectOverview({
   resolvedTheme: ResolvedTheme
   onOpenProjectGitTasks: () => void
   onRefreshProjectGitTasks: () => Promise<void>
+  onOpenProjectWindow: (projectId: string) => Promise<void>
   onTitlebarProjectLocationChange: (location: AppTitlebarProjectLocation) => void
 }): JSX.Element {
   const {
@@ -16618,6 +16642,14 @@ function ProjectOverview({
             </Button>
             <Button
               size="small"
+              icon={<ExportOutlined />}
+              title="在独立窗口打开项目"
+              onClick={() => void onOpenProjectWindow(project.id)}
+            >
+              独立窗口
+            </Button>
+            <Button
+              size="small"
               type={canCommitProject ? 'primary' : 'default'}
               className={canCommitProject ? 'project-action-attention project-action-commit' : undefined}
               icon={<SaveOutlined />}
@@ -17010,6 +17042,17 @@ function ProjectOverview({
                       aria-pressed={selectedProject.isFavorite}
                       title={selectedProject.isFavorite ? '取消收藏' : '收藏并置顶'}
                       onClick={() => void toggleProjectFavorite(selectedProject)}
+                    />
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<ExportOutlined />}
+                      aria-label={`在独立窗口打开项目 ${selectedProject.name}`}
+                      title="在独立窗口打开项目"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void onOpenProjectWindow(selectedProject.id)
+                      }}
                     />
                   </Space>
                   <Typography.Text className="table-text" type="secondary" ellipsis={{ tooltip: selectedProject.workspacePath }}>
@@ -17573,8 +17616,8 @@ function ProjectGitTaskLogDrawer({
                                 {result.remoteName ? <Tag>{result.remoteName}</Tag> : null}
                               </Space>
                               <Typography.Text type={result.ok ? undefined : 'danger'}>{result.message}</Typography.Text>
-                              {result.stdout ? <pre className="project-git-task-output">{result.stdout}</pre> : null}
-                              {result.stderr ? <pre className="project-git-task-output is-error">{result.stderr}</pre> : null}
+                              {result.stdout ? <ProjectGitTaskOutput value={result.stdout} /> : null}
+                              {result.stderr ? <ProjectGitTaskOutput value={result.stderr} errorOutput={!result.ok} /> : null}
                             </div>
                           ))}
                         </div>
@@ -19115,7 +19158,7 @@ function RepositoryLogTree({
   const repositoryRefreshInFlightRef = useRef(false)
   const commitWindowRequestRef = useRef(0)
   const commitWindowLoadingRef = useRef(false)
-  const maxLoadedCommitsRef = useRef(gitLogRefreshPreferences.maxLoadedCommits)
+  const commitBoundaryArmedRef = useRef({ newer: true, older: true })
   const activeProjectId = (detailRepository ?? repository)?.projectId ?? ''
   const activeRepositoryForLog = detailRepository ?? repository
   const remoteNames = useMemo(() => activeRepositoryForLog?.remotes.map((remote) => remote.name).filter(Boolean) ?? [], [activeRepositoryForLog?.remotes])
@@ -19188,6 +19231,7 @@ function RepositoryLogTree({
   function cancelPendingCommitWindow(): void {
     commitWindowRequestRef.current += 1
     commitWindowLoadingRef.current = false
+    commitBoundaryArmedRef.current = { newer: true, older: true }
     setLoadingMoreCommits(false)
   }
 
@@ -19264,7 +19308,7 @@ function RepositoryLogTree({
           }
 
           const [nextCommits, nextWorkspaceStatus, nextTagSyncSnapshot] = await Promise.all([
-            window.forgeDesk.getRepositoryCommitGraph(detail.id, { limit: gitLogRefreshPreferences.maxLoadedCommits }),
+            window.forgeDesk.getRepositoryCommitGraph(detail.id, { limit: gitLogWindowSize + 1 }),
             window.forgeDesk.getRepositoryWorkspaceStatus(detail.id),
             window.forgeDesk.getRepositoryTagSyncStatus(detail.id).catch(() => null)
           ])
@@ -19275,12 +19319,12 @@ function RepositoryLogTree({
 
           updateRepository(detail)
           setDetailRepository(detail)
-          setCommits(nextCommits)
+          setCommits(nextCommits.slice(0, gitLogWindowSize))
           setCommitWindowStart(0)
-          setHasOlderCommits(nextCommits.length === gitLogRefreshPreferences.maxLoadedCommits)
+          setHasOlderCommits(nextCommits.length > gitLogWindowSize)
           setWorkspaceStatus(nextWorkspaceStatus)
           setTagSyncSnapshot(nextTagSyncSnapshot)
-          onCommitCountChange?.(detail.id, nextCommits.length)
+          onCommitCountChange?.(detail.id, Math.min(nextCommits.length, gitLogWindowSize))
           setGitError(null)
         }
       } catch (error) {
@@ -19348,7 +19392,7 @@ function RepositoryLogTree({
           ...nextRange,
           branchName: nextBranch || undefined,
           offset: windowOffset,
-          limit: gitLogRefreshPreferences.maxLoadedCommits
+          limit: gitLogWindowSize + 1
         }),
         window.forgeDesk.getRepositoryWorkspaceStatus(detail.id),
         window.forgeDesk.getRepositoryTagSyncStatus(detail.id).catch(() => null)
@@ -19356,12 +19400,12 @@ function RepositoryLogTree({
 
       updateRepository(detail)
       setDetailRepository(detail)
-      setCommits(nextCommits)
+      setCommits(nextCommits.slice(0, gitLogWindowSize))
       setCommitWindowStart(windowOffset)
-      setHasOlderCommits(nextCommits.length === gitLogRefreshPreferences.maxLoadedCommits)
+      setHasOlderCommits(nextCommits.length > gitLogWindowSize)
       setWorkspaceStatus(nextWorkspaceStatus)
       setTagSyncSnapshot(nextTagSyncSnapshot)
-      onCommitCountChange?.(detail.id, nextCommits.length)
+      onCommitCountChange?.(detail.id, Math.min(nextCommits.length, gitLogWindowSize))
       setGitError(null)
 
       if (showSuccess) {
@@ -19395,16 +19439,16 @@ function RepositoryLogTree({
         window.forgeDesk.getRepositoryCommitGraph(targetRepository.id, {
           ...nextRange,
           branchName: nextBranch || undefined,
-          limit: gitLogRefreshPreferences.maxLoadedCommits
+          limit: gitLogWindowSize + 1
         }),
         window.forgeDesk.getRepositoryWorkspaceStatus(targetRepository.id)
       ])
 
-      setCommits(nextCommits)
+      setCommits(nextCommits.slice(0, gitLogWindowSize))
       setCommitWindowStart(0)
-      setHasOlderCommits(nextCommits.length === gitLogRefreshPreferences.maxLoadedCommits)
+      setHasOlderCommits(nextCommits.length > gitLogWindowSize)
       setWorkspaceStatus(nextWorkspaceStatus)
-      onCommitCountChange?.(targetRepository.id, nextCommits.length)
+      onCommitCountChange?.(targetRepository.id, Math.min(nextCommits.length, gitLogWindowSize))
       setGitError(null)
     } catch (error) {
       setGitError(createGitErrorGuidance(error, '读取提交图谱'))
@@ -19412,15 +19456,6 @@ function RepositoryLogTree({
       setLoadingDetail(false)
     }
   }
-
-  useEffect(() => {
-    if (maxLoadedCommitsRef.current === gitLogRefreshPreferences.maxLoadedCommits) {
-      return
-    }
-
-    maxLoadedCommitsRef.current = gitLogRefreshPreferences.maxLoadedCommits
-    void refreshRepositorySnapshot({ context: '更新 Log 树加载上限' })
-  }, [gitLogRefreshPreferences.maxLoadedCommits])
 
   function captureCommitScrollAnchor(): { id: string; top: number } | null {
     const rows = Array.from(document.querySelectorAll<HTMLElement>('.source-tree-table .ant-table-row[data-row-key]'))
@@ -19459,7 +19494,7 @@ function RepositoryLogTree({
     }
 
     const currentCommits = commits
-    const maxLoadedCommits = gitLogRefreshPreferences.maxLoadedCommits
+    const maxLoadedCommits = gitLogWindowSize
     const pageSize = Math.min(gitLogScrollLoadBatchSize, maxLoadedCommits)
     const pageSizeForRequest = direction === 'newer' ? Math.min(pageSize, commitWindowStart) : pageSize
 
@@ -19480,16 +19515,17 @@ function RepositoryLogTree({
         ...commitRange,
         branchName: commitBranch || undefined,
         offset: requestOffset,
-        limit: pageSizeForRequest
+        limit: pageSizeForRequest + 1
       })
 
       if (requestId !== commitWindowRequestRef.current) {
         return
       }
 
+      const hasMoreInDirection = page.length > pageSizeForRequest
       const nextWindow = mergeGitLogCommitWindow({
         current: currentCommits,
-        page,
+        page: page.slice(0, pageSizeForRequest),
         windowStart: commitWindowStart,
         maxLoadedCommits,
         direction
@@ -19499,7 +19535,7 @@ function RepositoryLogTree({
 
       setCommits(nextCommits)
       setCommitWindowStart(nextWindowStart)
-      setHasOlderCommits(direction === 'older' ? page.length === pageSizeForRequest : hasOlderCommits)
+      setHasOlderCommits(direction === 'older' ? hasMoreInDirection : hasOlderCommits)
 
       if (selectedCommit && !nextCommits.some((commit) => commit.hash === selectedCommit.hash)) {
         setSelectedCommit(null)
@@ -19529,25 +19565,33 @@ function RepositoryLogTree({
     }
 
     const observers: IntersectionObserver[] = []
-    const observe = (node: HTMLDivElement | null, onIntersect: () => void): void => {
+    const observe = (node: HTMLDivElement | null, direction: 'newer' | 'older', onIntersect: () => void): void => {
       if (!node) {
         return
       }
 
       const observer = new IntersectionObserver((entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
+        const isIntersecting = entries.some((entry) => entry.isIntersecting)
+
+        if (!isIntersecting) {
+          commitBoundaryArmedRef.current[direction] = true
+          return
+        }
+
+        if (commitBoundaryArmedRef.current[direction]) {
+          commitBoundaryArmedRef.current[direction] = false
           onIntersect()
         }
-      }, { rootMargin: '280px 0px' })
+      }, { rootMargin: `${gitLogScrollPrefetchCommitCount * 46}px 0px` })
       observer.observe(node)
       observers.push(observer)
     }
 
     if (hasNewerCommits) {
-      observe(commitLoadPreviousRef.current, () => void shiftCommitWindow('newer'))
+      observe(commitLoadPreviousRef.current, 'newer', () => void shiftCommitWindow('newer'))
     }
     if (hasOlderCommits) {
-      observe(commitLoadMoreRef.current, () => void shiftCommitWindow('older'))
+      observe(commitLoadMoreRef.current, 'older', () => void shiftCommitWindow('older'))
     }
 
     return () => observers.forEach((observer) => observer.disconnect())
@@ -19990,7 +20034,7 @@ function RepositoryLogTree({
           {graphRows.length > 0 && (
             <div ref={commitLoadMoreRef} className="commit-load-more">
               <Typography.Text type="secondary">
-                已加载第 {formatNumber(commitWindowStart + 1)}–{formatNumber(commitWindowStart + commits.length)} 条 · 窗口上限 {formatNumber(gitLogRefreshPreferences.maxLoadedCommits)} 条
+                已加载第 {formatNumber(commitWindowStart + 1)}–{formatNumber(commitWindowStart + commits.length)} 条 · 窗口上限 100 条
                 {loadingMoreCommits ? ' · 正在加载…' : hasOlderCommits ? ' · 继续向下滚动加载较早提交' : ' · 已到最早提交'}
               </Typography.Text>
             </div>
@@ -22506,11 +22550,12 @@ function PasswordGeneratorTool({ onBack }: { onBack: () => void }): JSX.Element 
 }
 
 function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppProps): JSX.Element {
+  const projectWindowId = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('projectId')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const { loadingWorkspace, loadWorkspace, selectedProjectId, projects, setSelectedProjectId } = useForgeDeskStore()
-  const [appMode, setAppMode] = useState<AppMode>(() => readStoredAppMode())
+  const [appMode, setAppMode] = useState<AppMode>(() => projectWindowId ? 'full' : readStoredAppMode())
   const [chromePreferences, setChromePreferences] = useState<AppChromePreferences>(() => readStoredAppChromePreferences())
-  const [activeKey, setActiveKey] = useState<AppActiveKey>(() => (readStoredAppMode() === 'simple' ? 'projects' : 'overview'))
+  const [activeKey, setActiveKey] = useState<AppActiveKey>(() => projectWindowId ? 'projects' : readStoredAppMode() === 'simple' ? 'projects' : 'overview')
   const usesCustomTitleBar = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
   const [settingsActiveModule, setSettingsActiveModule] = useState<SettingsModuleKey>('appearance')
   const [settingsBackKey, setSettingsBackKey] = useState<AppActiveKey>('overview')
@@ -22889,6 +22934,19 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     }
 
     setActiveKey(key)
+  }
+
+  async function openProjectWindow(projectId: string): Promise<void> {
+    if (!window.forgeDesk) {
+      message.warning('请在 ForgeDesk 桌面应用中打开项目窗口')
+      return
+    }
+
+    try {
+      await window.forgeDesk.openProjectWindow(projectId)
+    } catch (error) {
+      message.error(getErrorMessage(error, '打开项目窗口失败'))
+    }
   }
 
   function handleAppModeChange(nextMode: AppMode): void {
@@ -23312,7 +23370,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
         >
           <div className="sidebar-inner">
             {activeKey === 'settings' ? (
-              <SettingsSidebar activeModule={settingsActiveModule} onSelectModule={setSettingsActiveModule} />
+              <SettingsSidebar activeModule={settingsActiveModule} onSelectModule={setSettingsActiveModule} onBack={closeSettings} />
             ) : (
               <>
                 <div className="brand">
@@ -23391,7 +23449,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             {!loadingWorkspace && activeKey === 'projects' && (
               <ProjectOverview
                 mode={appMode}
-                focusProjectId={selectedProjectId}
+                focusProjectId={projectWindowId ?? selectedProjectId}
                 onCreateProject={() => setCreatingProject(true)}
                 onOpenSettings={() => openNavigationKey('settings')}
                 onOpenAiTools={() => setActiveKey('ai-tools')}
@@ -23399,6 +23457,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
                 resolvedTheme={resolvedTheme}
                 onOpenProjectGitTasks={() => setProjectGitTaskDrawerOpen(true)}
                 onRefreshProjectGitTasks={refreshProjectGitTaskLogs}
+                onOpenProjectWindow={openProjectWindow}
                 onTitlebarProjectLocationChange={handleTitlebarProjectLocationChange}
               />
             )}

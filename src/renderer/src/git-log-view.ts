@@ -30,10 +30,12 @@ export const gitLogRefreshIntervalBounds = {
 }
 export const gitLogMaxLoadedCommitBounds = {
   minCommits: 100,
-  maxCommits: 1000,
+  maxCommits: 100,
   step: 50
 }
 export const gitLogScrollLoadBatchSize = 50
+export const gitLogScrollPrefetchCommitCount = 20
+export const gitLogWindowSize = 100
 const gitGraphColumnPadding = 56
 
 export type GitLogRefreshPreferences = {
@@ -57,8 +59,8 @@ function clampGitLogRefreshInterval(seconds: number): number {
 }
 
 function clampGitLogMaxLoadedCommits(commits: number): number {
-  const rounded = Math.round(commits / gitLogMaxLoadedCommitBounds.step) * gitLogMaxLoadedCommitBounds.step
-  return Math.min(gitLogMaxLoadedCommitBounds.maxCommits, Math.max(gitLogMaxLoadedCommitBounds.minCommits, rounded))
+  void commits
+  return gitLogWindowSize
 }
 
 export function normalizeGitLogRefreshPreferences(input: unknown): GitLogRefreshPreferences {
@@ -253,6 +255,28 @@ export function getNextVisibleCommitCount({
   batchSize: number
 }): number {
   return Math.min(total, current + batchSize)
+}
+
+export function shouldPrefetchGitLogWindow({
+  direction,
+  visibleStartIndex,
+  visibleEndIndex,
+  windowLength,
+  threshold = gitLogScrollPrefetchCommitCount
+}: {
+  direction: 'older' | 'newer'
+  visibleStartIndex: number
+  visibleEndIndex: number
+  windowLength: number
+  threshold?: number
+}): boolean {
+  if (windowLength <= 0 || threshold < 0) {
+    return false
+  }
+
+  return direction === 'newer'
+    ? visibleStartIndex <= threshold
+    : windowLength - 1 - visibleEndIndex <= threshold
 }
 
 export function mergeGitLogCommitWindow<T>({

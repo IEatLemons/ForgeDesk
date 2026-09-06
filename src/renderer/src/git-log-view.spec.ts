@@ -18,12 +18,15 @@ import {
   getRefColor,
   getRepositoryDefaultPushTarget,
   getNextVisibleCommitCount,
+  gitLogScrollPrefetchCommitCount,
+  gitLogWindowSize,
   mergeGitLogCommitWindow,
   getRefCopyText,
   getRefTone,
   groupCommitRefs,
   normalizeGitLogRefreshPreferences,
   prependWorkingTreeCommit,
+  shouldPrefetchGitLogWindow,
   workingTreeCommitHash
 } from './git-log-view.js'
 
@@ -360,8 +363,39 @@ describe('git log view helpers', () => {
     assert.deepEqual(normalizeGitLogRefreshPreferences({ autoRefreshEnabled: true, intervalSeconds: 45, maxLoadedCommits: 9988 }), {
       autoRefreshEnabled: true,
       intervalSeconds: 45,
-      maxLoadedCommits: gitLogMaxLoadedCommitBounds.maxCommits
+      maxLoadedCommits: gitLogWindowSize
     })
+  })
+
+  it('prefetches the bounded window before either edge is reached', () => {
+    assert.equal(shouldPrefetchGitLogWindow({
+      direction: 'older',
+      visibleStartIndex: 40,
+      visibleEndIndex: 79,
+      windowLength: gitLogWindowSize,
+      threshold: gitLogScrollPrefetchCommitCount
+    }), true)
+    assert.equal(shouldPrefetchGitLogWindow({
+      direction: 'older',
+      visibleStartIndex: 0,
+      visibleEndIndex: 70,
+      windowLength: gitLogWindowSize,
+      threshold: gitLogScrollPrefetchCommitCount
+    }), false)
+    assert.equal(shouldPrefetchGitLogWindow({
+      direction: 'newer',
+      visibleStartIndex: 20,
+      visibleEndIndex: 59,
+      windowLength: gitLogWindowSize,
+      threshold: gitLogScrollPrefetchCommitCount
+    }), true)
+    assert.equal(shouldPrefetchGitLogWindow({
+      direction: 'newer',
+      visibleStartIndex: 21,
+      visibleEndIndex: 60,
+      windowLength: gitLogWindowSize,
+      threshold: gitLogScrollPrefetchCommitCount
+    }), false)
   })
 
   it('slides a bounded log window in both history directions', () => {
