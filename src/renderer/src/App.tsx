@@ -264,11 +264,13 @@ import {
   canPushAllLocalRefsSelection,
   canPushBranchSelection,
   createPushRemoteOptions,
+  getDefaultPushRemoteSelection,
   getCurrentBranchName,
   getPushableTargets,
   hasProjectCommittableChanges,
   hasProjectPushableTargets,
   mergeRepositoryWorkspaceStatus,
+  normalizePushRemoteSelection,
   resolveSelectedPushRemoteNames
 } from './git-action-state'
 import { createGitErrorGuidance, type GitErrorGuidance } from './git-error-guidance'
@@ -11531,7 +11533,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
   const pushModalWasOpenRef = useRef(false)
   const [status, setStatus] = useState<GitWorkspaceStatus | null>(null)
-  const [pushRemote, setPushRemote] = useState('origin')
+  const [pushRemote, setPushRemote] = useState<string[]>([])
   const [pushMode, setPushMode] = useState<'branch' | 'all-local-refs'>('branch')
   const [pushBranch, setPushBranch] = useState('')
   const [pushTargetBranch, setPushTargetBranch] = useState('')
@@ -11615,7 +11617,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
       const nextStatus = await window.forgeDesk.getRepositoryWorkspaceStatus(selectedRepository.id)
       const target = getPreferredPushTarget(selectedRepository, nextStatus)
       setStatus(nextStatus)
-      setPushRemote(target.remote)
+      setPushRemote(getDefaultPushRemoteSelection(selectedRepository.remotes))
       setPushBranch(target.branch)
       setPushTargetBranch(target.branch)
     } catch (error) {
@@ -11632,14 +11634,14 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
 
     const target = getPreferredPushTarget(selectedRepository)
     setStatus(null)
-    setPushRemote(target.remote)
+    setPushRemote(getDefaultPushRemoteSelection(selectedRepository?.remotes ?? []))
     setPushBranch(target.branch)
     setPushTargetBranch(target.branch)
     refreshWorkspaceStatus()
   }, [open, selectedRepository?.id])
 
   function getSelectedRemoteNames(): string[] {
-    return selectedRepository ? resolveSelectedPushRemoteNames(pushRemote.trim(), selectedRepository.remotes) : []
+    return selectedRepository ? resolveSelectedPushRemoteNames(pushRemote, selectedRepository.remotes) : []
   }
 
   async function pushBranchToRemote(): Promise<void> {
@@ -11764,7 +11766,13 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
         <div className="git-push-fields">
           <label>
             <Typography.Text type="secondary">目标远端</Typography.Text>
-            <Select value={pushRemote} options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]} onChange={setPushRemote} />
+          <Select
+            mode="multiple"
+            maxTagCount="responsive"
+            value={pushRemote}
+            options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]}
+            onChange={(values) => setPushRemote(normalizePushRemoteSelection(values))}
+          />
           </label>
           {pushMode === 'branch' ? (
             <>
@@ -11812,8 +11820,8 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
           message={
             pushReady
               ? pushMode === 'all-local-refs'
-                ? `将推送 ${selectedRepository?.name} 的全部 ${localBranches.length} 个本地分支和 ${localTagCount} 个本地 Tag 到 ${pushRemote === PUSH_ALL_REMOTES_VALUE ? '所有远端' : pushRemote || 'origin'}`
-                : `将推送 ${selectedRepository?.name} 的 ${pushBranch} → ${pushRemote === PUSH_ALL_REMOTES_VALUE ? '所有远端' : pushRemote || 'origin'}/${pushTargetBranch}${pushTagNames.length > 0 ? `，以及版本 Tag：${pushTagNames.join('、')}` : ''}`
+                ? `将推送 ${selectedRepository?.name} 的全部 ${localBranches.length} 个本地分支和 ${localTagCount} 个本地 Tag 到 ${pushRemote.includes(PUSH_ALL_REMOTES_VALUE) ? '所有远端' : pushRemote.join('、') || 'origin'}`
+                : `将推送 ${selectedRepository?.name} 的 ${pushBranch} → ${pushRemote.includes(PUSH_ALL_REMOTES_VALUE) ? '所有远端' : pushRemote.join('、') || 'origin'}/${pushTargetBranch}${pushTagNames.length > 0 ? `，以及版本 Tag：${pushTagNames.join('、')}` : ''}`
               : pushMode === 'all-local-refs' ? '请选择远端，且当前仓库至少需要一个本地分支' : '请选择远端和本地源分支，并填写目标分支'
           }
           description={pushMode === 'all-local-refs'
@@ -12288,7 +12296,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
   const [tagRecommendation, setTagRecommendation] = useState<RepositoryReleaseTagRecommendation | null>(null)
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null)
   const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
-  const [pushRemote, setPushRemote] = useState('origin')
+  const [pushRemote, setPushRemote] = useState<string[]>([])
   const [pushBranch, setPushBranch] = useState('')
   const [pushTargetBranch, setPushTargetBranch] = useState('')
   const [pushTagNames, setPushTagNames] = useState<string[]>([])
@@ -12332,7 +12340,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
       setStatus(nextStatus)
       setPushBranch((current) => current || target.branch)
       setPushTargetBranch((current) => current || target.branch)
-      setPushRemote((current) => current || target.remote)
+      setPushRemote((current) => current.length > 0 ? current : getDefaultPushRemoteSelection(selectedRepository.remotes))
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
@@ -12422,7 +12430,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
     setPushTagNames([])
     setMergeSource('')
     const target = getPreferredPushTarget(selectedRepository)
-    setPushRemote(target.remote)
+    setPushRemote(getDefaultPushRemoteSelection(selectedRepository?.remotes ?? []))
     setPushBranch(target.branch)
     setPushTargetBranch(target.branch)
 
@@ -12444,7 +12452,7 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
       const target = getPreferredPushTarget(result.repository, result.status)
       setPushBranch(target.branch)
       setPushTargetBranch(target.branch)
-      setPushRemote(target.remote)
+      setPushRemote(getDefaultPushRemoteSelection(result.repository.remotes))
 
       if (result.ok) {
         message.success(successText)
@@ -12711,9 +12719,11 @@ function GitWorkspacePanel({ repositories }: { repositories: Repository[] }): JS
                 className="git-push-remote-select"
                 popupClassName="git-push-remote-select-popup"
                 popupMatchSelectWidth={320}
+                mode="multiple"
+                maxTagCount="responsive"
                 value={pushRemote}
                 options={remoteOptions.length > 0 ? remoteOptions : [{ label: 'origin', value: 'origin' }]}
-                onChange={setPushRemote}
+                onChange={(values) => setPushRemote(normalizePushRemoteSelection(values))}
               />
               <Select
                 showSearch
@@ -17044,7 +17054,6 @@ function ProjectOverview({
                       onClick={() => void toggleProjectFavorite(selectedProject)}
                     />
                     <Button
-                      type="text"
                       size="small"
                       icon={<ExportOutlined />}
                       aria-label={`在独立窗口打开项目 ${selectedProject.name}`}
@@ -17053,7 +17062,9 @@ function ProjectOverview({
                         event.stopPropagation()
                         void onOpenProjectWindow(selectedProject.id)
                       }}
-                    />
+                    >
+                      独立窗口
+                    </Button>
                   </Space>
                   <Typography.Text className="table-text" type="secondary" ellipsis={{ tooltip: selectedProject.workspacePath }}>
                     {selectedProject.workspacePath}
@@ -23342,6 +23353,46 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
         {systemLogDrawer}
         {projectGitTaskDrawer}
         {appStatusBar}
+      </>
+    )
+  }
+
+  if (projectWindowId) {
+    return (
+      <>
+        <AppTitleBar
+          appMode="full"
+          breadcrumbs={titlebarBreadcrumbs}
+          onAppModeChange={() => undefined}
+          onOpenCodex={() => undefined}
+          onOpenCodexMonitor={() => undefined}
+          onOpenForgeProject={() => undefined}
+          showAppModeSwitcher={false}
+          showCodexStatus={false}
+        />
+        <Layout className={`project-window-shell${usesCustomTitleBar ? ' project-window-shell-with-titlebar' : ''}`}>
+          <Layout.Content className="content project-window-content">
+            {loadingWorkspace ? (
+              <div className="loading-panel">
+                <Spin />
+              </div>
+            ) : (
+              <ProjectOverview
+                mode="full"
+                focusProjectId={projectWindowId}
+                onCreateProject={() => message.info('请在主窗口创建项目')}
+                onOpenSettings={() => message.info('项目窗口只保留项目功能，通用设置请在主窗口打开')}
+                onOpenAiTools={() => message.info('AI 工具请在主窗口打开')}
+                onOpenTerminalRequest={openTerminalRequest}
+                resolvedTheme={resolvedTheme}
+                onOpenProjectGitTasks={() => message.info('任务日志请在主窗口打开')}
+                onRefreshProjectGitTasks={refreshProjectGitTaskLogs}
+                onOpenProjectWindow={openProjectWindow}
+                onTitlebarProjectLocationChange={handleTitlebarProjectLocationChange}
+              />
+            )}
+          </Layout.Content>
+        </Layout>
       </>
     )
   }

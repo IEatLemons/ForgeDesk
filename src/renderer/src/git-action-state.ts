@@ -29,6 +29,8 @@ export type PushRemoteOption = {
   value: string
 }
 
+export type SelectedPushRemote = string | string[]
+
 export function getPushableTargets(pushTargets: PushTargetLike[] = []): PushTargetLike[] {
   return pushTargets.filter((target) => target.ahead > 0)
 }
@@ -76,26 +78,40 @@ export function createPushRemoteOptions(remotes: RemoteLike[], pushTargets: Push
   return [{ label: '所有远端', value: PUSH_ALL_REMOTES_VALUE }, ...remoteOptions]
 }
 
-export function resolveSelectedPushRemoteNames(selectedRemote: string, remotes: RemoteLike[]): string[] {
-  if (selectedRemote === PUSH_ALL_REMOTES_VALUE) {
+export function getDefaultPushRemoteSelection(remotes: RemoteLike[]): string[] {
+  const remoteNames = Array.from(new Set(remotes.map((remote) => remote.name.trim()).filter(Boolean)))
+  return remoteNames.length > 1 ? [PUSH_ALL_REMOTES_VALUE] : remoteNames
+}
+
+export function normalizePushRemoteSelection(selectedRemote: SelectedPushRemote): string[] {
+  const values = Array.isArray(selectedRemote) ? selectedRemote : [selectedRemote]
+  const normalized = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)))
+  return normalized.includes(PUSH_ALL_REMOTES_VALUE) ? [PUSH_ALL_REMOTES_VALUE] : normalized
+}
+
+export function resolveSelectedPushRemoteNames(selectedRemote: SelectedPushRemote, remotes: RemoteLike[]): string[] {
+  const selectedValues = normalizePushRemoteSelection(selectedRemote)
+
+  if (selectedValues.includes(PUSH_ALL_REMOTES_VALUE)) {
     return Array.from(new Set(remotes.map((remote) => remote.name).filter(Boolean)))
   }
 
-  return selectedRemote.trim() ? [selectedRemote.trim()] : []
+  return selectedValues
 }
 
-export function canPushSelection(selectedRemote: string, pushTargets: PushTargetLike[] = []): boolean {
+export function canPushSelection(selectedRemote: SelectedPushRemote, pushTargets: PushTargetLike[] = []): boolean {
   const pushableTargets = getPushableTargets(pushTargets)
 
-  if (selectedRemote === PUSH_ALL_REMOTES_VALUE) {
+  if (normalizePushRemoteSelection(selectedRemote).includes(PUSH_ALL_REMOTES_VALUE)) {
     return pushableTargets.length > 0
   }
 
-  return pushableTargets.some((target) => target.remote === selectedRemote)
+  const selectedNames = new Set(normalizePushRemoteSelection(selectedRemote))
+  return pushableTargets.some((target) => selectedNames.has(target.remote))
 }
 
 export function canPushBranchSelection(
-  selectedRemote: string,
+  selectedRemote: SelectedPushRemote,
   remotes: RemoteLike[],
   sourceBranch: string,
   targetBranch: string
@@ -105,7 +121,7 @@ export function canPushBranchSelection(
 }
 
 export function canPushAllLocalRefsSelection(
-  selectedRemote: string,
+  selectedRemote: SelectedPushRemote,
   remotes: RemoteLike[],
   localBranchCount: number
 ): boolean {

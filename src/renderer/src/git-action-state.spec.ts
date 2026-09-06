@@ -7,11 +7,13 @@ import {
   canPushBranchSelection,
   canPushSelection,
   createPushRemoteOptions,
+  getDefaultPushRemoteSelection,
   getCurrentBranchName,
   getPushableTargets,
   hasProjectCommittableChanges,
   hasProjectPushableTargets,
   mergeRepositoryWorkspaceStatus,
+  normalizePushRemoteSelection,
   resolveSelectedPushRemoteNames
 } from './git-action-state.js'
 
@@ -54,6 +56,9 @@ describe('git action state helpers', () => {
       'backup'
     ])
     assert.deepEqual(resolveSelectedPushRemoteNames(PUSH_ALL_REMOTES_VALUE, repository.remotes), ['origin', 'backup'])
+    assert.deepEqual(getDefaultPushRemoteSelection(repository.remotes), [PUSH_ALL_REMOTES_VALUE])
+    assert.deepEqual(normalizePushRemoteSelection([PUSH_ALL_REMOTES_VALUE, 'origin']), [PUSH_ALL_REMOTES_VALUE])
+    assert.deepEqual(resolveSelectedPushRemoteNames(['origin', 'backup'], repository.remotes), ['origin', 'backup'])
     assert.deepEqual(resolveSelectedPushRemoteNames('backup', repository.remotes), ['backup'])
   })
 

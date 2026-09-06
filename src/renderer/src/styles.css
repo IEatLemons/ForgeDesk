@@ -11451,6 +11451,15 @@ button.app-status-bar-item:hover {
   background: var(--app-bg);
 }
 
+.project-window-shell {
+  min-height: 100vh;
+  background: var(--app-bg);
+}
+
+.project-window-content {
+  min-height: 100vh;
+}
+
 .app-shell-with-titlebar .app-main {
   height: calc(100vh - var(--app-titlebar-height));
 }
