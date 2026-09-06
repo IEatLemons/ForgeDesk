@@ -15923,7 +15923,6 @@ function ProjectOverview({
 
     cancelledProjectGitTaskIdsRef.current.delete(taskId)
     await persistProjectGitTaskLog(runningLog)
-    onOpenProjectGitTasks()
     setProjectGitTaskRunning(project.id, action, true)
 
     try {
@@ -19306,7 +19305,10 @@ function RepositoryLogTree({
 
       try {
         if (window.forgeDesk) {
-          const detail = await window.forgeDesk.getRepositoryDetail(repository.id)
+          // The workspace status and commit graph below are refreshed live.
+          // Use the cached repository metadata for the first paint so opening
+          // a project does not also rescan every branch and remote.
+          const detail = await window.forgeDesk.getRepositoryDetail(repository.id, false)
 
           if (!detail.available) {
             updateRepository(detail)
@@ -19318,10 +19320,9 @@ function RepositoryLogTree({
             return
           }
 
-          const [nextCommits, nextWorkspaceStatus, nextTagSyncSnapshot] = await Promise.all([
+          const [nextCommits, nextWorkspaceStatus] = await Promise.all([
             window.forgeDesk.getRepositoryCommitGraph(detail.id, { limit: gitLogWindowSize + 1 }),
-            window.forgeDesk.getRepositoryWorkspaceStatus(detail.id),
-            window.forgeDesk.getRepositoryTagSyncStatus(detail.id).catch(() => null)
+            window.forgeDesk.getRepositoryWorkspaceStatus(detail.id)
           ])
 
           if (cancelled) {
@@ -19334,9 +19335,16 @@ function RepositoryLogTree({
           setCommitWindowStart(0)
           setHasOlderCommits(nextCommits.length > gitLogWindowSize)
           setWorkspaceStatus(nextWorkspaceStatus)
-          setTagSyncSnapshot(nextTagSyncSnapshot)
           onCommitCountChange?.(detail.id, Math.min(nextCommits.length, gitLogWindowSize))
           setGitError(null)
+
+          // Tag synchronization is auxiliary information and should not hold
+          // the first project view in a loading state.
+          window.forgeDesk.getRepositoryTagSyncStatus(detail.id).then((nextTagSyncSnapshot) => {
+            if (!cancelled) {
+              setTagSyncSnapshot(nextTagSyncSnapshot)
+            }
+          }).catch(() => undefined)
         }
       } catch (error) {
         if (!cancelled) {

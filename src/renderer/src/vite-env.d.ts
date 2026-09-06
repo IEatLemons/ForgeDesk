@@ -2897,7 +2897,7 @@ interface Window {
     rescanProjectRepositories: (projectId: string) => Promise<WorkspaceSnapshot>
     initializeProjectRepository: (projectId: string) => Promise<WorkspaceSnapshot>
     listRepositories: (projectId?: string) => Promise<RepositoryRecord[]>
-    getRepositoryDetail: (repositoryId: string) => Promise<RepositoryRecord>
+    getRepositoryDetail: (repositoryId: string, refresh?: boolean) => Promise<RepositoryRecord>
     listRepositoryCommits: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number }) => Promise<GitCommitRecord[]>
     getRepositoryCommitGraph: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number }) => Promise<GitCommitRecord[]>
     getProjectCommitStatusConfig: (projectId: string) => Promise<ProjectCommitStatusConfig>

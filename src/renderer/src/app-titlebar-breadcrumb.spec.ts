@@ -7,13 +7,13 @@ describe('app titlebar breadcrumbs', () => {
     assert.deepEqual(createAppTitlebarBreadcrumbs({ activeKey: 'overview' }), [APP_TITLEBAR_PRODUCT_NAME])
   })
 
-  it('shows the selected project and its current workspace tab', () => {
+  it('shows the selected project as a compact project label', () => {
     assert.deepEqual(
       createAppTitlebarBreadcrumbs({
         activeKey: 'projects',
         projectLocation: { name: 'Unipie', tabLabel: 'Log 树' }
       }),
-      [APP_TITLEBAR_PRODUCT_NAME, '项目', 'Unipie', 'Log 树']
+      [APP_TITLEBAR_PRODUCT_NAME, '项目：Unipie']
     )
   })
 

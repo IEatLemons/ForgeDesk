@@ -21,12 +21,9 @@ export function createAppTitlebarBreadcrumbs({
   }
 
   if (activeKey === 'projects') {
-    return compactBreadcrumbs([
-      APP_TITLEBAR_PRODUCT_NAME,
-      '项目',
-      projectLocation?.name,
-      projectLocation?.tabLabel
-    ])
+    return projectLocation?.name
+      ? [APP_TITLEBAR_PRODUCT_NAME, `项目：${projectLocation.name}`]
+      : [APP_TITLEBAR_PRODUCT_NAME, '项目']
   }
 
   if (activeKey === 'settings') {

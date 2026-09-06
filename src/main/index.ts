@@ -4323,7 +4323,35 @@ function resolveRepositoryFilePath(repository: RepositoryRecord, filePath: strin
   return normalizedPath
 }
 
+const repositoryWorkspaceStatusCache = new Map<string, { expiresAt: number; status: GitWorkspaceStatus }>()
+const repositoryWorkspaceStatusRequests = new Map<string, Promise<GitWorkspaceStatus>>()
+
 async function getRepositoryWorkspaceStatus(repositoryId: string): Promise<GitWorkspaceStatus> {
+  const now = Date.now()
+  const cached = repositoryWorkspaceStatusCache.get(repositoryId)
+
+  if (cached && cached.expiresAt > now) {
+    return cached.status
+  }
+
+  const existingRequest = repositoryWorkspaceStatusRequests.get(repositoryId)
+  if (existingRequest) {
+    return existingRequest
+  }
+
+  const request = loadRepositoryWorkspaceStatus(repositoryId)
+  repositoryWorkspaceStatusRequests.set(repositoryId, request)
+
+  try {
+    const status = await request
+    repositoryWorkspaceStatusCache.set(repositoryId, { expiresAt: Date.now() + 1500, status })
+    return status
+  } finally {
+    repositoryWorkspaceStatusRequests.delete(repositoryId)
+  }
+}
+
+async function loadRepositoryWorkspaceStatus(repositoryId: string): Promise<GitWorkspaceStatus> {
   const repository = getRepositoryOrThrow(repositoryId)
   const [statusOutput, branch] = await Promise.all([
     runGitInPathStrict(repository.localPath, ['status', '--porcelain=v1', '-z'], { preserveOutput: true }),
@@ -7318,14 +7346,17 @@ registerGitIpc('project:repository:init', async (_event, projectId: string): Pro
 
 registerGitIpc('repositories:list', async (_event, projectId?: string): Promise<RepositoryRecord[]> => listRepositories(projectId))
 
-registerGitIpc('repository:detail', async (_event, repositoryId: string): Promise<RepositoryRecord> => {
+registerGitIpc('repository:detail', async (_event, repositoryId: string, refresh = true): Promise<RepositoryRecord> => {
   const existing = listRepositories().find((repository) => repository.id === repositoryId)
 
   if (!existing) {
     throw new Error('仓库不存在')
   }
 
-  return rescanRepositoryRecord(existing)
+  // Opening a project already has a persisted repository snapshot. Re-scanning
+  // every branch and remote here makes the first paint wait on many Git
+  // subprocesses. Callers doing an explicit refresh still get live data.
+  return refresh ? rescanRepositoryRecord(existing) : existing
 })
 
 registerGitIpc(

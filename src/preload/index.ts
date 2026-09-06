@@ -28,7 +28,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   rescanProjectRepositories: (projectId: string) => invokeGitIpc<WorkspaceSnapshot>('project:repositories:rescan', projectId),
   initializeProjectRepository: (projectId: string) => invokeGitIpc<WorkspaceSnapshot>('project:repository:init', projectId),
   listRepositories: (projectId?: string) => invokeGitIpc<RepositoryRecord[]>('repositories:list', projectId),
-  getRepositoryDetail: (repositoryId: string) => invokeGitIpc<RepositoryRecord>('repository:detail', repositoryId),
+  getRepositoryDetail: (repositoryId: string, refresh = true) => invokeGitIpc<RepositoryRecord>('repository:detail', repositoryId, refresh),
   listRepositoryCommits: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number }) =>
     invokeGitIpc<GitCommitRecord[]>('repository:commits', repositoryId, options),
   getRepositoryCommitGraph: (repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number }) =>

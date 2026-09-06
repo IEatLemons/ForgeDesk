@@ -5668,6 +5668,11 @@ button.app-status-bar-item:hover {
   margin: 0;
 }
 
+.project-detail-heading h3 {
+  font-size: 34px;
+  line-height: 1.15;
+}
+
 .project-card-metrics {
   margin-top: 18px;
   color: var(--app-muted);
