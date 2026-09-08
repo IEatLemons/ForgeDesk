@@ -5689,11 +5689,42 @@ button.app-status-bar-item:hover {
 
 .project-detail-actions {
   display: flex;
-  justify-content: flex-start;
-  justify-self: stretch;
-  align-self: start;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 10px;
+  background: var(--subtle-bg);
   width: 100%;
   max-width: 100%;
+}
+
+.project-action-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.project-action-group-core {
+  flex: 1 1 auto;
+}
+
+.project-action-group-secondary {
+  flex: 0 0 auto;
+}
+
+.project-action-group-label {
+  flex: 0 0 100%;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.project-action-group .ant-space {
+  row-gap: 8px;
 }
 
 @container project-detail (max-width: 1180px) {
@@ -5703,8 +5734,10 @@ button.app-status-bar-item:hover {
 
   .project-detail-actions {
     justify-content: flex-start;
-    justify-self: stretch;
-    width: 100%;
+  }
+
+  .project-action-group-secondary {
+    margin-left: auto;
   }
 }
 
@@ -5719,12 +5752,28 @@ button.app-status-bar-item:hover {
     gap: 8px;
   }
 
+  .project-action-group {
+    display: contents;
+  }
+
+  .project-action-group-label {
+    grid-column: 1 / -1;
+    margin-top: 2px;
+  }
+
+  .project-detail-actions .ant-space,
   .project-detail-actions .ant-space-item,
-  .project-detail-actions .ant-btn {
+  .project-detail-actions .ant-btn,
+  .project-detail-actions .ant-dropdown-trigger {
     width: 100%;
   }
 
-  .project-detail-actions .ant-btn {
+  .project-detail-actions .ant-space {
+    display: contents;
+  }
+
+  .project-detail-actions .ant-btn,
+  .project-detail-actions .ant-dropdown-trigger {
     margin-inline-start: 0;
   }
 
@@ -6717,8 +6766,86 @@ button.app-status-bar-item:hover {
   width: 100%;
 }
 
-.source-tree-toolbar h4 {
+.source-tree-toolbar {
+  display: grid;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 10px;
+  background: var(--subtle-bg);
+}
+
+.source-tree-toolbar-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.source-tree-toolbar-heading h4 {
   margin: 0 !important;
+}
+
+.source-tree-toolbar-groups {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 20px;
+}
+
+.source-tree-control-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.source-tree-control-label {
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.source-tree-filter-group {
+  flex: 1 1 420px;
+}
+
+.source-tree-date-filter {
+  width: 150px;
+}
+
+@media (max-width: 760px) {
+  .source-tree-toolbar-groups {
+    display: grid;
+    gap: 12px;
+  }
+
+  .source-tree-control-group,
+  .source-tree-filter-group {
+    align-items: flex-start;
+    width: 100%;
+  }
+
+  .source-tree-control-group > .ant-space {
+    flex: 1 1 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .source-tree-toolbar {
+    padding: 10px;
+  }
+
+  .source-tree-control-group > .ant-space {
+    width: 100%;
+  }
+
+  .source-tree-date-filter,
+  .source-tree-filter-group .git-filter {
+    width: 100%;
+  }
 }
 
 .commit-meta,
@@ -6788,8 +6915,7 @@ button.app-status-bar-item:hover {
 }
 
 .commit-graph-cell.is-working-tree .commit-graph-line,
-.commit-graph-cell.is-working-tree .commit-graph-parent-edge,
-.commit-expanded-graph-cell.is-working-tree .commit-graph-line {
+.commit-graph-cell.is-working-tree .commit-graph-parent-edge {
   opacity: 0.9;
 }
 
@@ -6811,30 +6937,14 @@ button.app-status-bar-item:hover {
 }
 
 .commit-expanded-detail-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  display: block;
   min-height: 100%;
   background: var(--table-expanded-bg);
 }
 
-.commit-expanded-graph-cell {
-  position: relative;
-  min-width: 0;
-  overflow: hidden;
-  background: var(--graph-column-bg);
-  box-shadow: inset -1px 0 0 var(--graph-column-border);
-}
-
-.commit-expanded-graph-svg {
-  display: block;
-  height: 100%;
-  margin-left: 24px;
-  overflow: visible;
-}
-
 .source-tree-table .commit-inline-detail {
   margin-top: 0;
-  padding: 14px 16px 16px 20px;
+  padding: 14px 16px 16px;
   border: 0;
   border-radius: 0;
   background: var(--table-expanded-bg);
@@ -10811,6 +10921,11 @@ button.app-status-bar-item:hover {
 
 .project-log-toolbar h4 {
   margin: 0 0 4px !important;
+}
+
+.project-git-watch-control {
+  flex: 0 0 auto;
+  padding-top: 2px;
 }
 
 .project-log-repository-select,

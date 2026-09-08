@@ -293,16 +293,15 @@ import {
   createGraphRows,
   currentBranchRefColor,
   defaultGitLogRefreshPreferences,
+  gitLogMaxLoadedCommitOptions,
   gitLogRefreshIntervalBounds,
   gitLogRefreshPreferenceChangedEvent,
   gitLogRefreshPreferenceStorageKey,
-  gitLogScrollLoadBatchSize,
   gitLogScrollPrefetchCommitCount,
-  gitLogWindowSize,
+  getGraphCellBottomLaneIndexes,
   getWorkspaceFileChangeStatus,
   getCommitAuthorDisplay,
   getCommitAuthorFilterValue,
-  getGraphCellBottomLaneIndexes,
   getGitGraphColumnWidth,
   getGraphLaneColor,
   isWorkingTreeCommit,
@@ -423,6 +422,7 @@ import { AppModeSwitcher } from './app-mode-switcher'
 import { ModuleBackButton } from './module-navigation'
 import { countRunningProjectGitTaskLogs, filterProjectGitTaskLogs, getProjectGitTaskStatusMeta } from './project-git-task-log-view'
 import { isProjectGitTaskErrorLine } from './project-git-task-output'
+import { readStoredProjectGitWatchEnabled, writeStoredProjectGitWatchEnabled } from './project-git-watch-preferences'
 import type { ResolvedTheme, ThemePreference } from './app-theme'
 
 type ImportForm = {
@@ -1748,44 +1748,6 @@ function CommitGraphCell({ commit }: { commit: BranchColoredGitGraphRow<Reposito
   )
 }
 
-function CommitGraphContinuation({
-  commit,
-  columnWidth
-}: {
-  commit: BranchColoredGitGraphRow<RepositoryLogCommit>
-  columnWidth: number
-}): JSX.Element {
-  const isWorkingTree = isWorkingTreeCommit(commit)
-  const allLaneIndexes = [...commit.graphBottomLaneIndexes, ...commit.graphParentEdges.map((edge) => edge.toLaneIndex)]
-  const laneCount = Math.max(commit.graphLanes.length, ...allLaneIndexes.map((index) => index + 1), 1)
-  const svgWidth = Math.max(42, laneCount * gitGraphLaneWidth)
-  const xForLane = (index: number): number => index * gitGraphLaneWidth + gitGraphLaneWidth / 2
-
-  return (
-    <div className={isWorkingTree ? 'commit-expanded-graph-cell is-working-tree' : 'commit-expanded-graph-cell'} style={{ width: columnWidth }}>
-      <svg
-        aria-hidden="true"
-        className="commit-expanded-graph-svg"
-        focusable="false"
-        height="100%"
-        width={svgWidth}
-      >
-        {commit.graphBottomLaneIndexes.map((laneIndex) => (
-          <line
-            key={`expanded-bottom-${laneIndex}`}
-            className={laneIndex === commit.graphLaneIndex ? 'commit-graph-line is-active' : 'commit-graph-line'}
-            stroke={isWorkingTree ? '#98a2b3' : commit.graphLaneColors[laneIndex] ?? getGraphLaneColor(laneIndex)}
-            x1={xForLane(laneIndex)}
-            x2={xForLane(laneIndex)}
-            y1={-graphLineOverflow}
-            y2="100%"
-          />
-        ))}
-      </svg>
-    </div>
-  )
-}
-
 function CommitAuthorCell({ commit }: { commit: RepositoryLogCommit }): JSX.Element {
   const author = getCommitAuthorDisplay(commit)
 
@@ -1982,25 +1944,20 @@ function CommitMessageCell({
 }
 
 function CommitInlineDetail({
-  commit,
   files,
   selectedFile,
   loadingFiles,
   onSelectFile,
-  graphColumnWidth,
   canOpenDiff
 }: {
-  commit: BranchColoredGitGraphRow<RepositoryLogCommit>
   files: GitCommitFileChange[]
   selectedFile: GitCommitFileChange | null
   loadingFiles: boolean
   onSelectFile: (file: GitCommitFileChange) => void
-  graphColumnWidth: number
   canOpenDiff: boolean
 }): JSX.Element {
   return (
     <div className="commit-expanded-detail-row">
-      <CommitGraphContinuation commit={commit} columnWidth={graphColumnWidth} />
       <div className="commit-inline-detail">
         <Table
           rowKey="id"
@@ -5492,9 +5449,13 @@ function SettingsPanel({
             />
           </label>
           <label className="log-refresh-setting-field">
-            <span>Log 树窗口</span>
-            <Typography.Text>固定保留 100 条</Typography.Text>
-            <Typography.Text type="secondary">滚动接近上下边界时会提前加载相邻历史，内存中始终最多保留 100 条提交。</Typography.Text>
+            <span>单次加载 Commit 数量</span>
+            <Select
+              value={gitLogRefreshPreferences.maxLoadedCommits}
+              options={gitLogMaxLoadedCommitOptions.map((value) => ({ label: `${value} 条`, value }))}
+              onChange={(value) => saveGitLogRefreshPreferencePatch({ maxLoadedCommits: value })}
+            />
+            <Typography.Text type="secondary">控制 Log 树首次加载、刷新和滚动换页时的提交数量，最多 1000 条。</Typography.Text>
           </label>
           <Button icon={<ReloadOutlined />} onClick={() => setGitLogRefreshPreferences(defaultGitLogRefreshPreferences)}>
             恢复默认
@@ -14527,7 +14488,10 @@ function ProjectLogTreePanel({
   onRepositoryChange,
   initializingProjectRepository,
   onInitializeProjectRepository,
-  onOpenProjectRemoteSettings
+  onOpenProjectRemoteSettings,
+  showGitWatchControl = false,
+  gitWatchEnabled = true,
+  onGitWatchEnabledChange
 }: {
   repositories: Repository[]
   repositoryId: string
@@ -14540,6 +14504,9 @@ function ProjectLogTreePanel({
   initializingProjectRepository: boolean
   onInitializeProjectRepository: () => void
   onOpenProjectRemoteSettings: () => void
+  showGitWatchControl?: boolean
+  gitWatchEnabled?: boolean
+  onGitWatchEnabledChange?: (enabled: boolean) => void
 }): JSX.Element {
   const orderedRepositories = sortRepositoriesHierarchically(repositories).map((item) => item.repository)
   const selectedRepository = orderedRepositories.find((repository) => repository.id === repositoryId) ?? orderedRepositories[0] ?? null
@@ -14596,6 +14563,18 @@ function ProjectLogTreePanel({
           <Typography.Title level={4}>{title}</Typography.Title>
           <Typography.Text type="secondary">{description}</Typography.Text>
         </div>
+        {showGitWatchControl && onGitWatchEnabledChange ? (
+          <Space size={8} className="project-git-watch-control">
+            <Typography.Text type="secondary">监听本地 Git</Typography.Text>
+            <Switch
+              size="small"
+              checked={gitWatchEnabled}
+              checkedChildren="开"
+              unCheckedChildren="关"
+              onChange={onGitWatchEnabledChange}
+            />
+          </Space>
+        ) : null}
       </div>
       <RepositoryLogTree
         repository={selectedRepository}
@@ -15433,6 +15412,7 @@ function CreateProjectModal({
 
 function ProjectOverview({
   mode,
+  projectWindow = false,
   focusProjectId,
   onCreateProject,
   onOpenSettings,
@@ -15445,6 +15425,7 @@ function ProjectOverview({
   onTitlebarProjectLocationChange
 }: {
   mode: AppMode
+  projectWindow?: boolean
   focusProjectId: string | null
   onCreateProject: () => void
   onOpenSettings: () => void
@@ -15471,6 +15452,7 @@ function ProjectOverview({
     updateRepository
   } = useForgeDeskStore()
   const isSimpleMode = mode === 'simple'
+  const [projectGitWatchEnabled, setProjectGitWatchEnabled] = useState(() => readStoredProjectGitWatchEnabled())
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null)
   const [projectDetailTab, setProjectDetailTab] = useState<ProjectDetailTabKey>(DEFAULT_PROJECT_DETAIL_TAB)
   const [terminalOpenRequest, setTerminalOpenRequest] = useState<TerminalOpenRequest | null>(null)
@@ -16096,6 +16078,8 @@ function ProjectOverview({
 
     projectWorkspaceStatusRefreshRef.current = true
 
+    let changed = false
+
     try {
       await Promise.all(
         repositoriesToRefresh.filter((repository) => repository.available).map(async (repository) => {
@@ -16107,9 +16091,11 @@ function ProjectOverview({
             if (
               nextRepository.hasChanges !== repository.hasChanges ||
               nextRepository.currentBranch !== repository.currentBranch ||
+              nextRepository.checkedOutCommit !== repository.checkedOutCommit ||
               nextRepository.ahead !== repository.ahead ||
               pushTargetsChanged
             ) {
+              changed = true
               updateRepository(nextRepository)
             }
           } catch (error) {
@@ -16117,6 +16103,10 @@ function ProjectOverview({
           }
         })
       )
+
+      if (changed) {
+        setProjectGitRefreshToken((current) => current + 1)
+      }
     } finally {
       projectWorkspaceStatusRefreshRef.current = false
     }
@@ -16274,7 +16264,7 @@ function ProjectOverview({
   }
 
   useEffect(() => {
-    if (!selectedProject || projectRepositories.length === 0 || !window.forgeDesk) {
+    if (!selectedProject || projectRepositories.length === 0 || !window.forgeDesk || (projectWindow && !projectGitWatchEnabled)) {
       return
     }
 
@@ -16284,7 +16274,11 @@ function ProjectOverview({
     }, projectWorkspaceStatusRefreshIntervalMs)
 
     return () => window.clearInterval(intervalId)
-  }, [selectedProject?.id, projectRepositoryIds])
+  }, [projectGitWatchEnabled, projectRepositoryIds, projectWindow, selectedProject?.id])
+
+  function updateProjectGitWatchEnabled(enabled: boolean): void {
+    setProjectGitWatchEnabled(writeStoredProjectGitWatchEnabled(enabled))
+  }
 
   useEffect(() => {
     if (focusProjectAppliedRef.current || !focusProjectId || !projects.some((project) => project.id === focusProjectId)) {
@@ -16294,10 +16288,10 @@ function ProjectOverview({
     focusProjectAppliedRef.current = true
     setSelectedProjectId(focusProjectId)
 
-    if (!isSimpleMode) {
+    if (!isSimpleMode && !projectWindow) {
       setDetailProjectId(focusProjectId)
     }
-  }, [focusProjectId, isSimpleMode, projects, setSelectedProjectId])
+  }, [focusProjectId, isSimpleMode, projectWindow, projects, setSelectedProjectId])
 
   useEffect(() => {
     const nextTab = resolveProjectDetailTab(projectDetailTab, projectDetailTabAvailability)
@@ -16847,6 +16841,84 @@ function ProjectOverview({
     ]
   }
 
+  function openProjectSettings(): void {
+    setProjectSettingsInitialModule(undefined)
+    setProjectSettingsInitialGitTab(undefined)
+    setProjectSettingsDrawerOpen(true)
+  }
+
+  function pruneSelectedProjectBranches(): void {
+    if (!selectedProjectGitRepository) return
+
+    Modal.confirm({
+      title: `修剪 ${selectedProjectGitRepository.name} 的分支？`,
+      content: '会先 Fetch 全部远端，并切换到 main。随后删除已合并到 main 的本地及远端分支；未合并的本地分支会推送到每个远端。工作区必须干净。',
+      okText: '执行修剪',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => pruneProjectRepositoryBranches(selectedProjectGitRepository)
+    })
+  }
+
+  function handleProjectDetailMoreAction(key: string): void {
+    if (!selectedProject) return
+
+    if (key === 'scan') {
+      void rescanSelectedProject(selectedProject)
+    } else if (key === 'settings') {
+      openProjectSettings()
+    } else if (key === 'prune') {
+      pruneSelectedProjectBranches()
+    } else if (key === 'tag-align') {
+      setProjectDetailTab('log-tree')
+      setProjectTagSyncOpenRequest((current) => current + 1)
+    } else if (key === 'release') {
+      setReleaseModalOpen(true)
+    } else if (key === 'deploy') {
+      setProjectDeploymentDrawerOpen(true)
+    } else if (key === 'review') {
+      setApprovalModalOpen(true)
+    } else if (key === 'delete') {
+      confirmDeleteProject(selectedProject)
+    }
+  }
+
+  const projectDetailMoreMenuItems: MenuProps['items'] = [
+    {
+      type: 'group',
+      label: '项目管理',
+      children: [
+        { key: 'scan', icon: <ReloadOutlined />, label: '扫描仓库', disabled: Boolean(rescanningProjectId) },
+        { key: 'settings', icon: <SettingOutlined />, label: '设置' },
+        ...(isSimpleMode ? [{ key: 'deploy', icon: <CloudOutlined />, label: '部署', disabled: projectRepositories.length === 0 }] : [])
+      ]
+    },
+    {
+      type: 'group',
+      label: 'Git 操作',
+      children: [
+        { key: 'prune', icon: <ToolOutlined />, label: '分支修剪', disabled: !selectedProjectGitRepository || Boolean(pruningProjectRepositoryId) },
+        { key: 'tag-align', icon: <TagOutlined />, label: 'Tag 对齐', disabled: !selectedProjectGitRepository }
+      ]
+    },
+    ...(!isSimpleMode ? [{
+      type: 'group' as const,
+      label: '发布与审核',
+      children: [
+        { key: 'release', icon: <GithubOutlined />, label: '发布版本', disabled: projectRepositories.length === 0 },
+        { key: 'review', icon: <CheckCircleOutlined />, label: '快速审核', disabled: projectRepositories.length === 0 }
+      ]
+    }] : []),
+    ...(!isSimpleMode ? [{ type: 'divider' as const }] : []),
+    ...(!isSimpleMode ? [{
+      key: 'delete',
+      icon: <DeleteOutlined />,
+      label: '删除项目',
+      danger: true,
+      disabled: Boolean(deletingProjectId)
+    }] : [])
+  ]
+
   return (
     <section className="workspace-section project-workspace">
       <Modal
@@ -17097,95 +17169,49 @@ function ProjectOverview({
                   {selectedProject.description ? <Typography.Text type="secondary" className="project-detail-description" title={selectedProject.description}>{selectedProject.description}</Typography.Text> : null}
                 </div>
               </div>
-              <Space wrap className="project-detail-actions">
-                <Button
-                  icon={<ReloadOutlined />}
-                  loading={rescanningProjectId === selectedProject.id}
-                  onClick={() => rescanSelectedProject(selectedProject)}
-                >
-                  扫描仓库
-                </Button>
-                {!isSimpleMode ? (
-                  <Button danger icon={<DeleteOutlined />} loading={deletingProjectId === selectedProject.id} onClick={() => confirmDeleteProject(selectedProject)}>
-                    删除项目
-                  </Button>
-                ) : null}
-                <Button
-                  icon={<SettingOutlined />}
-                  onClick={() => {
-                    setProjectSettingsInitialModule(undefined)
-                    setProjectSettingsInitialGitTab(undefined)
-                    setProjectSettingsDrawerOpen(true)
-                  }}
-                >
-                  设置
-                </Button>
-                <Button icon={<SaveOutlined />} disabled={!projectHasCommittableChanges} onClick={() => setCommitModalOpen(true)}>
-                  提交
-                </Button>
-                {!isSimpleMode ? (
-                  <Button icon={<GithubOutlined />} disabled={projectRepositories.length === 0} onClick={() => setReleaseModalOpen(true)}>
-                    发布版本
-                  </Button>
-                ) : null}
-                <Button icon={<CloudOutlined />} disabled={projectRepositories.length === 0} onClick={() => setProjectDeploymentDrawerOpen(true)}>
-                  {isSimpleMode ? '部署' : '项目发布'}
-                </Button>
-                <Button
-                  icon={<UploadOutlined />}
-                  loading={selectedProject ? isProjectGitTaskRunning(selectedProject.id, 'push') : false}
-                  disabled={projectRepositories.length === 0 || (selectedProject ? isProjectGitTaskRunning(selectedProject.id, 'push') : false)}
-                  title={projectHasPushableTargets ? '推送待提交的分支和可选版本 Tag' : '没有待推送提交时，也可选择版本 Tag 推送'}
-                  onClick={() => setPushModalOpen(true)}
-                >
-                  推送
-                </Button>
-                <Button
-                  icon={<ToolOutlined />}
-                  loading={Boolean(selectedProjectGitRepository && pruningProjectRepositoryId === selectedProjectGitRepository.id)}
-                  disabled={!selectedProjectGitRepository || Boolean(pruningProjectRepositoryId)}
-                  onClick={() => {
-                    if (!selectedProjectGitRepository) return
-                    Modal.confirm({
-                      title: `修剪 ${selectedProjectGitRepository.name} 的分支？`,
-                      content: '会先 Fetch 全部远端，并切换到 main。随后删除已合并到 main 的本地及远端分支；未合并的本地分支会推送到每个远端。工作区必须干净。',
-                      okText: '执行修剪',
-                      okButtonProps: { danger: true },
-                      cancelText: '取消',
-                      onOk: () => pruneProjectRepositoryBranches(selectedProjectGitRepository)
-                    })
-                  }}
-                >
-                  分支修剪
-                </Button>
-                <Button icon={<BranchesOutlined />} disabled={projectRepositories.length === 0} onClick={() => setMergeModalOpen(true)}>
-                  合并
-                </Button>
-                <Button
-                  icon={<TagOutlined />}
-                  disabled={!selectedProjectGitRepository}
-                  onClick={() => {
-                    setProjectDetailTab('log-tree')
-                    setProjectTagSyncOpenRequest((current) => current + 1)
-                  }}
-                >
-                  Tag 对齐
-                </Button>
-                {!isSimpleMode ? (
-                  <Button icon={<CheckCircleOutlined />} disabled={projectRepositories.length === 0} onClick={() => setApprovalModalOpen(true)}>
-                    快速审核
-                  </Button>
-                ) : null}
-                <Button
-                  type="primary"
-                  icon={<DownloadOutlined />}
-                  loading={Boolean(selectedProjectGitRepository && syncingProjectRepositoryId === selectedProjectGitRepository.id)}
-                  disabled={!selectedProjectGitRepository}
-                  onClick={() => selectedProjectGitRepository && syncProjectRepository(selectedProjectGitRepository)}
-                >
-                  Fetch
-                </Button>
-              </Space>
+              <div className="project-detail-actions" aria-label="项目操作">
+                <div className="project-action-group project-action-group-core">
+                  <Typography.Text type="secondary" className="project-action-group-label">Git 操作</Typography.Text>
+                  <Space wrap size={8}>
+                    <Button
+                      type="primary"
+                      icon={<DownloadOutlined />}
+                      loading={Boolean(selectedProjectGitRepository && syncingProjectRepositoryId === selectedProjectGitRepository.id)}
+                      disabled={!selectedProjectGitRepository}
+                      onClick={() => selectedProjectGitRepository && syncProjectRepository(selectedProjectGitRepository)}
+                    >
+                      Fetch
+                    </Button>
+                    <Button icon={<SaveOutlined />} disabled={!projectHasCommittableChanges} onClick={() => setCommitModalOpen(true)}>
+                      提交
+                    </Button>
+                    <Button
+                      icon={<UploadOutlined />}
+                      loading={selectedProject ? isProjectGitTaskRunning(selectedProject.id, 'push') : false}
+                      disabled={projectRepositories.length === 0 || (selectedProject ? isProjectGitTaskRunning(selectedProject.id, 'push') : false)}
+                      title={projectHasPushableTargets ? '推送待提交的分支和可选版本 Tag' : '没有待推送提交时，也可选择版本 Tag 推送'}
+                      onClick={() => setPushModalOpen(true)}
+                    >
+                      推送
+                    </Button>
+                    <Button icon={<BranchesOutlined />} disabled={projectRepositories.length === 0} onClick={() => setMergeModalOpen(true)}>
+                      合并
+                    </Button>
+                  </Space>
+                </div>
+                <div className="project-action-group project-action-group-secondary">
+                  <Typography.Text type="secondary" className="project-action-group-label">其他操作</Typography.Text>
+                  <Dropdown
+                    trigger={['click']}
+                    menu={{
+                      items: projectDetailMoreMenuItems,
+                      onClick: ({ key }) => handleProjectDetailMoreAction(key)
+                    }}
+                  >
+                    <Button icon={<MoreOutlined />}>更多操作</Button>
+                  </Dropdown>
+                </div>
+              </div>
             </div>
 
             <GitCommitModal
@@ -17400,6 +17426,9 @@ function ProjectOverview({
                       initializingProjectRepository={initializingProjectId === selectedProject.id}
                       onInitializeProjectRepository={() => void initializeSelectedProjectRepository(selectedProject)}
                       onOpenProjectRemoteSettings={openProjectRemoteSettings}
+                      showGitWatchControl={projectWindow}
+                      gitWatchEnabled={projectGitWatchEnabled}
+                      onGitWatchEnabledChange={updateProjectGitWatchEnabled}
                     />
                   )
                 },
@@ -17418,6 +17447,9 @@ function ProjectOverview({
                       initializingProjectRepository={initializingProjectId === selectedProject.id}
                       onInitializeProjectRepository={() => void initializeSelectedProjectRepository(selectedProject)}
                       onOpenProjectRemoteSettings={openProjectRemoteSettings}
+                      showGitWatchControl={projectWindow}
+                      gitWatchEnabled={projectGitWatchEnabled}
+                      onGitWatchEnabledChange={updateProjectGitWatchEnabled}
                     />
                   )
                 },
@@ -19135,7 +19167,8 @@ function RepositoryLogTree({
   onRepositoryChange?: (repositoryId: string) => void
 }): JSX.Element {
   const { setProjectSummary, updateRepository } = useForgeDeskStore()
-  const [gitLogRefreshPreferences] = useGitLogRefreshPreferences()
+  const [gitLogRefreshPreferences, setGitLogRefreshPreferences] = useGitLogRefreshPreferences()
+  const previousMaxLoadedCommitsRef = useRef(gitLogRefreshPreferences.maxLoadedCommits)
   const [detailRepository, setDetailRepository] = useState<Repository | null>(repository)
   const [commits, setCommits] = useState<GitCommit[]>([])
   const [workspaceStatus, setWorkspaceStatus] = useState<GitWorkspaceStatus | null>(null)
@@ -19321,7 +19354,7 @@ function RepositoryLogTree({
           }
 
           const [nextCommits, nextWorkspaceStatus] = await Promise.all([
-            window.forgeDesk.getRepositoryCommitGraph(detail.id, { limit: gitLogWindowSize + 1 }),
+            window.forgeDesk.getRepositoryCommitGraph(detail.id, { limit: gitLogRefreshPreferences.maxLoadedCommits + 1 }),
             window.forgeDesk.getRepositoryWorkspaceStatus(detail.id)
           ])
 
@@ -19331,11 +19364,11 @@ function RepositoryLogTree({
 
           updateRepository(detail)
           setDetailRepository(detail)
-          setCommits(nextCommits.slice(0, gitLogWindowSize))
+          setCommits(nextCommits.slice(0, gitLogRefreshPreferences.maxLoadedCommits))
           setCommitWindowStart(0)
-          setHasOlderCommits(nextCommits.length > gitLogWindowSize)
+          setHasOlderCommits(nextCommits.length > gitLogRefreshPreferences.maxLoadedCommits)
           setWorkspaceStatus(nextWorkspaceStatus)
-          onCommitCountChange?.(detail.id, Math.min(nextCommits.length, gitLogWindowSize))
+          onCommitCountChange?.(detail.id, Math.min(nextCommits.length, gitLogRefreshPreferences.maxLoadedCommits))
           setGitError(null)
 
           // Tag synchronization is auxiliary information and should not hold
@@ -19362,7 +19395,7 @@ function RepositoryLogTree({
     return () => {
       cancelled = true
     }
-  }, [repository?.id, repository?.latestCommit, repository?.remoteCount, repository?.remoteBranchCount, refreshToken, branchTagRefreshToken])
+  }, [branchTagRefreshToken, refreshToken, repository?.id, repository?.latestCommit, repository?.remoteBranchCount, repository?.remoteCount])
 
   async function refreshRepositorySnapshot({
     targetRepository = detailRepository,
@@ -19411,7 +19444,7 @@ function RepositoryLogTree({
           ...nextRange,
           branchName: nextBranch || undefined,
           offset: windowOffset,
-          limit: gitLogWindowSize + 1
+          limit: gitLogRefreshPreferences.maxLoadedCommits + 1
         }),
         window.forgeDesk.getRepositoryWorkspaceStatus(detail.id),
         window.forgeDesk.getRepositoryTagSyncStatus(detail.id).catch(() => null)
@@ -19419,12 +19452,12 @@ function RepositoryLogTree({
 
       updateRepository(detail)
       setDetailRepository(detail)
-      setCommits(nextCommits.slice(0, gitLogWindowSize))
+      setCommits(nextCommits.slice(0, gitLogRefreshPreferences.maxLoadedCommits))
       setCommitWindowStart(windowOffset)
-      setHasOlderCommits(nextCommits.length > gitLogWindowSize)
+      setHasOlderCommits(nextCommits.length > gitLogRefreshPreferences.maxLoadedCommits)
       setWorkspaceStatus(nextWorkspaceStatus)
       setTagSyncSnapshot(nextTagSyncSnapshot)
-      onCommitCountChange?.(detail.id, Math.min(nextCommits.length, gitLogWindowSize))
+      onCommitCountChange?.(detail.id, Math.min(nextCommits.length, gitLogRefreshPreferences.maxLoadedCommits))
       setGitError(null)
 
       if (showSuccess) {
@@ -19437,6 +19470,22 @@ function RepositoryLogTree({
       setLoadingDetail(false)
     }
   }
+
+  useEffect(() => {
+    const nextMaxLoadedCommits = gitLogRefreshPreferences.maxLoadedCommits
+    const previousMaxLoadedCommits = previousMaxLoadedCommitsRef.current
+    previousMaxLoadedCommitsRef.current = nextMaxLoadedCommits
+
+    if (previousMaxLoadedCommits === nextMaxLoadedCommits || !detailRepository?.available) {
+      return
+    }
+
+    void refreshRepositorySnapshot({
+      targetRepository: detailRepository,
+      windowOffset: 0,
+      context: '调整 Log 树加载数量'
+    })
+  }, [detailRepository?.available, detailRepository?.id, gitLogRefreshPreferences.maxLoadedCommits])
 
   async function refreshCommits(nextRange = commitRange, nextBranch = commitBranch, targetRepository = detailRepository): Promise<void> {
     if (!targetRepository || !targetRepository.available || !window.forgeDesk) {
@@ -19458,16 +19507,16 @@ function RepositoryLogTree({
         window.forgeDesk.getRepositoryCommitGraph(targetRepository.id, {
           ...nextRange,
           branchName: nextBranch || undefined,
-          limit: gitLogWindowSize + 1
+          limit: gitLogRefreshPreferences.maxLoadedCommits + 1
         }),
         window.forgeDesk.getRepositoryWorkspaceStatus(targetRepository.id)
       ])
 
-      setCommits(nextCommits.slice(0, gitLogWindowSize))
+      setCommits(nextCommits.slice(0, gitLogRefreshPreferences.maxLoadedCommits))
       setCommitWindowStart(0)
-      setHasOlderCommits(nextCommits.length > gitLogWindowSize)
+      setHasOlderCommits(nextCommits.length > gitLogRefreshPreferences.maxLoadedCommits)
       setWorkspaceStatus(nextWorkspaceStatus)
-      onCommitCountChange?.(targetRepository.id, Math.min(nextCommits.length, gitLogWindowSize))
+      onCommitCountChange?.(targetRepository.id, Math.min(nextCommits.length, gitLogRefreshPreferences.maxLoadedCommits))
       setGitError(null)
     } catch (error) {
       setGitError(createGitErrorGuidance(error, '读取提交图谱'))
@@ -19513,8 +19562,8 @@ function RepositoryLogTree({
     }
 
     const currentCommits = commits
-    const maxLoadedCommits = gitLogWindowSize
-    const pageSize = Math.min(gitLogScrollLoadBatchSize, maxLoadedCommits)
+    const maxLoadedCommits = gitLogRefreshPreferences.maxLoadedCommits
+    const pageSize = maxLoadedCommits
     const pageSizeForRequest = direction === 'newer' ? Math.min(pageSize, commitWindowStart) : pageSize
 
     if (pageSizeForRequest === 0) {
@@ -19915,52 +19964,75 @@ function RepositoryLogTree({
         <RemoteAlignmentPanel alignment={activeRepository.remoteAlignment} currentBranch={activeRepository.currentBranch} />
       ) : (
         <div className="git-browser">
-          <div className="panel-title source-tree-toolbar">
-            <Space size={8} wrap>
+          <div className="source-tree-toolbar">
+            <div className="source-tree-toolbar-heading">
               <Typography.Title level={4}>提交图谱</Typography.Title>
-              <Tag color={commitBranch ? 'blue' : 'default'}>{commitBranch || '全部引用'}</Tag>
-              {gitLogRefreshPreferences.autoRefreshEnabled && <Tag color="processing">{gitLogRefreshPreferences.intervalSeconds}s 自动</Tag>}
-            </Space>
-            <Space wrap>
-              <Tooltip title="重新读取本地仓库详情、提交图谱和工作区状态">
-                <Button icon={<ReloadOutlined />} loading={loadingDetail} onClick={() => refreshRepositorySnapshot({ targetRepository: activeRepository, showSuccess: true })}>
-                  刷新
-                </Button>
-              </Tooltip>
-              <Button icon={<BranchesOutlined />} onClick={() => setBranchDrawerOpen(true)}>
-                分支
-              </Button>
-              <Button icon={<TagOutlined />} loading={tagSyncLoading} onClick={openTagSync}>
-                Tag 同步
-              </Button>
-              {commitBranch && <Button onClick={() => selectBranchFilter('')}>全部引用</Button>}
-              <Select
-                allowClear
-                placeholder="全部作者"
-                value={commitAuthor}
-                className="git-filter"
-                options={authorOptions.map((author) => ({ label: author, value: author }))}
-                onChange={(value) => setCommitAuthor(value ?? '')}
-              />
-              <Input
-                type="date"
-                value={commitRange.startDate}
-                onChange={(event) => {
-                  const nextRange = { ...commitRange, startDate: event.target.value }
-                  setCommitRange(nextRange)
-                  refreshCommits(nextRange)
-                }}
-              />
-              <Input
-                type="date"
-                value={commitRange.endDate}
-                onChange={(event) => {
-                  const nextRange = { ...commitRange, endDate: event.target.value }
-                  setCommitRange(nextRange)
-                  refreshCommits(nextRange)
-                }}
-              />
-            </Space>
+              <Space size={8} wrap>
+                <Tag color={commitBranch ? 'blue' : 'default'}>{commitBranch || '全部引用'}</Tag>
+                {gitLogRefreshPreferences.autoRefreshEnabled && <Tag color="processing">{gitLogRefreshPreferences.intervalSeconds}s 自动</Tag>}
+              </Space>
+            </div>
+            <div className="source-tree-toolbar-groups">
+              <div className="source-tree-control-group">
+                <Typography.Text type="secondary" className="source-tree-control-label">操作</Typography.Text>
+                <Space wrap size={8}>
+                  <Tooltip title="重新读取本地仓库详情、提交图谱和工作区状态">
+                    <Button icon={<ReloadOutlined />} loading={loadingDetail} onClick={() => refreshRepositorySnapshot({ targetRepository: activeRepository, showSuccess: true })}>
+                      刷新
+                    </Button>
+                  </Tooltip>
+                  <Button icon={<BranchesOutlined />} onClick={() => setBranchDrawerOpen(true)}>
+                    分支
+                  </Button>
+                  <Button icon={<TagOutlined />} loading={tagSyncLoading} onClick={openTagSync}>
+                    Tag 同步
+                  </Button>
+                  <Select
+                    size="small"
+                    aria-label="单次加载 Commit 数量"
+                    value={gitLogRefreshPreferences.maxLoadedCommits}
+                    options={gitLogMaxLoadedCommitOptions.map((value) => ({ label: `加载 ${value} 条`, value }))}
+                    onChange={(value) => setGitLogRefreshPreferences({ ...gitLogRefreshPreferences, maxLoadedCommits: value })}
+                  />
+                </Space>
+              </div>
+              <div className="source-tree-control-group source-tree-filter-group">
+                <Typography.Text type="secondary" className="source-tree-control-label">筛选</Typography.Text>
+                <Space wrap size={8}>
+                  {commitBranch && <Button onClick={() => selectBranchFilter('')}>全部引用</Button>}
+                  <Select
+                    allowClear
+                    placeholder="全部作者"
+                    value={commitAuthor}
+                    className="git-filter"
+                    options={authorOptions.map((author) => ({ label: author, value: author }))}
+                    onChange={(value) => setCommitAuthor(value ?? '')}
+                  />
+                  <Input
+                    aria-label="开始日期"
+                    type="date"
+                    className="source-tree-date-filter"
+                    value={commitRange.startDate}
+                    onChange={(event) => {
+                      const nextRange = { ...commitRange, startDate: event.target.value }
+                      setCommitRange(nextRange)
+                      refreshCommits(nextRange)
+                    }}
+                  />
+                  <Input
+                    aria-label="结束日期"
+                    type="date"
+                    className="source-tree-date-filter"
+                    value={commitRange.endDate}
+                    onChange={(event) => {
+                      const nextRange = { ...commitRange, endDate: event.target.value }
+                      setCommitRange(nextRange)
+                      refreshCommits(nextRange)
+                    }}
+                  />
+                </Space>
+              </div>
+            </div>
           </div>
           {hasNewerCommits && <div ref={commitLoadPreviousRef} className="commit-load-more commit-load-previous"><Typography.Text type="secondary">{loadingMoreCommits ? '正在加载较新提交…' : '继续向上滚动以加载较新提交'}</Typography.Text></div>}
           <Table
@@ -20021,11 +20093,9 @@ function RepositoryLogTree({
               expandedRowRender: (commit) =>
                 commit.hash === selectedCommit?.hash ? (
                   <CommitInlineDetail
-                    commit={commit}
                     files={commitFiles}
                     selectedFile={selectedFile}
                     loadingFiles={loadingFiles}
-                    graphColumnWidth={graphColumnWidth}
                     canOpenDiff={!isWorkingTreeCommit(commit)}
                     onSelectFile={(file) => {
                       selectCommitFile(file)
@@ -23387,6 +23457,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             ) : (
               <ProjectOverview
                 mode="full"
+                projectWindow
                 focusProjectId={projectWindowId}
                 onCreateProject={() => message.info('请在主窗口创建项目')}
                 onOpenSettings={() => message.info('项目窗口只保留项目功能，通用设置请在主窗口打开')}

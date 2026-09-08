@@ -801,6 +801,7 @@ type GitConflictFile = {
 type GitWorkspaceStatus = {
   repositoryId: string
   branch: string
+  headHash?: string
   files: GitStatusFile[]
   conflicts: GitConflictFile[]
   pushTargets: GitPushTarget[]

@@ -9,6 +9,7 @@ type PushTargetLike = {
 
 type RepositoryLike = {
   currentBranch?: string
+  checkedOutCommit?: string
   hasChanges?: boolean
   ahead?: number
   pushTargets?: PushTargetLike[]
@@ -20,6 +21,7 @@ type RemoteLike = {
 
 type WorkspaceStatusLike = {
   branch?: string
+  headHash?: string
   files?: unknown[]
   pushTargets?: PushTargetLike[]
 }
@@ -49,6 +51,7 @@ export function mergeRepositoryWorkspaceStatus<T extends RepositoryLike>(reposit
   return {
     ...repository,
     currentBranch: status.branch || repository.currentBranch,
+    checkedOutCommit: status.headHash || repository.checkedOutCommit,
     hasChanges: (status.files ?? []).length > 0,
     pushTargets,
     ahead: Math.max(0, ...pushTargets.map((target) => target.ahead))

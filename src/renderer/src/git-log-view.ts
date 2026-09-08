@@ -30,9 +30,10 @@ export const gitLogRefreshIntervalBounds = {
 }
 export const gitLogMaxLoadedCommitBounds = {
   minCommits: 100,
-  maxCommits: 100,
-  step: 50
+  maxCommits: 1000,
+  step: 100
 }
+export const gitLogMaxLoadedCommitOptions = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
 export const gitLogScrollLoadBatchSize = 50
 export const gitLogScrollPrefetchCommitCount = 20
 export const gitLogWindowSize = 100
@@ -59,8 +60,8 @@ function clampGitLogRefreshInterval(seconds: number): number {
 }
 
 function clampGitLogMaxLoadedCommits(commits: number): number {
-  void commits
-  return gitLogWindowSize
+  const rounded = Math.round(commits / gitLogMaxLoadedCommitBounds.step) * gitLogMaxLoadedCommitBounds.step
+  return Math.min(gitLogMaxLoadedCommitBounds.maxCommits, Math.max(gitLogMaxLoadedCommitBounds.minCommits, rounded))
 }
 
 export function normalizeGitLogRefreshPreferences(input: unknown): GitLogRefreshPreferences {

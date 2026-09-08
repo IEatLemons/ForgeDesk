@@ -363,7 +363,7 @@ describe('git log view helpers', () => {
     assert.deepEqual(normalizeGitLogRefreshPreferences({ autoRefreshEnabled: true, intervalSeconds: 45, maxLoadedCommits: 9988 }), {
       autoRefreshEnabled: true,
       intervalSeconds: 45,
-      maxLoadedCommits: gitLogWindowSize
+      maxLoadedCommits: gitLogMaxLoadedCommitBounds.maxCommits
     })
   })
 

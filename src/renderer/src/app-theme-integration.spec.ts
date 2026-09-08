@@ -68,7 +68,6 @@ describe('app theme integration', () => {
       '.commit-detail-panel',
       '.commit-inline-detail',
       '.commit-expanded-detail-row',
-      '.commit-expanded-graph-cell',
       '.source-tree-table .commit-inline-detail',
       '.commit-load-more',
       '.commit-status-config',

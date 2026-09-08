@@ -656,6 +656,7 @@ type GitConflictFile = {
 type GitWorkspaceStatus = {
   repositoryId: string
   branch: string
+  headHash?: string
   files: GitStatusFile[]
   conflicts: GitConflictFile[]
   pushTargets: GitPushTarget[]
@@ -4353,9 +4354,10 @@ async function getRepositoryWorkspaceStatus(repositoryId: string): Promise<GitWo
 
 async function loadRepositoryWorkspaceStatus(repositoryId: string): Promise<GitWorkspaceStatus> {
   const repository = getRepositoryOrThrow(repositoryId)
-  const [statusOutput, branch] = await Promise.all([
+  const [statusOutput, branch, headHash] = await Promise.all([
     runGitInPathStrict(repository.localPath, ['status', '--porcelain=v1', '-z'], { preserveOutput: true }),
-    runGitInPath(repository.localPath, ['branch', '--show-current'])
+    runGitInPath(repository.localPath, ['branch', '--show-current']),
+    runGitInPath(repository.localPath, ['rev-parse', '--verify', 'HEAD'])
   ])
   const files = parsePorcelainStatus(statusOutput)
   const currentBranch = branch || repository.currentBranch
@@ -4373,7 +4375,7 @@ async function loadRepositoryWorkspaceStatus(repositoryId: string): Promise<GitW
       })
   )
 
-  return { repositoryId, branch, files, conflicts, pushTargets }
+  return { repositoryId, branch, headHash, files, conflicts, pushTargets }
 }
 
 function parseGitCount(output: string): number {
