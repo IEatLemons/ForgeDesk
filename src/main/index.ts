@@ -570,9 +570,10 @@ const hasElectronInstanceLock = app.requestSingleInstanceLock()
 const hasSingleInstanceLock = Boolean(releaseSingleProcessFileLock && hasElectronInstanceLock)
 
 if (!hasSingleInstanceLock) {
+  console.error('ForgeDesk failed to acquire the instance lock and will exit. Another ForgeDesk process may already be running.')
   releaseSingleProcessFileLock?.()
   if (hasElectronInstanceLock) app.releaseSingleInstanceLock()
-  app.quit()
+  app.exit(0)
 } else {
   process.once('exit', () => releaseSingleProcessFileLock?.())
 }
