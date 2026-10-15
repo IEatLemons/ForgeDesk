@@ -5381,7 +5381,7 @@ button.app-status-bar-item:hover {
   min-width: 0;
   max-width: 100%;
   padding: 20px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .project-list-heading {
@@ -5569,6 +5569,77 @@ button.app-status-bar-item:hover {
   max-width: 100%;
   container-type: inline-size;
   container-name: project-detail;
+}
+
+.project-detail-sticky-header {
+  position: fixed;
+  top: var(--app-titlebar-height);
+  right: 28px;
+  left: calc(236px + 28px);
+  z-index: 1190;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 16px;
+  min-width: 0;
+  min-height: 54px;
+  margin: 0;
+  padding: 4px 0 12px;
+  border-bottom: 1px solid var(--app-border-soft);
+  background: var(--panel-bg);
+}
+
+.project-detail-sticky-header-slot {
+  height: 66px;
+  margin: -4px 0 12px;
+}
+
+.project-detail-page.is-sidebar-collapsed .project-detail-sticky-header {
+  left: calc(72px + 28px);
+}
+
+.project-detail-page.is-project-window .project-detail-sticky-header {
+  left: 28px;
+}
+
+.project-detail-sticky-identity {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  color: var(--primary);
+}
+
+.project-detail-back-button {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  color: var(--app-muted);
+  font-size: 18px;
+}
+
+.project-detail-back-button:hover,
+.project-detail-back-button:focus-visible {
+  color: var(--primary);
+  background: var(--primary-surface);
+}
+
+.project-detail-sticky-name {
+  min-width: 0;
+  max-width: min(720px, 70vw);
+  margin: 0 !important;
+  color: var(--app-text) !important;
+  font-size: 28px !important;
+  line-height: 1.15 !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-detail-sticky-tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .project-title-stack {
@@ -5802,6 +5873,16 @@ button.app-status-bar-item:hover {
 }
 
 @container project-detail (max-width: 420px) {
+  .project-detail-sticky-header {
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .project-detail-sticky-name {
+    max-width: calc(100vw - 120px);
+    font-size: 24px !important;
+  }
+
   .project-detail-actions {
     grid-template-columns: 1fr;
   }
@@ -7159,7 +7240,24 @@ button.app-status-bar-item:hover {
 
 .branch-drawer {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+  height: 100%;
+}
+
+.branch-drawer-toolbar {
+  display: grid;
+  gap: 6px;
+}
+
+.branch-drawer-list-scroll {
+  display: grid;
+  align-content: start;
   gap: 16px;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 4px 12px 0;
 }
 
 .branch-drawer-section {
@@ -7194,6 +7292,24 @@ button.app-status-bar-item:hover {
   cursor: pointer;
 }
 
+.branch-drawer-locate {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.branch-drawer-locate:disabled {
+  cursor: wait;
+}
+
 .branch-drawer-item:hover,
 .branch-drawer-item.is-active {
   border-color: var(--primary);
@@ -7225,6 +7341,12 @@ button.app-status-bar-item:hover {
 
 .current-branch-row > td {
   background: var(--primary-surface);
+}
+
+.branch-locator-highlight > td {
+  background: color-mix(in srgb, var(--primary-surface) 72%, #ffd666) !important;
+  box-shadow: inset 0 0 0 2px var(--primary);
+  transition: background 180ms ease, box-shadow 180ms ease;
 }
 
 .diff-merged {

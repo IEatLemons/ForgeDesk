@@ -393,7 +393,7 @@ export class ManagedTaskService {
     // continue to report a turn as running while the interrupt is propagating;
     // do not resurrect a task that has already been cancelled locally.
     if (task.stage === 'cancelled') return task
-    if (thread.status === 'running' && task.stage !== 'executing') this.setStage(id, 'executing', 'Codex 线程正在执行')
+    if (thread.status === 'running' && task.stage !== 'executing' && task.stage !== 'planning') this.setStage(id, 'executing', 'Codex 线程正在执行')
     if (thread.status === 'failed') this.fail(id, 'Codex 线程执行失败')
     if (thread.status === 'cancelled') this.cancel(id)
     return this.require(id)

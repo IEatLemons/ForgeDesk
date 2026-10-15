@@ -6,7 +6,7 @@ import ts from 'typescript'
 
 const root = process.cwd()
 const outDir = await mkdtemp(join(tmpdir(), 'forgedesk-tests-'))
-const sourceRoots = ['src/main', 'src/renderer/src']
+const sourceRoots = ['src/main', 'src/renderer/src', 'src/shared']
 
 async function walk(directory) {
   const entries = await readdir(directory, { withFileTypes: true })
@@ -59,9 +59,12 @@ try {
     }
   }
 
-  const child = spawn(process.execPath, ['--test', ...specFiles, ...scriptTestFiles], { stdio: 'inherit' })
+  const requestedSpecs = process.argv.slice(2)
+  const selectedSpecs = [...specFiles, ...scriptTestFiles].filter((file) => requestedSpecs.length === 0 || requestedSpecs.some((name) => file.includes(name)))
+  if (selectedSpecs.length === 0) throw new Error('No matching test files')
+  const child = spawn(process.execPath, ['--test', ...selectedSpecs], { stdio: 'inherit' })
   const exitCode = await new Promise((resolve) => child.on('exit', resolve))
-  process.exit(exitCode ?? 1)
+  process.exitCode = exitCode ?? 1
 } finally {
   await rm(outDir, { recursive: true, force: true })
 }

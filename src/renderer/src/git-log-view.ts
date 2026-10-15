@@ -199,6 +199,29 @@ export type BranchGroup = {
   items: BranchGroupItem[]
 }
 
+export function filterBranchGroups(groups: BranchGroup[], query: string): BranchGroup[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+
+  if (!normalizedQuery) {
+    return groups
+  }
+
+  return groups.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => item.name.toLocaleLowerCase().includes(normalizedQuery))
+  }))
+}
+
+export function countBranchGroupItems(groups: BranchGroup[]): number {
+  return groups.reduce((count, group) => count + group.items.length, 0)
+}
+
+export function findCommitIndexByHash(commits: Array<{ hash: string }>, hash: string): number {
+  const normalizedHash = hash.trim().toLowerCase()
+  if (!normalizedHash) return -1
+  return commits.findIndex((commit) => commit.hash.toLowerCase() === normalizedHash)
+}
+
 export type RefTone = 'blue' | 'cyan' | 'gold' | 'default'
 
 export type BranchTagColorRule = {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
-import { describe, it } from 'node:test'
+import { afterEach, beforeEach, describe, it, mock } from 'node:test'
 import {
   clearProjectGitTasks,
   deleteProjectGitTask,
@@ -36,6 +36,8 @@ function createTask(input: Partial<ProjectGitTaskLog> = {}): ProjectGitTaskLog {
 }
 
 describe('project Git task log persistence', () => {
+  beforeEach(() => mock.timers.enable({ apis:['Date'],now:new Date('2026-08-13T04:00:00.000Z') }))
+  afterEach(() => mock.timers.reset())
   it('migrates, upserts and restores repository results', () => {
     const db = createDatabase()
 

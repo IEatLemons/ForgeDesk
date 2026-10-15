@@ -67,9 +67,12 @@ export type CodexTaskMonitorSummary = {
   finishedAt: string
 }
 
+export type AiMonitorProvider = 'codex' | 'cursor'
+
 export type CodexUncommittedAlert = {
   id: string
-  sourceType: 'session' | 'task'
+  providerId: AiMonitorProvider
+  sourceType: 'session' | 'task' | 'cursor-agent'
   sourceId: string
   completionMarker: string
   codexKey: string
@@ -90,6 +93,7 @@ export type CodexUncommittedAlert = {
 export type CodexProjectMonitorStatus = 'running' | 'attention' | 'completed' | 'clean' | 'unknown'
 
 export type CodexProjectMonitorItem = {
+  providerId: AiMonitorProvider
   key: string
   cwd: string
   forgeProjectId: string | null
@@ -125,6 +129,7 @@ export type CodexProjectMonitorSnapshot = {
   completed: number
   failed: number
   sessions: CodexSessionSummary[]
+  cursor: import('./cursor-monitor.js').CursorMonitorSnapshot
 }
 
 type DatabaseStatement = {
@@ -197,7 +202,7 @@ function mapLinkRow(row: Record<string, unknown>): CodexProjectLink {
 }
 
 function mapAlertRow(row: Record<string, unknown>): CodexUncommittedAlert {
-  const sourceType = text(row.source_type) === 'task' ? 'task' : 'session'
+  const sourceType = text(row.source_type) === 'task' ? 'task' : text(row.source_type) === 'cursor-agent' ? 'cursor-agent' : 'session'
   const status = text(row.status) === 'resolved' ? 'resolved' : 'open'
   return {
     additions: number(row.additions),
@@ -213,6 +218,7 @@ function mapAlertRow(row: Record<string, unknown>): CodexUncommittedAlert {
     notifiedAt: text(row.notified_at) || null,
     projectId: text(row.project_id) || null,
     projectName: text(row.project_name),
+    providerId: text(row.provider_id) === 'cursor' ? 'cursor' : 'codex',
     resolvedAt: text(row.resolved_at) || null,
     sourceId: text(row.source_id),
     sourceType,
@@ -232,6 +238,7 @@ export function migrateCodexProjectMonitorTables(db: CodexMonitorDatabase): void
 
     CREATE TABLE IF NOT EXISTS codex_monitor_alerts (
       id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL DEFAULT 'codex',
       source_type TEXT NOT NULL,
       source_id TEXT NOT NULL,
       completion_marker TEXT NOT NULL,
@@ -257,6 +264,7 @@ export function migrateCodexProjectMonitorTables(db: CodexMonitorDatabase): void
     CREATE INDEX IF NOT EXISTS idx_codex_project_links_project_id
       ON codex_project_links(project_id);
   `)
+  try { db.exec("ALTER TABLE codex_monitor_alerts ADD COLUMN provider_id TEXT NOT NULL DEFAULT 'codex'") } catch { /* already migrated */ }
 }
 
 export function listCodexProjectLinks(db: CodexMonitorDatabase): CodexProjectLink[] {
@@ -297,13 +305,13 @@ function markAlertNotified(db: CodexMonitorDatabase, alertId: string, now: strin
   db.prepare('UPDATE codex_monitor_alerts SET notified_at = ? WHERE id = ? AND notified_at IS NULL').run(now, alertId)
 }
 
-function createAlert(db: CodexMonitorDatabase, item: CodexProjectMonitorItem, sourceType: 'session' | 'task', sourceId: string, completedAt: string, marker: string, now: string): CodexUncommittedAlert {
-  const id = `codex-alert-${sourceType}-${sourceId}-${marker}`.slice(0, 220)
+export function createMonitorAlert(db: CodexMonitorDatabase, item: CodexProjectMonitorItem, sourceType: CodexUncommittedAlert['sourceType'], sourceId: string, completedAt: string, marker: string, now: string): CodexUncommittedAlert {
+  const id = `${item.providerId}-alert-${sourceType}-${sourceId}-${marker}`.slice(0, 220)
   db.prepare(`
     INSERT INTO codex_monitor_alerts (
-      id, source_type, source_id, completion_marker, codex_key, cwd, project_id, project_name,
+      id, provider_id, source_type, source_id, completion_marker, codex_key, cwd, project_id, project_name,
       completed_at, detected_at, branch, additions, deletions, files_changed, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
     ON CONFLICT(source_type, source_id, completion_marker) DO UPDATE SET
       branch = excluded.branch,
       additions = excluded.additions,
@@ -311,8 +319,8 @@ function createAlert(db: CodexMonitorDatabase, item: CodexProjectMonitorItem, so
       files_changed = excluded.files_changed,
       project_id = excluded.project_id,
       project_name = excluded.project_name
-  `).run(id, sourceType, sourceId, marker, item.key, item.cwd, item.forgeProjectId, item.forgeProjectName, completedAt, now, item.git.branch, item.git.additions, item.git.deletions, item.git.filesChanged)
-  return mapAlertRow(db.prepare('SELECT * FROM codex_monitor_alerts WHERE source_type = ? AND source_id = ? AND completion_marker = ?').get(sourceType, sourceId, marker) as Record<string, unknown>)
+  `).run(id, item.providerId, sourceType, sourceId, marker, item.key, item.cwd, item.forgeProjectId, item.forgeProjectName, completedAt, now, item.git.branch, item.git.additions, item.git.deletions, item.git.filesChanged)
+  return mapAlertRow(db.prepare('SELECT * FROM codex_monitor_alerts WHERE provider_id = ? AND source_type = ? AND source_id = ? AND completion_marker = ?').get(item.providerId, sourceType, sourceId, marker) as Record<string, unknown>)
 }
 
 function resolveSourceAlerts(db: CodexMonitorDatabase, sourceType: 'session' | 'task', sourceId: string, now: string): void {
@@ -566,6 +574,7 @@ export class CodexProjectMonitorService {
       const hasTerminalActivity = terminalSessions.length > 0 || terminalTasks.length > 0
       const forgeProjectId = resolvedProject?.id ?? null
       const item: CodexProjectMonitorItem = {
+        providerId: 'codex',
         completedCount,
         cwd: current.cwd,
         failedCount,
@@ -590,7 +599,7 @@ export class CodexProjectMonitorService {
       for (const session of terminalSessions) {
         const marker = `${session.updatedAt}:${session.lastEvent}:${session.status}`
         if (git.repositoryAvailable && git.hasChanges) {
-          const alert = createAlert(db, item, 'session', session.id, session.updatedAt, marker, checkedAt)
+          const alert = createMonitorAlert(db, item, 'session', session.id, session.updatedAt, marker, checkedAt)
           if (!alert.notifiedAt) {
             markAlertNotified(db, alert.id, checkedAt)
             this.options.onAlert?.({ ...alert, notifiedAt: checkedAt })
@@ -602,7 +611,7 @@ export class CodexProjectMonitorService {
       for (const task of terminalTasks) {
         const marker = `${task.finishedAt || task.updatedAt}:${task.status}`
         if (git.repositoryAvailable && git.hasChanges) {
-          const alert = createAlert(db, item, 'task', task.id, task.finishedAt || task.updatedAt, marker, checkedAt)
+          const alert = createMonitorAlert(db, item, 'task', task.id, task.finishedAt || task.updatedAt, marker, checkedAt)
           if (!alert.notifiedAt) {
             markAlertNotified(db, alert.id, checkedAt)
             this.options.onAlert?.({ ...alert, notifiedAt: checkedAt })
@@ -614,7 +623,7 @@ export class CodexProjectMonitorService {
       items.push(item)
     }
 
-    const alerts = listCodexMonitorAlerts(db, 'open')
+    const alerts = listCodexMonitorAlerts(db, 'open').filter((alert) => alert.providerId === 'codex')
     const alertsByKey = new Map<string, CodexUncommittedAlert>()
     for (const alert of alerts) alertsByKey.set(alert.codexKey, alert)
     for (const item of items) item.openAlert = alertsByKey.get(item.key) ?? null
@@ -633,7 +642,8 @@ export class CodexProjectMonitorService {
       sessions: sessionSnapshot.sessions,
       source: sessionSnapshot.source,
       uncommitted: alerts.length,
-      unlinked: items.filter((item) => !item.forgeProjectId).length
+      unlinked: items.filter((item) => !item.forgeProjectId).length,
+      cursor: { available: false, checkedAt, error: '', source: '', projects: [], running: 0, uncommitted: 0, unlinked: 0, completed: 0, failed: 0, alerts: [] }
     }
   }
 }

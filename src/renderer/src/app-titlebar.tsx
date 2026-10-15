@@ -395,10 +395,11 @@ export function CodexStatusControl({
   }
 
   function findAlertProject(alert: CodexUncommittedAlert): CodexProjectMonitorSnapshot['projects'][number] | null {
-    return codexMonitor?.projects.find((project) => project.key === alert.codexKey) ?? null
+    return [...(codexMonitor?.projects ?? []), ...(codexMonitor?.cursor?.projects ?? [])].find((project) => project.key === alert.codexKey) ?? null
   }
 
   function getAlertTitle(alert: CodexUncommittedAlert): string {
+    if (alert.providerId === 'cursor') return 'Cursor Agent 已结束，工作区仍有未提交改动'
     const project = findAlertProject(alert)
     if (alert.sourceType === 'task') {
       return project?.tasks.find((task) => task.id === alert.sourceId)?.title || '已完成的 Codex 任务'

@@ -58,6 +58,34 @@ export function mergeRepositoryWorkspaceStatus<T extends RepositoryLike>(reposit
   }
 }
 
+export function mergeRepositoryPushTarget<T extends RepositoryLike>(
+  repository: T,
+  startedRepository: RepositoryLike,
+  pushedTarget: PushTargetLike,
+  targetBranch: string
+): T {
+  // A background push must not reset workspace edits, a new HEAD, or another
+  // task's remote status by writing back the snapshot from when it started.
+  if (
+    pushedTarget.branch !== targetBranch ||
+    pushedTarget.branch !== startedRepository.currentBranch ||
+    repository.currentBranch !== startedRepository.currentBranch ||
+    repository.checkedOutCommit !== startedRepository.checkedOutCommit
+  ) {
+    return repository
+  }
+
+  const pushTargets = (repository.pushTargets ?? []).map((target) =>
+    target.remote === pushedTarget.remote && target.branch === pushedTarget.branch ? pushedTarget : target
+  )
+
+  return {
+    ...repository,
+    pushTargets,
+    ahead: Math.max(0, ...pushTargets.map((target) => target.ahead))
+  }
+}
+
 export function canCommitSelection(files: unknown[], selectedPaths: string[], commitMessage: string): boolean {
   return files.length > 0 && selectedPaths.length > 0 && commitMessage.trim().length > 0
 }

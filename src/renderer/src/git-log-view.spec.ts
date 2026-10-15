@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import {
   applyBranchColorsToGraphRows,
   buildBranchGroups,
+  countBranchGroupItems,
   createWorkingTreeCommit,
   createGraphRows,
   defaultGitLogRefreshPreferences,
@@ -17,6 +18,8 @@ import {
   currentBranchRefColor,
   getRefColor,
   getRepositoryDefaultPushTarget,
+  findCommitIndexByHash,
+  filterBranchGroups,
   getNextVisibleCommitCount,
   gitLogScrollPrefetchCommitCount,
   gitLogWindowSize,
@@ -131,6 +134,28 @@ describe('git log view helpers', () => {
     assert.equal(groups[0].items[0].isCurrent, true)
     assert.equal(groups[1].items[0].name, 'origin/main')
     assert.equal(groups[1].items[0].isActive, true)
+  })
+
+  it('filters branches case-insensitively without mutating the source groups', () => {
+    const groups = buildBranchGroups({
+      branches: ['main', 'feature/Payment-Flow'],
+      remoteBranches: ['origin/main'],
+      currentBranch: 'main',
+      activeBranch: ''
+    })
+
+    const filtered = filterBranchGroups(groups, 'PAYMENT')
+
+    assert.deepEqual(filtered[0]?.items.map((item) => item.name), ['feature/Payment-Flow'])
+    assert.deepEqual(filtered[1]?.items, [])
+    assert.equal(countBranchGroupItems(filtered), 1)
+    assert.equal(groups[0]?.items.length, 2)
+  })
+
+  it('finds a branch tip inside a loaded commit window', () => {
+    assert.equal(findCommitIndexByHash([{ hash: 'abc123' }, { hash: 'DEF456' }], 'def456'), 1)
+    assert.equal(findCommitIndexByHash([{ hash: 'abc123' }], 'missing'), -1)
+    assert.equal(findCommitIndexByHash([{ hash: 'abc123' }], ''), -1)
   })
 
   it('uses SourceTree-like tones for refs', () => {

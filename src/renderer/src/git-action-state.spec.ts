@@ -12,6 +12,7 @@ import {
   getPushableTargets,
   hasProjectCommittableChanges,
   hasProjectPushableTargets,
+  mergeRepositoryPushTarget,
   mergeRepositoryWorkspaceStatus,
   normalizePushRemoteSelection,
   resolveSelectedPushRemoteNames
@@ -98,5 +99,42 @@ describe('git action state helpers', () => {
     assert.deepEqual(merged.pushTargets, [{ remote: 'origin', branch: 'main', ahead: 1, hasRemoteBranch: true }])
     assert.equal(hasProjectCommittableChanges([merged]), true)
     assert.equal(hasProjectPushableTargets([merged]), true)
+  })
+
+  it('merges concurrent push results into the latest state without reverting another remote or workspace edits', () => {
+    const started = {
+      ...repository,
+      checkedOutCommit: 'commit-1',
+      ahead: 3,
+      pushTargets: repository.pushTargets.map((target) => ({ ...target, ahead: 3 }))
+    }
+
+    // Both pushes began from the same snapshot; either may finish first.
+    for (const remoteOrder of [['origin', 'backup'], ['backup', 'origin']]) {
+      let current = { ...started, hasChanges: true }
+      for (const remote of remoteOrder) {
+        current = mergeRepositoryPushTarget(current, started, { remote, branch: 'main', ahead: 0, hasRemoteBranch: true }, 'main')
+        assert.equal(current.hasChanges, true)
+        assert.equal(current.checkedOutCommit, 'commit-1')
+      }
+      assert.deepEqual(current.pushTargets.map((target) => target.ahead), [0, 0])
+      assert.equal(current.ahead, 0)
+    }
+  })
+
+  it('does not mark new commits or a newly checked-out branch as pushed by an older task', () => {
+    const started = { ...repository, checkedOutCommit: 'commit-1' }
+    const pushedTarget = { remote: 'backup', branch: 'main', ahead: 0 }
+    const withNewCommit = { ...started, checkedOutCommit: 'commit-2' }
+    const withNewBranch = { ...started, currentBranch: 'feature' }
+
+    assert.equal(mergeRepositoryPushTarget(withNewCommit, started, pushedTarget, 'main'), withNewCommit)
+    assert.equal(mergeRepositoryPushTarget(withNewBranch, started, pushedTarget, 'main'), withNewBranch)
+  })
+
+  it('does not clear tracking status when pushing to a different branch or pushing a non-current source', () => {
+    const pushedTarget = { remote: 'backup', branch: 'main', ahead: 0 }
+    assert.equal(mergeRepositoryPushTarget(repository, repository, pushedTarget, 'release'), repository)
+    assert.equal(mergeRepositoryPushTarget(repository, repository, { ...pushedTarget, branch: 'feature' }, 'feature'), repository)
   })
 })

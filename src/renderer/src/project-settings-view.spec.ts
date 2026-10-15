@@ -20,7 +20,7 @@ describe('project settings view helpers', () => {
   it('defines the project settings modules in the intended entry order', () => {
     assert.deepEqual(
       PROJECT_SETTINGS_MODULES.map((module) => module.key),
-      ['basic', 'people', 'branches', 'git', 'services', 'release', 'cloudflare', 'plane']
+      ['basic', 'people', 'branches', 'git', 'services', 'release', 'cloudflare', 'plane', 'codex']
     )
   })
 
@@ -35,7 +35,7 @@ describe('project settings view helpers', () => {
         { key: 'project', title: '项目与成员', modules: ['basic', 'people'] },
         { key: 'git', title: 'Git 与仓库', modules: ['git', 'branches'] },
         { key: 'delivery', title: '服务与发布', modules: ['services', 'release', 'cloudflare'] },
-        { key: 'collaboration', title: '协作与集成', modules: ['plane'] }
+        { key: 'collaboration', title: '协作与集成', modules: ['plane', 'codex'] }
       ]
     )
 

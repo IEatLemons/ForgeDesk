@@ -269,10 +269,12 @@ import {
   getPushableTargets,
   hasProjectCommittableChanges,
   hasProjectPushableTargets,
+  mergeRepositoryPushTarget,
   mergeRepositoryWorkspaceStatus,
   normalizePushRemoteSelection,
   resolveSelectedPushRemoteNames
 } from './git-action-state'
+import { hasRunningProjectGitTask, updateRunningProjectGitTasks, type RunningProjectGitTask } from './project-git-task-state'
 import { createGitErrorGuidance, type GitErrorGuidance } from './git-error-guidance'
 import {
   DEFAULT_PASSWORD_GROUP_KEYS,
@@ -293,6 +295,9 @@ import {
   createGraphRows,
   currentBranchRefColor,
   defaultGitLogRefreshPreferences,
+  filterBranchGroups,
+  countBranchGroupItems,
+  findCommitIndexByHash,
   gitLogMaxLoadedCommitOptions,
   gitLogRefreshIntervalBounds,
   gitLogRefreshPreferenceChangedEvent,
@@ -405,7 +410,7 @@ import {
 import { TerminalWorkspace } from './terminal-panel'
 import type { TerminalOpenRequest } from './terminal-panel-events'
 import { TerminalRemoteShortcuts } from './terminal-remote-shortcuts'
-import { ManagedTaskPanel as TaskListPanel } from './managed-task-panel'
+import { ProjectProgressPanel as TaskListPanel } from './project-progress-panel'
 import { OverviewDashboard } from './overview-dashboard'
 import { MarketNewsDashboard } from './market-news-dashboard'
 import { SystemMonitorPanel } from './system-monitor-panel'
@@ -11705,6 +11710,7 @@ function GitPushModal({ open, repositories, initialRepositoryId, onClose, onChan
       ]}
     >
       <Space direction="vertical" size={14} className="git-action-modal">
+        {onStartTask && <Typography.Text type="secondary">推送将在后台执行，可继续发起其他推送；进度与结果可在底部 Git 任务中查看。</Typography.Text>}
         <Space wrap className="git-action-modal-toolbar">
           <Select
             value={selectedRepository?.id}
@@ -14399,10 +14405,6 @@ type ProjectGitPushPlan =
   | { mode: 'branch'; branch: string; targetBranch: string; tagNames: string[]; remotes: string[] }
   | { mode: 'all-local-refs'; remotes: string[] }
 
-function getProjectGitTaskKey(projectId: string, action: ProjectGitListAction): string {
-  return `${projectId}:${action}`
-}
-
 function getProjectGitActionLabel(action: ProjectGitListAction): string {
   if (action === 'fetch') {
     return 'Fetch'
@@ -14491,7 +14493,10 @@ function ProjectLogTreePanel({
   onOpenProjectRemoteSettings,
   showGitWatchControl = false,
   gitWatchEnabled = true,
-  onGitWatchEnabledChange
+  onGitWatchEnabledChange,
+  showLogRefreshControl = false,
+  logRefreshEnabled = false,
+  onLogRefreshEnabledChange
 }: {
   repositories: Repository[]
   repositoryId: string
@@ -14507,6 +14512,9 @@ function ProjectLogTreePanel({
   showGitWatchControl?: boolean
   gitWatchEnabled?: boolean
   onGitWatchEnabledChange?: (enabled: boolean) => void
+  showLogRefreshControl?: boolean
+  logRefreshEnabled?: boolean
+  onLogRefreshEnabledChange?: (enabled: boolean) => void
 }): JSX.Element {
   const orderedRepositories = sortRepositoriesHierarchically(repositories).map((item) => item.repository)
   const selectedRepository = orderedRepositories.find((repository) => repository.id === repositoryId) ?? orderedRepositories[0] ?? null
@@ -14563,18 +14571,32 @@ function ProjectLogTreePanel({
           <Typography.Title level={4}>{title}</Typography.Title>
           <Typography.Text type="secondary">{description}</Typography.Text>
         </div>
-        {showGitWatchControl && onGitWatchEnabledChange ? (
-          <Space size={8} className="project-git-watch-control">
-            <Typography.Text type="secondary">监听本地 Git</Typography.Text>
-            <Switch
-              size="small"
-              checked={gitWatchEnabled}
-              checkedChildren="开"
-              unCheckedChildren="关"
-              onChange={onGitWatchEnabledChange}
-            />
-          </Space>
-        ) : null}
+        <Space size={16} wrap className="project-git-watch-control">
+          {showGitWatchControl && onGitWatchEnabledChange ? (
+            <Space size={8}>
+              <Typography.Text type="secondary">监听本地 Git</Typography.Text>
+              <Switch
+                size="small"
+                checked={gitWatchEnabled}
+                checkedChildren="开"
+                unCheckedChildren="关"
+                onChange={onGitWatchEnabledChange}
+              />
+            </Space>
+          ) : null}
+          {showLogRefreshControl && onLogRefreshEnabledChange && view === 'log' ? (
+            <Space size={8}>
+              <Typography.Text type="secondary">自动刷新 Log 树</Typography.Text>
+              <Switch
+                size="small"
+                checked={logRefreshEnabled}
+                checkedChildren="开"
+                unCheckedChildren="关"
+                onChange={onLogRefreshEnabledChange}
+              />
+            </Space>
+          ) : null}
+        </Space>
       </div>
       <RepositoryLogTree
         repository={selectedRepository}
@@ -14586,6 +14608,7 @@ function ProjectLogTreePanel({
         emptyDescription="请选择要查看的仓库"
         branchTagRefreshToken={branchTagRefreshToken}
         tagSyncOpenRequest={tagSyncOpenRequest}
+        autoRefreshEnabled={logRefreshEnabled}
         onCommitCountChange={onCommitCountChange}
         onRepositoryChange={onRepositoryChange}
       />
@@ -15413,6 +15436,7 @@ function CreateProjectModal({
 function ProjectOverview({
   mode,
   projectWindow = false,
+  sidebarCollapsed = false,
   focusProjectId,
   onCreateProject,
   onOpenSettings,
@@ -15426,6 +15450,7 @@ function ProjectOverview({
 }: {
   mode: AppMode
   projectWindow?: boolean
+  sidebarCollapsed?: boolean
   focusProjectId: string | null
   onCreateProject: () => void
   onOpenSettings: () => void
@@ -15452,6 +15477,7 @@ function ProjectOverview({
     updateRepository
   } = useForgeDeskStore()
   const isSimpleMode = mode === 'simple'
+  const [gitLogRefreshPreferences, setGitLogRefreshPreferences] = useGitLogRefreshPreferences()
   const [projectGitWatchEnabled, setProjectGitWatchEnabled] = useState(() => readStoredProjectGitWatchEnabled())
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null)
   const [projectDetailTab, setProjectDetailTab] = useState<ProjectDetailTabKey>(DEFAULT_PROJECT_DETAIL_TAB)
@@ -15481,7 +15507,7 @@ function ProjectOverview({
   const [projectServiceCounts, setProjectServiceCounts] = useState<Record<string, number>>({})
   const [projectPlaneAvailability, setProjectPlaneAvailability] = useState<Record<string, boolean>>({})
   const [selectedProjectRowIds, setSelectedProjectRowIds] = useState<string[]>([])
-  const [runningProjectGitTaskKeys, setRunningProjectGitTaskKeys] = useState<string[]>([])
+  const [runningProjectGitTasks, setRunningProjectGitTasks] = useState<RunningProjectGitTask[]>([])
   const [projectAiBindings, setProjectAiBindings] = useState<AiProjectResourceLink[]>([])
   const [projectAiProvider, setProjectAiProvider] = useState<AiProviderRuntimeSnapshot | null>(null)
   const [projectAiStatusLoading, setProjectAiStatusLoading] = useState(false)
@@ -15535,7 +15561,7 @@ function ProjectOverview({
     hasPlane: hasConfiguredProjectPlane
   }
   const projectDetailTabs = createProjectDetailTabs(projectDetailTabAvailability)
-  const simpleProjectDetailTabKeys: ProjectDetailTabKey[] = ['log-tree', 'codex-work', 'service-monitor', 'terminal']
+  const simpleProjectDetailTabKeys: ProjectDetailTabKey[] = ['log-tree', 'progress', 'codex-work', 'service-monitor', 'terminal']
   const visibleProjectDetailTabs = isSimpleMode ? projectDetailTabs.filter((tab) => simpleProjectDetailTabKeys.includes(tab.key)) : projectDetailTabs
   const activeProjectDetailTab = visibleProjectDetailTabs.some((tab) => tab.key === projectDetailTab)
     ? projectDetailTab
@@ -15638,7 +15664,7 @@ function ProjectOverview({
   }
 
   function isProjectGitTaskRunning(projectId: string, action: ProjectGitListAction): boolean {
-    return runningProjectGitTaskKeys.includes(getProjectGitTaskKey(projectId, action))
+    return hasRunningProjectGitTask(runningProjectGitTasks, projectId, action)
   }
 
   function isProjectGitTaskCancelled(taskId: string): boolean {
@@ -15658,16 +15684,8 @@ function ProjectOverview({
     return !task || task.status !== 'running'
   }
 
-  function setProjectGitTaskRunning(projectId: string, action: ProjectGitListAction, running: boolean): void {
-    const key = getProjectGitTaskKey(projectId, action)
-
-    setRunningProjectGitTaskKeys((current) => {
-      if (running) {
-        return current.includes(key) ? current : [...current, key]
-      }
-
-      return current.filter((item) => item !== key)
-    })
+  function setProjectGitTaskRunning(task: RunningProjectGitTask, running: boolean): void {
+    setRunningProjectGitTasks((current) => updateRunningProjectGitTasks(current, task, running))
   }
 
   useEffect(() => {
@@ -15678,7 +15696,7 @@ function ProjectOverview({
     return window.forgeDesk.onProjectGitTaskUpdated((task) => {
       if (task.status === 'cancelled' || task.status === 'interrupted') {
         cancelledProjectGitTaskIdsRef.current.add(task.id)
-        setProjectGitTaskRunning(task.projectId, task.action, false)
+        setProjectGitTaskRunning(task, false)
       }
     })
   }, [])
@@ -15784,7 +15802,6 @@ function ProjectOverview({
             : [{ mode: 'branch', branch: request.branch, targetBranch: request.targetBranch, tagNames: request.tagNames, remotes: request.remoteNames }]
           : groupPushTargetsByBranch(repository.pushTargets)
         const pushResults: ProjectGitRepositoryTaskResult[] = []
-        let currentRepository = repository
 
         for (const plan of pushPlans) {
           for (const remoteName of plan.remotes) {
@@ -15801,6 +15818,7 @@ function ProjectOverview({
               const input: GitPushInput = plan.mode === 'all-local-refs'
                 ? { mode: 'all-local-refs', remote: remoteName }
                 : createGitPushInput([remoteName], plan.branch, plan.tagNames, plan.targetBranch)
+              const startedRepository = useForgeDeskStore.getState().repositories.find((item) => item.id === repository.id)
               const result = await window.forgeDesk.gitPushTask(repository.id, input, taskId)
 
               if (plan.mode === 'all-local-refs') {
@@ -15829,16 +15847,14 @@ function ProjectOverview({
               }
 
               const pushedTarget = result.pushTargets.find((target) => target.remote === remoteName && target.branch === plan.branch)
-              const updatesCurrentTrackingBranch = plan.branch === currentRepository.currentBranch && plan.targetBranch === plan.branch
+              const currentRepository = useForgeDeskStore.getState().repositories.find((item) => item.id === repository.id)
 
-              if (updatesCurrentTrackingBranch && pushedTarget) {
-                currentRepository = mergeRepositoryWorkspaceStatus(currentRepository, {
-                  pushTargets: currentRepository.pushTargets.map((target) =>
-                    target.remote === remoteName && target.branch === plan.branch ? pushedTarget : target
-                  )
-                })
+              if (result.ok && currentRepository && startedRepository && pushedTarget) {
+                const nextRepository = mergeRepositoryPushTarget(currentRepository, startedRepository, pushedTarget, plan.targetBranch)
+                if (nextRepository !== currentRepository) {
+                  updateRepository(nextRepository)
+                }
               }
-              updateRepository(currentRepository)
 
               const branchLabel = plan.targetBranch === plan.branch ? plan.branch : `${plan.branch} → ${plan.targetBranch}`
 
@@ -15904,10 +15920,10 @@ function ProjectOverview({
     }
 
     cancelledProjectGitTaskIdsRef.current.delete(taskId)
-    await persistProjectGitTaskLog(runningLog)
-    setProjectGitTaskRunning(project.id, action, true)
+    setProjectGitTaskRunning(runningLog, true)
 
     try {
+      await persistProjectGitTaskLog(runningLog)
       const completedRepositoryResults: ProjectGitRepositoryTaskResult[] = []
       let progressWrite = Promise.resolve()
       const persistRepositoryResult = async (result: ProjectGitRepositoryTaskResult): Promise<void> => {
@@ -15956,12 +15972,10 @@ function ProjectOverview({
             ? `${actionLabel} 完成 ${successCount}${resultUnit}，失败 ${failedCount} 个`
             : `${actionLabel} 完成 ${successCount}${resultUnit}`
 
-      // Pushing only changes the remote. The repository result above already
-      // contains the refreshed local workspace/push status, so re-analyzing
-      // the full project history here is unnecessary and can be very
-      // expensive for large projects. The Log tree still needs a refresh so
-      // its remote refs reflect the successful push. Fetch needs the full
-      // analysis because it may introduce new remote commits.
+      // Push results patch only the relevant remote's status; workspace edits
+      // and concurrent task results stay intact. Avoid re-analyzing the full
+      // project history for a branch push, but refresh the Log tree's refs.
+      // Fetch/all-local-refs still need the full analysis.
       if (successCount > 0) {
         if (action === 'fetch' || pushRequest?.mode === 'all-local-refs') {
           await refreshProjectAfterGitTask(project.id)
@@ -16004,7 +16018,7 @@ function ProjectOverview({
       })
       message.error(errorMessage)
     } finally {
-      setProjectGitTaskRunning(project.id, action, false)
+      setProjectGitTaskRunning(runningLog, false)
     }
   }
 
@@ -16288,7 +16302,7 @@ function ProjectOverview({
     focusProjectAppliedRef.current = true
     setSelectedProjectId(focusProjectId)
 
-    if (!isSimpleMode && !projectWindow) {
+    if (projectWindow || !isSimpleMode) {
       setDetailProjectId(focusProjectId)
     }
   }, [focusProjectId, isSimpleMode, projectWindow, projects, setSelectedProjectId])
@@ -16488,7 +16502,7 @@ function ProjectOverview({
     const deletedRepositoryIds = new Set(repositories.filter((repository) => repository.projectId === projectId).map((repository) => repository.id))
 
     setSelectedProjectRowIds((current) => current.filter((item) => item !== projectId))
-    setRunningProjectGitTaskKeys((current) => current.filter((item) => !item.startsWith(`${projectId}:`)))
+    setRunningProjectGitTasks((current) => current.filter((task) => task.projectId !== projectId))
     setProjectRepositoryCommitCounts((current) => omitRecordKeys(current, deletedRepositoryIds))
     setProjectServiceCounts((current) => omitRecordKeys(current, new Set([projectId])))
     setProjectPlaneAvailability((current) => omitRecordKeys(current, new Set([projectId])))
@@ -16538,7 +16552,6 @@ function ProjectOverview({
   )
   const selectedProjectsHaveRepositories = selectedProjectRows.some((project) => getProjectRepositories(project).length > 0)
   const selectedProjectsFetching = selectedProjectRows.some((project) => isProjectGitTaskRunning(project.id, 'fetch'))
-  const selectedProjectsPushing = selectedProjectRows.some((project) => isProjectGitTaskRunning(project.id, 'push'))
   const projectListColumns: ColumnsType<Project> = [
     {
       title: '项目',
@@ -16671,7 +16684,6 @@ function ProjectOverview({
               className={canPushProject ? 'project-action-attention project-action-push' : undefined}
               icon={<UploadOutlined />}
               title={canPushProject ? '选择分支并推送到远端' : undefined}
-              loading={isProjectGitTaskRunning(project.id, 'push')}
               disabled={!canPushProject}
               onClick={() => openProjectPushFromList(project)}
             >
@@ -17008,7 +17020,6 @@ function ProjectOverview({
                     </Button>
                     <Button
                       icon={<UploadOutlined />}
-                      loading={selectedProjectsPushing}
                       disabled={selectedProjectRows.length === 0 || !selectedProjectsHavePushRepositories}
                       onClick={() => runSelectedProjectsGitTask('push')}
                     >
@@ -17096,47 +17107,55 @@ function ProjectOverview({
           </div>
         </div>
       ) : (
-        <div className="project-detail-page">
-          <div className="module-back-row">
-            <ModuleBackButton
-              label="返回项目列表"
-              onClick={() => {
-                setDetailProjectId(null)
-              }}
-            />
-          </div>
+        <div className={`project-detail-page${projectWindow ? ' is-project-window' : sidebarCollapsed ? ' is-sidebar-collapsed' : ''}`}>
           <div className="project-detail-panel">
+            <div className="project-detail-sticky-header-slot" aria-hidden="true" />
+            <div className="project-detail-sticky-header" aria-label={`当前项目：${selectedProject.name}`}>
+              <Button
+                type="text"
+                className="project-detail-back-button"
+                icon={<ArrowLeftOutlined />}
+                aria-label="返回项目列表"
+                title="返回项目列表"
+                onClick={() => setDetailProjectId(null)}
+              />
+              <div className="project-detail-sticky-identity">
+                <Typography.Title level={3} title={selectedProject.name} className="project-detail-sticky-name">
+                  {selectedProject.name}
+                </Typography.Title>
+                <Tag color={selectedProject.status === 'warning' ? 'orange' : selectedProject.status === 'needs-setup' ? 'gold' : 'green'}>
+                  {selectedProject.status === 'warning' ? '需要关注' : selectedProject.status === 'needs-setup' ? '待设置' : '正常'}
+                </Tag>
+                <Button
+                  type="text"
+                  className={`project-favorite-button project-detail-favorite-button${selectedProject.isFavorite ? ' is-active' : ''}`}
+                  icon={selectedProject.isFavorite ? <StarFilled /> : <StarOutlined />}
+                  loading={updatingFavoriteProjectId === selectedProject.id}
+                  aria-label={selectedProject.isFavorite ? `取消收藏项目 ${selectedProject.name}` : `收藏项目 ${selectedProject.name}`}
+                  aria-pressed={selectedProject.isFavorite}
+                  title={selectedProject.isFavorite ? '取消收藏' : '收藏并置顶'}
+                  onClick={() => void toggleProjectFavorite(selectedProject)}
+                />
+                <Button
+                  size="small"
+                  icon={<ExportOutlined />}
+                  aria-label={`在独立窗口打开项目 ${selectedProject.name}`}
+                  title="在独立窗口打开项目"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void onOpenProjectWindow(selectedProject.id)
+                  }}
+                >
+                  独立窗口
+                </Button>
+                <Typography.Text type="secondary" className="project-detail-sticky-tab">
+                  {activeProjectDetailTabLabel}
+                </Typography.Text>
+              </div>
+            </div>
             <div className="project-detail-heading">
               <div className="project-title-stack">
                 <div className="project-title-content">
-                  <Space size={8} align="center" className="project-title-row">
-                    <Typography.Title level={3}>{selectedProject.name}</Typography.Title>
-                    <Tag color={selectedProject.status === 'warning' ? 'orange' : selectedProject.status === 'needs-setup' ? 'gold' : 'green'}>
-                      {selectedProject.status === 'warning' ? '需要关注' : selectedProject.status === 'needs-setup' ? '待设置' : '正常'}
-                    </Tag>
-                    <Button
-                      type="text"
-                      className={`project-favorite-button project-detail-favorite-button${selectedProject.isFavorite ? ' is-active' : ''}`}
-                      icon={selectedProject.isFavorite ? <StarFilled /> : <StarOutlined />}
-                      loading={updatingFavoriteProjectId === selectedProject.id}
-                      aria-label={selectedProject.isFavorite ? `取消收藏项目 ${selectedProject.name}` : `收藏项目 ${selectedProject.name}`}
-                      aria-pressed={selectedProject.isFavorite}
-                      title={selectedProject.isFavorite ? '取消收藏' : '收藏并置顶'}
-                      onClick={() => void toggleProjectFavorite(selectedProject)}
-                    />
-                    <Button
-                      size="small"
-                      icon={<ExportOutlined />}
-                      aria-label={`在独立窗口打开项目 ${selectedProject.name}`}
-                      title="在独立窗口打开项目"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        void onOpenProjectWindow(selectedProject.id)
-                      }}
-                    >
-                      独立窗口
-                    </Button>
-                  </Space>
                   <Typography.Text className="table-text" type="secondary" ellipsis={{ tooltip: selectedProject.workspacePath }}>
                     {selectedProject.workspacePath}
                   </Typography.Text>
@@ -17187,8 +17206,7 @@ function ProjectOverview({
                     </Button>
                     <Button
                       icon={<UploadOutlined />}
-                      loading={selectedProject ? isProjectGitTaskRunning(selectedProject.id, 'push') : false}
-                      disabled={projectRepositories.length === 0 || (selectedProject ? isProjectGitTaskRunning(selectedProject.id, 'push') : false)}
+                      disabled={projectRepositories.length === 0}
                       title={projectHasPushableTargets ? '推送待提交的分支和可选版本 Tag' : '没有待推送提交时，也可选择版本 Tag 推送'}
                       onClick={() => setPushModalOpen(true)}
                     >
@@ -17429,6 +17447,9 @@ function ProjectOverview({
                       showGitWatchControl={projectWindow}
                       gitWatchEnabled={projectGitWatchEnabled}
                       onGitWatchEnabledChange={updateProjectGitWatchEnabled}
+                      showLogRefreshControl={projectWindow}
+                      logRefreshEnabled={projectWindow && gitLogRefreshPreferences.autoRefreshEnabled}
+                      onLogRefreshEnabledChange={projectWindow ? (enabled) => setGitLogRefreshPreferences({ ...gitLogRefreshPreferences, autoRefreshEnabled: enabled }) : undefined}
                     />
                   )
                 },
@@ -17450,6 +17471,9 @@ function ProjectOverview({
                       showGitWatchControl={projectWindow}
                       gitWatchEnabled={projectGitWatchEnabled}
                       onGitWatchEnabledChange={updateProjectGitWatchEnabled}
+                      showLogRefreshControl={projectWindow}
+                      logRefreshEnabled={projectWindow && gitLogRefreshPreferences.autoRefreshEnabled}
+                      onLogRefreshEnabledChange={projectWindow ? (enabled) => setGitLogRefreshPreferences({ ...gitLogRefreshPreferences, autoRefreshEnabled: enabled }) : undefined}
                     />
                   )
                 },
@@ -17463,6 +17487,11 @@ function ProjectOverview({
                       onOpenProjectSettings={() => setProjectSettingsDrawerOpen(true)}
                     />
                   )
+                },
+                {
+                  key: 'progress',
+                  label: '项目进度',
+                  children: <TaskListPanel projectId={selectedProject.id} />
                 },
                 {
                   key: 'codex-work',
@@ -19151,6 +19180,7 @@ function RepositoryLogTree({
   emptyDescription = '请选择仓库',
   branchTagRefreshToken = 0,
   tagSyncOpenRequest = 0,
+  autoRefreshEnabled = false,
   onCommitCountChange,
   onRepositoryChange
 }: {
@@ -19163,6 +19193,7 @@ function RepositoryLogTree({
   emptyDescription?: string
   branchTagRefreshToken?: number
   tagSyncOpenRequest?: number
+  autoRefreshEnabled?: boolean
   onCommitCountChange?: (repositoryId: string, commitCount: number) => void
   onRepositoryChange?: (repositoryId: string) => void
 }): JSX.Element {
@@ -19190,6 +19221,9 @@ function RepositoryLogTree({
   const [syncingRepositoryId, setSyncingRepositoryId] = useState<string | null>(null)
   const [gitError, setGitError] = useState<GitErrorGuidance | null>(null)
   const [branchDrawerOpen, setBranchDrawerOpen] = useState(false)
+  const [branchSearchQuery, setBranchSearchQuery] = useState('')
+  const [locatingBranchName, setLocatingBranchName] = useState('')
+  const [locatedCommitHash, setLocatedCommitHash] = useState('')
   const [branchTags, setBranchTags] = useState<ProjectBranchTag[]>([])
   const [tagSyncSnapshot, setTagSyncSnapshot] = useState<RepositoryTagSyncSnapshot | null>(null)
   const [tagSyncDrawerOpen, setTagSyncDrawerOpen] = useState(false)
@@ -19322,6 +19356,7 @@ function RepositoryLogTree({
 
       setDetailRepository(repository)
       cancelPendingCommitWindow()
+      setLocatedCommitHash('')
       setLoadingDetail(true)
       setCommitBranch('')
       setCommitAuthor('')
@@ -19419,6 +19454,7 @@ function RepositoryLogTree({
     repositoryRefreshInFlightRef.current = true
     cancelPendingCommitWindow()
     setLoadingDetail(true)
+    setLocatedCommitHash('')
     setSelectedCommit(null)
     setCommitFiles([])
     setSelectedFile(null)
@@ -19493,6 +19529,7 @@ function RepositoryLogTree({
     }
 
     setLoadingDetail(true)
+    setLocatedCommitHash('')
     cancelPendingCommitWindow()
     setSelectedCommit(null)
     setCommitFiles([])
@@ -19744,7 +19781,7 @@ function RepositoryLogTree({
   }
 
   useEffect(() => {
-    if (!gitLogRefreshPreferences.autoRefreshEnabled || !activeRepositoryForLog || !window.forgeDesk) {
+    if (!autoRefreshEnabled || !activeRepositoryForLog || !window.forgeDesk) {
       return
     }
 
@@ -19765,16 +19802,130 @@ function RepositoryLogTree({
     commitRange.endDate,
     commitRange.startDate,
     commitWindowStart,
-    gitLogRefreshPreferences.autoRefreshEnabled,
     gitLogRefreshPreferences.intervalSeconds,
-    loadingDetail
+    loadingDetail,
+    autoRefreshEnabled
   ])
 
   function selectBranchFilter(nextBranch: string): void {
+    setLocatedCommitHash('')
     setCommitBranch(nextBranch)
     setBranchDrawerOpen(false)
     refreshCommits(commitRange, nextBranch)
   }
+
+  async function locateBranchInLog(branchName: string): Promise<void> {
+    if (!detailRepository?.available || !window.forgeDesk || locatingBranchName) {
+      return
+    }
+
+    const repositoryId = detailRepository.id
+    const pageSize = gitLogRefreshPreferences.maxLoadedCommits
+    const emptyRange = { startDate: '', endDate: '' }
+    setLocatingBranchName(branchName)
+    setBranchDrawerOpen(false)
+    setLocatedCommitHash('')
+    setCommitBranch('')
+    setCommitAuthor('')
+    setCommitRange(emptyRange)
+    setSelectedCommit(null)
+    setCommitFiles([])
+    setSelectedFile(null)
+    setCommitDiff(null)
+    setDiffModalOpen(false)
+    setLoadingDetail(true)
+
+    try {
+      const tipCommits = await window.forgeDesk.getRepositoryCommitGraph(repositoryId, {
+        branchName,
+        limit: 1
+      })
+      const targetHash = tipCommits[0]?.hash?.trim()
+
+      if (!targetHash) {
+        throw new Error(`分支「${branchName}」没有可定位的提交`)
+      }
+
+      let offset = 0
+      let foundPage: GitCommit[] | null = null
+      let foundOffset = 0
+      let hasOlder = false
+
+      while (true) {
+        const page = await window.forgeDesk.getRepositoryCommitGraph(repositoryId, {
+          ...emptyRange,
+          offset,
+          limit: pageSize + 1
+        })
+        const visiblePage = page.slice(0, pageSize)
+        const targetIndex = findCommitIndexByHash(visiblePage, targetHash)
+
+        if (targetIndex >= 0) {
+          foundPage = visiblePage
+          foundOffset = offset
+          hasOlder = page.length > pageSize
+          break
+        }
+
+        if (page.length <= pageSize) {
+          break
+        }
+
+        offset += pageSize
+      }
+
+      if (!foundPage) {
+        throw new Error(`未在 Log 树中找到分支「${branchName}」的提交位置`)
+      }
+
+      const nextWorkspaceStatus = await window.forgeDesk.getRepositoryWorkspaceStatus(repositoryId)
+      setCommits(foundPage)
+      setCommitWindowStart(foundOffset)
+      setHasOlderCommits(hasOlder)
+      setWorkspaceStatus(nextWorkspaceStatus)
+      setLocatedCommitHash(targetHash)
+      onCommitCountChange?.(repositoryId, foundPage.length)
+      setGitError(null)
+      message.success(`已定位到分支「${branchName}」的最新提交`)
+    } catch (error) {
+      setGitError(createGitErrorGuidance(error, `定位分支「${branchName}」`))
+    } finally {
+      setLocatingBranchName('')
+      setLoadingDetail(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!locatedCommitHash) return
+
+    let cancelled = false
+    let attempts = 0
+    let timer: number | undefined
+
+    const scrollToLocatedCommit = (): void => {
+      if (cancelled) return
+      const row = document.querySelector<HTMLElement>('.branch-locator-highlight')
+
+      if (row) {
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        timer = window.setTimeout(() => {
+          if (!cancelled) setLocatedCommitHash('')
+        }, 2600)
+        return
+      }
+
+      attempts += 1
+      if (attempts < 12) {
+        timer = window.setTimeout(scrollToLocatedCommit, 50)
+      }
+    }
+
+    timer = window.setTimeout(scrollToLocatedCommit, 0)
+    return () => {
+      cancelled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [locatedCommitHash])
 
   async function syncRemote(targetRepository: Repository): Promise<void> {
     if (!window.forgeDesk) {
@@ -19894,6 +20045,8 @@ function RepositoryLogTree({
     currentBranch: activeRepository.currentBranch,
     activeBranch: commitBranch
   })
+  const filteredBranchGroups = filterBranchGroups(branchGroups, branchSearchQuery)
+  const matchingBranchCount = countBranchGroupItems(filteredBranchGroups)
   const tagSyncColumns: ColumnsType<RepositoryTagSyncTag> = [
     {
       title: 'Tag',
@@ -19981,7 +20134,7 @@ function RepositoryLogTree({
                       刷新
                     </Button>
                   </Tooltip>
-                  <Button icon={<BranchesOutlined />} onClick={() => setBranchDrawerOpen(true)}>
+                  <Button icon={<BranchesOutlined />} onClick={() => { setBranchSearchQuery(''); setBranchDrawerOpen(true) }}>
                     分支
                   </Button>
                   <Button icon={<TagOutlined />} loading={tagSyncLoading} onClick={openTagSync}>
@@ -20043,7 +20196,8 @@ function RepositoryLogTree({
             rowClassName={(commit) =>
               [
                 isWorkingTreeCommit(commit) ? 'working-tree-row' : '',
-                commit.hash === selectedCommit?.hash ? 'selected-row' : ''
+                commit.hash === selectedCommit?.hash ? 'selected-row' : '',
+                commit.hash === locatedCommitHash ? 'branch-locator-highlight' : ''
               ]
                 .filter(Boolean)
                 .join(' ')
@@ -20160,40 +20314,71 @@ function RepositoryLogTree({
         onClose={() => setBranchDrawerOpen(false)}
       >
         <div className="branch-drawer">
-          <Button block type={commitBranch ? 'default' : 'primary'} onClick={() => selectBranchFilter('')}>
-            全部引用
-          </Button>
-          {branchGroups.map((group) => (
-            <div key={group.key} className="branch-drawer-section">
-              <div className="branch-drawer-heading">
-                <Typography.Text strong>{group.title}</Typography.Text>
-                <Tag>{group.items.length}</Tag>
+          <div className="branch-drawer-toolbar">
+            <Input
+              allowClear
+              autoFocus
+              prefix={<SearchOutlined />}
+              placeholder="搜索分支名称"
+              value={branchSearchQuery}
+              onChange={(event) => {
+                setBranchSearchQuery(event.target.value)
+                setLocatedCommitHash('')
+              }}
+            />
+            <Typography.Text type="secondary">匹配 {matchingBranchCount} / {countBranchGroupItems(branchGroups)} 个分支</Typography.Text>
+          </div>
+          <div className="branch-drawer-list-scroll">
+            <Button block type={commitBranch ? 'default' : 'primary'} onClick={() => selectBranchFilter('')}>
+              全部引用
+            </Button>
+            {filteredBranchGroups.map((group) => (
+              <div key={group.key} className="branch-drawer-section">
+                <div className="branch-drawer-heading">
+                  <Typography.Text strong>{group.title}</Typography.Text>
+                  <Tag>{group.items.length}</Tag>
+                </div>
+                <div className="branch-drawer-list">
+                  {group.items.length === 0 ? (
+                    <Typography.Text type="secondary">暂无匹配的{group.title}</Typography.Text>
+                  ) : (
+                    group.items.map((branch) => (
+                      <div
+                        key={`${group.key}:${branch.name}`}
+                        className={[
+                          'branch-drawer-item',
+                          branch.isCurrent ? 'is-current' : '',
+                          branch.isActive ? 'is-active' : ''
+                        ].filter(Boolean).join(' ')}
+                      >
+                        <button
+                          className="branch-drawer-locate"
+                          title={`定位到 ${branch.name}`}
+                          disabled={Boolean(locatingBranchName)}
+                          onClick={() => void locateBranchInLog(branch.name)}
+                        >
+                          <span className="branch-drawer-name">{branch.name}</span>
+                          <Space size={4}>
+                            {branch.isCurrent && <Tag color={currentBranchRefColor}>当前</Tag>}
+                            {branch.isActive && <Tag color="green">筛选中</Tag>}
+                          </Space>
+                        </button>
+                        <Button
+                          type="text"
+                          size="small"
+                          disabled={Boolean(locatingBranchName)}
+                          onClick={() => selectBranchFilter(branch.name)}
+                        >
+                          筛选
+                        </Button>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
-              <div className="branch-drawer-list">
-                {group.items.length === 0 ? (
-                  <Typography.Text type="secondary">暂无{group.title}</Typography.Text>
-                ) : (
-                  group.items.map((branch) => (
-                    <button
-                      key={`${group.key}:${branch.name}`}
-                      className={[
-                        'branch-drawer-item',
-                        branch.isCurrent ? 'is-current' : '',
-                        branch.isActive ? 'is-active' : ''
-                      ].filter(Boolean).join(' ')}
-                      onClick={() => selectBranchFilter(branch.name)}
-                    >
-                      <span className="branch-drawer-name">{branch.name}</span>
-                      <Space size={4}>
-                        {branch.isCurrent && <Tag color={currentBranchRefColor}>当前</Tag>}
-                        {branch.isActive && <Tag color="green">筛选中</Tag>}
-                      </Space>
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-          ))}
+            ))}
+            {matchingBranchCount === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的分支" />}
+          </div>
         </div>
       </Drawer>
       <Drawer
@@ -23458,6 +23643,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
               <ProjectOverview
                 mode="full"
                 projectWindow
+                sidebarCollapsed
                 focusProjectId={projectWindowId}
                 onCreateProject={() => message.info('请在主窗口创建项目')}
                 onOpenSettings={() => message.info('项目窗口只保留项目功能，通用设置请在主窗口打开')}
@@ -23579,7 +23765,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             {!loadingWorkspace && activeKey === 'projects' && (
               <ProjectOverview
                 mode={appMode}
-                focusProjectId={projectWindowId ?? selectedProjectId}
+                sidebarCollapsed={sidebarCollapsed}
+                focusProjectId={null}
                 onCreateProject={() => setCreatingProject(true)}
                 onOpenSettings={() => openNavigationKey('settings')}
                 onOpenAiTools={() => setActiveKey('ai-tools')}

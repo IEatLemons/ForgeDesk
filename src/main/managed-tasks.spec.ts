@@ -10,6 +10,13 @@ function createService(): ManagedTaskService {
 }
 
 describe('managed task service', () => {
+  it('does not confuse a planning turn with implementation when its thread becomes active', () => {
+    const service = createService()
+    const task = service.create({title:'分析计划',projectId:'project',repositoryId:'repo',cwd:'/repo',codexThreadId:'planning-thread'})
+    service.beginPlanning(task.id)
+    assert.equal(service.updateBinding({id:'planning-thread',title:'分析计划',cwd:'/repo',status:'running',updatedAt:'2026-08-18T01:00:00.000Z'})?.stage,'planning')
+    assert.equal(service.setPlan(task.id,[{title:'待确认节点'}]).stage,'ready')
+  })
   it('requires a project, repository, and native Codex thread before creating a managed task', () => {
     const service = createService()
     assert.throws(() => service.create({ title: '修复任务', projectId: '', repositoryId: 'repo', cwd: '/repo', codexThreadId: 'thread-1' }), /关联项目/)

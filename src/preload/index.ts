@@ -1,11 +1,22 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { parseGitIpcPayload } from './git-ipc'
+import type { ProgressAiInput, ProgressCommand, ProgressSnapshotQuery } from '../shared/project-progress'
 
 function invokeGitIpc<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args).then((payload: unknown) => parseGitIpcPayload<T>(channel, payload))
 }
 
 contextBridge.exposeInMainWorld('forgeDesk', {
+  getProjectProgress: (query?: ProgressSnapshotQuery) => ipcRenderer.invoke('project-progress:snapshot', query),
+  runProjectProgressCommand: (command: ProgressCommand) => ipcRenderer.invoke('project-progress:command', command),
+  previewProjectProgressMigration: (input: { legacyRaw: string | null }) => ipcRenderer.invoke('project-progress:migration:preview', input),
+  activateProjectProgressMigration: (input: { batchId: string; inputHash: string; legacyRaw: string | null }) => ipcRenderer.invoke('project-progress:migration:activate', input),
+  runProjectProgressAi: (input: ProgressAiInput) => ipcRenderer.invoke('project-progress:ai', input),
+  onProjectProgressUpdated: (listener: () => void) => {
+    const wrapped = (): void => listener()
+    ipcRenderer.on('project-progress:updated', wrapped)
+    return () => ipcRenderer.removeListener('project-progress:updated', wrapped)
+  },
   listProjects: () => invokeGitIpc<WorkspaceSnapshot>('projects:list'),
   createProject: (input: { name: string; workspacePath: string; repositories: ScannedRepository[] }) => invokeGitIpc<WorkspaceSnapshot>('projects:create', input),
   createEmptyProject: (input: { name: string; parentPath: string }) => invokeGitIpc<WorkspaceSnapshot>('projects:create-empty', input),

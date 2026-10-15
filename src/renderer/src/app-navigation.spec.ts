@@ -37,7 +37,7 @@ describe('app navigation', () => {
 
   it('exposes tasks, projects, AI tools, and settings in simple mode', () => {
     assert.deepEqual(getNavigationItemsForMode('simple').map((item) => item.key), ['settings', 'tasks', 'projects', 'ai-tools'])
-    assert.deepEqual(getNavigationSectionsForMode('simple').map((section) => section.key), ['system', 'life', 'work'])
+    assert.deepEqual(getNavigationSectionsForMode('simple').map((section) => section.key), ['system', 'work'])
     assert.equal(isNavigationKeyVisible('simple', 'tasks'), true)
     assert.equal(isNavigationKeyVisible('simple', 'projects'), true)
     assert.equal(isNavigationKeyVisible('simple', 'ai-tools'), true)
@@ -51,7 +51,7 @@ describe('app navigation', () => {
     )
     assert.deepEqual(
       getNavigationSectionsForMode('full').map((section) => section.key),
-      APP_NAVIGATION_SECTIONS.map((section) => section.key)
+      APP_NAVIGATION_SECTIONS.filter(section => APP_NAVIGATION_ITEMS.some(item => item.section === section.key)).map((section) => section.key)
     )
   })
 })

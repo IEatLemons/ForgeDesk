@@ -37,7 +37,7 @@ type CodexProjectMonitorProps = {
   onSelectSession: (sessionId: string) => void
   onRefresh: () => void
   onOpenConversation: () => void
-  onLinkCodexProject: (cwd: string, projectId: string | null) => Promise<void>
+  onLinkCodexProject: (cwd: string, projectId: string | null, providerId: 'codex' | 'cursor') => Promise<void>
   onOpenForgeProject?: (projectId: string) => void
 }
 
@@ -206,9 +206,9 @@ export function CodexProjectMonitor({
 }: CodexProjectMonitorProps): JSX.Element {
   const [monitorView, setMonitorView] = useState<'overview' | 'detail'>('overview')
   const [collapsedMonitorGroups, setCollapsedMonitorGroups] = useState<Set<string>>(new Set())
-  const selectedGroup = projectGroups.find((group) => group.project.key === selectedProjectKey) ?? projectGroups[0] ?? null
-  const monitorProjects = monitorSnapshot?.projects ?? []
+  const monitorProjects = useMemo(() => [...(monitorSnapshot?.projects ?? []), ...(monitorSnapshot?.cursor?.projects ?? [])], [monitorSnapshot?.cursor?.projects, monitorSnapshot?.projects])
   const selectedMonitorProject = monitorProjects.find((project) => project.key === selectedProjectKey) ?? null
+  const selectedGroup = projectGroups.find((group) => group.project.key === selectedProjectKey) ?? (selectedProjectKey ? null : projectGroups[0]) ?? null
   const monitorGroups = useMemo(() => {
     const groups = new Map<string, CodexProjectMonitorItem[]>()
     for (const project of monitorProjects) {
@@ -223,7 +223,11 @@ export function CodexProjectMonitor({
       return 0
     })
   }, [monitorProjects])
-  const selectedTone = selectedGroup ? toneMeta(projectTone(selectedGroup)) : toneMeta('idle')
+  const selectedTone = selectedGroup
+    ? toneMeta(projectTone(selectedGroup))
+    : selectedMonitorProject
+      ? toneMeta(selectedMonitorProject.status === 'running' ? 'running' : selectedMonitorProject.status === 'attention' ? 'attention' : selectedMonitorProject.status === 'completed' ? 'ready' : 'idle')
+      : toneMeta('idle')
   const runningSessions = useMemo(() => snapshot.sessions.filter((session) => session.status === 'running').sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 5), [snapshot.sessions])
   const attentionSessions = useMemo(() => snapshot.sessions.filter((session) => session.status === 'aborted').sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 5), [snapshot.sessions])
   const completionRate = snapshot.sessions.length > 0 ? Math.round((snapshot.completed / snapshot.sessions.length) * 100) : 0
@@ -297,6 +301,7 @@ export function CodexProjectMonitor({
         </div>
         <div className="codex-monitor-project-path" title={project.cwd}>{project.cwd || '未记录工作目录'}</div>
         <div className="codex-monitor-project-stats">
+          <span><strong>{project.providerId === 'cursor' ? 'Cursor' : 'Codex'}</strong> 工具</span>
           <span><strong>{project.sessionCount}</strong> 会话</span>
           <span><strong>{project.worktrees.length}</strong> 工作树</span>
           <span><strong>{project.tasks.length}</strong> 内置任务</span>
@@ -313,7 +318,7 @@ export function CodexProjectMonitor({
             options={[{ label: '未关联项目', value: '__unlinked__' }, ...forgeProjects.map((item) => ({ label: item.name, value: item.id }))]}
             size="small"
             value={linkValue}
-            onChange={(value: string) => onLinkCodexProject(project.cwd, value === '__unlinked__' ? null : value).catch(() => undefined)}
+            onChange={(value: string) => onLinkCodexProject(project.cwd, value === '__unlinked__' ? null : value, project.providerId || 'codex').catch(() => undefined)}
           />
           {project.forgeProjectId && onOpenForgeProject ? <Button size="small" type="link" onClick={() => onOpenForgeProject(project.forgeProjectId as string)}>打开项目</Button> : null}
         </div>
@@ -344,8 +349,8 @@ export function CodexProjectMonitor({
           <span className="codex-monitor-hero-icon">{monitorView === 'overview' ? <FolderOpenOutlined /> : selectedTone.icon}</span>
           <div>
             <Typography.Text type="secondary">{monitorView === 'overview' ? '监控范围' : '当前项目'}</Typography.Text>
-            <Typography.Title level={3}>{monitorView === 'overview' ? '全部 Codex 项目' : selectedGroup?.project.name || '等待读取 Codex 项目'}</Typography.Title>
-            <Typography.Text type="secondary" title={selectedGroup?.project.cwd}>{monitorView === 'overview' ? `${monitorSnapshot?.projects.length ?? snapshot.projects.length} 个项目 · ${snapshot.sessions.length} 个会话` : selectedGroup?.project.cwd || '尚未读取到本机会话目录'}</Typography.Text>
+            <Typography.Title level={3}>{monitorView === 'overview' ? '全部 AI 项目' : selectedGroup?.project.name || selectedMonitorProject?.forgeProjectName || '等待读取 AI 项目'}</Typography.Title>
+            <Typography.Text type="secondary" title={selectedGroup?.project.cwd}>{monitorView === 'overview' ? `${monitorProjects.length} 个项目 · ${snapshot.sessions.length} 个 Codex 会话 · ${monitorSnapshot?.cursor?.running ?? 0} 个 Cursor Agent` : selectedGroup?.project.cwd || selectedMonitorProject?.cwd || '尚未读取到本地 AI 工作区'}</Typography.Text>
           </div>
         </div>
         <div className="codex-monitor-hero-meta">
@@ -356,8 +361,8 @@ export function CodexProjectMonitor({
 
       {monitorView === 'overview' ? (
         <section className="codex-monitor-metrics">
-          <div className="codex-monitor-metric"><span>项目</span><strong>{monitorSnapshot?.projects.length ?? snapshot.projects.length}</strong><small>已接入 Codex</small></div>
-          <div className="codex-monitor-metric is-running"><span>进行中</span><strong>{monitorSnapshot?.running ?? snapshot.running}</strong><small>正在执行的会话/任务</small></div>
+          <div className="codex-monitor-metric"><span>项目</span><strong>{monitorProjects.length}</strong><small>已发现的 AI 工作区</small></div>
+          <div className="codex-monitor-metric is-running"><span>进行中</span><strong>{monitorSnapshot?.running ?? snapshot.running}</strong><small>Codex 会话 / Cursor Agent</small></div>
           <div className="codex-monitor-metric is-completed"><span>未提交</span><strong>{monitorSnapshot?.uncommitted ?? 0}</strong><small>执行结束后仍有改动</small></div>
           <div className="codex-monitor-metric is-attention"><span>未关联</span><strong>{monitorSnapshot?.unlinked ?? 0}</strong><small>等待绑定 ForgeDesk 项目</small></div>
         </section>
@@ -489,9 +494,9 @@ export function CodexProjectMonitor({
         </section>
       ) : monitorView === 'detail' && !selectedSummary ? <div className="codex-monitor-empty panel"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="这个项目还没有可分析的 Codex 会话" /></div> : null}
 
-      {loading && projectGroups.length === 0 ? (
+      {loading && monitorProjects.length === 0 ? (
         <div className="codex-monitor-loading"><Spin /><Typography.Text type="secondary">正在读取 Codex 项目状态…</Typography.Text></div>
-      ) : projectGroups.length === 0 ? (
+      ) : monitorProjects.length === 0 ? (
         <div className="codex-monitor-empty panel"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={snapshot.available ? '还没有可监控的 Codex 项目' : '尚未读取到本机 Codex 会话'} /><Button type="primary" icon={<RobotOutlined />} onClick={onOpenConversation}>打开对话模式</Button></div>
       ) : (
         monitorView === 'overview' ? <div className="codex-monitor-layout">

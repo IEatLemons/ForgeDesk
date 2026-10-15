@@ -44,7 +44,7 @@ export const APP_NAVIGATION_ITEMS: AppNavigationItem[] = [
   { key: 'overview', label: '总览', section: 'home' },
   { key: 'market-news', label: '资讯', section: 'home' },
   { key: 'settings', label: '设置', section: 'system' },
-  { key: 'tasks', label: '待办与安排', section: 'life' },
+  { key: 'tasks', label: '项目任务', section: 'work' },
   { key: 'docs', label: '资料与文档', section: 'study' },
   { key: 'projects', label: '项目', section: 'work' },
   { key: 'ai-tools', label: 'AI 工具', section: 'work' },

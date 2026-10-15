@@ -1062,9 +1062,9 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded 
           }}
           onRefresh={() => refresh().catch(() => undefined)}
           onOpenConversation={openConversationMode}
-          onLinkCodexProject={async (cwd, projectId) => {
-            if (projectId) await window.forgeDesk.saveAiProjectResourceLink({ providerId: 'codex', projectId, resourcePath: cwd })
-            else await window.forgeDesk.deleteAiProjectResourceLink({ providerId: 'codex', resourcePath: cwd })
+          onLinkCodexProject={async (cwd, projectId, providerId) => {
+            if (projectId) await window.forgeDesk.saveAiProjectResourceLink({ providerId, projectId, resourcePath: cwd })
+            else await window.forgeDesk.deleteAiProjectResourceLink({ providerId, resourcePath: cwd })
             const nextMonitorSnapshot = await window.forgeDesk.getCodexProjectMonitorSnapshot()
             setMonitorSnapshot(nextMonitorSnapshot)
             setSnapshot(snapshotFromMonitor(nextMonitorSnapshot))

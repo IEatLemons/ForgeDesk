@@ -1,0 +1,335 @@
+import assert from 'node:assert/strict'
+import { DatabaseSync } from 'node:sqlite'
+import { describe, it } from 'node:test'
+import { ProjectProgressService, type LegacyProgressManagedTask } from './project-progress.js'
+import type { ProgressCommand, ProjectWorkItem } from '../shared/project-progress.js'
+
+function fixture() {
+  const db = new DatabaseSync(':memory:')
+  db.exec("CREATE TABLE projects(id TEXT PRIMARY KEY); INSERT INTO projects VALUES('p'),('other');")
+  const service = new ProjectProgressService(() => db as never,() => new Date('2026-10-15T00:00:00Z'))
+  let sequence = 0
+  const command = (input: Omit<ProgressCommand,'commandId'> | Record<string,unknown>) => service.command({ ...input,commandId:`command-${++sequence}` } as ProgressCommand)
+  const create = (title = '人工任务',parentId?: string): ProjectWorkItem => service.getItem(command({ type:'create',input:{title,projectId:'p',parentId} }).entityId)
+  const transition = (id: string,action: string) => command({ type:'transition',id,expectedVersion:service.getItem(id).rowVersion,action })
+  return {db,service,command,create,transition}
+}
+function managed(patch: Partial<LegacyProgressManagedTask> = {}): LegacyProgressManagedTask {
+  return {id:'managed-1',title:'AI 工作',description:'工作说明',source:'forgedesk',projectId:'p',repositoryId:'repo',cwd:'/repo',stage:'completed',runStatus:'completed',createdAt:'2026-10-14T00:00:00Z',updatedAt:'2026-10-14T01:00:00Z',finishedAt:'2026-10-14T01:00:00Z',codexThreadId:'thread',branch:'codex/work',baseBranch:'main',baselineSha:'base',commitSha:'commit',targetBranch:'develop',autoExecute:false,hasChanges:true,subtasks:[],events:[],bindings:[],...patch}
+}
+
+describe('native project progress',() => {
+  it('rejects dependency deadlocks through parent acceptance and inherited dependencies', () => {
+    const {service,create,command}=fixture(),a=create('父任务 A'),childA=create('节点 A',a.id),b=create('父任务 B'),childB=create('节点 B',b.id)
+    command({type:'dependencies',id:a.id,expectedVersion:service.getItem(a.id).rowVersion,dependencyIds:[b.id]})
+    assert.throws(()=>command({type:'dependencies',id:childB.id,expectedVersion:childB.rowVersion,dependencyIds:[childA.id]}),/循环/)
+    assert.deepEqual(service.getItem(childB.id).dependencyIds,[])
+  })
+  it('rolls back family moves when incoming or outgoing child dependencies would cross projects', () => {
+    const {service,create,command}=fixture(), root=create('父任务'), child=create('节点',root.id), external=create('外部依赖')
+    command({type:'dependencies',id:external.id,expectedVersion:external.rowVersion,dependencyIds:[child.id]})
+    assert.throws(()=>command({type:'move',id:root.id,expectedVersion:service.getItem(root.id).rowVersion,scope:{projectId:'other',goalId:null,milestoneId:null,versionId:null}}),/依赖/)
+    assert.equal(service.getItem(root.id).projectId,'p'); assert.equal(service.getItem(child.id).projectId,'p')
+    command({type:'dependencies',id:external.id,expectedVersion:service.getItem(external.id).rowVersion,dependencyIds:[]})
+    command({type:'dependencies',id:child.id,expectedVersion:child.rowVersion,dependencyIds:[external.id]})
+    assert.throws(()=>command({type:'move',id:root.id,expectedVersion:service.getItem(root.id).rowVersion,scope:{projectId:'other',goalId:null,milestoneId:null,versionId:null}}),/依赖/)
+    assert.equal(service.getItem(child.id).projectId,'p')
+  })
+  it('keeps dependent sibling nodes valid while moving their whole family', () => {
+    const {service,create,command}=fixture(), root=create(), a=create('A',root.id), b=create('B',root.id)
+    command({type:'dependencies',id:b.id,expectedVersion:b.rowVersion,dependencyIds:[a.id]})
+    command({type:'move',id:root.id,expectedVersion:service.getItem(root.id).rowVersion,scope:{projectId:'other',goalId:null,milestoneId:null,versionId:null}})
+    assert.deepEqual(service.getItem(b.id).dependencyIds,[a.id]); assert.equal(service.getItem(b.id).projectId,'other')
+  })
+  it('requires a real project for goals and rejects malformed command fields atomically', () => {
+    const {service,command,create}=fixture(), item=create()
+    assert.throws(()=>command({type:'save-entity',kind:'goal',input:{title:'无项目',projectId:''}}),/必须关联/)
+    assert.throws(()=>command({type:'update',id:item.id,expectedVersion:item.rowVersion,patch:{tags:[1]}}),/字符串数组/)
+    assert.equal(service.getItem(item.id).rowVersion,item.rowVersion)
+    assert.throws(()=>command({type:'arbitrary',id:item.id,expectedVersion:item.rowVersion}),/无效/)
+  })
+  it('invalidates confirmed goal and version achievement when their scope reopens', () => {
+    const {service,create,command,transition}=fixture(), root=create()
+    const goal=command({type:'save-entity',kind:'goal',input:{title:'目标',projectId:'p'}}).entityId
+    const version=command({type:'save-entity',kind:'version',input:{title:'v1',projectId:'p'}}).entityId
+    command({type:'move',id:root.id,expectedVersion:root.rowVersion,scope:{projectId:'p',goalId:goal,versionId:version,milestoneId:null}})
+    transition(root.id,'accept')
+    command({type:'save-entity',kind:'goal',expectedVersion:1,input:{id:goal,title:'目标',projectId:'p',status:'achieved'}})
+    command({type:'save-entity',kind:'version',expectedVersion:1,input:{id:version,title:'v1',projectId:'p',status:'closed'}})
+    transition(root.id,'reopen')
+    assert.ok(service.getSnapshot().entities.every(entity=>entity.status==='active'&&!entity.completedAt))
+    assert.equal(service.getSnapshot().stats.percent,0)
+  })
+  it('keeps task evidence in the inbox after deleting its project and forbids deletion during execution', () => {
+    const {service,create}=fixture(), root=create(), child=create('节点',root.id)
+    const run=service.beginExecution(root.id,'implementation','repo','/repo','running')
+    assert.throws(()=>service.detachProject('p'),/活动/)
+    service.setExecutionResult(run.id,'cancelled','已停止')
+    service.detachProject('p')
+    assert.equal(service.getItem(child.id).parentId,root.id); assert.equal(service.getItem(child.id).projectId,null)
+    assert.equal(service.getSnapshot().stats.total,0); assert.equal(service.getSnapshot().stats.inbox,1)
+    assert.equal(service.getExecution(run.id).status,'cancelled')
+  })
+  it('creates persistent manual work without a repository, account, or AI execution',() => {
+    const {service,create} = fixture(), item = create()
+    assert.equal(item.status,'todo'); assert.equal(item.projectId,'p')
+    assert.equal(service.getSnapshot().executions.length,0)
+    assert.equal(service.getItem(item.id).title,'人工任务')
+  })
+  it('deduplicates commands and rejects stale writes or a reused command with changed content',() => {
+    const {service} = fixture()
+    const command: ProgressCommand = {type:'create',commandId:'same',input:{title:'目标',projectId:'p'}}
+    const first = service.command(command)
+    assert.deepEqual(service.command(command),first)
+    assert.equal(service.getSnapshot().items.length,1)
+    assert.throws(() => service.command({...command,input:{title:'不同',projectId:'p'}}),/内容发生变化/)
+    service.command({type:'update',id:first.entityId,commandId:'edit',expectedVersion:1,patch:{title:'新标题'}})
+    assert.throws(() => service.command({type:'update',id:first.entityId,commandId:'stale',expectedVersion:1,patch:{title:'覆盖'}}),/其他窗口/)
+    assert.equal(service.getItem(first.entityId).title,'新标题')
+  })
+  it('tracks unassigned work in an inbox and moves a task family together',() => {
+    const {service,command,create} = fixture()
+    const inbox = command({type:'create',input:{title:'待归属'}}).entityId
+    assert.equal(service.getSnapshot().stats.inbox,1); assert.equal(service.getSnapshot().stats.total,0)
+    const root = create(), child = create('节点',root.id)
+    command({type:'move',id:root.id,expectedVersion:service.getItem(root.id).rowVersion,scope:{projectId:'other',goalId:null,milestoneId:null,versionId:null}})
+    assert.equal(service.getItem(child.id).projectId,'other')
+    assert.equal(service.getItem(inbox).projectId,null)
+  })
+  it('rejects invalid dates, cross-project scopes and deep nesting without partial writes',() => {
+    const {service,command,create} = fixture(), root = create(), child = create('节点',root.id)
+    assert.throws(() => command({type:'create',input:{title:'错误',parentId:child.id}}),/一级子任务/)
+    assert.throws(() => command({type:'update',id:root.id,expectedVersion:service.getItem(root.id).rowVersion,patch:{dueDate:'2026-02-30'}}),/日期格式/)
+    assert.equal(service.getSnapshot().items.length,2)
+    const goal = command({type:'save-entity',kind:'goal',input:{title:'其他目标',projectId:'other'}}).entityId
+    assert.throws(() => command({type:'move',id:root.id,expectedVersion:service.getItem(root.id).rowVersion,scope:{projectId:'p',goalId:goal,milestoneId:null,versionId:null}}),/不属于当前项目/)
+  })
+  it('requires child acceptance and keeps parent acceptance separate from leaf progress',() => {
+    const {service,create,transition} = fixture(), root=create(), a=create('一',root.id),b=create('二',root.id)
+    assert.throws(() => transition(root.id,'accept'),/未完成的子任务/)
+    transition(a.id,'accept')
+    assert.equal(service.getSnapshot().stats.percent,50)
+    transition(b.id,'accept')
+    assert.equal(service.getSnapshot().stats.total,2)
+    assert.equal(service.getSnapshot().stats.awaitingParentAcceptance,1)
+    assert.notEqual(service.getItem(root.id).status,'done')
+    transition(root.id,'accept'); transition(root.id,'archive')
+    assert.equal(service.getSnapshot().stats.done,2)
+    transition(root.id,'unarchive')
+    assert.throws(() => transition(a.id,'reopen'),/父任务/)
+    transition(root.id,'reopen'); transition(a.id,'reopen')
+    assert.equal(service.getSnapshot().stats.percent,50)
+  })
+  it('preserves blocker and date history and prevents acceptance through unresolved dependencies',() => {
+    const {service,create,command,transition}=fixture(),a=create('前置'),b=create('依赖')
+    command({type:'dependencies',id:b.id,expectedVersion:b.rowVersion,dependencyIds:[a.id]})
+    assert.throws(() => transition(b.id,'accept'),/阻塞/)
+    assert.throws(() => command({type:'dependencies',id:a.id,expectedVersion:a.rowVersion,dependencyIds:[b.id]}),/循环/)
+    assert.deepEqual(service.getItem(a.id).dependencyIds,[])
+    transition(a.id,'accept')
+    command({type:'block',id:b.id,expectedVersion:service.getItem(b.id).rowVersion,reason:'等待接口',nextAction:'联系后端'})
+    const blocked=service.getItem(b.id)
+    command({type:'unblock',id:b.id,expectedVersion:blocked.rowVersion,blockerId:blocked.blockers[0].id,resolution:'接口已提供'})
+    transition(b.id,'accept')
+    assert.equal(service.getItem(b.id).blockers[0].resolution,'接口已提供')
+    assert.ok(service.getSnapshot().events.some(event=>event.eventType==='unblock'))
+  })
+  it('computes deadline boundaries in the requested timezone and excludes cancelled scope',() => {
+    const {service,create,command,transition}=fixture(),item=create()
+    command({type:'update',id:item.id,expectedVersion:item.rowVersion,patch:{dueDate:'2026-10-14'}})
+    assert.equal(service.getSnapshot({asOf:'2026-10-14T20:00:00Z',timezone:'Asia/Shanghai'}).stats.overdue,1)
+    assert.equal(service.getSnapshot({asOf:'2026-10-14T20:00:00Z',timezone:'UTC'}).stats.overdue,0)
+    transition(item.id,'cancel')
+    assert.equal(service.getSnapshot().stats.percent,null)
+  })
+  it('groups the same work into goals, milestones and versions without counting duplicate projections',() => {
+    const {service,command,create,transition}=fixture(),item=create()
+    const goal=command({type:'save-entity',kind:'goal',input:{title:'账号体系',projectId:'p'}}).entityId
+    command({type:'move',id:item.id,expectedVersion:item.rowVersion,scope:{projectId:'p',goalId:goal,versionId:null,milestoneId:null}})
+    assert.equal(service.getSnapshot().scopeStats[goal].total,1)
+    assert.throws(()=>command({type:'save-entity',kind:'goal',input:{id:goal,title:'账号体系',projectId:'p',status:'achieved'},expectedVersion:1}),/未验收/)
+    transition(item.id,'accept')
+    command({type:'save-entity',kind:'goal',input:{id:goal,title:'账号体系',projectId:'p',status:'achieved'},expectedVersion:1})
+    assert.equal(service.getSnapshot().entities[0].status,'achieved')
+  })
+})
+
+describe('progress migration',()=>{
+  it('reports whitespace titles, invalid subtask fields and reused node sources in the preview', () => {
+    const {service}=fixture(),raw=JSON.stringify([{id:'blank',title:' ',status:'todo'},{id:'bad',title:'损坏',status:'todo',subtasks:'bad'},{id:'one',title:'一',status:'todo',subtasks:[{id:'shared',title:'节点'}]},{id:'two',title:'二',status:'todo',subtasks:[{id:'shared',title:'节点'}]}])
+    const batch=service.previewMigration(raw,[])
+    assert.ok(batch.issues.some(issue=>issue.message.includes('缺少 ID 或标题')))
+    assert.ok(batch.issues.some(issue=>issue.message.includes('不是数组')))
+    assert.ok(batch.issues.some(issue=>issue.message.includes('多个工作项')))
+    assert.throws(()=>service.activateMigration(batch.id,batch.inputHash,raw,[]),/存在错误/)
+    assert.equal(service.getSnapshot().items.length,0)
+  })
+  it('does not mistake auto-discovered running conversation events for confirmed project execution', () => {
+    const {service,command}=fixture(),old=managed({source:'codex-import',stage:'executing',runStatus:'running',branch:'',commitSha:'',subtasks:[],events:[{stage:'executing',message:'已从 Codex 自动同步，等待确认归因或交付状态',detail:'',createdAt:'2026-10-14T01:00:00Z'}]}),batch=service.previewMigration(null,[old])
+    assert.equal(batch.issues.filter(issue=>issue.severity==='error').length,0)
+    service.activateMigration(batch.id,batch.inputHash,null,[old])
+    const item=service.getSnapshot().items[0]
+    assert.equal(item.origin,'ai_conversation');assert.equal(item.trackingState,'inbox');assert.equal(service.getSnapshot().stats.total,0)
+    command({type:'move',id:item.id,expectedVersion:item.rowVersion,scope:{projectId:'p',goalId:null,milestoneId:null,versionId:null}})
+    assert.equal(service.beginExecution(item.id,'planning','repo','/repo','explicit-planning').status,'queued')
+  })
+  it('preserves raw source snapshots and summary evidence and never reimports after activation', () => {
+    const {service,db}=fixture(), old=managed({events:[{stage:'completed',message:'已推送',detail:'保留原始交付依据',createdAt:'2026-10-14T01:00:00Z'}]})
+    const raw=JSON.stringify([{id:'legacy',title:'个人任务',status:'todo',unknownField:{keep:'原文'}}]), batch=service.previewMigration(raw,[old])
+    service.activateMigration(batch.id,batch.inputHash,raw,[old])
+    const saved=db.prepare('SELECT source_json FROM progress_migration_batches WHERE id=?').get(batch.id)!
+    assert.equal(JSON.parse(String(saved.source_json)).legacyRaw,raw)
+    assert.equal(service.getSnapshot().executions[0].delivery?.events[0].detail,'保留原始交付依据')
+    assert.equal(service.previewMigration('[]',[]).id,batch.id)
+    assert.equal(service.getSnapshot().items.length,2)
+  })
+  it('reports broken and duplicate legacy children without partial activation', () => {
+    const {service}=fixture(),raw=JSON.stringify([{id:'legacy',title:'旧工作',status:'todo',subtasks:[null,{id:'x',title:'一'},{id:'x',title:'二'}]}]), batch=service.previewMigration(raw,[])
+    assert.ok(batch.issues.some(issue=>issue.message.includes('损坏')))
+    assert.ok(batch.issues.some(issue=>issue.message.includes('重复 ID')))
+    assert.throws(()=>service.activateMigration(batch.id,batch.inputHash,raw,[]),/存在错误/)
+    assert.equal(service.getSnapshot().items.length,0)
+  })
+  it('migrates inbox node dependencies even when the original project was removed', () => {
+    const {service}=fixture(),old=managed({projectId:'removed',subtasks:[{id:'a',title:'一',description:'',acceptance:'',dependencyIds:[],order:0,stage:'completed',runStatus:'completed',codexThreadId:'a-thread',createdAt:'',updatedAt:''},{id:'b',title:'二',description:'',acceptance:'',dependencyIds:['a'],order:1,stage:'completed',runStatus:'completed',codexThreadId:'b-thread',createdAt:'',updatedAt:''}]}),batch=service.previewMigration(null,[old])
+    service.activateMigration(batch.id,batch.inputHash,null,[old])
+    const snapshot=service.getSnapshot(), b=snapshot.items.find(item=>item.title==='二')!
+    assert.equal(b.dependencyIds.length,1); assert.equal(snapshot.stats.total,0)
+  })
+  it('merges an already imported legacy todo while retaining fields absent from managed tasks',()=>{
+    const {service}=fixture()
+    const raw=JSON.stringify([{id:'old',title:'人工任务',notes:'原说明',status:'done',projectId:'p',priority:'high',tags:['发布'],startDate:'2026-10-10',dueDate:'2026-10-14',completedAt:'2026-10-14T00:00:00Z',updatedAt:'2026-10-14T01:00:00Z',subtasks:[{id:'node',title:'节点',done:true,completedAt:'2026-10-13T00:00:00Z'}]}])
+    const old=managed({id:'old',source:'legacy',stage:'completed-no-changes',branch:'',commitSha:'',subtasks:[{id:'node',title:'节点',description:'',acceptance:'',dependencyIds:[],order:0,stage:'completed',runStatus:'completed',codexThreadId:'',createdAt:'2026-10-13T00:00:00Z',updatedAt:'2026-10-14T01:00:00Z'}]})
+    const preview=service.previewMigration(raw,[old])
+    assert.equal(preview.duplicateCount,1)
+    service.activateMigration(preview.id,preview.inputHash,raw,[old],'/backup.db')
+    assert.equal(service.getSnapshot().items.length,2)
+    const root=service.getSnapshot().items.find(item=>!item.parentId)!
+    assert.equal(root.priority,'high'); assert.equal(root.dueDate,'2026-10-14'); assert.deepEqual(root.tags,['发布'])
+    assert.equal(root.status,'done'); assert.equal(root.completionBasis,'legacy_user_marked')
+    assert.equal(service.getSnapshot().sourceLinks.length,4)
+    assert.ok(service.getSnapshot().sourceLinks.some(link=>link.sourceSystem==='legacy'&&link.sourceId==='old'&&link.workItemId===root.id))
+    assert.equal(service.activateMigration(preview.id,preview.inputHash,raw,[old]).backupPath,'/backup.db')
+    assert.equal(service.getSnapshot().items.length,2)
+  })
+  it('preserves AI delivery completion as evidence but requires business acceptance',()=>{
+    const {service}=fixture(),old=managed(),preview=service.previewMigration(null,[old])
+    service.activateMigration(preview.id,preview.inputHash,null,[old])
+    assert.equal(service.getSnapshot().items[0].status,'review')
+    assert.equal(service.getSnapshot().stats.done,0)
+    assert.equal(service.getSnapshot().executions[0].status,'succeeded')
+  })
+  it('keeps unconfirmed imported sessions out of project progress',()=>{
+    const {service}=fixture(),old=managed({source:'codex-import',stage:'needs-attention',branch:'',commitSha:'',subtasks:[]}),preview=service.previewMigration(null,[old])
+    service.activateMigration(preview.id,preview.inputHash,null,[old])
+    assert.equal(service.getSnapshot().stats.total,0)
+    assert.equal(service.getSnapshot().stats.inbox,1)
+  })
+  it('blocks malformed input, active runs, and source changes without activating partial results',()=>{
+    const {service}=fixture(),invalid=service.previewMigration('{bad',[])
+    assert.throws(()=>service.activateMigration(invalid.id,invalid.inputHash,'{bad',[]),/存在错误/)
+    assert.equal(service.isActive(),false); assert.equal(service.getSnapshot().items.length,0)
+    const running=managed({runStatus:'running',stage:'executing'}),preview=service.previewMigration(null,[running])
+    assert.throws(()=>service.activateMigration(preview.id,preview.inputHash,null,[running]),/活动执行/)
+    const settled=service.previewMigration(null,[])
+    assert.throws(()=>service.activateMigration(settled.id,settled.inputHash,'[]',[]),/源任务已变化/)
+    service.activateMigration(settled.id,settled.inputHash,null,[])
+    assert.equal(service.isActive(),true)
+  })
+  it('never merges two unrelated tasks just because titles match',()=>{
+    const {service}=fixture(),raw=JSON.stringify([{id:'one',title:'相同',status:'todo'},{id:'two',title:'相同',status:'todo'}]),preview=service.previewMigration(raw,[])
+    service.activateMigration(preview.id,preview.inputHash,raw,[])
+    assert.equal(service.getSnapshot().items.length,2)
+  })
+})
+
+describe('AI execution isolation and plan revisions',()=>{
+  it('keeps cancellation pending until native threads stop, without changing business state', () => {
+    const {service,create}=fixture(),root=create(),run=service.beginExecution(root.id,'implementation','repo','/repo','running')
+    const old=managed({stage:'executing',runStatus:'running',updatedAt:'2026-10-15T01:00:00Z',bindings:[{codexThreadId:'thread',role:'parent',nativeStatus:'running'}]})
+    service.attachManagedExecution(run.id,old)
+    service.recordManagedUpdate({...old,stage:'cancelled',runStatus:'cancelled'})
+    assert.equal(service.getExecution(run.id).status,'cancelling')
+    assert.throws(()=>service.beginExecution(root.id,'implementation','repo','/repo','retry'),/活动/)
+    service.recordManagedUpdate({...old,stage:'cancelled',runStatus:'cancelled',updatedAt:'2026-10-15T02:00:00Z',bindings:[{codexThreadId:'thread',role:'parent',nativeStatus:'idle'}]})
+    assert.equal(service.getExecution(run.id).status,'cancelled');assert.notEqual(service.getItem(root.id).status,'cancelled')
+  })
+  it('prevents overlapping parent and child executions and rejects blocked child delivery', () => {
+    const {service,create,command}=fixture(),root=create(),child=create('节点',root.id),run=service.beginExecution(root.id,'implementation','repo','/repo','parent')
+    assert.throws(()=>service.beginExecution(child.id,'implementation','repo','/repo','child'),/活动/)
+    service.setExecutionResult(run.id,'failed','失败')
+    command({type:'block',id:child.id,expectedVersion:child.rowVersion,reason:'接口未提供'})
+    assert.throws(()=>service.beginExecution(root.id,'implementation','repo','/repo','retry'),/节点仍有/)
+  })
+  it('recovers interrupted executions without automatically rerunning or finishing business work', () => {
+    const {service,create}=fixture(),a=create('未发送'),b=create('已发送')
+    const queued=service.beginExecution(a.id,'implementation','repo-a','/repo-a','queued'),attached=service.beginExecution(b.id,'implementation','repo','/repo','attached')
+    service.attachManagedExecution(attached.id,managed({runStatus:'running',stage:'executing'}))
+    service.recoverExecutions()
+    assert.equal(service.getExecution(queued.id).status,'failed'); assert.equal(service.getExecution(attached.id).status,'unknown')
+    assert.equal(service.getItem(b.id).status,'todo')
+    assert.throws(()=>service.beginExecution(b.id,'implementation','repo','/repo','new'),/待核对/)
+  })
+  it('keeps terminal execution status while accepting later commit and push evidence', () => {
+    const {service,create}=fixture(),root=create(),run=service.beginExecution(root.id,'implementation','repo','/repo','run')
+    service.attachManagedExecution(run.id,managed({updatedAt:'2026-10-15T01:00:00Z'}))
+    service.setExecutionResult(run.id,'succeeded','执行结束')
+    service.recordManagedUpdate(managed({commitSha:'later-commit',stage:'completed',updatedAt:'2026-10-16T01:00:00Z'}))
+    assert.equal(service.getExecution(run.id).status,'succeeded'); assert.equal(service.getExecution(run.id).delivery?.commitSha,'later-commit')
+    assert.notEqual(service.getItem(root.id).status,'done')
+  })
+  it('rejects stale child edits, cyclic drafts, unrelated execution links and late cancelled plans', () => {
+    const {service,create,command}=fixture(),root=create(),child=create('节点',root.id)
+    const draft=command({type:'save-draft',id:root.id,expectedVersion:service.getItem(root.id).rowVersion,items:[{id:'a',existingWorkItemId:child.id,title:'旧说明',description:'',acceptanceText:'',dependencyIds:[]}]}).entityId
+    command({type:'update',id:child.id,expectedVersion:child.rowVersion,patch:{description:'后来修改'}})
+    assert.throws(()=>command({type:'apply-draft',draftId:draft,draftVersion:1,expectedVersion:service.getItem(root.id).rowVersion}),/范围已变化/)
+    assert.equal(service.getItem(child.id).description,'后来修改')
+    assert.throws(()=>command({type:'save-draft',id:root.id,expectedVersion:service.getItem(root.id).rowVersion,items:[{id:'a',title:'一',description:'',acceptanceText:'',dependencyIds:['b']},{id:'b',title:'二',description:'',acceptanceText:'',dependencyIds:['a']}]}),/循环/)
+    const other=create('其他'),run=service.beginExecution(other.id,'planning','repo','/repo','planning')
+    assert.throws(()=>service.createDraftFromAi(root.id,run.id,'{"subtasks":[{"title":"错任务"}]}'),/失效/)
+    service.setExecutionResult(run.id,'cancelled','取消')
+    assert.throws(()=>service.createDraftFromAi(other.id,run.id,'{"subtasks":[{"title":"迟到"}]}'),/失效/)
+  })
+  it('makes AI draft reads repeatable and records explicit draft discard', () => {
+    const {service,create,command}=fixture(),root=create(),run=service.beginExecution(root.id,'planning','repo','/repo','planning')
+    const first=service.createDraftFromAi(root.id,run.id,'{"subtasks":[{"title":"节点"}]}')
+    assert.equal(service.createDraftFromAi(root.id,run.id,'{"subtasks":[{"title":"节点"}]}').id,first.id)
+    command({type:'discard-draft',id:root.id,expectedVersion:root.rowVersion,draftId:first.id,draftVersion:1})
+    assert.equal(service.getSnapshot().drafts[0].status,'discarded')
+  })
+  it('stops or fails an execution without cancelling or completing the business task',()=>{
+    const {service,create}=fixture(),item=create(),run=service.beginExecution(item.id,'implementation','repo','/repo','run')
+    assert.equal(service.beginExecution(item.id,'implementation','repo','/repo','run').id,run.id)
+    service.setExecutionResult(run.id,'failed','失败')
+    assert.equal(service.getItem(item.id).status,'todo')
+    const retry=service.beginExecution(item.id,'implementation','repo','/repo','retry')
+    assert.equal(retry.attemptNo,2)
+    service.setExecutionResult(retry.id,'cancelled','停止')
+    assert.equal(service.getItem(item.id).status,'todo')
+  })
+  it('does not resurrect terminal executions when a stale managed update arrives',()=>{
+    const {service,create}=fixture(),item=create(),run=service.beginExecution(item.id,'implementation','repo','/repo','run'),old=managed({stage:'executing',runStatus:'running',updatedAt:'2026-10-15T01:00:00Z'})
+    service.attachManagedExecution(run.id,old)
+    service.setExecutionResult(run.id,'cancelled','停止')
+    service.recordManagedUpdate(old)
+    assert.equal(service.getExecution(run.id).status,'cancelled')
+    assert.notEqual(service.getItem(item.id).status,'done')
+  })
+  it('applies drafts with stable node IDs and retains removed nodes as cancelled history',()=>{
+    const {service,create,command}=fixture(),root=create(),child=create('保留',root.id),removed=create('移出',root.id)
+    const draftId=command({type:'save-draft',id:root.id,expectedVersion:service.getItem(root.id).rowVersion,items:[{id:'existing',existingWorkItemId:child.id,title:'保留',description:'',acceptanceText:'',dependencyIds:[]},{id:'new',title:'新增',description:'',acceptanceText:'通过测试',dependencyIds:['existing']}]}).entityId
+    command({type:'apply-draft',draftId,expectedVersion:service.getItem(root.id).rowVersion,draftVersion:1})
+    assert.equal(service.getItem(removed.id).status,'cancelled')
+    assert.equal(service.getItem(child.id).id,child.id)
+    assert.deepEqual(service.getSnapshot().items.find(item=>item.title==='新增')?.dependencyIds,[child.id])
+    assert.deepEqual(service.getSnapshot().items.filter(item=>item.parentId===root.id&&item.status!=='cancelled').map(item=>item.title),['保留','新增'])
+  })
+  it('rejects stale drafts and protects accepted scope from silent replanning',()=>{
+    const {service,create,command,transition}=fixture(),root=create(),child=create('已验收',root.id)
+    transition(child.id,'accept')
+    const draftId=command({type:'save-draft',id:root.id,expectedVersion:service.getItem(root.id).rowVersion,items:[{id:'new',title:'替代',description:'',acceptanceText:'',dependencyIds:[]}]}).entityId
+    assert.throws(()=>command({type:'apply-draft',draftId,expectedVersion:service.getItem(root.id).rowVersion,draftVersion:1}),/已验收节点不能/)
+    assert.equal(service.getItem(child.id).status,'done')
+    assert.equal(service.getSnapshot().items.length,2)
+  })
+})

@@ -2067,7 +2067,8 @@ type CodexTaskMonitorSummary = {
 
 type CodexUncommittedAlert = {
   id: string
-  sourceType: 'session' | 'task'
+  providerId?: 'codex' | 'cursor'
+  sourceType: 'session' | 'task' | 'cursor-agent'
   sourceId: string
   completionMarker: string
   codexKey: string
@@ -2086,6 +2087,7 @@ type CodexUncommittedAlert = {
 }
 
 type CodexProjectMonitorItem = {
+  providerId?: 'codex' | 'cursor'
   key: string
   cwd: string
   forgeProjectId: string | null
@@ -2121,6 +2123,19 @@ type CodexProjectMonitorSnapshot = {
   completed: number
   failed: number
   sessions: CodexSessionSummary[]
+  cursor?: {
+    available: boolean
+    checkedAt: string
+    error: string
+    source: string
+    projects: CodexProjectMonitorItem[]
+    alerts: CodexUncommittedAlert[]
+    running: number
+    uncommitted: number
+    unlinked: number
+    completed: number
+    failed: number
+  }
 }
 
 type CodexSessionEventType = 'item' | 'running' | 'updated' | 'completed' | 'failed' | 'cancelled'
@@ -2875,7 +2890,7 @@ type MarketDataSnapshot = {
 }
 
 interface Window {
-  forgeDesk: {
+  forgeDesk: import('../../shared/project-progress').ProjectProgressApi & {
     listProjects: () => Promise<WorkspaceSnapshot>
     createProject: (input: { name: string; workspacePath: string; repositories: ScannedRepository[] }) => Promise<WorkspaceSnapshot>
     createEmptyProject: (input: { name: string; parentPath: string }) => Promise<WorkspaceSnapshot>

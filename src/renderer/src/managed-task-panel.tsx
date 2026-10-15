@@ -1,11 +1,10 @@
 import { CheckCircleOutlined, CloudSyncOutlined, CodeOutlined, FolderOpenOutlined, MessageOutlined, PlayCircleOutlined, PlusOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
 import { Button, Empty, Form, Input, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ManagedTask, ManagedTaskPlanItem, ManagedTaskStage } from './data'
 import { resolveManagedTaskCodexThreadId } from './managed-task-view'
 import { useForgeDeskStore } from './store'
-import { readStoredTaskItems, writeStoredTaskItems } from './task-list-view'
 
 const labels: Record<ManagedTaskStage, string> = {
   created: '已创建', planning: 'Codex 分析中', ready: '待确认执行', branching: '创建分支中', executing: '执行中', 'codex-complete': 'Codex 已完成', 'completed-no-changes': '已完成（无代码变更）', 'awaiting-review': '待审核', 'awaiting-commit': '待提交', 'awaiting-target': '待选择发布分支', merging: '合并中', merged: '已合并', pushing: '推送中', completed: '已完成', failed: '执行失败', cancelled: '已取消', 'needs-attention': '需处理', unassigned: '待关联项目'
@@ -36,7 +35,6 @@ export function ManagedTaskPanel({ onOpenCodexSession }: ManagedTaskPanelProps):
   const [form] = Form.useForm<{ title: string; description: string; projectId: string; repositoryId: string; autoExecute: boolean }>()
   const [planText, setPlanText] = useState('')
   const [cancellingTaskIds, setCancellingTaskIds] = useState<Set<string>>(() => new Set())
-  const migratedLegacyTasks = useRef(false)
 
   const visible = useMemo(() => tasks.filter((task) => projectFilter === 'all' || task.projectId === projectFilter), [projectFilter, tasks])
   const projectName = (projectId: string) => projects.find((project) => project.id === projectId)?.name || '待关联项目'
@@ -49,14 +47,6 @@ export function ManagedTaskPanel({ onOpenCodexSession }: ManagedTaskPanelProps):
     if (!window.forgeDesk) return
     setLoading(true)
     try {
-      if (!migratedLegacyTasks.current) {
-        const legacyTasks = readStoredTaskItems()
-        if (legacyTasks.length) {
-          await window.forgeDesk.importLegacyManagedTasks(legacyTasks)
-          writeStoredTaskItems([])
-        }
-        migratedLegacyTasks.current = true
-      }
       if (sync) await window.forgeDesk.syncManagedTasks()
       setTasks(await window.forgeDesk.listManagedTasks())
     } catch (error) {

@@ -2283,7 +2283,8 @@ export type CodexTaskMonitorSummary = {
 
 export type CodexUncommittedAlert = {
   id: string
-  sourceType: 'session' | 'task'
+  providerId?: 'codex' | 'cursor'
+  sourceType: 'session' | 'task' | 'cursor-agent'
   sourceId: string
   completionMarker: string
   codexKey: string
@@ -2304,6 +2305,7 @@ export type CodexUncommittedAlert = {
 export type CodexProjectMonitorStatus = 'running' | 'attention' | 'completed' | 'clean' | 'unknown'
 
 export type CodexProjectMonitorItem = {
+  providerId?: 'codex' | 'cursor'
   key: string
   cwd: string
   forgeProjectId: string | null
@@ -2339,6 +2341,19 @@ export type CodexProjectMonitorSnapshot = {
   completed: number
   failed: number
   sessions: CodexSessionSummary[]
+  cursor?: {
+    available: boolean
+    checkedAt: string
+    error: string
+    source: string
+    projects: CodexProjectMonitorItem[]
+    alerts: CodexUncommittedAlert[]
+    running: number
+    uncommitted: number
+    unlinked: number
+    completed: number
+    failed: number
+  }
 }
 
 export type CodexSessionEventType = 'item' | 'running' | 'updated' | 'completed' | 'failed' | 'cancelled'

@@ -107,6 +107,7 @@ import {
   CodexProjectMonitorService,
   codexProjectKey,
   findAutomaticCodexProjectId,
+  inspectCodexGitWorkspace,
   migrateCodexProjectMonitorTables,
   listCodexProjectLinks,
   type CodexProjectLink,
@@ -115,6 +116,9 @@ import {
   type MonitorProjectRecord,
   type CodexUncommittedAlert
 } from './codex-project-monitor'
+import { CursorMonitorService } from './cursor-monitor'
+import { ProjectProgressService, migrateProjectProgressTables } from './project-progress'
+import type { ProgressAiInput, ProgressCommand, ProgressSnapshotQuery } from '../shared/project-progress'
 import {
   deleteProjectGroup,
   listProjectGroups,
@@ -1023,6 +1027,9 @@ const codexTaskService = new CodexTaskService({
   resolveCodexHome: (accountId) => resolveCodexHome(app.getPath('userData'), accountId)
 })
 const managedTaskService = new ManagedTaskService(() => getDatabase())
+const projectProgressService = new ProjectProgressService(() => getDatabase(), () => new Date(), () => {
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('project-progress:updated')
+})
 let managedCodexThreadService: CodexAppServerThreadService | null = null
 const codexActivityService = new CodexActivityService()
 const codexSiteService = new CodexSiteService({ db: () => getDatabase() })
@@ -1038,19 +1045,34 @@ const codexProjectMonitorService = new CodexProjectMonitorService({
   listTasks: () => codexTaskService.list(),
   onAlert: (alert) => sendCodexMonitorAlert(alert)
 })
+const cursorMonitorService = new CursorMonitorService({
+  db: () => getDatabase(),
+  listGroups: () => listProjectGroups(getDatabase()),
+  listProjects: () => listCodexMonitorProjects(),
+  inspectGit: inspectCodexGitWorkspace,
+  onAlert: (alert) => sendCodexMonitorAlert(alert)
+})
 let codexMonitorRefreshPromise: Promise<CodexProjectMonitorSnapshot> | null = null
+let aiMonitorTimer: NodeJS.Timeout | null = null
 
 async function refreshCodexProjectMonitor(emit = true): Promise<CodexProjectMonitorSnapshot> {
   if (codexMonitorRefreshPromise) return codexMonitorRefreshPromise
-  codexMonitorRefreshPromise = codexProjectMonitorService.snapshot()
-    .then((snapshot) => {
-      if (emit) sendCodexProjectMonitorEvent(snapshot)
-      return snapshot
+  codexMonitorRefreshPromise = Promise.all([codexProjectMonitorService.snapshot(), cursorMonitorService.snapshot()])
+    .then(([snapshot, cursor]) => {
+      const merged = { ...snapshot, cursor, alerts: [...snapshot.alerts, ...cursor.alerts], uncommitted: snapshot.uncommitted + cursor.uncommitted, running: snapshot.running + cursor.running, unlinked: snapshot.unlinked + cursor.unlinked }
+      if (emit) sendCodexProjectMonitorEvent(merged)
+      return merged
     })
     .finally(() => {
       codexMonitorRefreshPromise = null
     })
   return codexMonitorRefreshPromise
+}
+
+function startAiMonitorScheduler(): void {
+  if (aiMonitorTimer) return
+  aiMonitorTimer = setInterval(() => void refreshCodexProjectMonitor().catch((error) => console.warn('Scheduled AI monitor check skipped', error)), 30_000)
+  aiMonitorTimer.unref?.()
 }
 const releasePublishTasks = new Map<string, RepositoryReleasePublishTaskSnapshot>()
 const releasePublishTaskProcesses = new Map<string, ChildProcessWithoutNullStreams>()
@@ -1925,7 +1947,7 @@ function sendCodexMonitorAlert(alert: CodexUncommittedAlert): void {
 
   const notification = new Notification({
     body: `${alert.projectName || '未关联项目'} · ${alert.filesChanged} 个文件仍有未提交改动`,
-    title: 'Codex 执行完成，但工作区未提交'
+    title: alert.providerId === 'cursor' ? 'Cursor Agent 已结束，但工作区未提交' : 'Codex 执行完成，但工作区未提交'
   })
   notification.on('click', () => {
     const focusPayload = serializeGitIpcPayload('codex:project-monitor:focus', alert)
@@ -2431,6 +2453,7 @@ function migrateDatabase(db: Database.Database): void {
   migrateResourceGovernanceTables(db)
   migrateCodexTaskTables(db)
   migrateManagedTaskTables(db)
+  migrateProjectProgressTables(db)
   migrateProjectGroupTables(db)
   migrateCodexProjectMonitorTables(db)
   migrateCodexSiteTables(db)
@@ -2762,7 +2785,10 @@ function deleteProject(projectId: string): WorkspaceSnapshot {
     throw new Error('项目不存在')
   }
 
-  db.prepare('DELETE FROM projects WHERE id = ?').run(projectId)
+  db.transaction(() => {
+    projectProgressService.detachProject(projectId)
+    db.prepare('DELETE FROM projects WHERE id = ?').run(projectId)
+  })()
   return getWorkspaceSnapshot()
 }
 
@@ -8245,6 +8271,7 @@ ipcMain.handle('codex:runtime:status', async (_event, verify = false): Promise<A
   inspectCodexRuntime(Boolean(verify), await resolveCodexHome(app.getPath('userData'))))
 
 function sendManagedTaskEvent(task: ManagedTask): void {
+  try { projectProgressService.recordManagedUpdate(task) } catch (error) { console.error('Project progress execution sync failed', error) }
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send('managed-tasks:event', task)
 }
 
@@ -8359,7 +8386,7 @@ ipcMain.handle('managed-tasks:list', async (_event, projectId?: string): Promise
 
 ipcMain.handle('managed-tasks:sync', async (): Promise<ManagedTask[]> => syncManagedCodexThreads())
 
-ipcMain.handle('managed-tasks:cancel', async (_event, taskId: string): Promise<ManagedTask> => {
+async function cancelManagedProgressTask(taskId: string): Promise<ManagedTask> {
   const task = managedTaskService.get(taskId)
   if (!task) throw new Error('任务不存在')
   if (['completed', 'completed-no-changes', 'failed', 'cancelled'].includes(task.stage)) return task
@@ -8386,7 +8413,9 @@ ipcMain.handle('managed-tasks:cancel', async (_event, taskId: string): Promise<M
   try { await mirrorManagedTaskTitle(cancelled) } catch (error) { console.warn('Failed to mirror cancelled task title', error) }
   sendManagedTaskEvent(cancelled)
   return cancelled
-})
+}
+
+ipcMain.handle('managed-tasks:cancel', async (_event, taskId: string) => cancelManagedProgressTask(taskId))
 
 ipcMain.handle('managed-tasks:import-legacy', async (_event, legacyTasks: ManagedTaskLegacyImport[]): Promise<ManagedTask[]> => {
   const repositories = listRepositories()
@@ -8398,20 +8427,22 @@ ipcMain.handle('managed-tasks:import-legacy', async (_event, legacyTasks: Manage
   return imported
 })
 
-ipcMain.handle('managed-tasks:create', async (_event, input: Omit<ManagedTaskCreateInput, 'codexThreadId' | 'cwd'>): Promise<ManagedTask> => {
+async function createManagedProgressTask(input: Omit<ManagedTaskCreateInput, 'codexThreadId' | 'cwd'>, onCreated?: (task: ManagedTask) => void, onTurnStarted?: (turnId: string) => void): Promise<ManagedTask> {
   const repository = getRepositoryOrThrow(input.repositoryId)
   if (repository.projectId !== input.projectId) throw new Error('所选仓库不属于该项目')
   const codex = await getManagedCodexThreadService()
   const thread = await codex.startThread({ cwd: repository.localPath, title: input.title.trim(), sandbox: 'workspace-write' })
   const task = managedTaskService.create({ ...input, cwd: repository.localPath, codexThreadId: thread.id })
+  onCreated?.(task)
   const planning = managedTaskService.beginPlanning(task.id)
   try {
-    await codex.startTurn({
+    const turnId = await codex.startTurn({
       threadId: thread.id,
       cwd: repository.localPath,
       text: `请分析并拆分以下 ForgeDesk 任务。只输出可执行的子任务计划、依赖和验收标准，不要修改文件或运行命令。\n\n任务：${task.title}\n${task.description}`,
       outputSchema: { type: 'object', properties: { subtasks: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, description: { type: 'string' }, acceptance: { type: 'string' }, dependencyIndexes: { type: 'array', items: { type: 'integer' } } }, required: ['title'] } } }, required: ['subtasks'] }
     })
+    onTurnStarted?.(turnId)
     await mirrorManagedTaskTitle(planning)
     sendManagedTaskEvent(planning)
     return planning
@@ -8420,7 +8451,9 @@ ipcMain.handle('managed-tasks:create', async (_event, input: Omit<ManagedTaskCre
     sendManagedTaskEvent(failed)
     return failed
   }
-})
+}
+
+ipcMain.handle('managed-tasks:create', async (_event, input: Omit<ManagedTaskCreateInput, 'codexThreadId' | 'cwd'>) => createManagedProgressTask(input))
 
 ipcMain.handle('managed-tasks:plan', async (_event, input: { taskId: string; subtasks: ManagedTaskPlanItem[] }): Promise<ManagedTask> => {
   const task = managedTaskService.setPlan(input.taskId, input.subtasks)
@@ -8429,7 +8462,7 @@ ipcMain.handle('managed-tasks:plan', async (_event, input: { taskId: string; sub
   return task
 })
 
-ipcMain.handle('managed-tasks:execute', async (_event, input: { taskId: string; baseBranch?: string }): Promise<ManagedTask> => {
+async function executeManagedProgressTask(input: { taskId: string; baseBranch?: string }): Promise<ManagedTask> {
   const task = managedTaskService.get(input.taskId)
   if (!task) throw new Error('任务不存在')
   const repository = getRepositoryOrThrow(task.repositoryId)
@@ -8451,7 +8484,108 @@ ipcMain.handle('managed-tasks:execute', async (_event, input: { taskId: string; 
     sendManagedTaskEvent(next)
     return next
   }
+}
+
+ipcMain.handle('managed-tasks:execute', async (_event, input: { taskId: string; baseBranch?: string }) => executeManagedProgressTask(input))
+
+ipcMain.handle('project-progress:snapshot', (_event, query?: ProgressSnapshotQuery) => projectProgressService.getSnapshot(query))
+ipcMain.handle('project-progress:command', (_event, command: ProgressCommand) => projectProgressService.command(command))
+ipcMain.handle('project-progress:migration:preview', (_event, input: { legacyRaw: string | null }) => {
+  if (input.legacyRaw !== null && typeof input.legacyRaw !== 'string') throw new Error('无效的旧待办存储')
+  return projectProgressService.previewMigration(input.legacyRaw, managedTaskService.list())
 })
+ipcMain.handle('project-progress:migration:activate', async (_event, input: { batchId: string; inputHash: string; legacyRaw: string | null }) => {
+  const batch = projectProgressService.latestMigration()
+  if (!batch || batch.id !== input.batchId || batch.inputHash !== input.inputHash) throw new Error('迁移预览已变化，请重新核对')
+  if (batch.status === 'activated') return batch
+  const backupDirectory = join(app.getPath('userData'), 'progress-backups')
+  await mkdir(backupDirectory, { recursive: true })
+  const backupPath = join(backupDirectory, `forgedesk-${randomUUID()}.db`)
+  await getDatabase().backup(backupPath)
+  return projectProgressService.activateMigration(input.batchId, input.inputHash, input.legacyRaw, managedTaskService.list(), backupPath)
+})
+
+const pendingProgressAiCommands = new Map<string, {key:string;operation:Promise<unknown>}>()
+ipcMain.handle('project-progress:ai', async (_event, input: ProgressAiInput) => {
+  if (typeof input?.commandId !== 'string' || !input.commandId.trim()) throw new Error('缺少执行命令 ID')
+  const key = JSON.stringify([input.action,input.workItemId,input.repositoryId || null,input.executionId || null])
+  const pending = pendingProgressAiCommands.get(input.commandId)
+  if (pending) {if (pending.key !== key) throw new Error('相同执行命令 ID 的请求内容发生变化'); return pending.operation}
+  const operation = runProjectProgressAi(input)
+  pendingProgressAiCommands.set(input.commandId, {key,operation})
+  try { return await operation } finally { pendingProgressAiCommands.delete(input.commandId) }
+})
+
+async function runProjectProgressAi(input: ProgressAiInput) {
+  const work = projectProgressService.getItem(input.workItemId)
+  if (!projectProgressService.isActive()) throw new Error('请先核对迁移并启用原生任务')
+  if (input.action === 'sync') {
+    await syncManagedCodexThreads()
+    const run = input.executionId ? projectProgressService.getExecution(input.executionId) : null
+    if (run && run.workItemId !== work.id) throw new Error('执行记录不属于此任务')
+    return run
+  }
+  if (input.action === 'cancel' || input.action === 'read-plan') {
+    if (!input.executionId) throw new Error('请选择执行记录')
+    const run = projectProgressService.getExecution(input.executionId)
+    if (run.workItemId !== work.id) throw new Error('执行记录不属于此任务')
+    if (input.action === 'cancel') {
+      if (['succeeded', 'failed', 'cancelled'].includes(run.status)) return run
+      if (!run.managedTaskId) throw new Error('执行尚未完成启动，请先同步并核对')
+      projectProgressService.setExecutionResult(run.id, 'cancelling', '已请求停止，等待 Codex 确认')
+      try {
+        const stopped = await cancelManagedProgressTask(run.managedTaskId)
+        projectProgressService.recordManagedUpdate(stopped)
+        return projectProgressService.getExecution(run.id)
+      } catch (error) {
+        projectProgressService.setExecutionResult(run.id, 'unknown', '停止结果未确认，请同步核对')
+        throw error
+      }
+    }
+    if (!run.threadId || run.purpose !== 'planning') throw new Error('此记录不是 AI 规划会话')
+    const session = await codexSessionService.get(run.threadId)
+    if (session.status === 'running') throw new Error('AI 仍在分析，请等待完成后读取计划')
+    const message = [...session.items].reverse().find((item) => item.kind === 'assistant' && item.text.includes('subtasks'))
+    if (!message) throw new Error('尚未读取到结构化计划，可稍后重试或手动编辑草稿')
+    const draft = projectProgressService.createDraftFromAi(work.id, run.id, message.text)
+    const managed = run.managedTaskId ? managedTaskService.get(run.managedTaskId) : null
+    if (managed && ['planning', 'created', 'ready'].includes(managed.stage)) {
+      const planned = managedTaskService.setPlan(managed.id, draft.items.map(item => ({title:item.title,description:item.description,acceptance:item.acceptanceText,dependencyIndexes:item.dependencyIds.map(id => draft.items.findIndex(node => node.id === id))})))
+      sendManagedTaskEvent(planned)
+    }
+    projectProgressService.setExecutionResult(run.id, 'succeeded', 'AI 计划已读取，等待确认差异')
+    return draft
+  }
+  if (input.action !== 'plan' && input.action !== 'execute') throw new Error('无效的 AI 操作')
+  const repository = getRepositoryOrThrow(input.repositoryId || '')
+  if (repository.projectId !== work.projectId) throw new Error('所选仓库不属于任务项目')
+  const run = projectProgressService.beginExecution(work.id, input.action === 'plan' ? 'planning' : 'implementation', repository.id, repository.localPath, input.commandId)
+  if (run.status !== 'queued' || run.managedTaskId) return run
+  try {
+    if (input.action === 'plan') {
+      const task = await createManagedProgressTask({ title: work.title, description: `${work.description}\n验收条件：${work.acceptanceText}`, projectId: repository.projectId, repositoryId: repository.id, autoExecute: false },
+        (task) => projectProgressService.attachManagedExecution(run.id, task),
+        (turnId) => projectProgressService.setExecutionResult(run.id, 'running', 'AI 正在分析计划', turnId))
+      projectProgressService.recordManagedUpdate(task)
+    } else {
+      if (managedTaskService.list().some(task => task.repositoryId === repository.id && task.runStatus === 'running')) throw new Error('此仓库仍有历史 AI 执行，请先在历史工作流核对或停止')
+      const codex = await getManagedCodexThreadService()
+      const thread = await codex.startThread({ cwd: repository.localPath, title: work.title, sandbox: 'workspace-write' })
+      let task = managedTaskService.create({ title: work.title, description: work.description, projectId: repository.projectId, repositoryId: repository.id, cwd: repository.localPath, codexThreadId: thread.id, autoExecute: false })
+      projectProgressService.attachManagedExecution(run.id, task)
+      const children = projectProgressService.getSnapshot({ projectId: repository.projectId }).items.filter((item) => item.parentId === work.id && !['done', 'cancelled'].includes(item.status))
+      const nodes = children.length ? children : [work]
+      task = managedTaskService.setPlan(task.id, nodes.map((item) => ({ title: item.title, description: item.description, acceptance: item.acceptanceText, dependencyIndexes: item.dependencyIds.map((id) => nodes.findIndex((node) => node.id === id)).filter((index) => index >= 0) })))
+      projectProgressService.attachManagedNodes(task, nodes.map((item) => item.id))
+      await executeManagedProgressTask({ taskId: task.id })
+    }
+    return projectProgressService.getExecution(run.id)
+  } catch (error) {
+    const latest = projectProgressService.getExecution(run.id)
+    projectProgressService.setExecutionResult(run.id, latest.managedTaskId ? 'unknown' : 'failed', error instanceof Error ? error.message : String(error))
+    throw error
+  }
+}
 
 ipcMain.handle('managed-tasks:review:approve', async (_event, taskId: string): Promise<ManagedTask> => {
   const task = managedTaskService.approveReview(taskId); await mirrorManagedTaskTitle(task); sendManagedTaskEvent(task); return task
@@ -9130,6 +9264,7 @@ function startStorageGovernanceScheduler(): void {
 }
 
 app.whenReady().then(async () => {
+  projectProgressService.recoverExecutions()
   await syncActiveCodexHome(app.getPath('userData')).catch((error) => console.warn('Failed to sync active Codex account', error))
 
   if (process.platform === 'darwin' && existsSync(appIconPath)) {
@@ -9155,6 +9290,7 @@ app.whenReady().then(async () => {
   const openedAsHidden = app.isPackaged && app.getLoginItemSettings().wasOpenedAsHidden
   createWindow(!openedAsHidden)
   void refreshCodexProjectMonitor(false).catch((error) => console.warn('Initial Codex project monitor check skipped', error))
+  startAiMonitorScheduler()
   startServiceMonitorScheduler()
   resourceMonitorService.start()
   startStorageGovernanceScheduler()

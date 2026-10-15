@@ -52,11 +52,11 @@ const allProjectDetailFeatures: ProjectDetailTabAvailability = {
 
 describe('project detail view helpers', () => {
   it('keeps the repository summary visible across all project detail tabs', () => {
-    const tabs: ProjectDetailTabKey[] = ['data', 'log-tree', 'remote-alignment', 'plane', 'service-monitor', 'terminal']
+    const tabs: ProjectDetailTabKey[] = ['data', 'log-tree', 'progress', 'remote-alignment', 'plane', 'codex-work', 'service-monitor', 'terminal']
 
     assert.deepEqual(
       tabs.map((tab) => shouldShowRepositorySummary(tab, true)),
-      [true, true, true, true, true, true]
+      [true, true, true, true, true, true, true, true]
     )
     assert.equal(shouldShowRepositorySummary('data', false), false)
   })
@@ -64,7 +64,7 @@ describe('project detail view helpers', () => {
   it('orders project detail tabs around the branch tree workflow', () => {
     assert.deepEqual(
       PROJECT_DETAIL_TABS.map((tab) => tab.key),
-      ['log-tree', 'data', 'terminal', 'remote-alignment', 'plane', 'service-monitor']
+      ['log-tree', 'progress', 'data', 'terminal', 'remote-alignment', 'plane', 'codex-work', 'service-monitor']
     )
 
     assert.equal(PROJECT_DETAIL_TABS[0]?.key, 'log-tree')
@@ -76,12 +76,12 @@ describe('project detail view helpers', () => {
         ...allProjectDetailFeatures,
         hasBoundServices: false
       }).map((tab) => tab.key),
-      ['log-tree', 'data', 'terminal', 'remote-alignment', 'plane']
+      ['log-tree', 'progress', 'data', 'terminal', 'remote-alignment', 'plane', 'codex-work']
     )
 
     assert.deepEqual(
       createProjectDetailTabs(allProjectDetailFeatures).map((tab) => tab.key),
-      ['log-tree', 'data', 'terminal', 'remote-alignment', 'plane', 'service-monitor']
+      ['log-tree', 'progress', 'data', 'terminal', 'remote-alignment', 'plane', 'codex-work', 'service-monitor']
     )
   })
 
@@ -92,7 +92,7 @@ describe('project detail view helpers', () => {
         hasRemoteAlignment: false,
         hasPlane: false
       }).map((tab) => tab.key),
-      ['log-tree', 'data', 'terminal']
+      ['log-tree', 'progress', 'data', 'terminal', 'codex-work']
     )
 
     assert.deepEqual(
@@ -101,7 +101,7 @@ describe('project detail view helpers', () => {
         hasRemoteAlignment: true,
         hasPlane: false
       }).map((tab) => tab.key),
-      ['log-tree', 'data', 'terminal', 'remote-alignment']
+      ['log-tree', 'progress', 'data', 'terminal', 'remote-alignment', 'codex-work']
     )
   })
 
