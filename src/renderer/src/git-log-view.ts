@@ -18,7 +18,7 @@ export type GraphParentEdge = {
 }
 
 export const gitGraphLaneWidth = 16
-export const gitGraphColumnMinWidth = 152
+export const gitGraphColumnMinWidth = 64
 export const workingTreeCommitHash = '__FORGEDESK_WORKING_TREE__'
 export const gitLogRefreshPreferenceStorageKey = 'forgedesk.gitLogRefreshPreferences'
 export const gitLogRefreshPreferenceChangedEvent = 'forgedesk:git-log-refresh-preferences-changed'
@@ -37,7 +37,7 @@ export const gitLogMaxLoadedCommitOptions = [100, 200, 300, 400, 500, 600, 700, 
 export const gitLogScrollLoadBatchSize = 50
 export const gitLogScrollPrefetchCommitCount = 20
 export const gitLogWindowSize = 100
-const gitGraphColumnPadding = 56
+const gitGraphColumnPadding = 32
 
 export type GitLogRefreshPreferences = {
   autoRefreshEnabled: boolean
@@ -355,9 +355,16 @@ export function getGraphLaneColor(index: number): string {
   return `hsl(${hue} ${saturation}% ${lightness}%)`
 }
 
+export function getGitGraphLayout(rows: GitGraphRow[]): { columnWidth: number; laneOffset: number } {
+  const laneCount = rows.reduce((max, row) => Math.max(max, getGraphLaneCount(row)), 1)
+  const columnWidth = Math.max(gitGraphColumnMinWidth, laneCount * gitGraphLaneWidth + gitGraphColumnPadding)
+  // Every row shares this offset: centering each row separately would break passing lanes.
+  const laneOffset = (columnWidth - laneCount * gitGraphLaneWidth) / 2 + gitGraphLaneWidth / 2
+  return { columnWidth, laneOffset }
+}
+
 export function getGitGraphColumnWidth(rows: GitGraphRow[]): number {
-  const maxLaneCount = rows.reduce((max, row) => Math.max(max, getGraphLaneCount(row)), 1)
-  return Math.max(gitGraphColumnMinWidth, maxLaneCount * gitGraphLaneWidth + gitGraphColumnPadding)
+  return getGitGraphLayout(rows).columnWidth
 }
 
 export function getGraphCellBottomLaneIndexes(row: GitGraphRow): number[] {

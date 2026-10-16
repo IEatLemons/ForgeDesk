@@ -6728,10 +6728,18 @@ button.app-status-bar-item:hover {
 }
 
 .source-tree-table .ant-table-thead > tr > th {
-  padding-top: 8px !important;
-  padding-bottom: 8px !important;
+  height: 36px;
+  padding-top: 6px !important;
+  padding-bottom: 6px !important;
+  color: var(--app-muted);
+  font-size: 12px;
+  font-weight: 500;
   border-bottom: 1px solid var(--table-border) !important;
   background: var(--table-header-bg) !important;
+}
+
+.source-tree-table .ant-table-thead > tr > th.commit-graph-column {
+  text-align: center;
 }
 
 .source-tree-table .ant-table-tbody > tr.ant-table-row > td {
@@ -6952,10 +6960,10 @@ button.app-status-bar-item:hover {
   inset: 0;
   display: flex;
   align-items: stretch;
-  min-width: 42px;
+  min-width: 0;
   max-width: none;
   height: auto;
-  padding-left: 24px;
+  padding: 0;
   overflow: hidden;
 }
 

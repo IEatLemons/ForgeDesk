@@ -317,7 +317,7 @@ import {
   getWorkspaceFileChangeStatus,
   getCommitAuthorDisplay,
   getCommitAuthorFilterValue,
-  getGitGraphColumnWidth,
+  getGitGraphLayout,
   getGraphLaneColor,
   isWorkingTreeCommit,
   mergeGitLogCommitWindow,
@@ -1679,21 +1679,13 @@ function createGraphParentPath({
   ].join(' ')
 }
 
-function CommitGraphCell({ commit }: { commit: BranchColoredGitGraphRow<RepositoryLogCommit> }): JSX.Element {
+function CommitGraphCell({ commit, columnWidth, laneOffset }: { commit: BranchColoredGitGraphRow<RepositoryLogCommit>; columnWidth: number; laneOffset: number }): JSX.Element {
   const isMerge = commit.parentHashes.length > 1
   const isWorkingTree = isWorkingTreeCommit(commit)
   const graphCellBottomLaneIndexes = getGraphCellBottomLaneIndexes(commit)
   const graphCellBottomLaneIndexSet = new Set(graphCellBottomLaneIndexes)
   const graphCellSideContinuationLaneIndexes = commit.graphBottomLaneIndexes.filter((laneIndex) => !graphCellBottomLaneIndexSet.has(laneIndex))
-  const allLaneIndexes = [
-    commit.graphLaneIndex,
-    ...commit.graphParentLaneIndexes,
-    ...commit.graphTopLaneIndexes,
-    ...commit.graphBottomLaneIndexes
-  ]
-  const laneCount = Math.max(commit.graphLanes.length, ...allLaneIndexes.map((index) => index + 1), 1)
-  const svgWidth = Math.max(42, laneCount * gitGraphLaneWidth)
-  const xForLane = (index: number): number => index * gitGraphLaneWidth + gitGraphLaneWidth / 2
+  const xForLane = (index: number): number => laneOffset + index * gitGraphLaneWidth
   const parentEdges = commit.graphParentEdges.filter((edge) => edge.fromLaneIndex !== edge.toLaneIndex)
   const getLaneColor = (laneIndex: number): string => (isWorkingTree ? '#98a2b3' : commit.graphLaneColors[laneIndex] ?? getGraphLaneColor(laneIndex))
 
@@ -1704,7 +1696,7 @@ function CommitGraphCell({ commit }: { commit: BranchColoredGitGraphRow<Reposito
         className="commit-graph-svg"
         focusable="false"
         height="100%"
-        width={svgWidth}
+        width={columnWidth}
       >
         {commit.graphTopLaneIndexes.map((laneIndex) => (
           <line
@@ -19414,7 +19406,8 @@ function RepositoryLogTree({
   const graphRows = useMemo(() => createGraphRows(graphCommits), [graphCommits])
   const coloredGraphRows = useMemo(() => applyBranchColorsToGraphRows(graphRows, branchTags, activeBranchName, remoteNames), [activeBranchName, branchTags, graphRows, remoteNames])
   const visibleGraphRows = coloredGraphRows
-  const graphColumnWidth = useMemo(() => getGitGraphColumnWidth(visibleGraphRows), [visibleGraphRows])
+  const graphLayout = useMemo(() => getGitGraphLayout(visibleGraphRows), [visibleGraphRows])
+  const graphColumnWidth = graphLayout.columnWidth
   const hasNewerCommits = commitWindowStart > 0
   const isEmptyRepositoryHistory = activeRepositoryForLog?.latestCommit.trim() === 'No commits yet' && commits.length === 0 && (workspaceStatus?.files.length ?? 0) === 0
   const authorOptions = useMemo(
@@ -20335,7 +20328,7 @@ function RepositoryLogTree({
                 className: 'commit-graph-column',
                 onCell: () => ({ style: { width: graphColumnWidth, minWidth: graphColumnWidth } }),
                 onHeaderCell: () => ({ style: { width: graphColumnWidth, minWidth: graphColumnWidth } }),
-                render: (_, commit) => <CommitGraphCell commit={commit} />
+                render: (_, commit) => <CommitGraphCell commit={commit} columnWidth={graphColumnWidth} laneOffset={graphLayout.laneOffset} />
               },
               {
                 title: '提交',
