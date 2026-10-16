@@ -2,6 +2,7 @@ export type ProjectStatus = 'ready' | 'needs-setup' | 'warning'
 
 export type Project = {
   id: string
+  archivedAt?: string | null
   name: string
   description: string
   status: ProjectStatus

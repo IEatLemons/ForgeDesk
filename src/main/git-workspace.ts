@@ -217,6 +217,12 @@ export function buildGitFetchRemoteArgs(remoteName: string): string[] {
   return ['fetch', assertRemoteName(remoteName), '--prune', '--tags']
 }
 
+export function buildGitPullArgs(input: { remote: string; branch: string }): string[] {
+  const remote=assertRemoteName(input.remote),branch=assertSafeBranchName(input.branch,'拉取分支')
+  if(remote.startsWith('-')||branch.startsWith('-')||branch.includes('..')||branch.endsWith('/'))throw new Error('不支持的拉取目标')
+  return ['pull','--ff-only','--',remote,branch]
+}
+
 export function buildGitPushTargetRemoteRefArgs(remote: string, branch: string): string[] {
   return [`refs/remotes/${assertRemoteName(remote)}/${assertSafeRef(branch, '分支')}`]
 }

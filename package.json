@@ -10,6 +10,8 @@
   },
   "type": "module",
   "scripts": {
+    "prototype": "vite --config vite.prototype.config.ts",
+    "prototype:build": "vite build --config vite.prototype.config.ts",
     "rebuild:native": "node scripts/rebuild-native.mjs",
     "build:menu-bar-helper": "node scripts/build-menu-bar-helper.mjs",
     "dev": "node scripts/build-menu-bar-helper.mjs && node scripts/rebuild-native.mjs && electron-vite dev",

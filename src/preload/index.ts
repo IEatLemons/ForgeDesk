@@ -7,6 +7,14 @@ function invokeGitIpc<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 contextBridge.exposeInMainWorld('forgeDesk', {
+  onWorkspaceUpdated: (listener: (snapshot: WorkspaceSnapshot) => void) => {
+    const wrapped=(_event:Electron.IpcRendererEvent,payload:unknown):void=>listener(parseGitIpcPayload<WorkspaceSnapshot>('workspace:updated',payload))
+    ipcRenderer.on('workspace:updated',wrapped)
+    return ()=>ipcRenderer.removeListener('workspace:updated',wrapped)
+  },
+  readProjectRuntime: (projectId: string) => ipcRenderer.invoke('project:runtime:read', projectId),
+  refreshProjectRuntime: (input: { projectId: string; targetId: string }) => ipcRenderer.invoke('project:runtime:refresh', input),
+  readProjectRuntimeLogs: (input: { projectId: string; targetId: string }) => ipcRenderer.invoke('project:runtime:logs', input),
   getProjectProgress: (query?: ProgressSnapshotQuery) => ipcRenderer.invoke('project-progress:snapshot', query),
   runProjectProgressCommand: (command: ProgressCommand) => ipcRenderer.invoke('project-progress:command', command),
   previewProjectProgressMigration: (input: { legacyRaw: string | null }) => ipcRenderer.invoke('project-progress:migration:preview', input),
@@ -18,6 +26,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
     return () => ipcRenderer.removeListener('project-progress:updated', wrapped)
   },
   listProjects: () => invokeGitIpc<WorkspaceSnapshot>('projects:list'),
+  setProjectArchived: (input: { id: string; archived: boolean }) => invokeGitIpc<WorkspaceSnapshot>('projects:archive', input),
   createProject: (input: { name: string; workspacePath: string; repositories: ScannedRepository[] }) => invokeGitIpc<WorkspaceSnapshot>('projects:create', input),
   createEmptyProject: (input: { name: string; parentPath: string }) => invokeGitIpc<WorkspaceSnapshot>('projects:create-empty', input),
   createProjectFromRemote: (input: { name: string; remoteUrl: string; parentPath: string }) => invokeGitIpc<WorkspaceSnapshot>('projects:create-from-remote', input),
@@ -59,6 +68,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   switchRepositoryBranch: (repositoryId: string, input: GitBranchSwitchInput) => invokeGitIpc<RepositoryRecord>('repository:branch:switch', repositoryId, input),
   runRepositoryGitCommand: (input: GitCommandRequest) => invokeGitIpc<GitCommandResult>('repository:git-command', input),
   getRepositoryWorkspaceStatus: (repositoryId: string) => invokeGitIpc<GitWorkspaceStatus>('repository:workspace-status', repositoryId),
+  gitPull: (repositoryId: string, input: {remote:string;branch:string}, operationId?:string) => invokeGitIpc<GitOperationResult>('repository:git-pull',repositoryId,input,operationId),
   gitAdd: (repositoryId: string, input: GitAddInput) => invokeGitIpc<GitOperationResult>('repository:git-add', repositoryId, input),
   gitCommit: (repositoryId: string, input: GitCommitInput) => invokeGitIpc<GitOperationResult>('repository:git-commit', repositoryId, input),
   gitPush: (repositoryId: string, input: GitPushInput, operationId?: string) => invokeGitIpc<GitOperationResult>('repository:git-push', repositoryId, input, operationId),

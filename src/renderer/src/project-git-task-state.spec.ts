@@ -64,7 +64,8 @@ describe('background push entry points', () => {
     assert.deepEqual(disabledExpressions, [
       '{!canPushProject}',
       '{selectedProjectRows.length === 0 || !selectedProjectsHavePushRepositories}',
-      '{projectRepositories.length === 0}'
+      '{projectRepositories.length === 0}',
+      '{!selectedProjectGitRepository.available}'
     ])
   })
 })

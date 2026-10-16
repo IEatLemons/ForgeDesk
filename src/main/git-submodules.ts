@@ -26,6 +26,13 @@ function parseNullConfig(output: string): Array<{ key: string; value: string }> 
   const values = output.split('\0').filter((value) => value.length > 0)
   const entries: Array<{ key: string; value: string }> = []
 
+  // `git config --null --get-regexp` emits key\nvalue\0, not key\0value\0.
+  // Split only the first newline: a value may itself contain newlines.
+  if(values.some(value=>value.includes('\n'))){
+    for(const record of values){const separator=record.indexOf('\n');if(separator>0)entries.push({key:record.slice(0,separator),value:record.slice(separator+1)})}
+    return entries
+  }
+
   for (let index = 0; index + 1 < values.length; index += 2) {
     entries.push({ key: values[index], value: values[index + 1] })
   }

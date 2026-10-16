@@ -158,6 +158,7 @@ export type ProgressMigration = {
 
 export type ProgressSnapshotQuery = {
   projectId?: string
+  includeArchivedProjects?: boolean
   scopeId?: string
   asOf?: string
   timezone?: string

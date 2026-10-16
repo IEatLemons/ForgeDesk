@@ -14,6 +14,7 @@ import {
   Select,
   Space,
   Spin,
+  Switch,
   Steps,
   Tag,
   Typography,
@@ -40,6 +41,7 @@ type Props = {
   project: Project
   repositories: Repository[]
   open: boolean
+  configurationOnly?: boolean
 }
 
 const providerOptions: Array<{ value: DeploymentProviderType; label: string; description: string }> = [
@@ -96,7 +98,7 @@ function taskLabel(status: ProjectDeploymentTask['status']): string {
   return '进行中'
 }
 
-export function ProjectDeploymentPanel({ project, repositories, open }: Props): JSX.Element {
+export function ProjectDeploymentPanel({ project, repositories, open, configurationOnly = false }: Props): JSX.Element {
   const [provider, setProvider] = useState<DeploymentProviderType>('vercel')
   const [sourceMode, setSourceMode] = useState<DeploymentSourceMode>('git')
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
@@ -157,7 +159,7 @@ export function ProjectDeploymentPanel({ project, repositories, open }: Props): 
     setSuggestion(null)
     setPreparation(null)
     load().catch((error) => message.error(getErrorMessage(error)))
-  }, [open, project.id, repositories])
+  }, [open, project.id, repositories.map(repository=>repository.id).join('|')])
 
   useEffect(() => {
     if (!open || !repositoryId) return
@@ -181,8 +183,8 @@ export function ProjectDeploymentPanel({ project, repositories, open }: Props): 
     return () => window.clearInterval(timer)
   }, [open, runningTask?.id])
 
-  function updateConfig(field: keyof ProjectDeploymentConfig, value: string | number | undefined): void {
-    setConfig((current) => ({ ...current, [field]: value === undefined ? '' : String(value) }))
+  function updateConfig(field: keyof ProjectDeploymentConfig, value: string | number | Record<string, string> | undefined): void {
+    setConfig((current) => ({ ...current, [field]: field === 'extra' ? value : value === undefined ? '' : String(value) }))
     setPreparation(null)
   }
 
@@ -418,9 +420,7 @@ export function ProjectDeploymentPanel({ project, repositories, open }: Props): 
                       </Space>
                       <Typography.Text type="secondary">{repositories.find((item) => item.id === target.repositoryId)?.name || '仓库已移除'}</Typography.Text>
                     </Space>
-                    <Button type="primary" ghost loading={starting && target.id === targetId} onClick={() => quickPublishTarget(target)}>
-                      预检并发布
-                    </Button>
+                    <Space><Button onClick={()=>{setProvider(target.provider);setRepositoryId(target.repositoryId);setSourceMode(target.config.sourceMode);setTargetId(target.id);setConfig(target.config);setStep(2)}}>编辑目标</Button>{!configurationOnly ? <Button type="primary" ghost loading={starting && target.id === targetId} onClick={() => quickPublishTarget(target)}>预检并发布</Button> : null}</Space>
                   </div>
                 ))}
               </Space>
@@ -491,6 +491,7 @@ export function ProjectDeploymentPanel({ project, repositories, open }: Props): 
             <Select value={environmentName || undefined} options={environments.map((environment) => ({ label: environment.name, value: environment.name }))} onChange={setEnvironmentName} placeholder="选择环境" />
           ) : null}
           <Space>
+            <Button disabled={!repositoryId} onClick={()=>setStep(2)}>手动配置（无需 AI）</Button>
             <Button type="primary" icon={<RobotOutlined />} disabled={!repositoryId} onClick={() => setStep(1)}>继续，让 AI 分析</Button>
             {targets.filter((target) => target.provider === provider).map((target) => <Button key={target.id} danger size="small" icon={<DeleteOutlined />} onClick={() => removeTarget(target)}>{target.displayName}</Button>)}
           </Space>
@@ -538,11 +539,12 @@ export function ProjectDeploymentPanel({ project, repositories, open }: Props): 
           </Row>
           {provider === 'ssh-pm2' ? <><Divider orientation="left">SSH / PM2</Divider><Row gutter={[12, 0]}><Col xs={24} md={8}><Typography.Text strong>远程主机</Typography.Text><Input value={config.remoteHost} onChange={(event) => updateConfig('remoteHost', event.target.value)} placeholder="deploy@example.com" /></Col><Col xs={24} md={8}><Typography.Text strong>部署目录</Typography.Text><Input value={config.remotePath} onChange={(event) => updateConfig('remotePath', event.target.value)} /></Col><Col xs={24} md={8}><Typography.Text strong>应用名</Typography.Text><Input value={config.appName} onChange={(event) => updateConfig('appName', event.target.value)} /></Col></Row></> : null}
           {provider === 'docker-compose' ? <><Divider orientation="left">Docker / Compose</Divider><Row gutter={[12, 0]}><Col xs={24} md={8}><Typography.Text strong>远程主机</Typography.Text><Input value={config.remoteHost} onChange={(event) => updateConfig('remoteHost', event.target.value)} /></Col><Col xs={24} md={8}><Typography.Text strong>远程目录</Typography.Text><Input value={config.remotePath} onChange={(event) => updateConfig('remotePath', event.target.value)} /></Col><Col xs={24} md={8}><Typography.Text strong>Compose 文件</Typography.Text><Input value={config.composeFile} onChange={(event) => updateConfig('composeFile', event.target.value)} placeholder="docker-compose.yml" /></Col><Col xs={24} md={8}><Typography.Text strong>Compose 服务</Typography.Text><Input value={config.composeService} onChange={(event) => updateConfig('composeService', event.target.value)} /></Col><Col xs={24} md={8}><Typography.Text strong>Dockerfile</Typography.Text><Input value={config.dockerfile} onChange={(event) => updateConfig('dockerfile', event.target.value)} /></Col><Col xs={24} md={8}><Typography.Text strong>端口</Typography.Text><InputNumber style={{ width: '100%' }} value={Number(config.port) || undefined} onChange={(value) => updateConfig('port', value ?? '')} /></Col></Row></> : null}
+          {['ssh-pm2', 'docker-compose'].includes(provider) ? <Card size="small" title="只读运行监控（默认关闭）"><Space direction="vertical"><Space><Switch checked={config.extra.runtimeMonitoring === 'true'} onChange={enabled => updateConfig('extra', { ...config.extra, runtimeMonitoring: String(enabled) })} /><Typography.Text>启用当前目标的状态和最近日志采集</Typography.Text></Space><Space><Switch checked={config.extra.runtimeHealthCheck === 'true'} onChange={enabled => updateConfig('extra', { ...config.extra, runtimeHealthCheck: String(enabled) })} /><Typography.Text>检查远程本机 HTTP 端口</Typography.Text><Input aria-label="健康检查端口" value={config.port} onChange={event => updateConfig('port', event.target.value)} style={{ width: 90 }} /><Input aria-label="健康检查路径" value={config.healthPath} onChange={event => updateConfig('healthPath', event.target.value)} style={{ width: 150 }} /></Space><Typography.Text type="secondary">保存目标后生效。只在运行页面可见时每 30 秒检查，不会启动 PM2、重启服务或接受陌生 SSH 主机密钥。</Typography.Text></Space></Card> : null}
           <Space wrap>
             <Button onClick={() => setStep(1)}>返回 AI 分析</Button>
             <Button icon={<CheckCircleOutlined />} loading={loading} onClick={loadPreparation}>运行预检</Button>
             <Button icon={<SaveOutlined />} loading={saving} onClick={saveTarget}>保存目标</Button>
-            <Button type="primary" icon={<ThunderboltOutlined />} loading={starting} onClick={startDeployment}>确认并发布</Button>
+            {!configurationOnly ? <Button type="primary" icon={<ThunderboltOutlined />} loading={starting} onClick={startDeployment}>确认并发布</Button> : null}
           </Space>
           {currentIssues.length > 0 ? <Alert type="error" showIcon message="预检未通过" description={currentIssues.join('；')} /> : null}
           {currentWarnings.length > 0 ? <Alert type="warning" showIcon message="发布前提醒" description={currentWarnings.join('；')} /> : null}

@@ -10,6 +10,7 @@ import {
   buildGitMergeBaseArgs,
   buildGitMergeTreeArgs,
   buildGitPushArgs,
+  buildGitPullArgs,
   buildGitPushOperationArgs,
   describeGitPushOperation,
   buildGitPushTagArgs,
@@ -26,6 +27,11 @@ import {
 } from './git-workspace.js'
 
 describe('git workspace operations', () => {
+  it('only fast-forwards pulls and rejects option injection',()=>{
+    assert.deepEqual(buildGitPullArgs({remote:'origin',branch:'main'}),['pull','--ff-only','--','origin','main'])
+    for(const remote of ['--upload-pack=evil','host;cmd'])assert.throws(()=>buildGitPullArgs({remote,branch:'main'}))
+    for(const branch of ['-evil','main:other','../main','main;cmd'])assert.throws(()=>buildGitPullArgs({remote:'origin',branch}))
+  })
   it('builds safe git add args', () => {
     assert.deepEqual(buildGitAddArgs({ mode: 'all', paths: [] }), ['add', '--all'])
     assert.deepEqual(buildGitAddArgs({ mode: 'paths', paths: ['src/main/index.ts'] }), ['add', '--', 'src/main/index.ts'])

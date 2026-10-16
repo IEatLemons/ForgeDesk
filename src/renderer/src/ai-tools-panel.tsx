@@ -45,6 +45,7 @@ export type CodexWorkspaceTarget = {
 }
 
 type AiToolsPanelProps = {
+  view?: 'accounts'
   projectId: string | null
   projectPath: string
   onOpenTerminal?: () => void
@@ -150,7 +151,7 @@ function AccountUsageSummary({ quota, compact = false }: { quota: QuotaSnapshot 
   )
 }
 
-export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWorkspaceTarget, onCodexWorkspaceTargetHandled }: AiToolsPanelProps): JSX.Element {
+export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWorkspaceTarget, onCodexWorkspaceTargetHandled, view }: AiToolsPanelProps): JSX.Element {
   const [provider, setProvider] = useState<AiProviderRuntimeSnapshot | null>(null)
   const [accounts, setAccounts] = useState<CodexAccountRegistryView | null>(null)
   const [apiService, setApiService] = useState<CodexApiServiceView | null>(null)
@@ -448,7 +449,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWork
     return <div className="loading-panel"><Spin /></div>
   }
 
-  if (!codexDetailsOpen) {
+  if (!codexDetailsOpen && !view) {
     return (
       <section className="workspace-section ai-tools-shell">
         <div className="workspace-section-header">
@@ -497,7 +498,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWork
     )
   }
 
-  if (codexTab === 'projects') {
+  if (codexTab === 'projects' && !view) {
     return (
       <section className="workspace-section ai-tools-shell ai-codex-workspace-shell">
         <div className="workspace-section-header">
@@ -525,10 +526,10 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWork
     <section className="workspace-section ai-tools-shell">
       <div className="workspace-section-header">
         <div>
-          <Button type="link" icon={<ArrowLeftOutlined />} onClick={() => setCodexDetailsOpen(false)}>返回 AI 工具</Button>
+          {!view ? <Button type="link" icon={<ArrowLeftOutlined />} onClick={() => setCodexDetailsOpen(false)}>返回 AI 工具</Button> : null}
           <Typography.Title level={2}>Codex</Typography.Title>
           <Typography.Paragraph type="secondary">账户、配额与本机 API 服务集中在账户管理区，软件状态提供快捷入口，项目绑定位于底部。</Typography.Paragraph>
-          <div className="ai-codex-tabs">{renderCodexTabs()}</div>
+          {!view ? <div className="ai-codex-tabs">{renderCodexTabs()}</div> : null}
         </div>
         <Button icon={<ReloadOutlined />} loading={refreshing} onClick={() => void refreshAll(true)}>刷新状态</Button>
       </div>

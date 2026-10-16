@@ -15,20 +15,26 @@ const kindLabels:Record<ProgressScopeKind,string>={goal:'目标',milestone:'里�
 const entityStatusLabels:Record<string,string>={draft:'草稿',active:'进行中',achieved:'已达成',cancelled:'已取消',planned:'计划中',closed:'已收口',archived:'已归档'}
 const executionLabels:Record<string,string>={queued:'等待启动',running:'运行中',waiting:'等待输入',cancelling:'正在停止',succeeded:'执行结束',failed:'执行失败',cancelled:'已停止',unknown:'需要核对'}
 const activeExecution=(status:string)=>['queued','running','waiting','cancelling','unknown'].includes(status)
+function savedTaskView(projectId?:string){try{const value=localStorage.getItem(`forgedesk:task-view:v2:${projectId||'all'}`);return value&&['list','board','gantt'].includes(value)?value:'list'}catch{return 'list'}}
 
 type WorkForm=WorkItemFields & WorkScopeFields
 type EntityForm={projectId:string;title:string;description:string;criteriaText:string;ownerRef:string;targetDate:string|null;status:ProgressEntity['status']}
 function ProgressDateInput({value,onChange,id}:{value?:string|null;onChange?:(value:string|null)=>void;id?:string}){return <Input id={id} value={value??''} placeholder="YYYY-MM-DD" maxLength={10} onChange={event=>onChange?.(event.target.value||null)}/>}
 
-export function ProjectProgressPanel({projectId,onOpenCodexSession}:{projectId?:string;onOpenCodexSession?:(id:string)=>void}):JSX.Element{
+export type ProgressSection='tasks'|ProgressScopeKind|'maintenance'
+export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entityId,onSelectTask,onOpenMaintenance,maintenancePage,detailView,onDetailViewChange}:{projectId?:string;onOpenCodexSession?:(id:string)=>void;section?:ProgressSection;entityId?:string;onSelectTask?:(id:string|undefined)=>void;onOpenMaintenance?:()=>void;maintenancePage?:string;detailView?:'preview'|'overview'|'children'|'ai'|'history';onDetailViewChange?:(view:'overview'|'children'|'ai'|'history')=>void}):JSX.Element{
   const {projects,repositories}=useForgeDeskStore()
   const [projectFilter,setProjectFilter]=useState(projectId||'all')
   const currentProject=projectId||(projectFilter==='all'?undefined:projectFilter)
-  const {snapshot,error,loading,refresh}=useProjectProgress(currentProject)
+  const {snapshot,error,loading,refresh}=useProjectProgress(currentProject,section==='maintenance')
   const [busy,setBusy]=useState(''),[legacy,setLegacy]=useState(false),[preview,setPreview]=useState<ProgressMigration|null>(null),[migrationError,setMigrationError]=useState('')
   const [legacyTodos,setLegacyTodos]=useState(false),[rawRepair,setRawRepair]=useState<string|null>(null)
-  const [query,setQuery]=useState(''),[status,setStatus]=useState(''),[scopeId,setScopeId]=useState(''),[inbox,setInbox]=useState(false),[archived,setArchived]=useState(false),[view,setView]=useState('list')
-  const [selectedId,setSelectedId]=useState<string|null>(null),[editing,setEditing]=useState<ProjectWorkItem|null>(null),[parentId,setParentId]=useState<string|null>(null),[workModal,setWorkModal]=useState(false)
+  const [query,setQuery]=useState(''),[status,setStatus]=useState(''),[scopeId,setScopeId]=useState(''),[inbox,setInbox]=useState(false),[archived,setArchived]=useState(false),[view,setLocalView]=useState(()=>savedTaskView(currentProject))
+  function setView(value:string){setLocalView(value);try{localStorage.setItem(`forgedesk:task-view:v2:${currentProject||'all'}`,value)}catch{/* preferences are best effort */}}
+  useEffect(()=>setLocalView(savedTaskView(currentProject)),[currentProject])
+  const [selectedId,setLocalSelectedId]=useState<string|null>(null),[editing,setEditing]=useState<ProjectWorkItem|null>(null),[parentId,setParentId]=useState<string|null>(null),[workModal,setWorkModal]=useState(false)
+  const [fullDetail,setFullDetail]=useState(false),[detailTab,setDetailTab]=useState('overview')
+  function setSelectedId(id:string|null){setLocalSelectedId(id);setFullDetail(false);setDetailTab('overview');onSelectTask?.(id??undefined)}
   const [scopeItem,setScopeItem]=useState<ProjectWorkItem|null>(null),[entityEdit,setEntityEdit]=useState<ProgressEntity|null>(null),[entityKind,setEntityKind]=useState<ProgressScopeKind>('goal'),[entityModal,setEntityModal]=useState(false)
   const [draftRoot,setDraftRoot]=useState<ProjectWorkItem|null>(null),[draftNodes,setDraftNodes]=useState<ProgressPlanItem[]>([]),[previewDraft,setPreviewDraft]=useState<ProgressPlanDraft|null>(null)
   const [repositoryId,setRepositoryId]=useState<string>(),[blockReason,setBlockReason]=useState(''),[blockNext,setBlockNext]=useState(''),[rawSession,setRawSession]=useState<CodexSessionDetail|null>(null)
@@ -46,7 +52,10 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession}:{projectId?:
   const scopeOptions=(kind:ProgressScopeKind,id:string|null|undefined)=>entities.filter(entity=>entity.kind===kind&&entity.projectId===id).map(entity=>({value:entity.id,label:entity.title}))
   const nameOfProject=(id:string|null)=>id?projects.find(project=>project.id===id)?.name||'已删除项目':'收件箱'
 
-  useEffect(()=>{setProjectFilter(projectId||'all');setScopeId('');setSelectedId(null)},[projectId])
+  useEffect(()=>{setProjectFilter(projectId||'all');setScopeId('');setLocalSelectedId(entityId??null)},[projectId])
+  useEffect(()=>{setLocalSelectedId(entityId??null);setFullDetail(!!detailView&&detailView!=='preview');setDetailTab(detailView&&detailView!=='preview'?detailView:'overview')},[entityId,detailView])
+  useEffect(()=>{setLegacy(maintenancePage==='legacy-ai');setLegacyTodos(maintenancePage==='legacy-todos');if(maintenancePage==='repair')setRawRepair(legacyRaw()??'[]')},[maintenancePage])
+  useEffect(()=>{let disposed=false;if(entityId&&snapshot&&!loading&&!busy&&!snapshot.items.some(item=>item.id===entityId))void refresh().then(next=>{if(!disposed&&next&&!next.items.some(item=>item.id===entityId)){message.warning('任务不存在或不属于当前项目，已返回任务列表');onSelectTask?.(undefined)}});return()=>{disposed=true}},[entityId,currentProject,snapshot?.active,loading,busy])
   useEffect(()=>{
     if(!selected)return
     const repository=repositories.find(repository=>repository.id===repositoryId&&repository.projectId===selected.projectId)||repositories.find(repository=>repository.projectId===selected.projectId)
@@ -74,8 +83,8 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession}:{projectId?:
     catch(error){setMigrationError(error instanceof Error?error.message:String(error));return null}
   }
   useEffect(()=>{
-    if(snapshot&&!snapshot.active&&!preview&&!busy)void migrationPreview()
-  },[snapshot?.active])
+    if(snapshot&&!snapshot.active&&!preview&&!busy&&(!section||section==='maintenance'))void migrationPreview()
+  },[snapshot?.active,section])
   async function activate(){
     if(!preview)return
     await window.forgeDesk.activateProjectProgressMigration({batchId:preview.id,inputHash:preview.inputHash,legacyRaw:legacyRaw()})
@@ -141,10 +150,11 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession}:{projectId?:
   if(legacyTodos)return <section><Button onClick={()=>{setLegacyTodos(false);void migrationPreview();void refresh()}}>返回迁移核对</Button><Alert showIcon type="warning" message="旧待办恢复入口" description="此处仍修改旧存储。修复后请返回重新预览；未通过迁移核对前不会切换首页统计。"/><LegacyTodoPanel/></section>
   if(legacy)return <section><Button onClick={()=>setLegacy(false)}>返回原生项目进度</Button><Alert type="info" showIcon message="历史 AI 工作流" description="保留原会话和代码交付操作。此处执行结束不会自动完成新的业务任务。"/><ManagedTaskPanel onOpenCodexSession={onOpenCodexSession??(id=>void window.forgeDesk.getCodexSession(id).then(setRawSession))}/><Drawer open={!!rawSession} onClose={()=>setRawSession(null)} title={rawSession?.title} width={760}>{rawSession?.items.filter(item=>['user','assistant'].includes(item.kind)).map(item=><Typography.Paragraph key={item.id} style={{whiteSpace:'pre-wrap'}}>{item.text}</Typography.Paragraph>)}</Drawer></section>
   if(loading&&!snapshot)return <div className="loading-panel"><Spin/></div>
-  return <section className="workspace-section progress-workspace">
-    <div className="section-heading"><div><Typography.Title level={projectId?3:2}>项目进度</Typography.Title><Typography.Text type="secondary">目标、节点与验收形成业务进度，AI 执行与代码交付分别追踪。</Typography.Text></div><Space wrap><Button onClick={()=>setLegacy(true)}>历史 AI 工作流</Button><Button icon={<ReloadOutlined/>} onClick={()=>void refresh()}>刷新</Button>{snapshot?.active?<Button type="primary" icon={<PlusOutlined/>} onClick={()=>editWork(null)}>新建任务</Button>:null}</Space></div>
+  return <section className={`workspace-section progress-workspace${section?' progress-section-controlled':''}`}>
+    <div className="section-heading"><div><Typography.Title level={projectId?3:2}>{section&&section in kindLabels?kindLabels[section as ProgressScopeKind]:section==='maintenance'?'任务数据与维护':'项目任务'}</Typography.Title><Typography.Text type="secondary">目标、节点与验收形成业务进度，AI 执行与代码交付分别追踪。</Typography.Text></div><Space wrap>{!section||section==='maintenance'?<Button onClick={()=>setLegacy(true)}>历史 AI 工作流</Button>:null}<Button icon={<ReloadOutlined/>} onClick={()=>void refresh()}>刷新</Button>{snapshot?.active&&section!=='maintenance'&&(!section||section==='tasks')?<Button type="primary" icon={<PlusOutlined/>} onClick={()=>editWork(null)}>新建任务</Button>:null}</Space></div>
     {error?<Alert type="error" showIcon message={error}/>:null}
-    {!snapshot?.active?<Card title="核对历史任务并启用原生进度"><Space direction="vertical" size={16} style={{width:'100%'}}>
+    {section==='maintenance'&&snapshot?.active?<Space wrap style={{marginBottom:16}}><Button onClick={()=>setLegacyTodos(true)}>旧待办恢复</Button><Button onClick={()=>setRawRepair(legacyRaw()??'[]')}>原始记录修复</Button><Typography.Text type="secondary">原生读取已启用；旧存储仍保留，不会重复迁移。</Typography.Text></Space>:null}
+    {!snapshot?.active&&section&&section!=='maintenance'?<Alert showIcon type="info" message="原生进度尚未启用" description="请先在设置 → 数据与维护中核对历史数据。此操作不会在进入项目时自动执行。" action={<Button onClick={onOpenMaintenance}>前往核对</Button>}/>:!snapshot?.active?<Card title="核对历史任务并启用原生进度"><Space direction="vertical" size={16} style={{width:'100%'}}>
       <Typography.Paragraph>先核对旧待办与 AI 托管记录。启用时保存数据库备份和原始快照，旧存储不会被清空；旧 AI 自动完成将转为业务待验收。</Typography.Paragraph>
       {migrationError?<Alert type="error" message={migrationError}/>:null}
       {preview?<><Space wrap><Tag>旧待办 {preview.legacyCount}</Tag><Tag>AI／托管 {preview.managedCount}</Tag><Tag>工作项及节点 {preview.workItemCount}</Tag><Tag>精确去重 {preview.duplicateCount}</Tag><Tag color="warning">待验收 {preview.reviewCount}</Tag></Space><List size="small" dataSource={preview.issues} pagination={{pageSize:8,hideOnSinglePage:true}} locale={{emptyText:'未发现迁移异常'}} renderItem={issue=><List.Item><Tag color={issue.severity==='error'?'error':'warning'}>{issue.severity==='error'?'需处理':'提示'}</Tag><Typography.Text>{issue.message}（{issue.sourceId}）</Typography.Text></List.Item>}/></>:<Spin/>}
@@ -152,7 +162,7 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession}:{projectId?:
       <Space wrap><Button onClick={()=>setLegacyTodos(true)}>打开旧待办恢复入口</Button><Button onClick={()=>setRawRepair(legacyRaw()??'[]')}>检查／修复旧存储原文</Button></Space>
     </Space></Card>:<>
       <div className="progress-summary" aria-label="项目进度摘要"><span><strong>{stats?.done}／{stats?.total}</strong> 节点完成</span><span>待验收 {stats?.review}</span><span>阻塞 {stats?.blocked}</span><span>逾期 {stats?.overdue}</span><span>父任务待验收 {stats?.awaitingParentAcceptance}</span><span>收件箱 {snapshot.stats.inbox}</span><Progress percent={stats?.percent??0} format={()=>stats?.percent==null?'暂无有效工作':`${stats.percent}%`}/></div>
-      <Tabs items={[
+      <Tabs className={section?'progress-controlled-tabs':undefined} activeKey={section?(section==='tasks'?'tasks':section==='maintenance'?'activity':'plans'):undefined} items={[
         {key:'tasks',label:'任务与节点',children:<>
           <div className="progress-toolbar"><Input.Search allowClear placeholder="搜索任务、说明、标签或负责人" value={query} onChange={event=>setQuery(event.target.value)} style={{width:280,maxWidth:'100%'}}/>
             {!projectId?<Select aria-label="筛选项目" value={projectFilter} style={{minWidth:160}} options={[{value:'all',label:'全部项目'},...projectOptions]} onChange={value=>{setProjectFilter(value);setScopeId('');setSelectedId(null)}}/>:null}
@@ -163,7 +173,7 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession}:{projectId?:
           </div>
           {view==='list'?<div className="progress-table"><Table<WorkTreeRow> rowKey="id" columns={columns} dataSource={rows} pagination={{pageSize:15}} scroll={{x:760}} locale={{emptyText:<Empty description={inbox?'暂无待归属工作':'暂无工作项，创建任务后开始跟踪'}/>}}/></div>:view==='board'?<div className="progress-board">{(Object.keys(workStatusLabels) as WorkStatus[]).map(state=><section key={state}><Typography.Title level={5}>{workStatusLabels[state]}</Typography.Title>{rows.flatMap(root=>[root,...(root.children??[])]).filter(item=>item.status===state).map(item=><Card size="small" key={item.id} onClick={()=>setSelectedId(item.id)}><Button type="link" className="progress-title">{item.title}</Button><div>{item.ownerRef||'未指定'} · {item.dueDate||'未安排'}</div></Card>)}</section>)}</div>:timeline?<div className="progress-gantt"><Typography.Text type="secondary">{timeline.startDate} 至 {timeline.endDate} · {timeline.days} 天</Typography.Text>{timeline.rows.map(row=><div className="progress-gantt-row" key={row.item.id}><Button type="link" className="progress-title" onClick={()=>setSelectedId(row.item.id)}>{row.item.parentId?'↳ ':''}{row.item.title}</Button><div className="progress-gantt-track">{row.duration?<div className={`progress-gantt-bar status-${row.item.status}`} style={{left:`${row.offset/timeline.days*100}%`,width:`${row.duration/timeline.days*100}%`}} aria-label={`${row.item.startDate||row.item.dueDate} 至 ${row.item.dueDate||row.item.startDate}`}/>:<Typography.Text type="secondary">未安排日期</Typography.Text>}</div></div>)}</div>:<Empty description="设置任务起止日期后显示甘特图"/>}
         </>},
-        {key:'plans',label:'目标与计划',children:<><Space wrap style={{marginBottom:16}}>{(Object.keys(kindLabels) as ProgressScopeKind[]).map(kind=><Button key={kind} icon={<PlusOutlined/>} onClick={()=>editEntity(kind)}>新建{kindLabels[kind]}</Button>)}</Space><Table rowKey="id" dataSource={entities} pagination={{pageSize:10}} scroll={{x:700}} columns={[
+        {key:'plans',label:'目标与计划',children:<><Space wrap style={{marginBottom:16}}>{(Object.keys(kindLabels) as ProgressScopeKind[]).filter(kind=>!section||section===kind).map(kind=><Button key={kind} icon={<PlusOutlined/>} onClick={()=>editEntity(kind)}>新建{kindLabels[kind]}</Button>)}</Space><Table rowKey="id" dataSource={entities.filter(entity=>!section||entity.kind===section)} pagination={{pageSize:10}} scroll={{x:700}} columns={[
           {title:'类型',dataIndex:'kind',render:(kind:ProgressScopeKind)=>kindLabels[kind]},
           {title:'名称',dataIndex:'title'},
           {title:'项目',dataIndex:'projectId',render:(id:string)=>nameOfProject(id)},
@@ -176,18 +186,24 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession}:{projectId?:
       ]}/>
     </>}
 
-    <Drawer open={!!selected} onClose={()=>setSelectedId(null)} width={760} title={selected?.title}>
+    <Drawer open={!!selected} onClose={()=>setSelectedId(null)} width={fullDetail?760:440} title={selected?.title} extra={!fullDetail?<Button onClick={()=>{setFullDetail(true);onDetailViewChange?.('overview')}}>完整详情</Button>:null}>
       {selected?<Space direction="vertical" size={18} style={{width:'100%'}}>
+        {fullDetail?<Tabs activeKey={detailTab} onChange={view=>{setDetailTab(view);onDetailViewChange?.(view as 'overview'|'children'|'ai'|'history')}} items={[{key:'overview',label:'概况'},{key:'children',label:'子任务'},{key:'ai',label:'AI 执行'},{key:'history',label:'历史'}]}/>:null}
+        {!fullDetail||detailTab==='overview'?<>
         <Space wrap><Tag color={workStatusColors[selected.status]}>{workStatusLabels[selected.status]}</Tag><Tag>{nameOfProject(selected.projectId)}</Tag><Button onClick={()=>editWork(selected)}>编辑资料</Button>{!selected.parentId?<Button onClick={()=>editScope(selected)}>调整归属与范围</Button>:null}{!selected.parentId&&!['done','cancelled'].includes(selected.status)?<Button onClick={()=>editWork(null,selected.id)}>添加节点</Button>:null}</Space>
         <Typography.Paragraph style={{whiteSpace:'pre-wrap'}}>{selected.description||'尚无说明'}</Typography.Paragraph><Typography.Text strong>验收条件</Typography.Text><Typography.Paragraph style={{whiteSpace:'pre-wrap'}}>{selected.acceptanceText||'完成时由你确认验收依据'}</Typography.Paragraph>
         <Typography.Text strong>来源追溯</Typography.Text><List size="small" dataSource={snapshot?.sourceLinks?.filter(link=>link.workItemId===selected.id)} locale={{emptyText:'ForgeDesk 原生创建'}} renderItem={link=><List.Item><Space wrap><Tag>{link.sourceSystem==='legacy'?'旧待办':link.sourceSystem==='managed'?'历史 AI 工作流':link.sourceSystem}</Tag><Typography.Text type="secondary">{link.sourceScope} · {link.sourceType}</Typography.Text><Typography.Text copyable>{link.sourceId}</Typography.Text></Space></List.Item>}/>
         <Space wrap>{rowActions(selected)}{!['done','cancelled'].includes(selected.status)?<><Button onClick={()=>transition(selected,'review')}>提交验收</Button><Button danger onClick={()=>transition(selected,'cancel')}>取消业务任务</Button></>:<Button onClick={()=>transition(selected,'archive')}>归档</Button>}</Space>
-        {!selected.parentId?<><Typography.Text strong>任务节点</Typography.Text><List dataSource={items.filter(item=>item.parentId===selected.id)} locale={{emptyText:'尚未拆解'}} renderItem={item=><List.Item actions={[<Button key="open" onClick={()=>setSelectedId(item.id)}>查看</Button>]}><Tag color={workStatusColors[item.status]}>{workStatusLabels[item.status]}</Tag>{item.title}</List.Item>}/><Button onClick={()=>editPlan(selected)}>编辑计划草稿</Button></>:null}
+        </>:null}
+        {fullDetail&&detailTab==='children'&&!selected.parentId?<><Typography.Text strong>任务节点</Typography.Text><List dataSource={items.filter(item=>item.parentId===selected.id)} locale={{emptyText:'尚未拆解'}} renderItem={item=><List.Item actions={[<Button key="open" onClick={()=>setSelectedId(item.id)}>查看</Button>]}><Tag color={workStatusColors[item.status]}>{workStatusLabels[item.status]}</Tag>{item.title}</List.Item>}/><Button onClick={()=>editPlan(selected)}>编辑计划草稿</Button></>:null}
+        {fullDetail&&detailTab==='children'&&selected.parentId?<Typography.Text>这是子任务，不再嵌套下级节点。</Typography.Text>:null}
+        {fullDetail&&detailTab==='overview'?<>
         <Typography.Text strong>依赖与阻塞</Typography.Text>
         <Select mode="multiple" style={{width:'100%'}} aria-label="前置依赖" placeholder="选择前置任务" value={selected.dependencyIds} disabled={!!busy} onChange={dependencyIds=>void perform('dependencies',()=>send({type:'dependencies',id:selected.id,expectedVersion:selected.rowVersion,dependencyIds}))} options={items.filter(item=>item.projectId===selected.projectId&&item.id!==selected.id&&item.id!==selected.parentId&&item.parentId!==selected.id&&item.status!=='cancelled').map(item=>({value:item.id,label:`${item.title} · ${workStatusLabels[item.status]}`}))}/>
         {selected.blockers.map(blocker=><Alert key={blocker.id} type={blocker.resolvedAt?'success':'warning'} message={blocker.reason} description={`${blocker.nextAction}${blocker.resolvedAt?` · 已解除：${blocker.resolution}`:''}`} action={!blocker.resolvedAt?<Button size="small" onClick={()=>resolveBlocker(selected,blocker.id)}>解除</Button>:undefined}/>)}
         {!['done','cancelled'].includes(selected.status)?<><Input value={blockReason} onChange={event=>setBlockReason(event.target.value)} placeholder="阻塞原因"/><Input value={blockNext} onChange={event=>setBlockNext(event.target.value)} placeholder="下一步行动"/><Button disabled={!blockReason.trim()} onClick={()=>void perform('block',async()=>{await send({type:'block',id:selected.id,expectedVersion:selected.rowVersion,reason:blockReason,nextAction:blockNext});setBlockReason('');setBlockNext('')})}>记录阻塞</Button></>:null}
-        <Typography.Text strong>AI 辅助执行</Typography.Text><Typography.Text type="secondary">执行结束仅提供结果，业务是否完成由验收决定。</Typography.Text>
+        </>:null}
+        {fullDetail&&detailTab==='ai'?<><Typography.Text strong>AI 辅助执行</Typography.Text><Typography.Text type="secondary">执行结束仅提供结果，业务是否完成由验收决定。</Typography.Text>
         <Select aria-label="AI 执行仓库" style={{width:'100%'}} placeholder="选择任务项目的仓库" value={repositoryId} onChange={setRepositoryId} options={repositories.filter(repository=>repository.projectId===selected.projectId).map(repository=>({value:repository.id,label:repository.name}))}/>
         <Space wrap>{!selected.parentId?<Button disabled={!repositoryId||!!busy} onClick={()=>void perform('ai-plan',()=>ai('plan'))}>AI 分析计划</Button>:null}<Button disabled={!repositoryId||!!busy} onClick={()=>void perform('ai-execute',()=>ai('execute'))}>执行当前工作</Button><Button disabled={!!busy} onClick={()=>void perform('ai-sync',()=>ai('sync'))}>同步核对</Button></Space>
         <List dataSource={snapshot?.executions.filter(run=>run.workItemId===selected.id).slice().reverse()} locale={{emptyText:'暂无执行记录，人工任务无需 AI'}} renderItem={run=><List.Item><Space direction="vertical" style={{width:'100%'}}><Space wrap><Tag>{run.phase==='context-imported'?'历史会话来源':executionLabels[run.status]}</Tag><span>{run.purpose==='planning'?'规划':'执行'} · 第 {run.attemptNo} 次</span><Typography.Text type="secondary">{run.phase}</Typography.Text></Space><Typography.Text>{run.errorMessage||run.resultSummary}</Typography.Text><Space wrap>{activeExecution(run.status)&&run.phase!=='context-imported'?<Button danger size="small" disabled={!!busy} onClick={()=>void perform('ai-cancel',()=>ai('cancel',run.id))}>停止此次执行</Button>:null}{run.purpose==='planning'&&run.threadId?<Button size="small" onClick={()=>void perform('read-plan',()=>ai('read-plan',run.id))}>读取计划草稿</Button>:null}{run.threadId?<Button size="small" onClick={()=>onOpenCodexSession?onOpenCodexSession(run.threadId!):void perform('session',async()=>setRawSession(await window.forgeDesk.getCodexSession(run.threadId!)))}>查看对话</Button>:null}</Space></Space></List.Item>}/>
@@ -199,7 +215,8 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession}:{projectId?:
           <Space wrap>{run.threadLinks?.filter(link=>link.threadId!==run.threadId).map(link=><Button size="small" key={link.threadId} onClick={()=>onOpenCodexSession?onOpenCodexSession(link.threadId):void perform('session',async()=>setRawSession(await window.forgeDesk.getCodexSession(link.threadId)))}>查看节点会话</Button>)}</Space>
           <List size="small" pagination={{pageSize:5,hideOnSinglePage:true}} dataSource={run.delivery?.events} renderItem={event=><List.Item><Space direction="vertical" size={0}><Typography.Text>{event.message}</Typography.Text>{event.detail?<Typography.Paragraph style={{whiteSpace:'pre-wrap'}}>{event.detail}</Typography.Paragraph>:null}<Typography.Text type="secondary">{new Date(event.createdAt).toLocaleString()}</Typography.Text></Space></List.Item>}/>
         </Card>)}
-        <Typography.Text strong>变更历史</Typography.Text><List size="small" dataSource={snapshot?.events.filter(event=>event.entityId===selected.id)} renderItem={event=><List.Item><Space direction="vertical"><span>{progressEventLabels[event.eventType]||event.eventType} · {new Date(event.occurredAt).toLocaleString()}</span><details><summary>查看变更前后</summary><pre className="progress-event-detail">{JSON.stringify({before:event.before,after:event.after},null,2)}</pre></details></Space></List.Item>}/>
+        </>:null}
+        {fullDetail&&detailTab==='history'?<><Typography.Text strong>变更历史</Typography.Text><List size="small" dataSource={snapshot?.events.filter(event=>event.entityId===selected.id)} renderItem={event=><List.Item><Space direction="vertical"><span>{progressEventLabels[event.eventType]||event.eventType} · {new Date(event.occurredAt).toLocaleString()}</span><details><summary>查看变更前后</summary><pre className="progress-event-detail">{JSON.stringify({before:event.before,after:event.after},null,2)}</pre></details></Space></List.Item>}/></>:null}
       </Space>:null}
     </Drawer>
 

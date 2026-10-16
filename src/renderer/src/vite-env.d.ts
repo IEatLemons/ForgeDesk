@@ -1436,6 +1436,7 @@ type DockerEventSummary = {
 
 type ProjectRecord = {
   id: string
+  archivedAt?: string | null
   name: string
   description: string
   status: 'ready' | 'needs-setup' | 'warning'
@@ -2892,6 +2893,8 @@ type MarketDataSnapshot = {
 interface Window {
   forgeDesk: import('../../shared/project-progress').ProjectProgressApi & {
     listProjects: () => Promise<WorkspaceSnapshot>
+    setProjectArchived: (input: { id: string; archived: boolean }) => Promise<WorkspaceSnapshot>
+    onWorkspaceUpdated: (listener:(snapshot:WorkspaceSnapshot)=>void)=>()=>void
     createProject: (input: { name: string; workspacePath: string; repositories: ScannedRepository[] }) => Promise<WorkspaceSnapshot>
     createEmptyProject: (input: { name: string; parentPath: string }) => Promise<WorkspaceSnapshot>
     createProjectFromRemote: (input: { name: string; remoteUrl: string; parentPath: string }) => Promise<WorkspaceSnapshot>
@@ -2930,6 +2933,7 @@ interface Window {
     switchRepositoryBranch: (repositoryId: string, input: GitBranchSwitchInput) => Promise<RepositoryRecord>
     runRepositoryGitCommand: (input: GitCommandRequest) => Promise<GitCommandResult>
     getRepositoryWorkspaceStatus: (repositoryId: string) => Promise<GitWorkspaceStatus>
+    gitPull: (repositoryId:string,input:{remote:string;branch:string},operationId?:string)=>Promise<GitOperationResult>
     gitAdd: (repositoryId: string, input: GitAddInput) => Promise<GitOperationResult>
     gitCommit: (repositoryId: string, input: GitCommitInput) => Promise<GitOperationResult>
     gitPush: (repositoryId: string, input: GitPushInput, operationId?: string) => Promise<GitOperationResult>
@@ -3034,6 +3038,9 @@ interface Window {
     listServiceRuntimeLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
     inspectProjectDeploymentContext: (repositoryId: string) => Promise<DeploymentInspection>
     suggestProjectDeploymentConfig: (repositoryId: string, input: { provider: DeploymentProviderType; sourceMode: DeploymentSourceMode }) => Promise<ProjectDeploymentSuggestion>
+    readProjectRuntime: (projectId: string) => Promise<import('../../shared/project-runtime').ProjectRuntimeSnapshot[]>
+    refreshProjectRuntime: (input: { projectId: string; targetId: string }) => Promise<import('../../shared/project-runtime').ProjectRuntimeSnapshot>
+    readProjectRuntimeLogs: (input: { projectId: string; targetId: string }) => Promise<import('../../shared/project-runtime').ProjectRuntimeLog>
     listProjectDeploymentTargets: (projectId: string) => Promise<ProjectDeploymentTarget[]>
     saveProjectDeploymentTarget: (input: ProjectDeploymentTargetInput) => Promise<ProjectDeploymentTarget>
     deleteProjectDeploymentTarget: (projectId: string, targetId: string) => Promise<ProjectDeploymentTarget[]>

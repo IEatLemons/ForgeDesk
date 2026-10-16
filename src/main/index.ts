@@ -7,6 +7,9 @@ import { homedir, tmpdir } from 'node:os'
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import Database from 'better-sqlite3'
 import simpleGit from 'simple-git'
+import { setProjectArchived } from './project-archive'
+import { ProjectRuntimeService } from './project-runtime'
+import { AsyncReadCache } from './async-read-cache'
 import { requestCommitMessageSuggestion, type CommitMessageSuggestion } from './ai-commit-message-assistant'
 import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion } from './ai-conflict-assistant'
 import { requestReleaseSuggestion, type ReleaseSuggestion } from './ai-release-assistant'
@@ -306,6 +309,7 @@ import {
   buildGitMergeBaseArgs,
   buildGitMergeTreeArgs,
   buildGitPushOperationArgs,
+  buildGitPullArgs,
   buildGitPushTagArgs,
   buildGitPushTagsArgs,
   buildGitPushTargetCommitCountArgs,
@@ -803,6 +807,7 @@ type GitMergeAnalysis = {
 
 type ProjectRecord = {
   id: string
+  archivedAt?: string | null
   name: string
   description: string
   status: 'ready' | 'needs-setup' | 'warning'
@@ -2485,6 +2490,7 @@ function migrateDatabase(db: Database.Database): void {
   addColumnIfMissing(db, 'repositories', 'remote_alignment_json', "TEXT NOT NULL DEFAULT '{}'")
   addColumnIfMissing(db, 'git_commits', 'branch_name', "TEXT NOT NULL DEFAULT ''")
   addColumnIfMissing(db, 'projects', 'is_favorite', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(db, 'projects', 'archived_at', 'TEXT DEFAULT NULL')
 }
 
 function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string): void {
@@ -2515,6 +2521,7 @@ function createProjectId(name: string): string {
 function mapProjectRow(row: Record<string, unknown>): ProjectRecord {
   return {
     id: String(row.id),
+    archivedAt: row.archived_at ? String(row.archived_at) : null,
     name: String(row.name),
     groupId: String(row.group_id ?? '') || null,
     description: String(row.description ?? ''),
@@ -2588,10 +2595,11 @@ function getProjectOrThrow(projectId: string): ProjectRecord {
   return mapProjectRow(row)
 }
 
-function listRepositories(projectId?: string): RepositoryRecord[] {
+function listRepositories(projectId?: string, includeUnavailable = false): RepositoryRecord[] {
+  const activeFilter=includeUnavailable?'':' AND active = 1'
   const statement = projectId
-    ? getDatabase().prepare('SELECT * FROM repositories WHERE project_id = ? AND active = 1 ORDER BY relative_path ASC, name ASC')
-    : getDatabase().prepare('SELECT * FROM repositories WHERE active = 1 ORDER BY relative_path ASC, name ASC')
+    ? getDatabase().prepare(`SELECT * FROM repositories WHERE project_id = ?${activeFilter} ORDER BY relative_path ASC, name ASC`)
+    : getDatabase().prepare(`SELECT * FROM repositories WHERE 1 = 1${activeFilter} ORDER BY relative_path ASC, name ASC`)
   const rows = projectId ? statement.all(projectId) : statement.all()
   return rows.map((row) => mapRepositoryRow(row as Record<string, unknown>))
 }
@@ -2795,7 +2803,7 @@ function deleteProject(projectId: string): WorkspaceSnapshot {
 function getWorkspaceSnapshot(): WorkspaceSnapshot {
   return {
     projects: listProjects(),
-    repositories: listRepositories()
+    repositories: listRepositories(undefined,true)
   }
 }
 
@@ -3135,8 +3143,8 @@ function createWindow(show = true, projectId?: string): void {
     show,
     width: 1360,
     height: 900,
-    minWidth: 1080,
-    minHeight: 720,
+    minWidth: 720,
+    minHeight: 600,
     title: 'ForgeDesk',
     ...(process.platform === 'darwin'
       ? {
@@ -3931,6 +3939,7 @@ function getRepositoryOrThrow(repositoryId: string): RepositoryRecord {
 }
 
 async function rescanRepositoryRecord(repository: RepositoryRecord): Promise<RepositoryRecord> {
+  repositoryWorkspaceStatusCache.invalidate(repository.id)
   const scanned = await scanRepository(repository.localPath, {
     repositoryKind: repository.repositoryKind,
     parentRepositoryId: repository.parentRepositoryId,
@@ -4351,32 +4360,10 @@ function resolveRepositoryFilePath(repository: RepositoryRecord, filePath: strin
   return normalizedPath
 }
 
-const repositoryWorkspaceStatusCache = new Map<string, { expiresAt: number; status: GitWorkspaceStatus }>()
-const repositoryWorkspaceStatusRequests = new Map<string, Promise<GitWorkspaceStatus>>()
+const repositoryWorkspaceStatusCache = new AsyncReadCache<GitWorkspaceStatus>(1500)
 
 async function getRepositoryWorkspaceStatus(repositoryId: string): Promise<GitWorkspaceStatus> {
-  const now = Date.now()
-  const cached = repositoryWorkspaceStatusCache.get(repositoryId)
-
-  if (cached && cached.expiresAt > now) {
-    return cached.status
-  }
-
-  const existingRequest = repositoryWorkspaceStatusRequests.get(repositoryId)
-  if (existingRequest) {
-    return existingRequest
-  }
-
-  const request = loadRepositoryWorkspaceStatus(repositoryId)
-  repositoryWorkspaceStatusRequests.set(repositoryId, request)
-
-  try {
-    const status = await request
-    repositoryWorkspaceStatusCache.set(repositoryId, { expiresAt: Date.now() + 1500, status })
-    return status
-  } finally {
-    repositoryWorkspaceStatusRequests.delete(repositoryId)
-  }
+  return repositoryWorkspaceStatusCache.get(repositoryId,()=>loadRepositoryWorkspaceStatus(repositoryId))
 }
 
 async function loadRepositoryWorkspaceStatus(repositoryId: string): Promise<GitWorkspaceStatus> {
@@ -6954,7 +6941,7 @@ async function scanRepositoryTree(rootPath: string): Promise<RepositoryScanResul
 
   for (const repositoryPath of repositoryPaths) {
     const normalizedRepositoryPath = resolve(repositoryPath)
-    const submodules = await discoverSubmoduleTree(normalizedRepositoryPath, normalizedRoot, runGitInPath)
+    const submodules = await discoverSubmoduleTree(normalizedRepositoryPath, normalizedRoot, (path,args)=>runGitInPathStrict(path,args,{preserveOutput:true}).catch(()=>''))
 
     for (const submodule of submodules) {
       targets.set(submodule.localPath, {
@@ -7367,6 +7354,13 @@ registerGitIpc(
   }
 )
 
+registerGitIpc('projects:archive', async (_event, input: { id: string; archived: boolean }): Promise<WorkspaceSnapshot> => {
+  setProjectArchived(getDatabase(), input)
+  const snapshot=getWorkspaceSnapshot()
+  for (const window of BrowserWindow.getAllWindows()) { window.webContents.send('project-progress:updated');window.webContents.send('workspace:updated',serializeGitIpcPayload('workspace:updated',snapshot)) }
+  return snapshot
+})
+
 registerGitIpc('projects:delete', async (_event, projectId: string): Promise<WorkspaceSnapshot> => deleteProject(projectId))
 
 registerGitIpc('project:repositories:rescan', async (_event, projectId: string): Promise<WorkspaceSnapshot> => rescanProjectRepositories(projectId))
@@ -7447,6 +7441,14 @@ registerGitIpc('repository:workspace-status', async (_event, repositoryId: strin
 registerGitIpc('repository:git-add', async (_event, repositoryId: string, input: GitAddInput): Promise<GitOperationResult> =>
   runRepositoryWriteOperation(repositoryId, buildGitAddArgs(input))
 )
+
+registerGitIpc('repository:git-pull', async (_event, repositoryId: string, input: {remote:string;branch:string}, operationId?:string): Promise<GitOperationResult> => {
+  const args=buildGitPullArgs(input),repository=getRepositoryOrThrow(repositoryId)
+  if(!repository.remotes.some(remote=>remote.name===input.remote.trim()))throw new Error('请选择已配置的远端')
+  const status=await loadRepositoryWorkspaceStatus(repositoryId)
+  if(!status.branch||status.files.length)throw new Error('拉取前请切换到本地分支，并提交或处理工作区改动')
+  return withSavedSshPassphrases(env=>runRepositoryWriteOperation(repositoryId,args,{env,operationId}))
+})
 
 registerGitIpc('repository:git-commit', async (_event, repositoryId: string, input: GitCommitInput): Promise<GitOperationResult> =>
   commitRepositoryChanges(repositoryId, input)
@@ -7855,6 +7857,26 @@ ipcMain.handle(
   'project:deployment:targets:list',
   async (_event, projectId: string): Promise<ProjectDeploymentTarget[]> => listProjectDeploymentTargets(getDatabase(), projectId)
 )
+
+const projectRuntime = new ProjectRuntimeService()
+function runtimeTarget(projectId: string, targetId: string): ProjectDeploymentTarget {
+  getProjectOrThrow(projectId)
+  const target = listProjectDeploymentTargets(getDatabase(), projectId).find(item => item.id === targetId)
+  if (!target) throw new Error('部署目标不存在或不属于当前项目')
+  return target
+}
+ipcMain.handle('project:runtime:read', (_event, projectId: string) => {
+  getProjectOrThrow(projectId)
+  return listProjectDeploymentTargets(getDatabase(), projectId).filter(target => ['ssh-pm2', 'docker-compose'].includes(target.provider)).map(target => projectRuntime.read(target))
+})
+ipcMain.handle('project:runtime:refresh', (_event, input: { projectId: string; targetId: string }) => {
+  const target = runtimeTarget(input.projectId, input.targetId)
+  return withSavedSshPassphrases(env => projectRuntime.refresh(target, env))
+})
+ipcMain.handle('project:runtime:logs', (_event, input: { projectId: string; targetId: string }) => {
+  const target = runtimeTarget(input.projectId, input.targetId)
+  return withSavedSshPassphrases(env => projectRuntime.logs(target, env))
+})
 
 ipcMain.handle(
   'project:deployment:target:save',

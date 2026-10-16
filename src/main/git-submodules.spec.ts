@@ -1,11 +1,21 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, it } from 'node:test'
 import { discoverSubmoduleTree, parseSubmoduleConfig } from './git-submodules.js'
 
 describe('git submodule discovery', () => {
+  it('parses real Git config output rather than a mocked NUL-pair format',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'forgedesk-submodule-format-'))
+    try{
+      await writeFile(join(root,'.gitmodules'),'[submodule "deps/sub"]\n\tpath = deps/sub\n\turl = ../local.git\n\tbranch = main\n')
+      const {stdout}=await promisify(execFile)('git',['-C',root,'config','--file','.gitmodules','--null','--get-regexp','^submodule\\..*\\.(path|url|branch)$'])
+      assert.deepEqual(parseSubmoduleConfig(stdout),[{name:'deps/sub',path:'deps/sub',url:'../local.git',branch:'main'}])
+    }finally{await rm(root,{recursive:true,force:true})}
+  })
   it('parses gitmodules config entries grouped by submodule name', () => {
     const output = [
       'submodule.DispatchX.path\0DispatchX\0',

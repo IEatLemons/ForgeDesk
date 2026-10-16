@@ -32,6 +32,7 @@ type ForgeDeskState = {
   createProjectFromRemote: (projectName: string, remoteUrl: string, parentPath: string) => Promise<void>
   updateProject: (input: { id: string; name?: string; workspacePath?: string; description?: string; owner?: string }) => Promise<void>
   setProjectFavorite: (input: { id: string; isFavorite: boolean }) => Promise<void>
+  setProjectArchived: (input: { id: string; archived: boolean }) => Promise<void>
   deleteProject: (projectId: string) => Promise<void>
   updateRepository: (repository: ScannedRepository) => void
   setProjectSummary: (summary: ProjectGitSummary) => void
@@ -146,6 +147,11 @@ export const useForgeDeskStore = create<ForgeDeskState>((set) => ({
     }
 
     const snapshot = await window.forgeDesk.setProjectFavorite(input)
+    set((state) => applyWorkspaceSnapshot(state, snapshot))
+  },
+  setProjectArchived: async (input) => {
+    if (!window.forgeDesk) throw new Error('请在 ForgeDesk 桌面应用中管理项目')
+    const snapshot = await window.forgeDesk.setProjectArchived(input)
     set((state) => applyWorkspaceSnapshot(state, snapshot))
   },
   deleteProject: async (projectId) => {

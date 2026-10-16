@@ -435,13 +435,15 @@ export class ProjectProgressService {
   getSnapshot(query: ProgressSnapshotQuery = {}): ProjectProgressSnapshot {
     const asOf = query.asOf ?? this.timestamp(), timezone = query.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
     progressToday(asOf,timezone)
-    const items = this.allItems().filter((item) => !query.projectId || item.projectId === query.projectId)
-    const entities = this.entities().filter((entity) => !query.projectId || entity.projectId === query.projectId)
+    const archivedProjects = new Set(query.projectId || query.includeArchivedProjects ? [] : this.db().prepare('SELECT * FROM projects').all().filter(row => !!(row as Row).archived_at).map(row => String((row as Row).id)))
+    const visibleProject = (id: string | null) => query.projectId ? id === query.projectId : !id || !archivedProjects.has(id)
+    const items = this.allItems().filter((item) => visibleProject(item.projectId))
+    const entities = this.entities().filter((entity) => visibleProject(entity.projectId))
     const ids = new Set(items.map((item) => item.id))
     const migration = this.latestMigration()
     return {
       active: this.isActive(), items, entities, executions: this.executions().filter((run) => ids.has(run.workItemId)), drafts: this.drafts().filter((draft) => ids.has(draft.workItemId)),
-      events: this.db().prepare('SELECT data_json FROM progress_events ORDER BY occurred_at DESC,rowid DESC LIMIT 500').all().map((row) => json<ProgressEvent>(row)).filter((event) => !query.projectId || event.projectId === query.projectId),
+      events: this.db().prepare('SELECT data_json FROM progress_events ORDER BY occurred_at DESC,rowid DESC LIMIT 500').all().map((row) => json<ProgressEvent>(row)).filter((event) => visibleProject(event.projectId)),
       sourceLinks:this.db().prepare('SELECT * FROM work_item_source_links').all().map(row=>row as Row).filter(row=>ids.has(String(row.work_item_id))).map(row=>({sourceSystem:String(row.source_system),sourceScope:String(row.source_scope),sourceType:String(row.source_type),sourceId:String(row.source_id),workItemId:String(row.work_item_id)})),
       stats: calculateProjectProgress(items,asOf,timezone,query.scopeId), scopeStats: Object.fromEntries(entities.map((entity) => [entity.id,calculateProjectProgress(items,asOf,timezone,entity.id)])), migration, asOf, timezone
     }
