@@ -29,4 +29,17 @@ describe('production workspace navigation', () => {
     assert.equal(validRoute({...projectPage('p'),entityId:{secret:1}}),false)
     for(const item of APP_NAVIGATION_ITEMS)assert.ok(validRoute(legacyRoute(item.key)),`${item.key} must have a production destination`)
   })
+  it('keeps typed outcome navigation separate from tasks, sessions and filters',()=>{
+    const goal={...projectPage('p','goals'),progressObject:{kind:'goal' as const,id:'g'}}
+    const result={...projectPage('p','goals'),progressObject:{kind:'key_result' as const,id:'kr'}}
+    const tasks={...projectPage('p','tasks'),progressFilter:'kr',entityId:'task',detailView:'preview' as const}
+    assert.ok(validRoute(goal));assert.ok(validRoute(result));assert.ok(validRoute(tasks))
+    let history=visitRoute(visitRoute(visitRoute(createWorkspaceHistory(),goal),result),tasks)
+    history=visitRoute(history,{...globalPage('ai','sessions'),entityId:'conversation'})
+    assert.deepEqual(restoreHistory(history,2).entries[2],result)
+    assert.deepEqual(history.locations.p,tasks)
+    assert.equal(validRoute({...goal,progressObject:{kind:'execution',id:'x'}}),false)
+    assert.equal(validRoute({...goal,progressObject:{kind:'goal',id:''}}),false)
+    assert.equal(validRoute({...tasks,progressFilter:4}),false)
+  })
 })

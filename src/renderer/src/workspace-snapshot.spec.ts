@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { applyWorkspaceSnapshot } from './workspace-snapshot.js'
+import { applyWorkspaceSnapshot, overlayRepositoryRead, shareWorkspaceRecords } from './workspace-snapshot.js'
 
 const projectA = {
   id: 'project-a',
@@ -77,6 +77,23 @@ const repositoryB = {
 }
 
 describe('workspace snapshot state helpers', () => {
+  it('preserves a newer local check over an identical scan snapshot, not over a new operation', () => {
+    const changed = { ...repositoryA, hasChanges: true }
+    const overlay = { base: repositoryA, next: changed }
+    assert.equal(overlayRepositoryRead(structuredClone(repositoryA), overlay).hasChanges, true)
+    const switched = { ...repositoryA, currentBranch: 'feature' }
+    assert.equal(overlayRepositoryRead(switched, overlay), switched)
+  })
+  it('reuses unchanged IPC records, arrays and summaries', () => {
+    const state = { projects: [projectA, projectB], repositories: [repositoryA, repositoryB], selectedProjectId: projectA.id, summaries: {} }
+    const result = applyWorkspaceSnapshot(state, JSON.parse(JSON.stringify(state)))
+    assert.equal(result.projects, state.projects)
+    assert.equal(result.repositories, state.repositories)
+    assert.equal(result.summaries, state.summaries)
+    const changed = shareWorkspaceRecords(state.repositories, [{ ...repositoryA, ahead: 2 }, structuredClone(repositoryB)])
+    assert.notEqual(changed[0], repositoryA)
+    assert.equal(changed[1], repositoryB)
+  })
   it('updates the workspace snapshot after deleting the selected project', () => {
     const next = applyWorkspaceSnapshot(
       {

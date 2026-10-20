@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Card, Checkbox, Drawer, Empty, Form, Input, List, Modal, Progress, Select, Space, Spin, Table, Tabs, Tag, Typography, message } from 'antd'
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
-import type { ProgressCommand, ProgressEntity, ProgressMigration, ProgressPlanDraft, ProgressPlanItem, ProgressScopeKind, ProjectWorkItem, WorkItemFields, WorkScopeFields, WorkStatus } from '../../shared/project-progress'
+import type { ProgressCommand, ProgressMigration, ProgressObject, ProgressPlanDraft, ProgressPlanItem, ProgressScopeKind, ProjectWorkItem, WorkItemFields, WorkScopeFields, WorkStatus } from '../../shared/project-progress'
+import { ProgressObjectPanel } from './progress-object-panel'
+import { ProgressHistory } from './progress-history'
 import { useForgeDeskStore } from './store'
 import { useProjectProgress } from './use-project-progress'
 import { describePlanChanges, filterProgressItems, progressEventLabels, progressTimeline, workStatusColors, workStatusLabels, type WorkTreeRow } from './project-progress-view'
 import { ManagedTaskPanel } from './managed-task-panel'
 import { TaskListPanel as LegacyTodoPanel } from './task-list-panel'
 import { taskListStorageKey } from './task-list-view'
+import { TaskDatePicker } from './task-date-picker'
 import './project-progress.css'
 
 const commandId=()=>crypto.randomUUID()
@@ -18,11 +21,9 @@ const activeExecution=(status:string)=>['queued','running','waiting','cancelling
 function savedTaskView(projectId?:string){try{const value=localStorage.getItem(`forgedesk:task-view:v2:${projectId||'all'}`);return value&&['list','board','gantt'].includes(value)?value:'list'}catch{return 'list'}}
 
 type WorkForm=WorkItemFields & WorkScopeFields
-type EntityForm={projectId:string;title:string;description:string;criteriaText:string;ownerRef:string;targetDate:string|null;status:ProgressEntity['status']}
-function ProgressDateInput({value,onChange,id}:{value?:string|null;onChange?:(value:string|null)=>void;id?:string}){return <Input id={id} value={value??''} placeholder="YYYY-MM-DD" maxLength={10} onChange={event=>onChange?.(event.target.value||null)}/>}
 
 export type ProgressSection='tasks'|ProgressScopeKind|'maintenance'
-export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entityId,onSelectTask,onOpenMaintenance,maintenancePage,detailView,onDetailViewChange}:{projectId?:string;onOpenCodexSession?:(id:string)=>void;section?:ProgressSection;entityId?:string;onSelectTask?:(id:string|undefined)=>void;onOpenMaintenance?:()=>void;maintenancePage?:string;detailView?:'preview'|'overview'|'children'|'ai'|'history';onDetailViewChange?:(view:'overview'|'children'|'ai'|'history')=>void}):JSX.Element{
+export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entityId,onSelectTask,onOpenMaintenance,maintenancePage,detailView,onDetailViewChange,progressObject,onProgressObjectChange,progressFilter,onProgressFilterChange}:{projectId?:string;onOpenCodexSession?:(id:string)=>void;section?:ProgressSection;entityId?:string;onSelectTask?:(id:string|undefined)=>void;onOpenMaintenance?:()=>void;maintenancePage?:string;detailView?:'preview'|'overview'|'children'|'ai'|'history';onDetailViewChange?:(view:'overview'|'children'|'ai'|'history')=>void;progressObject?:ProgressObject;onProgressObjectChange?:(object?:ProgressObject,ownerProjectId?:string)=>void;progressFilter?:string;onProgressFilterChange?:(id?:string)=>void}):JSX.Element{
   const {projects,repositories}=useForgeDeskStore()
   const [projectFilter,setProjectFilter]=useState(projectId||'all')
   const currentProject=projectId||(projectFilter==='all'?undefined:projectFilter)
@@ -35,13 +36,14 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entit
   const [selectedId,setLocalSelectedId]=useState<string|null>(null),[editing,setEditing]=useState<ProjectWorkItem|null>(null),[parentId,setParentId]=useState<string|null>(null),[workModal,setWorkModal]=useState(false)
   const [fullDetail,setFullDetail]=useState(false),[detailTab,setDetailTab]=useState('overview')
   function setSelectedId(id:string|null){setLocalSelectedId(id);setFullDetail(false);setDetailTab('overview');onSelectTask?.(id??undefined)}
-  const [scopeItem,setScopeItem]=useState<ProjectWorkItem|null>(null),[entityEdit,setEntityEdit]=useState<ProgressEntity|null>(null),[entityKind,setEntityKind]=useState<ProgressScopeKind>('goal'),[entityModal,setEntityModal]=useState(false)
+  const [scopeItem,setScopeItem]=useState<ProjectWorkItem|null>(null)
   const [draftRoot,setDraftRoot]=useState<ProjectWorkItem|null>(null),[draftNodes,setDraftNodes]=useState<ProgressPlanItem[]>([]),[previewDraft,setPreviewDraft]=useState<ProgressPlanDraft|null>(null)
   const [repositoryId,setRepositoryId]=useState<string>(),[blockReason,setBlockReason]=useState(''),[blockNext,setBlockNext]=useState(''),[rawSession,setRawSession]=useState<CodexSessionDetail|null>(null)
-  const [workForm]=Form.useForm<WorkForm>(),[scopeForm]=Form.useForm<WorkScopeFields>(),[entityForm]=Form.useForm<EntityForm>()
+  const [workForm]=Form.useForm<WorkForm>(),[scopeForm]=Form.useForm<WorkScopeFields>()
   const pendingCommand=useRef<{key:string;command:ProgressCommand}|null>(null)
   const workProject=Form.useWatch('projectId',workForm)
   const scopeProject=Form.useWatch('projectId',scopeForm)
+  const workGoal=Form.useWatch('goalId',workForm),scopeGoal=Form.useWatch('goalId',scopeForm)
   const selected=snapshot?.items.find(item=>item.id===selectedId)??null
   const items=snapshot?.items??[],entities=snapshot?.entities??[]
   const stats=(scopeId?snapshot?.scopeStats[scopeId]:null)??snapshot?.stats
@@ -52,7 +54,8 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entit
   const scopeOptions=(kind:ProgressScopeKind,id:string|null|undefined)=>entities.filter(entity=>entity.kind===kind&&entity.projectId===id).map(entity=>({value:entity.id,label:entity.title}))
   const nameOfProject=(id:string|null)=>id?projects.find(project=>project.id===id)?.name||'已删除项目':'收件箱'
 
-  useEffect(()=>{setProjectFilter(projectId||'all');setScopeId('');setLocalSelectedId(entityId??null)},[projectId])
+  useEffect(()=>{setProjectFilter(projectId||'all');setScopeId(progressFilter||'');setLocalSelectedId(entityId??null)},[projectId])
+  useEffect(()=>setScopeId(progressFilter||''),[progressFilter])
   useEffect(()=>{setLocalSelectedId(entityId??null);setFullDetail(!!detailView&&detailView!=='preview');setDetailTab(detailView&&detailView!=='preview'?detailView:'overview')},[entityId,detailView])
   useEffect(()=>{setLegacy(maintenancePage==='legacy-ai');setLegacyTodos(maintenancePage==='legacy-todos');if(maintenancePage==='repair')setRawRepair(legacyRaw()??'[]')},[maintenancePage])
   useEffect(()=>{let disposed=false;if(entityId&&snapshot&&!loading&&!busy&&!snapshot.items.some(item=>item.id===entityId))void refresh().then(next=>{if(!disposed&&next&&!next.items.some(item=>item.id===entityId)){message.warning('任务不存在或不属于当前项目，已返回任务列表');onSelectTask?.(undefined)}});return()=>{disposed=true}},[entityId,currentProject,snapshot?.active,loading,busy])
@@ -98,16 +101,16 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entit
     window.localStorage.setItem(taskListStorageKey,rawRepair)
     setRawRepair(null);await migrationPreview();message.success('修复内容已保存，修改前原文已另外备份')
   }
-  function editWork(item:ProjectWorkItem|null,parent:string|null=null){
+  function editWork(item:ProjectWorkItem|null,parent:string|null=null,scope:Partial<WorkScopeFields>={}){
     setEditing(item);setParentId(parent)
     const owner=parent?items.find(item=>item.id===parent):null
-    workForm.resetFields();workForm.setFieldsValue(item??{title:'',description:'',acceptanceText:'',priority:'medium',ownerRef:'',startDate:null,dueDate:null,tags:[],projectId:owner?.projectId??currentProject??null,goalId:owner?.goalId??null,milestoneId:owner?.milestoneId??null,versionId:owner?.versionId??null})
+    workForm.resetFields();workForm.setFieldsValue(item??{title:'',description:'',acceptanceText:'',priority:'medium',ownerRef:'',startDate:null,dueDate:null,tags:[],projectId:owner?.projectId??currentProject??null,goalId:owner?.goalId??null,keyResultId:owner?.keyResultId??null,milestoneId:owner?.milestoneId??null,versionId:owner?.versionId??null,...scope})
     setWorkModal(true)
   }
   async function saveWork(){
     const values=await workForm.validateFields()
     const fields:WorkItemFields={title:values.title,description:values.description||'',acceptanceText:values.acceptanceText||'',priority:values.priority,ownerRef:values.ownerRef||'',startDate:values.startDate||null,dueDate:values.dueDate||null,tags:values.tags||[]}
-    const result=editing?await send({type:'update',id:editing.id,expectedVersion:editing.rowVersion,patch:fields}):await send({type:'create',input:{...fields,projectId:values.projectId||null,goalId:values.goalId||null,milestoneId:values.milestoneId||null,versionId:values.versionId||null,parentId}})
+    const result=editing?await send({type:'update',id:editing.id,expectedVersion:editing.rowVersion,patch:fields}):await send({type:'create',input:{...fields,projectId:values.projectId||null,goalId:values.goalId||null,keyResultId:values.keyResultId||null,milestoneId:values.milestoneId||null,versionId:values.versionId||null,parentId}})
     setWorkModal(false);setSelectedId(result.entityId)
   }
   function transition(item:ProjectWorkItem,action:string){
@@ -118,8 +121,6 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entit
     }else void execute()
   }
   function editScope(item:ProjectWorkItem){setScopeItem(item);scopeForm.setFieldsValue(item)}
-  function editEntity(kind:ProgressScopeKind,item:ProgressEntity|null=null){setEntityKind(kind);setEntityEdit(item);entityForm.resetFields();entityForm.setFieldsValue(item??{projectId:currentProject??projects[0]?.id,title:'',description:'',criteriaText:'',ownerRef:'',targetDate:null,status:kind==='goal'?'active':'planned'});setEntityModal(true)}
-  async function saveEntity(){const values=await entityForm.validateFields();await send({type:'save-entity',kind:entityKind,input:{...values,id:entityEdit?.id,targetDate:values.targetDate||null},expectedVersion:entityEdit?.rowVersion});setEntityModal(false)}
   function editPlan(item:ProjectWorkItem){setDraftRoot(item);setDraftNodes(items.filter(node=>node.parentId===item.id&&node.status!=='cancelled').map(node=>({id:node.id,existingWorkItemId:node.id,title:node.title,description:node.description,acceptanceText:node.acceptanceText,dependencyIds:node.dependencyIds})))}
   function resolveBlocker(item:ProjectWorkItem,blockerId:string){let resolution='';Modal.confirm({title:'解除阻塞',content:<Input.TextArea placeholder="说明处理结果" onChange={event=>{resolution=event.target.value}}/>,okText:'确认解除',cancelText:'返回',onOk:()=>perform('unblock',()=>send({type:'unblock',id:item.id,expectedVersion:item.rowVersion,blockerId,resolution}))})}
   async function savePlan(){
@@ -161,27 +162,19 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entit
       <Space><Button loading={busy==='preview'} onClick={()=>void perform('preview',migrationPreview)}>重新预览</Button><Button type="primary" disabled={!preview||preview.issues.some(issue=>issue.severity==='error')} loading={busy==='activate'} onClick={()=>void perform('activate',activate)}>核对并启用原生任务</Button></Space>
       <Space wrap><Button onClick={()=>setLegacyTodos(true)}>打开旧待办恢复入口</Button><Button onClick={()=>setRawRepair(legacyRaw()??'[]')}>检查／修复旧存储原文</Button></Space>
     </Space></Card>:<>
-      <div className="progress-summary" aria-label="项目进度摘要"><span><strong>{stats?.done}／{stats?.total}</strong> 节点完成</span><span>待验收 {stats?.review}</span><span>阻塞 {stats?.blocked}</span><span>逾期 {stats?.overdue}</span><span>父任务待验收 {stats?.awaitingParentAcceptance}</span><span>收件箱 {snapshot.stats.inbox}</span><Progress percent={stats?.percent??0} format={()=>stats?.percent==null?'暂无有效工作':`${stats.percent}%`}/></div>
+      {!section||section==='tasks'?<div className="progress-summary" aria-label="任务执行摘要"><span><strong>{stats?.done}／{stats?.total}</strong> 节点完成</span><span>待验收 {stats?.review}</span><span>阻塞 {stats?.blocked}</span><span>逾期 {stats?.overdue}</span><span>父任务待验收 {stats?.awaitingParentAcceptance}</span><span>收件箱 {snapshot.stats.inbox}</span><Progress percent={stats?.percent??0} format={()=>stats?.percent==null?'暂无有效工作':`${stats.percent}%`}/></div>:null}
       <Tabs className={section?'progress-controlled-tabs':undefined} activeKey={section?(section==='tasks'?'tasks':section==='maintenance'?'activity':'plans'):undefined} items={[
         {key:'tasks',label:'任务与节点',children:<>
           <div className="progress-toolbar"><Input.Search allowClear placeholder="搜索任务、说明、标签或负责人" value={query} onChange={event=>setQuery(event.target.value)} style={{width:280,maxWidth:'100%'}}/>
             {!projectId?<Select aria-label="筛选项目" value={projectFilter} style={{minWidth:160}} options={[{value:'all',label:'全部项目'},...projectOptions]} onChange={value=>{setProjectFilter(value);setScopeId('');setSelectedId(null)}}/>:null}
             <Select aria-label="筛选状态" value={status} style={{minWidth:120}} onChange={setStatus} options={[{value:'',label:'全部状态'},...Object.entries(workStatusLabels).map(([value,label])=>({value,label}))]}/>
-            <Select aria-label="筛选目标或计划" allowClear value={scopeId||undefined} placeholder="目标／里程碑／版本" style={{minWidth:190}} onChange={value=>setScopeId(value||'')} options={entities.map(entity=>({value:entity.id,label:`${kindLabels[entity.kind]} · ${entity.title}`}))}/>
+            <Select aria-label="筛选目标或计划" allowClear value={scopeId||undefined} placeholder="目标／关键结果／里程碑／版本" style={{minWidth:190}} onChange={value=>{setScopeId(value||'');onProgressFilterChange?.(value)}} options={[...entities.map(entity=>({value:entity.id,label:`${kindLabels[entity.kind]} · ${entity.title}`})),...snapshot.keyResults.map(result=>({value:result.id,label:`关键结果 · ${result.title}`}))]}/>
             <Checkbox checked={inbox} onChange={event=>setInbox(event.target.checked)}>收件箱</Checkbox><Checkbox checked={archived} onChange={event=>setArchived(event.target.checked)}>含归档</Checkbox>
             <Select aria-label="任务视图" value={view} onChange={setView} options={[{value:'list',label:'列表'},{value:'board',label:'看板'},{value:'gantt',label:'甘特图'}]}/>
           </div>
           {view==='list'?<div className="progress-table"><Table<WorkTreeRow> rowKey="id" columns={columns} dataSource={rows} pagination={{pageSize:15}} scroll={{x:760}} locale={{emptyText:<Empty description={inbox?'暂无待归属工作':'暂无工作项，创建任务后开始跟踪'}/>}}/></div>:view==='board'?<div className="progress-board">{(Object.keys(workStatusLabels) as WorkStatus[]).map(state=><section key={state}><Typography.Title level={5}>{workStatusLabels[state]}</Typography.Title>{rows.flatMap(root=>[root,...(root.children??[])]).filter(item=>item.status===state).map(item=><Card size="small" key={item.id} onClick={()=>setSelectedId(item.id)}><Button type="link" className="progress-title">{item.title}</Button><div>{item.ownerRef||'未指定'} · {item.dueDate||'未安排'}</div></Card>)}</section>)}</div>:timeline?<div className="progress-gantt"><Typography.Text type="secondary">{timeline.startDate} 至 {timeline.endDate} · {timeline.days} 天</Typography.Text>{timeline.rows.map(row=><div className="progress-gantt-row" key={row.item.id}><Button type="link" className="progress-title" onClick={()=>setSelectedId(row.item.id)}>{row.item.parentId?'↳ ':''}{row.item.title}</Button><div className="progress-gantt-track">{row.duration?<div className={`progress-gantt-bar status-${row.item.status}`} style={{left:`${row.offset/timeline.days*100}%`,width:`${row.duration/timeline.days*100}%`}} aria-label={`${row.item.startDate||row.item.dueDate} 至 ${row.item.dueDate||row.item.startDate}`}/>:<Typography.Text type="secondary">未安排日期</Typography.Text>}</div></div>)}</div>:<Empty description="设置任务起止日期后显示甘特图"/>}
         </>},
-        {key:'plans',label:'目标与计划',children:<><Space wrap style={{marginBottom:16}}>{(Object.keys(kindLabels) as ProgressScopeKind[]).filter(kind=>!section||section===kind).map(kind=><Button key={kind} icon={<PlusOutlined/>} onClick={()=>editEntity(kind)}>新建{kindLabels[kind]}</Button>)}</Space><Table rowKey="id" dataSource={entities.filter(entity=>!section||entity.kind===section)} pagination={{pageSize:10}} scroll={{x:700}} columns={[
-          {title:'类型',dataIndex:'kind',render:(kind:ProgressScopeKind)=>kindLabels[kind]},
-          {title:'名称',dataIndex:'title'},
-          {title:'项目',dataIndex:'projectId',render:(id:string)=>nameOfProject(id)},
-          {title:'节点完成',key:'progress',render:(_,entity)=><span>{snapshot.scopeStats[entity.id]?.done??0}／{snapshot.scopeStats[entity.id]?.total??0}</span>},
-          {title:'目标日期',dataIndex:'targetDate',render:(value:string)=>value||'未安排'},
-          {title:'状态',dataIndex:'status',render:(value:string)=>entityStatusLabels[value]},
-          {title:'操作',key:'action',render:(_,entity)=><Button onClick={()=>editEntity(entity.kind,entity)}>编辑／确认达成</Button>}
-        ]}/></>},
+        {key:'plans',label:'目标与计划',children:<ProgressObjectPanel snapshot={snapshot} projectId={currentProject} projects={projects} section={section==='goal'||section==='milestone'||section==='version'?section:undefined} object={progressObject} onObjectChange={onProgressObjectChange} onSend={send} onRefresh={refresh} onCreateWork={scope=>editWork(null,null,scope)} onOpenWork={setSelectedId}/>},
         {key:'activity',label:'活动与迁移',children:<><Alert type="info" showIcon message="业务活动与执行记录分别保留" description={snapshot.migration?.backupPath?`数据库备份：${snapshot.migration.backupPath}`:'原始迁移快照保存在本机数据库中。'}/><List pagination={{pageSize:15}} dataSource={snapshot.events} renderItem={event=><List.Item><Space direction="vertical"><Space wrap><Tag>{event.actorType}</Tag><Typography.Text>{items.find(item=>item.id===event.entityId)?.title||entities.find(entity=>entity.id===event.entityId)?.title} · {progressEventLabels[event.eventType]||event.eventType}</Typography.Text><Typography.Text type="secondary">{new Date(event.occurredAt).toLocaleString()}</Typography.Text></Space><details><summary>查看变更前后</summary><pre className="progress-event-detail">{JSON.stringify({before:event.before,after:event.after},null,2)}</pre></details></Space></List.Item>}/></>}
       ]}/>
     </>}
@@ -191,6 +184,7 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entit
         {fullDetail?<Tabs activeKey={detailTab} onChange={view=>{setDetailTab(view);onDetailViewChange?.(view as 'overview'|'children'|'ai'|'history')}} items={[{key:'overview',label:'概况'},{key:'children',label:'子任务'},{key:'ai',label:'AI 执行'},{key:'history',label:'历史'}]}/>:null}
         {!fullDetail||detailTab==='overview'?<>
         <Space wrap><Tag color={workStatusColors[selected.status]}>{workStatusLabels[selected.status]}</Tag><Tag>{nameOfProject(selected.projectId)}</Tag><Button onClick={()=>editWork(selected)}>编辑资料</Button>{!selected.parentId?<Button onClick={()=>editScope(selected)}>调整归属与范围</Button>:null}{!selected.parentId&&!['done','cancelled'].includes(selected.status)?<Button onClick={()=>editWork(null,selected.id)}>添加节点</Button>:null}</Space>
+        {onProgressObjectChange?<Space wrap>{selected.goalId?<Button type="link" onClick={()=>{setSelectedId(null);onProgressObjectChange({kind:'goal',id:selected.goalId!},selected.projectId||undefined)}}>目标：{entities.find(entity=>entity.id===selected.goalId)?.title||'查看目标'}</Button>:null}{selected.keyResultId?<Button type="link" onClick={()=>{setSelectedId(null);onProgressObjectChange({kind:'key_result',id:selected.keyResultId!},selected.projectId||undefined)}}>关键结果：{snapshot?.keyResults.find(result=>result.id===selected.keyResultId)?.title||'查看结果'}</Button>:null}</Space>:null}
         <Typography.Paragraph style={{whiteSpace:'pre-wrap'}}>{selected.description||'尚无说明'}</Typography.Paragraph><Typography.Text strong>验收条件</Typography.Text><Typography.Paragraph style={{whiteSpace:'pre-wrap'}}>{selected.acceptanceText||'完成时由你确认验收依据'}</Typography.Paragraph>
         <Typography.Text strong>来源追溯</Typography.Text><List size="small" dataSource={snapshot?.sourceLinks?.filter(link=>link.workItemId===selected.id)} locale={{emptyText:'ForgeDesk 原生创建'}} renderItem={link=><List.Item><Space wrap><Tag>{link.sourceSystem==='legacy'?'旧待办':link.sourceSystem==='managed'?'历史 AI 工作流':link.sourceSystem}</Tag><Typography.Text type="secondary">{link.sourceScope} · {link.sourceType}</Typography.Text><Typography.Text copyable>{link.sourceId}</Typography.Text></Space></List.Item>}/>
         <Space wrap>{rowActions(selected)}{!['done','cancelled'].includes(selected.status)?<><Button onClick={()=>transition(selected,'review')}>提交验收</Button><Button danger onClick={()=>transition(selected,'cancel')}>取消业务任务</Button></>:<Button onClick={()=>transition(selected,'archive')}>归档</Button>}</Space>
@@ -216,22 +210,19 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entit
           <List size="small" pagination={{pageSize:5,hideOnSinglePage:true}} dataSource={run.delivery?.events} renderItem={event=><List.Item><Space direction="vertical" size={0}><Typography.Text>{event.message}</Typography.Text>{event.detail?<Typography.Paragraph style={{whiteSpace:'pre-wrap'}}>{event.detail}</Typography.Paragraph>:null}<Typography.Text type="secondary">{new Date(event.createdAt).toLocaleString()}</Typography.Text></Space></List.Item>}/>
         </Card>)}
         </>:null}
-        {fullDetail&&detailTab==='history'?<><Typography.Text strong>变更历史</Typography.Text><List size="small" dataSource={snapshot?.events.filter(event=>event.entityId===selected.id)} renderItem={event=><List.Item><Space direction="vertical"><span>{progressEventLabels[event.eventType]||event.eventType} · {new Date(event.occurredAt).toLocaleString()}</span><details><summary>查看变更前后</summary><pre className="progress-event-detail">{JSON.stringify({before:event.before,after:event.after},null,2)}</pre></details></Space></List.Item>}/></>:null}
+        {fullDetail&&detailTab==='history'?<ProgressHistory key={selected.updatedAt} object={{kind:'task',id:selected.id}} projectId={selected.projectId}/>:null}
       </Space>:null}
     </Drawer>
 
     <Modal open={workModal} title={editing?'编辑任务':parentId?'添加任务节点':'新建原生任务'} okText="保存" cancelText="取消" confirmLoading={busy==='save'} onCancel={()=>setWorkModal(false)} onOk={()=>void perform('save',saveWork)}>
       <Form name="progress-work" form={workForm} layout="vertical"><Form.Item name="title" label="任务名称" rules={[{required:true,whitespace:true}]}><Input/></Form.Item><Form.Item name="description" label="工作说明"><Input.TextArea rows={3}/></Form.Item><Form.Item name="acceptanceText" label="验收条件"><Input.TextArea rows={2}/></Form.Item>
-        {!parentId?<Form.Item name="projectId" label="项目"><Select allowClear disabled={!!editing} placeholder="未选择时进入收件箱" options={projectOptions} onChange={()=>workForm.setFieldsValue({goalId:null,milestoneId:null,versionId:null})}/></Form.Item>:null}
-        {!editing&&!parentId?(Object.keys(kindLabels) as ProgressScopeKind[]).map(kind=><Form.Item key={kind} name={`${kind}Id`} label={kindLabels[kind]}><Select allowClear disabled={!workProject} options={scopeOptions(kind,workProject)}/></Form.Item>):null}
-        <Form.Item name="ownerRef" label="负责人"><Input/></Form.Item><Form.Item name="priority" label="优先级"><Select options={[{value:'low',label:'低'},{value:'medium',label:'中'},{value:'high',label:'高'}]}/></Form.Item><div className="progress-form-dates"><Form.Item name="startDate" label="开始日期"><ProgressDateInput/></Form.Item><Form.Item name="dueDate" label="计划完成日期"><ProgressDateInput/></Form.Item></div><Form.Item name="tags" label="标签"><Select mode="tags" tokenSeparators={[',','，']}/></Form.Item>
+        {!parentId?<Form.Item name="projectId" label="项目"><Select allowClear disabled={!!editing} placeholder="未选择时进入收件箱" options={projectOptions} onChange={()=>workForm.setFieldsValue({goalId:null,keyResultId:null,milestoneId:null,versionId:null})}/></Form.Item>:null}
+        {!editing&&!parentId?<><Form.Item name="goalId" label="主要目标"><Select allowClear disabled={!workProject} options={scopeOptions('goal',workProject)} onChange={()=>workForm.setFieldValue('keyResultId',null)}/></Form.Item><Form.Item name="keyResultId" label="支撑关键结果"><Select allowClear disabled={!workGoal} options={snapshot?.keyResults.filter(result=>result.goalId===workGoal&&result.projectId===workProject).map(result=>({value:result.id,label:result.title}))}/></Form.Item>{(['milestone','version'] as const).map(kind=><Form.Item key={kind} name={`${kind}Id`} label={kindLabels[kind]}><Select allowClear disabled={!workProject} options={scopeOptions(kind,workProject)}/></Form.Item>)}</>:null}
+        <Form.Item name="ownerRef" label="负责人"><Input/></Form.Item><Form.Item name="priority" label="优先级"><Select options={[{value:'low',label:'低'},{value:'medium',label:'中'},{value:'high',label:'高'}]}/></Form.Item><div className="progress-form-dates"><Form.Item name="startDate" label="开始日期"><TaskDatePicker/></Form.Item><Form.Item name="dueDate" label="计划完成日期"><TaskDatePicker/></Form.Item></div><Form.Item name="tags" label="标签"><Select mode="tags" tokenSeparators={[',','，']}/></Form.Item>
       </Form>
     </Modal>
-    <Modal open={!!scopeItem} title="调整项目与目标范围" okText="保存归属" cancelText="取消" onCancel={()=>setScopeItem(null)} onOk={()=>void perform('scope',async()=>{if(!scopeItem)return;const values=await scopeForm.validateFields();await send({type:'move',id:scopeItem.id,expectedVersion:scopeItem.rowVersion,scope:{projectId:values.projectId||null,goalId:values.goalId||null,milestoneId:values.milestoneId||null,versionId:values.versionId||null}});setScopeItem(null)})}>
-      <Form name="progress-scope" form={scopeForm} layout="vertical"><Form.Item name="projectId" label="项目"><Select allowClear options={projectOptions} onChange={()=>scopeForm.setFieldsValue({goalId:null,milestoneId:null,versionId:null})}/></Form.Item>{(Object.keys(kindLabels) as ProgressScopeKind[]).map(kind=><Form.Item key={kind} name={`${kind}Id`} label={kindLabels[kind]}><Select allowClear disabled={!scopeProject} options={scopeOptions(kind,scopeProject)}/></Form.Item>)}</Form>
-    </Modal>
-    <Modal open={entityModal} title={`${entityEdit?'编辑':'新建'}${kindLabels[entityKind]}`} okText="保存" cancelText="取消" confirmLoading={busy==='entity'} onCancel={()=>setEntityModal(false)} onOk={()=>void perform('entity',saveEntity)}>
-      <Form name="progress-entity" form={entityForm} layout="vertical"><Form.Item name="projectId" label="项目" rules={[{required:true}]}><Select disabled={!!entityEdit} options={projectOptions}/></Form.Item><Form.Item name="title" label="名称" rules={[{required:true,whitespace:true}]}><Input/></Form.Item><Form.Item name="description" label="说明"><Input.TextArea rows={3}/></Form.Item><Form.Item name="criteriaText" label="达成条件"><Input.TextArea/></Form.Item><Form.Item name="ownerRef" label="负责人"><Input/></Form.Item><Form.Item name="targetDate" label="目标日期"><ProgressDateInput/></Form.Item><Form.Item name="status" label="状态"><Select options={(entityKind==='goal'?['draft','active','achieved','cancelled']:entityKind==='milestone'?['planned','achieved','cancelled']:['planned','active','closed','archived']).map(value=>({value,label:entityStatusLabels[value]}))}/></Form.Item></Form>
+    <Modal open={!!scopeItem} title="调整项目与目标范围" okText="保存归属" cancelText="取消" onCancel={()=>setScopeItem(null)} onOk={()=>void perform('scope',async()=>{if(!scopeItem)return;const values=await scopeForm.validateFields();await send({type:'move',id:scopeItem.id,expectedVersion:scopeItem.rowVersion,scope:{projectId:values.projectId||null,goalId:values.goalId||null,keyResultId:values.keyResultId||null,milestoneId:values.milestoneId||null,versionId:values.versionId||null}});setScopeItem(null)})}>
+      <Form name="progress-scope" form={scopeForm} layout="vertical"><Form.Item name="projectId" label="项目"><Select allowClear options={projectOptions} onChange={()=>scopeForm.setFieldsValue({goalId:null,keyResultId:null,milestoneId:null,versionId:null})}/></Form.Item><Form.Item name="goalId" label="主要目标"><Select allowClear disabled={!scopeProject} options={scopeOptions('goal',scopeProject)} onChange={()=>scopeForm.setFieldValue('keyResultId',null)}/></Form.Item><Form.Item name="keyResultId" label="支撑关键结果"><Select allowClear disabled={!scopeGoal} options={snapshot?.keyResults.filter(result=>result.goalId===scopeGoal&&result.projectId===scopeProject).map(result=>({value:result.id,label:result.title}))}/></Form.Item>{(['milestone','version'] as const).map(kind=><Form.Item key={kind} name={`${kind}Id`} label={kindLabels[kind]}><Select allowClear disabled={!scopeProject} options={scopeOptions(kind,scopeProject)}/></Form.Item>)}</Form>
     </Modal>
     <Modal open={!!draftRoot} title="编辑计划草稿" width={780} okText="保存草稿" cancelText="取消" onCancel={()=>setDraftRoot(null)} onOk={()=>void perform('draft',savePlan)}>
       <Typography.Paragraph type="secondary">草稿不直接改动任务。保存后核对新增、变更和移出项，再确认应用。</Typography.Paragraph>

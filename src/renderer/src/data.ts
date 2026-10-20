@@ -779,10 +779,12 @@ export type QuickBuildTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancell
 
 export type QuickBuildStartInput = {
   cwd?: string
+  force?: boolean
 }
 
 export type QuickBuildRestartInput = {
   cwd?: string
+  taskId?: string
 }
 
 export type QuickBuildRestartResult = {
@@ -790,25 +792,7 @@ export type QuickBuildRestartResult = {
   restarted: boolean
 }
 
-export type QuickBuildTask = {
-  id: string
-  command: string
-  cwd: string
-  status: QuickBuildTaskStatus
-  phase: string
-  hint: string
-  lastOutputAt: string
-  processPid?: number
-  startedAt: string
-  updatedAt: string
-  finishedAt?: string
-  log: string
-  stdout: string
-  stderr: string
-  exitCode: number | null
-  signal?: string
-  error?: string
-}
+export type QuickBuildTask = import('../../shared/quick-build').QuickBuildTask
 
 export type ProjectTerminalCommandRecord = {
   id: string

@@ -1,8 +1,9 @@
 import type { AppNavigationKey } from './app-navigation'
+import type { ProgressObject } from '../../shared/project-progress'
 
 export type WorkspaceArea = 'workbench' | 'projects' | 'ai' | 'resources' | 'toolbox' | 'settings'
 export type ProjectPage = 'overview' | 'goals' | 'tasks' | 'milestones' | 'versions' | 'repositories' | 'contributions' | 'environments' | 'deployments' | 'monitoring' | 'domains' | 'settings-general' | 'settings-repositories' | 'settings-runtime' | 'settings-integrations'
-type DetailLocation = { detailView?: 'preview'|'overview'|'children'|'ai'|'history' }
+type DetailLocation = { detailView?: 'preview'|'overview'|'children'|'ai'|'history'; progressObject?: ProgressObject; progressFilter?: string }
 export type AppRoute = DetailLocation & (
   | { scope: 'global'; area: WorkspaceArea; page: string; entityId?: string; projectFilter?: string; view?: string }
   | { scope: 'project'; projectId: string; page: ProjectPage; repositoryId?: string; entityId?: string; view?: string })
@@ -77,6 +78,8 @@ export function validRoute(value: unknown): value is AppRoute {
   if (!value || typeof value !== 'object') return false
   const route = value as AppRoute
   if (route.entityId !== undefined && typeof route.entityId !== 'string') return false
+  if (route.progressObject!==undefined && (!route.progressObject || typeof route.progressObject.id!=='string' || !route.progressObject.id || !['task','goal','key_result','milestone','version'].includes(route.progressObject.kind))) return false
+  if (route.progressFilter!==undefined && typeof route.progressFilter!=='string') return false
   if (route.detailView!==undefined&&!['preview','overview','children','ai','history'].includes(route.detailView))return false
   if (route.view !== undefined && typeof route.view !== 'string') return false
   if (route.scope === 'project' && route.repositoryId !== undefined && typeof route.repositoryId !== 'string') return false

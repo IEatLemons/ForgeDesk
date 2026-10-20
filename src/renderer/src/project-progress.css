@@ -1,4 +1,15 @@
 .progress-workspace { min-width: 0; }
+.progress-object-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:16px 0; }
+.progress-object-heading h3,.progress-object-heading h4,.progress-object-heading h5 { margin:0; overflow-wrap:anywhere; }
+.progress-object-detail,.progress-result-detail { min-width:0; }
+.progress-result-detail { padding:8px 0; }
+.progress-result-detail > .ant-progress { display:block; margin:12px 0; }
+.progress-workspace:has(.progress-object-detail) > .section-heading { justify-content:flex-end; margin-bottom:0; }
+.progress-workspace:has(.progress-object-detail) > .section-heading > div:first-child { display:none; }
+.progress-evidence { margin:12px 0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.progress-object-detail .ant-list-item { gap:12px; flex-wrap:wrap; }
+.progress-object-detail .ant-list-item-meta { min-width:160px; }
+.progress-object-detail .ant-progress { max-width:520px; }
 .progress-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 24px; padding: 18px 0; }
 .progress-summary .ant-progress { max-width: 260px; }
 .progress-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 16px; }

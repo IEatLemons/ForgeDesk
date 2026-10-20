@@ -1,0 +1,15 @@
+// Deliberately run as Node by the target Electron. No app/profile is opened.
+const { createRequire } = require('node:module')
+const { join } = require('node:path')
+const [root, arch] = process.argv.slice(2)
+if (!process.versions.electron || process.arch !== arch) throw Error('Incorrect target Electron architecture')
+const fromApp = createRequire(join(root, 'package.json'))
+const Database = fromApp('better-sqlite3')
+const database = new Database(':memory:')
+if (database.prepare('select 42 as value').get().value !== 42) throw Error('SQLite failed')
+database.close()
+const pty = fromApp('node-pty').spawn('/bin/sh', ['-c', 'printf QB_NATIVE_OK'], { cwd: root, env: { PATH: process.env.PATH } })
+let output = ''
+const timeout = setTimeout(() => { pty.kill(); process.exit(1) }, 5000)
+pty.onData(data => { output += data })
+pty.onExit(({ exitCode }) => { clearTimeout(timeout); if (exitCode !== 0 || !output.includes('QB_NATIVE_OK')) process.exitCode = 1 })

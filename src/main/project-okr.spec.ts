@@ -1,0 +1,160 @@
+import assert from 'node:assert/strict'
+import { DatabaseSync } from 'node:sqlite'
+import { describe, it } from 'node:test'
+import { ProjectProgressService } from './project-progress.js'
+import { keyResultPercent, type ProgressCommand, type ProgressEntity } from '../shared/project-progress.js'
+
+function fixture() {
+  const db=new DatabaseSync(':memory:')
+  db.exec("CREATE TABLE projects(id TEXT PRIMARY KEY, archived_at TEXT); INSERT INTO projects VALUES('p',NULL),('other',NULL)")
+  const service=new ProjectProgressService(()=>db as never,()=>new Date('2026-10-19T00:00:00Z'))
+  let sequence=0
+  const command=(input:Record<string,unknown>)=>service.command({...input,commandId:`okr-${++sequence}`} as ProgressCommand).entityId
+  const entity=(kind='goal',projectId='p')=>command({type:'save-entity',kind,input:{projectId,title:`${kind}-${sequence}`}})
+  const result=(goalId:string,measurement='deliverable',patch:Record<string,unknown>={})=>command({type:'save-key-result',input:{projectId:'p',goalId,title:'结果',measurement,criteriaText:'有可验证的验收证据',...patch}})
+  const getResult=(id:string)=>service.getSnapshot({includeArchivedProjects:true}).keyResults.find(result=>result.id===id)!
+  const getEntity=(id:string)=>service.getSnapshot({includeArchivedProjects:true}).entities.find(entity=>entity.id===id)!
+  const accept=(id:string,kind='key_result')=>kind==='key_result'?command({type:'transition-key-result',id,expectedVersion:getResult(id).rowVersion,action:'accept',evidence:'独立验收证据'}):command({type:'transition-entity',id,kind,expectedVersion:getEntity(id).rowVersion,action:'accept'})
+  const task=(input:Record<string,unknown>={})=>command({type:'create',input:{title:'支撑任务',projectId:'p',...input}})
+  const links=(id:string,kind:string,targetIds:string[])=>command({type:'set-progress-relations',id,kind,targetIds,expectedVersion:getEntity(id).rowVersion})
+  const legacy=(id:string)=>{const goal=getEntity(id);delete goal.progressMode;db.prepare('UPDATE project_goals SET data_json=? WHERE id=?').run(JSON.stringify(goal),id)}
+  return {db,service,command,entity,result,getResult,getEntity,accept,task,links,legacy}
+}
+
+describe('goal driven project progress',()=>{
+  it('uses outcomes rather than task completion and keeps independent work',()=>{
+    const f=fixture(),goal=f.entity(),kr=f.result(goal),task=f.task({goalId:goal,keyResultId:kr})
+    assert.equal(f.getEntity(goal).progressMode,'key_results')
+    assert.throws(()=>f.accept(goal,'goal'),/关键结果/)
+    f.accept(kr);f.accept(goal,'goal')
+    assert.equal(f.service.getItem(task).status,'todo')
+    assert.equal(f.service.getSnapshot().goalStats[goal].unfinishedTasks,1)
+    const extra=f.task({goalId:goal})
+    f.command({type:'transition',id:extra,expectedVersion:1,action:'start'})
+    assert.equal(f.getEntity(goal).status,'achieved')
+    assert.equal(f.service.getItem(f.task()).goalId,null)
+  })
+  it('requires outcome evidence even after all supporting work is accepted',()=>{
+    const f=fixture(),goal=f.entity(),kr=f.result(goal),task=f.task({goalId:goal,keyResultId:kr})
+    f.command({type:'transition',id:task,expectedVersion:1,action:'accept'})
+    assert.throws(()=>f.accept(goal,'goal'),/关键结果/)
+    assert.throws(()=>f.command({type:'transition-key-result',id:kr,expectedVersion:1,action:'accept',evidence:''}),/依据/)
+    assert.equal(f.service.getSnapshot().scopeStats[goal].percent,100)
+    assert.equal(f.service.getSnapshot().goalStats[goal].percent,0)
+  })
+  it('measures increasing and decreasing values without auto acceptance',()=>{
+    const f=fixture(),goal=f.entity(),up=f.result(goal,'numeric',{baselineValue:0,targetValue:10}),down=f.result(goal,'numeric',{baselineValue:500,targetValue:300,direction:'decrease'})
+    const measure=(id:string,value:number)=>f.command({type:'measure-key-result',id,expectedVersion:f.getResult(id).rowVersion,value,evidence:'本次测量记录'})
+    measure(up,5);measure(down,400)
+    assert.equal(f.service.getSnapshot().goalStats[goal].percent,50)
+    assert.throws(()=>f.accept(up),/未达标/)
+    measure(up,20);measure(down,200)
+    assert.equal(f.service.getSnapshot().goalStats[goal].percent,100)
+    assert.equal(f.service.getSnapshot().goalStats[goal].readyForAcceptance,false)
+    f.accept(up);f.accept(down);f.accept(goal,'goal')
+    assert.throws(()=>measure(up,0),/重开/)
+    f.command({type:'transition-key-result',id:up,expectedVersion:f.getResult(up).rowVersion,action:'reopen',evidence:'需要重新测量'})
+    assert.equal(f.getEntity(goal).status,'active')
+    measure(up,-5)
+    assert.equal(f.service.getSnapshot().keyResultStats[up].percent,0)
+    assert.ok(f.service.getHistory({object:{kind:'goal',id:goal}}).events.some(event=>event.eventType==='scope-reopened'))
+  })
+  it('rejects invalid numbers, directions and reassignment atomically',()=>{
+    const f=fixture(),goal=f.entity()
+    for (const patch of [{baselineValue:0,targetValue:0},{baselineValue:0,targetValue:-1},{baselineValue:NaN,targetValue:1},{baselineValue:0,targetValue:Infinity}]) assert.throws(()=>f.result(goal,'numeric',patch),/数值/)
+    const kr=f.result(goal),other=f.entity(),root=f.task({goalId:goal,keyResultId:kr}),child=f.task({parentId:root,goalId:other})
+    assert.equal(f.service.getItem(child).goalId,goal)
+    assert.equal(f.service.getItem(child).keyResultId,kr)
+    assert.throws(()=>f.task({goalId:other,keyResultId:kr}),/关键结果/)
+    assert.throws(()=>f.task({projectId:'other',goalId:goal,keyResultId:kr}),/不属于/)
+    assert.throws(()=>f.command({type:'move',id:root,expectedVersion:2,scope:{projectId:'p',goalId:other,keyResultId:kr,milestoneId:null,versionId:null}}),/关键结果/)
+    assert.equal(f.service.getItem(child).goalId,goal)
+    assert.equal(f.service.getItem(root).rowVersion,2) // adding a child revised the parent
+  })
+  it('keeps cancellation explicit and reports undefined empty outcomes',()=>{
+    const f=fixture(),goal=f.entity()
+    assert.equal(f.service.getSnapshot().goalStats[goal].percent,null)
+    const a=f.result(goal),b=f.result(goal)
+    f.accept(a)
+    assert.equal(f.service.getSnapshot().goalStats[goal].percent,50)
+    f.command({type:'transition-key-result',id:b,expectedVersion:1,action:'cancel',evidence:'范围调整确认'})
+    assert.equal(f.service.getSnapshot().goalStats[goal].percent,100)
+    f.accept(goal,'goal')
+    assert.throws(()=>f.result(goal),/重开/)
+  })
+  it('handles large finite metrics and refuses to bypass cancelled goal reopening',()=>{
+    const f=fixture(),goal=f.entity(),kr=f.result(goal,'numeric',{baselineValue:-Number.MAX_VALUE,targetValue:Number.MAX_VALUE,currentValue:0})
+    assert.equal(keyResultPercent(f.getResult(kr)),50)
+    f.command({type:'measure-key-result',id:kr,expectedVersion:1,value:Number.MAX_VALUE,evidence:'极值测量'})
+    f.accept(kr)
+    f.command({type:'transition-entity',kind:'goal',id:goal,expectedVersion:1,action:'cancel'})
+    assert.throws(()=>f.command({type:'save-entity',kind:'goal',input:{id:goal,projectId:'p',title:'goal',status:'achieved'},expectedVersion:f.getEntity(goal).rowVersion}),/重开/)
+  })
+  it('moves whole task families and preserves outcome isolation during AI execution',()=>{
+    const f=fixture(),goal=f.entity(),kr=f.result(goal),root=f.task({goalId:goal}),child=f.task({parentId:root})
+    f.command({type:'move',id:root,expectedVersion:2,scope:{projectId:'p',goalId:goal,keyResultId:kr,milestoneId:null,versionId:null}})
+    assert.equal(f.service.getItem(child).keyResultId,kr)
+    const run=f.service.beginExecution(root,'implementation','repo','/tmp/isolated','qa-run')
+    assert.throws(()=>f.command({type:'move',id:root,expectedVersion:f.service.getItem(root).rowVersion,scope:{projectId:'p',goalId:null,keyResultId:null,milestoneId:null,versionId:null}}),/执行/)
+    f.service.setExecutionResult(run.id,'succeeded','执行结束，仅为证据')
+    assert.equal(f.getResult(kr).status,'active');assert.equal(f.service.getItem(root).status,'todo')
+    assert.equal(f.service.getSnapshot().goalStats[goal].percent,0)
+  })
+  it('links cross-goal checkpoints and releases without importing implicit tasks',()=>{
+    const f=fixture(),a=f.entity(),b=f.entity(),ra=f.result(a),rb=f.result(b),m=f.entity('milestone'),v=f.entity('version'),v2=f.entity('version')
+    f.task({goalId:a,keyResultId:ra})
+    f.links(m,'milestone_result',[ra,rb]);f.links(v,'version_milestone',[m]);f.links(v2,'version_milestone',[m])
+    assert.deepEqual(f.service.getSnapshot().deliveryStats[m],{tasksTotal:0,tasksAccepted:0,checkpointsTotal:2,checkpointsAccepted:0,readyForAcceptance:false})
+    assert.throws(()=>f.accept(m,'milestone'),/未验收/)
+    f.accept(ra);f.accept(rb);f.accept(m,'milestone');f.accept(v,'version');f.accept(v2,'version')
+    assert.equal(f.service.getSnapshot().deliveryStats[v].readyForAcceptance,true)
+    assert.equal(f.service.getSnapshot().stats.total,1)
+    assert.equal(f.service.getSnapshot().scopeStats[v].total,0)
+    f.command({type:'transition-key-result',id:ra,expectedVersion:f.getResult(ra).rowVersion,action:'reopen',evidence:'检查点复核'})
+    assert.equal(f.getEntity(m).status,'planned')
+    assert.equal(f.getEntity(v).status,'active');assert.equal(f.getEntity(v2).status,'active')
+    assert.throws(()=>f.links(m,'milestone_result',[f.result(f.entity('goal','other'))]),/不属于/)
+  })
+  it('requires parent acceptance for milestones and refuses empty releases',()=>{
+    const f=fixture(),m=f.entity('milestone'),v=f.entity('version'),root=f.task({milestoneId:m}),child=f.task({parentId:root})
+    f.command({type:'transition',id:child,expectedVersion:1,action:'accept'})
+    assert.equal(f.service.getSnapshot().scopeStats[m].percent,100)
+    assert.throws(()=>f.accept(m,'milestone'),/未验收/)
+    assert.throws(()=>f.accept(v,'version'),/未验收/)
+    f.command({type:'transition',id:root,expectedVersion:f.service.getItem(root).rowVersion,action:'accept'})
+    f.accept(m,'milestone')
+  })
+  it('preserves legacy mode and upgrades explicitly with rollback and evidence',()=>{
+    const f=fixture(),goal=f.entity();f.legacy(goal)
+    const task=f.task({goalId:goal});f.command({type:'transition',id:task,expectedVersion:1,action:'accept'});f.accept(goal,'goal')
+    const before=f.getEntity(goal)
+    assert.equal(before.progressMode,'legacy_tasks')
+    assert.throws(()=>f.command({type:'upgrade-goal',id:goal,expectedVersion:before.rowVersion,keyResults:[{projectId:'p',goalId:goal,title:'bad',measurement:'numeric',criteriaText:'criteria'}]}),/数值/)
+    assert.deepEqual(f.getEntity(goal),before)
+    f.command({type:'upgrade-goal',id:goal,expectedVersion:before.rowVersion,keyResults:[{projectId:'p',goalId:goal,title:'新验收口径',measurement:'deliverable',criteriaText:'明确结果'}]})
+    assert.equal(f.getEntity(goal).status,'active');assert.equal(f.getEntity(goal).progressMode,'key_results')
+    assert.equal(f.service.getItem(task).status,'done');assert.equal(f.service.getItem(task).keyResultId,null)
+    assert.ok(f.service.getHistory({object:{kind:'goal',id:goal}}).events.some(event=>event.eventType==='goal-upgraded' && (event.before as ProgressEntity).status==='achieved'))
+  })
+  it('deduplicates writes, rejects stale edits and pages complete object history',()=>{
+    const f=fixture(),goal=f.entity(),kr=f.result(goal,'numeric',{baselineValue:0,targetValue:1000})
+    const cmd:ProgressCommand={type:'measure-key-result',id:kr,expectedVersion:1,value:1,evidence:'测量',commandId:'repeat'}
+    f.service.command(cmd);f.service.command(cmd)
+    assert.throws(()=>f.service.command({...cmd,commandId:'stale'}),/其他窗口/)
+    for(let value=2;value<515;value++) f.command({type:'measure-key-result',id:kr,expectedVersion:f.getResult(kr).rowVersion,value,evidence:'测量'})
+    let cursor:string|undefined,total=0
+    do {const page=f.service.getHistory({object:{kind:'key_result',id:kr},cursor,limit:100});total+=page.events.length;cursor=page.nextCursor??undefined}while(cursor)
+    assert.equal(total,515)
+    assert.throws(()=>f.service.getHistory({object:{kind:'key_result',id:kr},projectId:'other'}),/不属于/)
+  })
+  it('filters archived project outcomes and detaches tasks without deleting history',()=>{
+    const f=fixture(),goal=f.entity(),kr=f.result(goal),task=f.task({goalId:goal,keyResultId:kr})
+    f.db.exec("UPDATE projects SET archived_at='2026-10-19' WHERE id='p'")
+    assert.equal(f.service.getSnapshot().keyResults.length,0)
+    assert.equal(f.service.getSnapshot({projectId:'p'}).keyResults.length,1)
+    f.service.detachProject('p');f.db.exec("DELETE FROM projects WHERE id='p'")
+    assert.equal(f.service.getItem(task).keyResultId,null)
+    assert.equal(f.service.getSnapshot().keyResults.length,0)
+    assert.ok(f.service.getHistory({object:{kind:'task',id:task}}).events.length>0)
+  })
+})

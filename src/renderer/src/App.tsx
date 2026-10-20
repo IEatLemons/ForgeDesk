@@ -95,7 +95,11 @@ import type { FormInstance } from 'antd/es/form'
 import forgedeskLogoUrl from './assets/forgedesk-logo.svg'
 import { AI_CODING_ASSISTANT_NAME } from './ai-coding-assistant'
 import { WorkspaceShell } from './workspace-shell'
-import { applyWorkspaceSnapshot } from './workspace-snapshot'
+import { ProjectDirectory } from './project-directory'
+import { QuickBuildPanel } from './quick-build-panel'
+import { WorkspaceVisibilityProvider, useWorkspaceVisible } from './workspace-visibility'
+import type { DirectoryController } from './project-directory-model'
+import { useShallow } from 'zustand/react/shallow'
 import { useWorkspaceNavigation } from './use-workspace-navigation'
 import { DirectoryLanding, ProgressOverview, RepositoryDirectory } from './workspace-pages'
 import { RepositoryHistoryFilters, RepositoryWorkspaceHeader } from './repository-workspace-header'
@@ -967,9 +971,14 @@ type QuickBuildState = {
   stderr?: string
   updatedAt?: string
   message?: string
+  architecture?: string
+  artifactPath?: string
+  elapsedMs?: number
+  reused?: boolean
+  stages?: QuickBuildTask['stages']
 }
 
-const quickBuildCommand = 'pnpm package:mac:legacy'
+const quickBuildCommand = 'pnpm build:quick'
 
 function createInitialQuickBuildState(): QuickBuildState {
   return {
@@ -1037,7 +1046,8 @@ function createQuickBuildStateFromTask(task: QuickBuildTask | null, fallbackCwd 
     stderr: task.stderr,
     stdout: task.stdout,
     taskId: task.id,
-    updatedAt: task.updatedAt
+    updatedAt: task.updatedAt,
+    architecture: task.architecture, artifactPath: task.artifactPath, elapsedMs: task.elapsedMs, reused: task.reused, stages: task.stages
   }
 }
 
@@ -1471,6 +1481,8 @@ function AppStatusBar({
   quickBuildTooltip,
   versionLabel,
   onQuickBuild,
+  onInspectQuickBuild,
+  onForceQuickBuild,
   onOpenLogs,
   onOpenSystemMonitor,
   onOpenProjectGitTasks,
@@ -1490,6 +1502,8 @@ function AppStatusBar({
   quickBuildTooltip: JSX.Element
   versionLabel: string
   onQuickBuild: () => void
+  onInspectQuickBuild: () => void
+  onForceQuickBuild: () => void
   onOpenLogs: () => void
   onOpenSystemMonitor: () => void
   onOpenProjectGitTasks: () => void
@@ -1525,13 +1539,21 @@ function AppStatusBar({
       <span className="app-status-bar-spacer" />
       <AppSystemMonitorStatus appMode={appMode} onOpenSystemMonitor={onOpenSystemMonitor} />
       {showQuickBuildButton ? (
-        <Tooltip title={quickBuildTooltip} placement="topRight">
+        <>
+        <Dropdown trigger={['contextMenu']} menu={{ items: [{ key: 'details', label: '阶段与耗时' }, { key: 'force', label: '强制完整重建', disabled: quickBuildState.status === 'running' }], onClick: ({key}) => key === 'force' ? onForceQuickBuild() : onInspectQuickBuild() }}><Tooltip title={quickBuildTooltip} placement="topRight">
           <button type="button" className={`app-status-bar-item app-status-bar-quick-build is-${quickBuildState.status}`} onClick={onQuickBuild}>
             <ThunderboltOutlined />
             <span>快速构建</span>
             <span className={`quick-build-status-dot is-${quickBuildState.status}`} />
           </button>
+        </Tooltip></Dropdown>
+        <Tooltip title="查看详细编译日志、标准输出和错误输出" placement="topRight">
+          <button type="button" className="app-status-bar-item app-status-bar-build-log" aria-label="查看构建日志" onClick={onInspectQuickBuild}>
+            <FileTextOutlined />
+            <span>构建日志</span>
+          </button>
         </Tooltip>
+        </>
       ) : null}
       {chromePreferences.codexStatus === 'bottom' ? <CodexStatusControl placement="bottom" onOpenCodex={onOpenCodex} onOpenCodexMonitor={onOpenCodexMonitor} onOpenForgeProject={onOpenForgeProject} /> : null}
       {chromePreferences.appModeSwitcher === 'bottom' ? <AppModeSwitcher mode={appMode} onChange={onAppModeChange} /> : null}
@@ -12255,7 +12277,8 @@ function GitMergeModal({
 }
 
 function GitWorkspacePanel({ repositories, compact = false }: { repositories: Repository[]; compact?: boolean }): JSX.Element {
-  const { updateRepository } = useForgeDeskStore()
+  const updateRepository = useForgeDeskStore(state => state.updateRepository)
+  const workspaceVisible = useWorkspaceVisible()
   const [aiSettingsForm] = Form.useForm<AiSettingsForm>()
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
   const [status, setStatus] = useState<GitWorkspaceStatus | null>(null)
@@ -12403,12 +12426,15 @@ function GitWorkspacePanel({ repositories, compact = false }: { repositories: Re
     setPushBranch(target.branch)
     setPushTargetBranch(target.branch)
 
-    if (selectedRepository) {
+  }, [selectedRepository?.id])
+
+  useEffect(() => {
+    if (workspaceVisible && selectedRepository) {
       void refreshWorkspaceAiSettings()
       refreshWorkspaceStatus()
       refreshReleaseTagRecommendation()
     }
-  }, [selectedRepository?.id])
+  }, [selectedRepository?.id, workspaceVisible])
 
   async function runGitWrite(action: () => Promise<GitOperationResult>, successText: string): Promise<void> {
     setWorking(true)
@@ -15471,6 +15497,7 @@ function ProjectOverview({
   workspaceRoute,
   workspaceArchived = false,
   workspaceVisible = true,
+  directoryControllerRef,
   onWorkspaceNavigate,
   onWorkspaceOpenProject,
   onOpenCodexSession
@@ -15492,6 +15519,7 @@ function ProjectOverview({
   workspaceRoute?: ProjectRoute
   workspaceArchived?: boolean
   workspaceVisible?: boolean
+  directoryControllerRef?: React.MutableRefObject<DirectoryController | null>
   onWorkspaceNavigate?: (route: AppRoute) => void
   onWorkspaceOpenProject?: (id: string) => void
   onOpenCodexSession?: (id: string) => void
@@ -15510,7 +15538,12 @@ function ProjectOverview({
     setSelectedProjectId,
     loadWorkspace,
     updateRepository
-  } = useForgeDeskStore()
+  } = useForgeDeskStore(useShallow(state => ({
+    projects: state.projects, repositories: state.repositories, selectedProjectId: state.selectedProjectId, summaries: state.summaries,
+    deleteProject: state.deleteProject, initializeProjectRepository: state.initializeProjectRepository, rescanProjectRepositories: state.rescanProjectRepositories,
+    setProjectFavorite: state.setProjectFavorite, setProjectArchived: state.setProjectArchived, setProjectSummary: state.setProjectSummary,
+    setSelectedProjectId: state.setSelectedProjectId, loadWorkspace: state.loadWorkspace, updateRepository: state.updateRepository
+  })))
   const isSimpleMode = mode === 'simple'
   const [gitLogRefreshPreferences, setGitLogRefreshPreferences] = useGitLogRefreshPreferences()
   const [projectGitWatchEnabled, setProjectGitWatchEnabled] = useState(() => readStoredProjectGitWatchEnabled())
@@ -15561,6 +15594,14 @@ function ProjectOverview({
   const [projectGroupName, setProjectGroupName] = useState('')
   const [projectListGroupFilter, setProjectListGroupFilter] = useState<ProjectListGroupFilter>('all')
   const [projectSearch, setProjectSearch] = useState('')
+  const projectRepositoryIndex = useMemo(() => {
+    const index = new Map<string, Repository[]>()
+    for (const repository of repositories) {
+      const bucket = index.get(repository.projectId) ?? []
+      bucket.push(repository); index.set(repository.projectId, bucket)
+    }
+    return new Map(projects.map(project => [project.id, getProjectRepositoriesForDisplay(project, workspaceNavigation ? index.get(project.id) ?? [] : repositories)]))
+  }, [projects, repositories, workspaceNavigation])
   const classifiedProjects = workspaceNavigation ? projects.filter(project => !!project.archivedAt === workspaceArchived) : projects
   const sortedProjects = useMemo(
     () => sortProjectsByGroupForDisplay(workspaceNavigation ? projects.filter(project => !!project.archivedAt === workspaceArchived) : projects, projectGroups),
@@ -15581,6 +15622,9 @@ function ProjectOverview({
     [activeProjectListGroupFilter, sortedProjects, projectSearch]
   )
   const selectedProject = projects.find((project) => project.id === (workspaceNavigation ? workspaceRoute?.projectId : detailProjectId)) ?? null
+  const detailVisible = workspaceVisible && Boolean(selectedProject)
+  const summaryVisible = detailVisible && (!workspaceNavigation || workspaceRoute?.page === 'contributions' || workspaceRoute?.page === 'settings-general')
+  const bindingsVisible = detailVisible && (!workspaceNavigation || workspaceRoute?.page === 'overview' || workspaceRoute?.page === 'settings-integrations')
   const selectedProjectRows = classifiedProjects.filter((project) => selectedProjectRowIds.includes(project.id))
   const listCommitProject = projects.find((project) => project.id === listCommitProjectId) ?? null
   const listCommitProjectRepositories = listCommitProject ? getProjectRepositories(listCommitProject) : []
@@ -15635,13 +15679,13 @@ function ProjectOverview({
   }, [workspaceRoute?.projectId, workspaceRoute?.repositoryId, repositories])
 
   useEffect(() => {
-    onTitlebarProjectLocationChange(selectedProject
+    onTitlebarProjectLocationChange(selectedProject && workspaceVisible
       ? { name: selectedProject.name, tabLabel: activeProjectDetailTabLabel }
       : null)
-  }, [activeProjectDetailTabLabel, onTitlebarProjectLocationChange, selectedProject?.id, selectedProject?.name])
+  }, [activeProjectDetailTabLabel, onTitlebarProjectLocationChange, selectedProject?.id, selectedProject?.name, workspaceVisible])
 
   useEffect(() => {
-    if (!window.forgeDesk || !selectedProject) {
+    if (!window.forgeDesk || !selectedProject || !bindingsVisible) {
       setProjectAiBindings([])
       setProjectAiProvider(null)
       return undefined
@@ -15668,7 +15712,7 @@ function ProjectOverview({
     return () => {
       mounted = false
     }
-  }, [selectedProject?.id])
+  }, [selectedProject?.id, bindingsVisible])
 
   function openProjectRepositoryCommit(repository: Repository): void {
     setProjectGitRepositoryId(repository.id)
@@ -15714,8 +15758,25 @@ function ProjectOverview({
   }
 
   function getProjectRepositories(project: Project): Repository[] {
-    return getProjectRepositoriesForDisplay(project, workspaceNavigation ? repositories.filter(repository=>repository.projectId===project.id) : repositories)
+    return projectRepositoryIndex.get(project.id) ?? []
   }
+
+  useEffect(() => {
+    if (!directoryControllerRef) return
+    directoryControllerRef.current = { run: (action, ids) => {
+      const currentProjects = useForgeDeskStore.getState().projects
+      const chosen = currentProjects.filter(project => ids.includes(project.id))
+      if (action === 'fetch' || action === 'push-selected') { void Promise.all(chosen.map(project => runProjectGitTask(project, action === 'fetch' ? 'fetch' : 'push'))); return }
+      const project = chosen[0]
+      if (!project) return
+      if (action === 'commit') setListCommitProjectId(project.id)
+      else if (action === 'merge') setListMergeProjectId(project.id)
+      else if (action === 'push') openProjectPushFromList(project)
+      else if (action === 'delete') confirmDeleteProject(project)
+      else if (action === 'window') void onOpenProjectWindow(project.id)
+    } }
+    return () => { directoryControllerRef.current = null }
+  })
 
   function isProjectGitTaskRunning(projectId: string, action: ProjectGitListAction): boolean {
     return hasRunningProjectGitTask(runningProjectGitTasks, projectId, action)
@@ -16190,23 +16251,23 @@ function ProjectOverview({
   }
 
   useEffect(() => {
-    if (!selectedProject || !window.forgeDesk) {
+    if (!selectedProject || !window.forgeDesk || !summaryVisible) {
       return
     }
 
     refreshSummary(selectedProject.id).catch((error) => setAnalysisGitError(createGitErrorGuidance(error, '读取 Git 数据')))
-  }, [selectedProject?.id, rangePreset, range.startDate, range.endDate])
+  }, [selectedProject?.id, rangePreset, range.startDate, range.endDate, summaryVisible])
 
   useEffect(() => {
-    if (!selectedProject || !window.forgeDesk) {
+    if (!selectedProject || !window.forgeDesk || !detailVisible || (workspaceNavigation && !['environments', 'monitoring', 'settings-runtime'].includes(workspaceRoute?.page ?? ''))) {
       return
     }
 
     refreshProjectServiceBindings(selectedProject.id).catch((error) => message.error(getErrorMessage(error)))
-  }, [selectedProject?.id, projectSettingsDrawerOpen])
+  }, [selectedProject?.id, projectSettingsDrawerOpen, detailVisible, workspaceRoute?.page])
 
   useEffect(() => {
-    if (!selectedProject || !window.forgeDesk) {
+    if (!selectedProject || !window.forgeDesk || !bindingsVisible) {
       return undefined
     }
 
@@ -16243,7 +16304,7 @@ function ProjectOverview({
     return () => {
       cancelled = true
     }
-  }, [selectedProject?.id, projectSettingsDrawerOpen])
+  }, [selectedProject?.id, projectSettingsDrawerOpen, bindingsVisible])
 
   useEffect(() => {
     projectRepositoriesRef.current = projectRepositories
@@ -16332,7 +16393,7 @@ function ProjectOverview({
   }
 
   useEffect(() => {
-    if (!selectedProject || projectRepositories.length === 0 || !window.forgeDesk || (projectWindow && !projectGitWatchEnabled)) {
+    if (!detailVisible || !selectedProject || projectRepositories.length === 0 || !window.forgeDesk || (projectWindow && !projectGitWatchEnabled) || (workspaceNavigation && workspaceRoute?.page !== 'repositories')) {
       return
     }
 
@@ -16342,7 +16403,7 @@ function ProjectOverview({
     }, projectWorkspaceStatusRefreshIntervalMs)
 
     return () => window.clearInterval(intervalId)
-  }, [projectGitWatchEnabled, projectRepositoryIds, projectWindow, selectedProject?.id])
+  }, [projectGitWatchEnabled, projectRepositoryIds, projectWindow, selectedProject?.id, detailVisible, workspaceRoute?.page])
 
   function updateProjectGitWatchEnabled(enabled: boolean): void {
     setProjectGitWatchEnabled(writeStoredProjectGitWatchEnabled(enabled))
@@ -17017,7 +17078,7 @@ function ProjectOverview({
           )) : <Typography.Text type="secondary">还没有自定义分组，项目将显示在未分组中。</Typography.Text>}
         </Space>
       </Modal>
-      {!selectedProject ? (
+      {!selectedProject && !workspaceNavigation ? (
         <div className="section-heading">
           <div>
             <Typography.Title level={2}>{workspaceArchived ? '已归档项目' : '项目'}</Typography.Title>
@@ -17039,7 +17100,7 @@ function ProjectOverview({
         </div>
       ) : null}
 
-      {projects.length === 0 ? (
+      {workspaceNavigation && !selectedProject ? null : projects.length === 0 ? (
         <div className="panel empty-project-panel">
           <Empty description="还没有项目" />
           <Space>
@@ -17152,15 +17213,6 @@ function ProjectOverview({
                   </Button>
                 </Empty>
               </div>
-            )}
-            {listCommitProject && (
-              <GitCommitModal
-                open={Boolean(listCommitProject)}
-                repositories={listCommitProjectRepositories}
-                initialRepositoryId={listCommitInitialRepository?.id}
-                onClose={() => setListCommitProjectId(null)}
-                onChanged={() => refreshProjectAfterGitTask(listCommitProject.id)}
-              />
             )}
           </div>
         </div>
@@ -17598,7 +17650,20 @@ function ProjectOverview({
                 {
                   key: 'progress',
                   label: '项目进度',
-                  children: <TaskListPanel projectId={selectedProject.id} section={workspaceNavigation ? ({goals:'goal',tasks:'tasks',milestones:'milestone',versions:'version'} as const)[workspaceRoute?.page as 'goals'|'tasks'|'milestones'|'versions'] : undefined} entityId={workspaceRoute?.entityId} detailView={workspaceRoute?.detailView} onDetailViewChange={detailView=>workspaceRoute&&onWorkspaceNavigate?.({...workspaceRoute,detailView})} onSelectTask={id=>workspaceRoute&&onWorkspaceNavigate?.({...workspaceRoute,entityId:id,detailView:undefined})} onOpenMaintenance={()=>onWorkspaceNavigate?.(globalPage('settings','migration'))} onOpenCodexSession={onOpenCodexSession} />
+                  children: <TaskListPanel
+                    projectId={selectedProject.id}
+                    section={workspaceNavigation ? ({goals:'goal',tasks:'tasks',milestones:'milestone',versions:'version'} as const)[workspaceRoute?.page as 'goals'|'tasks'|'milestones'|'versions'] : undefined}
+                    entityId={workspaceRoute?.progressObject?.kind==='task'?workspaceRoute.progressObject.id:workspaceRoute?.entityId}
+                    progressObject={workspaceRoute?.progressObject}
+                    onProgressObjectChange={workspaceRoute ? object=>onWorkspaceNavigate?.({...workspaceRoute,page:object?({goal:'goals',key_result:'goals',task:'tasks',milestone:'milestones',version:'versions'} as const)[object.kind]:workspaceRoute.page,progressObject:object,entityId:undefined,detailView:undefined}) : undefined}
+                    progressFilter={workspaceRoute?.progressFilter}
+                    onProgressFilterChange={progressFilter=>workspaceRoute&&onWorkspaceNavigate?.({...workspaceRoute,progressFilter})}
+                    detailView={workspaceRoute?.detailView}
+                    onDetailViewChange={detailView=>workspaceRoute&&onWorkspaceNavigate?.({...workspaceRoute,detailView})}
+                    onSelectTask={id=>workspaceRoute&&onWorkspaceNavigate?.({...workspaceRoute,entityId:id,progressObject:workspaceRoute.progressObject?.kind==='task'?undefined:workspaceRoute.progressObject,detailView:undefined})}
+                    onOpenMaintenance={()=>onWorkspaceNavigate?.(globalPage('settings','migration'))}
+                    onOpenCodexSession={onOpenCodexSession}
+                  />
                 },
                 {
                   key: 'codex-work',
@@ -17638,6 +17703,7 @@ function ProjectOverview({
           </div>
         </div>
       )}
+      {listCommitProject ? <GitCommitModal open repositories={listCommitProjectRepositories} initialRepositoryId={listCommitInitialRepository?.id} onClose={() => setListCommitProjectId(null)} onChanged={() => refreshProjectAfterGitTask(listCommitProject.id)} /> : null}
       <GitMergeModal
         open={Boolean(listMergeProject)}
         repositories={listMergeProjectRepositories}
@@ -19309,7 +19375,8 @@ function RepositoryLogTree({
   onCommitCountChange?: (repositoryId: string, commitCount: number) => void
   onRepositoryChange?: (repositoryId: string) => void
 }): JSX.Element {
-  const { setProjectSummary, updateRepository } = useForgeDeskStore()
+  const { setProjectSummary, updateRepository } = useForgeDeskStore(useShallow(state => ({ setProjectSummary: state.setProjectSummary, updateRepository: state.updateRepository })))
+  const workspaceVisible = useWorkspaceVisible()
   const [gitLogRefreshPreferences, setGitLogRefreshPreferences] = useGitLogRefreshPreferences()
   const previousMaxLoadedCommitsRef = useRef(gitLogRefreshPreferences.maxLoadedCommits)
   const [detailRepository, setDetailRepository] = useState<Repository | null>(repository)
@@ -19345,6 +19412,7 @@ function RepositoryLogTree({
   const commitLoadPreviousRef = useRef<HTMLDivElement | null>(null)
   const commitLoadMoreRef = useRef<HTMLDivElement | null>(null)
   const repositoryRefreshInFlightRef = useRef(false)
+  const loadedRepositoryKey = useRef('')
   const commitWindowRequestRef = useRef(0)
   const commitWindowLoadingRef = useRef(false)
   const commitBoundaryArmedRef = useRef({ newer: true, older: true })
@@ -19429,6 +19497,7 @@ function RepositoryLogTree({
     let cancelled = false
 
     async function loadBranchTags(): Promise<void> {
+      if (!workspaceVisible) return
       if (!activeProjectId || !window.forgeDesk) {
         setBranchTags([])
         return
@@ -19453,9 +19522,11 @@ function RepositoryLogTree({
     return () => {
       cancelled = true
     }
-  }, [activeProjectId, branchTagRefreshToken])
+  }, [activeProjectId, branchTagRefreshToken, workspaceVisible])
 
   useEffect(() => {
+    const key = JSON.stringify([branchTagRefreshToken, refreshToken, repository?.id, repository?.latestCommit, repository?.remoteBranchCount, repository?.remoteCount])
+    if (!workspaceVisible || loadedRepositoryKey.current === key) return
     let cancelled = false
 
     async function loadRepositoryDetail(): Promise<void> {
@@ -19538,12 +19609,12 @@ function RepositoryLogTree({
       }
     }
 
-    loadRepositoryDetail()
+    void loadRepositoryDetail().then(() => { if (!cancelled) loadedRepositoryKey.current = key })
 
     return () => {
       cancelled = true
     }
-  }, [branchTagRefreshToken, refreshToken, repository?.id, repository?.latestCommit, repository?.remoteBranchCount, repository?.remoteCount])
+  }, [branchTagRefreshToken, refreshToken, repository?.id, repository?.latestCommit, repository?.remoteBranchCount, repository?.remoteCount, workspaceVisible])
 
   async function refreshRepositorySnapshot({
     targetRepository = detailRepository,
@@ -19625,7 +19696,7 @@ function RepositoryLogTree({
     const previousMaxLoadedCommits = previousMaxLoadedCommitsRef.current
     previousMaxLoadedCommitsRef.current = nextMaxLoadedCommits
 
-    if (previousMaxLoadedCommits === nextMaxLoadedCommits || !detailRepository?.available) {
+    if (!workspaceVisible || previousMaxLoadedCommits === nextMaxLoadedCommits || !detailRepository?.available) {
       return
     }
 
@@ -19778,7 +19849,7 @@ function RepositoryLogTree({
   }
 
   useEffect(() => {
-    if (view !== 'log' || typeof IntersectionObserver === 'undefined') {
+    if (!workspaceVisible || view !== 'log' || typeof IntersectionObserver === 'undefined') {
       return
     }
 
@@ -19813,7 +19884,7 @@ function RepositoryLogTree({
     }
 
     return () => observers.forEach((observer) => observer.disconnect())
-  }, [commitWindowStart, commits, hasNewerCommits, hasOlderCommits, loadingMoreCommits, view])
+  }, [commitWindowStart, commits, hasNewerCommits, hasOlderCommits, loadingMoreCommits, view, workspaceVisible])
 
   async function refreshTagSyncStatus(targetRepository = detailRepository, showError = true): Promise<void> {
     if (!targetRepository || !window.forgeDesk) return
@@ -19894,7 +19965,7 @@ function RepositoryLogTree({
   }
 
   useEffect(() => {
-    if (!autoRefreshEnabled || !activeRepositoryForLog || !window.forgeDesk) {
+    if (!workspaceVisible || !autoRefreshEnabled || !activeRepositoryForLog || !window.forgeDesk) {
       return
     }
 
@@ -19917,7 +19988,8 @@ function RepositoryLogTree({
     commitWindowStart,
     gitLogRefreshPreferences.intervalSeconds,
     loadingDetail,
-    autoRefreshEnabled
+    autoRefreshEnabled,
+    workspaceVisible
   ])
 
   function selectBranchFilter(nextBranch: string): void {
@@ -22943,7 +23015,7 @@ function PasswordGeneratorTool({ onBack }: { onBack: () => void }): JSX.Element 
 function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppProps): JSX.Element {
   const projectWindowId = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('projectId')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const { loadingWorkspace, loadWorkspace, selectedProjectId, projects, setSelectedProjectId } = useForgeDeskStore()
+  const { loadingWorkspace, loadWorkspace, selectedProjectId, projects, setSelectedProjectId } = useForgeDeskStore(useShallow(state => ({ loadingWorkspace: state.loadingWorkspace, loadWorkspace: state.loadWorkspace, selectedProjectId: state.selectedProjectId, projects: state.projects, setSelectedProjectId: state.setSelectedProjectId })))
   const [appMode, setAppMode] = useState<AppMode>(() => projectWindowId ? 'full' : readStoredAppMode())
   const [chromePreferences, setChromePreferences] = useState<AppChromePreferences>(() => readStoredAppChromePreferences())
   const [activeKey, setLegacyActiveKey] = useState<AppActiveKey>(() => projectWindowId ? 'projects' : readStoredAppMode() === 'simple' ? 'projects' : 'overview')
@@ -22972,16 +23044,23 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     if(route.scope==='global'&&route.projectFilter&&!loadingWorkspace&&!projects.some(project=>project.id===route.projectFilter)){message.warning('筛选项目已失效，已返回全部项目');navigation.go({...route,projectFilter:undefined,entityId:undefined})}
   }, [route, loadingWorkspace, projects])
   useEffect(()=>{
-    const apply=(snapshot:WorkspaceSnapshot)=>useForgeDeskStore.setState(state=>applyWorkspaceSnapshot(state,snapshot))
-    const refresh=()=>{void window.forgeDesk?.listProjects().then(apply).catch(()=>{/* Keep current data; pages report their own errors. */})}
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const apply=(snapshot:WorkspaceSnapshot)=>useForgeDeskStore.getState().applyWorkspace(snapshot)
+    const refresh=()=>{if(timer)clearTimeout(timer);timer=setTimeout(()=>{timer=undefined;void useForgeDeskStore.getState().loadWorkspace().catch(()=>{/* Keep usable cached rows. */})},150)}
     const unsubscribe=window.forgeDesk?.onWorkspaceUpdated?.(apply)
     window.addEventListener('focus',refresh)
-    return()=>{unsubscribe?.();window.removeEventListener('focus',refresh)}
+    return()=>{unsubscribe?.();window.removeEventListener('focus',refresh);if(timer)clearTimeout(timer)}
   },[])
   const usesCustomTitleBar = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
   const [settingsActiveModule, setSettingsActiveModule] = useState<SettingsModuleKey>('appearance')
   const [settingsBackKey, setSettingsBackKey] = useState<AppActiveKey>('overview')
   const [creatingProject, setCreatingProject] = useState(false)
+  const directoryControllerRef = useRef<DirectoryController | null>(null)
+  const directoryArchived = useRef(false)
+  if (route.scope === 'global' && route.area === 'projects') directoryArchived.current = route.page === 'archived'
+  const createDirectoryProject = useCallback(() => setCreatingProject(true), [])
+  const directoryAction = useCallback<DirectoryController['run']>((action, ids) => directoryControllerRef.current?.run(action, ids), [])
+  const openArchiveDirectory = useCallback(() => navigation.go(globalPage('projects', directoryArchived.current ? 'list' : 'archived')), [navigation.go])
   const [initialization, setInitialization] = useState<InitializationSnapshot | null>(null)
   const [initializationLoading, setInitializationLoading] = useState(true)
   const [terminalOpenRequest, setTerminalOpenRequest] = useState<TerminalOpenRequest | null>(null)
@@ -22991,6 +23070,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const [systemLogFilter, setSystemLogFilter] = useState<SystemLogFilter>('all')
   const [projectGitTaskLogs, setProjectGitTaskLogs] = useState<ProjectGitTaskLog[]>([])
   const [projectGitTaskDrawerOpen, setProjectGitTaskDrawerOpen] = useState(false)
+  const openDirectoryLogs = useCallback(() => setProjectGitTaskDrawerOpen(true), [])
   const [deploymentRefreshActive, setDeploymentRefreshActive] = useState(false)
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateState>({
     status: 'idle',
@@ -22999,6 +23079,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const [appUpdateActionBusy, setAppUpdateActionBusy] = useState(false)
   const [appRuntimeInfo, setAppRuntimeInfo] = useState<AppRuntimeInfo | null>(null)
   const [quickBuildState, setQuickBuildState] = useState<QuickBuildState>(() => createInitialQuickBuildState())
+  const [quickBuildDetailsOpen, setQuickBuildDetailsOpen] = useState(false)
   const [codexWorkspaceTarget, setCodexWorkspaceTarget] = useState<CodexWorkspaceTarget | null>(null)
   const [titlebarProjectLocation, setTitlebarProjectLocation] = useState<AppTitlebarProjectLocation>(null)
   const terminalOpenRequestIdRef = useRef(0)
@@ -23254,7 +23335,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             ),
             okText: prompt.restartText,
             cancelText: prompt.cancelText,
-            onOk: () => restartQuickBuildApp(task.cwd)
+            onOk: () => restartQuickBuildApp(task.cwd, task.id)
           })
         } else {
           message.success('快速构建完成')
@@ -23317,6 +23398,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const quickBuildTooltip = (
     <div className="quick-build-tooltip">
       <Typography.Text strong>快速构建</Typography.Text>
+      <span>右键查看阶段耗时或强制完整重建</span>
       {!appRuntimeInfo?.canQuickBuild ? <span>未识别源码目录，点击后可以选择 ForgeDesk 源码目录</span> : null}
       <span>状态：{getQuickBuildStatusText(quickBuildState.status)}</span>
       <span>命令：{quickBuildState.command}</span>
@@ -23473,13 +23555,14 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     await window.forgeDesk.openAppReleases()
   }
 
-  async function startQuickBuild(): Promise<void> {
+  async function startQuickBuild(force = false): Promise<void> {
     if (!window.forgeDesk) {
       message.warning('请在 ForgeDesk 桌面应用中启动快速构建')
       return
     }
 
     if (quickBuildState.status === 'running') {
+      setQuickBuildDetailsOpen(true)
       message.info('快速构建正在后台运行')
       return
     }
@@ -23514,7 +23597,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     quickBuildStateRef.current = runningState
     setQuickBuildState(runningState)
     try {
-      const task = await window.forgeDesk.startQuickBuild({ cwd })
+      setQuickBuildDetailsOpen(true)
+      const task = await window.forgeDesk.startQuickBuild({ cwd, force })
       const nextState = createQuickBuildStateFromTask(task, cwd)
 
       quickBuildStateRef.current = nextState
@@ -23546,7 +23630,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     }
   }
 
-  async function restartQuickBuildApp(cwd: string): Promise<void> {
+  async function restartQuickBuildApp(cwd: string, taskId?: string): Promise<void> {
     if (!window.forgeDesk) {
       message.warning('请在 ForgeDesk 桌面应用中重启')
       return
@@ -23555,7 +23639,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     let result
 
     try {
-      result = await window.forgeDesk.restartQuickBuildApp({ cwd })
+      result = await window.forgeDesk.restartQuickBuildApp({ cwd, taskId })
     } catch (error) {
       message.error(getErrorMessage(error, '快速重启失败'))
       throw error
@@ -23672,6 +23756,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       quickBuildTooltip={quickBuildTooltip}
       versionLabel={appVersionLabel}
       onQuickBuild={() => startQuickBuild().catch((error) => message.error(getErrorMessage(error, '快速构建启动失败')))}
+      onInspectQuickBuild={() => setQuickBuildDetailsOpen(true)}
+      onForceQuickBuild={() => void startQuickBuild(true).catch(error => message.error(getErrorMessage(error)))}
       onOpenLogs={() => setSystemLogDrawerOpen(true)}
       onOpenSystemMonitor={() => setActiveKey('system-monitor')}
       onOpenProjectGitTasks={() => setProjectGitTaskDrawerOpen(true)}
@@ -23681,6 +23767,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       onOpenForgeProject={openForgeProjectFromCodex}
     />
   )
+  const quickBuildDrawer = <QuickBuildPanel open={quickBuildDetailsOpen} task={quickBuildState} onClose={() => setQuickBuildDetailsOpen(false)} onForce={() => void startQuickBuild(true).catch(error => message.error(getErrorMessage(error)))} onCancel={() => void window.forgeDesk.cancelQuickBuild().catch(error => message.error(getErrorMessage(error)))} onRestart={() => void restartQuickBuildApp(quickBuildState.cwd, quickBuildState.taskId).catch(() => undefined)} />
   const appUpdateBanner = (
     <AppUpdateBanner
       state={appUpdateState}
@@ -23704,14 +23791,14 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
   if (modernLayout) {
     const isProjects = route.scope === 'global' && route.area === 'projects'
-    const projectVisible = route.scope === 'project' || isProjects
-    const currentProjectRoute = route.scope === 'project' ? route : isProjects ? undefined : lastProjectRoute.current
+    const projectVisible = route.scope === 'project'
+    const currentProjectRoute = route.scope === 'project' ? route : lastProjectRoute.current
     const aiRoute = lastAiRoute.current
     const aiVisible = route.scope === 'global' && route.area === 'ai' && route.page !== 'assistant'
     const backToTools = () => navigation.go(globalPage('toolbox'))
     function renderGlobalPage(): JSX.Element | null {
       if (route.scope !== 'global' || route.area === 'projects' || route.area === 'ai' && route.page !== 'assistant') return null
-      if (route.area === 'workbench') return route.page === 'tasks' ? <TaskListPanel section="tasks" entityId={route.entityId} detailView={route.detailView} onDetailViewChange={detailView=>navigation.go({...route,detailView})} onSelectTask={id=>navigation.go({...route,entityId:id,detailView:undefined})} onOpenMaintenance={()=>navigation.go(globalPage('settings','migration'))} onOpenCodexSession={openManagedTaskCodexConversation} /> : <ProgressOverview onNavigate={navigation.go} onCreateProject={()=>setCreatingProject(true)} />
+      if (route.area === 'workbench') return route.page === 'tasks' ? <TaskListPanel section="tasks" entityId={route.entityId} progressFilter={route.progressFilter} onProgressFilterChange={progressFilter=>navigation.go({...route,progressFilter})} onProgressObjectChange={(object,ownerProjectId)=>{if(!object||!ownerProjectId)return;navigation.go({...projectPage(ownerProjectId,object.kind==='milestone'?'milestones':object.kind==='version'?'versions':'goals'),progressObject:object})}} detailView={route.detailView} onDetailViewChange={detailView=>navigation.go({...route,detailView})} onSelectTask={id=>navigation.go({...route,entityId:id,detailView:undefined})} onOpenMaintenance={()=>navigation.go(globalPage('settings','migration'))} onOpenCodexSession={openManagedTaskCodexConversation} /> : <ProgressOverview onNavigate={navigation.go} onCreateProject={()=>setCreatingProject(true)} />
       if (route.area === 'ai') return <AiChatPanel usesCustomTitleBar={false} onBack={navigation.back} onOpenAiSettings={()=>openSettingsModule('ai')} />
       if (route.area === 'resources') {
         if (route.page === 'services') return <GlobalServiceCenterPanel onSystemLog={appendSystemLog} onDeploymentRefreshActiveChange={setDeploymentRefreshActive} onOpenSystemLog={()=>setSystemLogDrawerOpen(true)} />
@@ -23754,7 +23841,8 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       {appUpdateBanner}
       <WorkspaceShell route={route} projects={projects} onNavigate={navigation.go} onOpenProject={navigation.openProject} onOpenTerminal={openContextTerminal} onBack={navigation.back} onForward={navigation.forward} canBack={navigation.canBack} canForward={navigation.canForward} projectWindow={!!projectWindowId} terminal={terminal}>
         {loadingWorkspace ? <Spin/> : <>
-          <div hidden={!projectVisible}><ProjectOverview mode={appMode} projectWindow={!!projectWindowId} focusProjectId={currentProjectRoute?.projectId??null} onCreateProject={()=>setCreatingProject(true)} onOpenSettings={()=>openSettingsModule('services')} onOpenAiTools={()=>navigation.go({...globalPage('ai'),projectFilter:currentProjectRoute?.projectId})} onOpenTerminalRequest={openTerminalRequest} resolvedTheme={resolvedTheme} onOpenProjectGitTasks={()=>setProjectGitTaskDrawerOpen(true)} onRefreshProjectGitTasks={refreshProjectGitTaskLogs} onOpenProjectWindow={openProjectWindow} onTitlebarProjectLocationChange={handleTitlebarProjectLocationChange} workspaceNavigation workspaceRoute={currentProjectRoute} workspaceArchived={route.scope==='global'&&route.page==='archived'} workspaceVisible={projectVisible} onWorkspaceNavigate={navigation.go} onWorkspaceOpenProject={navigation.openProject} onOpenCodexSession={openManagedTaskCodexConversation} /></div>
+          <div hidden={!isProjects}><ProjectDirectory visible={isProjects} archived={directoryArchived.current} mode={appMode} onCreate={createDirectoryProject} onOpen={navigation.openProject} onArchiveList={openArchiveDirectory} onLogs={openDirectoryLogs} onAction={directoryAction} /></div>
+          <div hidden={!projectVisible}><WorkspaceVisibilityProvider value={projectVisible}><ProjectOverview directoryControllerRef={directoryControllerRef} mode={appMode} projectWindow={!!projectWindowId} focusProjectId={currentProjectRoute?.projectId??null} onCreateProject={()=>setCreatingProject(true)} onOpenSettings={()=>openSettingsModule('services')} onOpenAiTools={()=>navigation.go({...globalPage('ai'),projectFilter:currentProjectRoute?.projectId})} onOpenTerminalRequest={openTerminalRequest} resolvedTheme={resolvedTheme} onOpenProjectGitTasks={()=>setProjectGitTaskDrawerOpen(true)} onRefreshProjectGitTasks={refreshProjectGitTaskLogs} onOpenProjectWindow={openProjectWindow} onTitlebarProjectLocationChange={handleTitlebarProjectLocationChange} workspaceNavigation workspaceRoute={currentProjectRoute} workspaceArchived={directoryArchived.current} workspaceVisible={projectVisible} onWorkspaceNavigate={navigation.go} onWorkspaceOpenProject={navigation.openProject} onOpenCodexSession={openManagedTaskCodexConversation} /></WorkspaceVisibilityProvider></div>
           {renderGlobalPage()}
           {aiVisited || aiVisible ? <div hidden={!aiVisible}><div className="workspace-page-heading"><Typography.Title level={2}>AI 工作台</Typography.Title><Space wrap><Select aria-label="筛选 AI 项目" allowClear placeholder="全部项目（含归档活动）" value={aiRoute.projectFilter} style={{minWidth:180}} options={projects.map(project=>({value:project.id,label:project.name}))} onChange={projectFilter=>navigation.go({...aiRoute,projectFilter,entityId:undefined})} /><Select aria-label="筛选 AI 工具" value={aiToolFilter} onChange={setAiToolFilter} options={[{value:'',label:'全部工具'},{value:'codex',label:'Codex'},{value:'cursor',label:'Cursor'}]} /><Button onClick={()=>navigation.go(globalPage('settings','ai-accounts'))}>账号与额度</Button><Button onClick={()=>navigation.go(globalPage('ai','assistant'))}>AI 助手</Button>{navigation.origin?<Button onClick={navigation.returnToOrigin}>返回来源</Button>:null}</Space></div>
             {aiToolFilter==='cursor'&&aiRoute.page==='sessions'?<Alert type="info" showIcon message="Cursor 不读取历史会话" description="可在运行动态和工作目录中查看现有 Agent、Git 提醒和项目关联。"/>:null}
@@ -23764,7 +23852,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       </WorkspaceShell>
       <CreateProjectModal open={creatingProject} onClose={()=>setCreatingProject(false)} onCreated={()=>{const id=useForgeDeskStore.getState().selectedProjectId;if(id)navigation.openProject(id);else navigation.go(globalPage('projects'))}} />
       <Drawer title="远程终端" open={terminalRemoteDrawerOpen} onClose={()=>setTerminalRemoteDrawerOpen(false)} width={380}><TerminalRemoteShortcuts onOpenTerminalRequest={request=>{setTerminalRemoteDrawerOpen(false);openTerminalRequest(request)}} /></Drawer>
-      {systemLogDrawer}{projectGitTaskDrawer}{appStatusBar}<ReleasePublishTaskDock />
+      {quickBuildDrawer}{systemLogDrawer}{projectGitTaskDrawer}{appStatusBar}<ReleasePublishTaskDock />
     </div>
   }
 
@@ -23780,6 +23868,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           onOpenAiSettings={() => openSettingsModule('ai')}
         />
         {systemLogDrawer}
+        {quickBuildDrawer}
         {projectGitTaskDrawer}
         {appStatusBar}
       </>
@@ -23832,6 +23921,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           />
         </Drawer>
         {systemLogDrawer}
+        {quickBuildDrawer}
         {projectGitTaskDrawer}
         {appStatusBar}
       </>
@@ -24012,6 +24102,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           </Layout.Content>
         </Layout>
         {systemLogDrawer}
+        {quickBuildDrawer}
         {projectGitTaskDrawer}
         {appStatusBar}
         <ReleasePublishTaskDock />

@@ -539,10 +539,12 @@ type QuickBuildTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 type QuickBuildStartInput = {
   cwd?: string
+  force?: boolean
 }
 
 type QuickBuildRestartInput = {
   cwd?: string
+  taskId?: string
 }
 
 type QuickBuildRestartResult = {
@@ -550,25 +552,7 @@ type QuickBuildRestartResult = {
   restarted: boolean
 }
 
-type QuickBuildTask = {
-  id: string
-  command: string
-  cwd: string
-  status: QuickBuildTaskStatus
-  phase: string
-  hint: string
-  lastOutputAt: string
-  processPid?: number
-  startedAt: string
-  updatedAt: string
-  finishedAt?: string
-  log: string
-  stdout: string
-  stderr: string
-  exitCode: number | null
-  signal?: string
-  error?: string
-}
+type QuickBuildTask = import('../../shared/quick-build').QuickBuildTask
 
 type GitAddInput = {
   mode: 'all' | 'paths'

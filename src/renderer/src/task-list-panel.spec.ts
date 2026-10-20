@@ -21,7 +21,7 @@ describe('task list panel', () => {
     const source = getTaskListPanelSource()
 
     assert.match(source, /TaskSubtaskCompletionControl/)
-    assert.match(source, /type="datetime-local"/)
+    assert.match(source, /<TaskDatePicker showTime/)
     assert.match(source, /可单独设置该子任务的完成时间/)
     assert.match(source, /updateTaskSubtaskCompletionTime/)
   })

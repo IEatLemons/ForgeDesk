@@ -56,7 +56,7 @@ await rebuild({
   electronVersion,
   force: true,
   mode: 'sequential',
-  onlyModules: ['better-sqlite3']
+  onlyModules: process.argv.includes('--quick') ? ['better-sqlite3', 'node-pty'] : ['better-sqlite3']
 })
 
 ensureNodePtySpawnHelperPermissions()

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { describePlanChanges, filterProgressItems, progressTimeline, type WorkFilters } from './project-progress-view.js'
+import { describePlanChanges, filterProgressItems, progressTimeline, relatedDeliveryGoalIds, type WorkFilters } from './project-progress-view.js'
 import type { ProjectWorkItem, ProgressPlanDraft } from '../../shared/project-progress.js'
 
 function item(id:string,patch:Partial<ProjectWorkItem>={}):ProjectWorkItem{
-  return {id,title:id,projectId:'p',parentId:null,sortOrder:0,trackingState:'tracked',goalId:null,milestoneId:null,versionId:null,description:'',acceptanceText:'',status:'todo',priority:'medium',ownerRef:'',startDate:null,dueDate:null,tags:[],dependencyIds:[],blockers:[],origin:'native',authority:'native',completionBasis:null,startedAt:null,completedAt:null,cancelledAt:null,archivedAt:null,scopeRevision:1,rowVersion:1,createdAt:'2026-10-15T00:00:00Z',updatedAt:'2026-10-15T00:00:00Z',...patch}
+  return {id,title:id,projectId:'p',parentId:null,sortOrder:0,trackingState:'tracked',goalId:null,keyResultId:null,milestoneId:null,versionId:null,description:'',acceptanceText:'',status:'todo',priority:'medium',ownerRef:'',startDate:null,dueDate:null,tags:[],dependencyIds:[],blockers:[],origin:'native',authority:'native',completionBasis:null,startedAt:null,completedAt:null,cancelledAt:null,archivedAt:null,scopeRevision:1,rowVersion:1,createdAt:'2026-10-15T00:00:00Z',updatedAt:'2026-10-15T00:00:00Z',...patch}
 }
 const filters:WorkFilters={query:'',status:'',scopeId:'',inbox:false,archived:false}
 describe('project progress views',()=>{
@@ -21,6 +21,17 @@ describe('project progress views',()=>{
   it('filters child status while keeping the parent as context',()=>{
     const rows=filterProgressItems([item('root',{status:'done'}),item('done',{parentId:'root',status:'done'}),item('cancelled',{parentId:'root',status:'cancelled'})],{...filters,status:'done'})
     assert.deepEqual(rows[0].children?.map(item=>item.id),['done'])
+  })
+  it('filters supporting tasks by outcome without duplicating parent and child projections',()=>{
+    const rows=filterProgressItems([item('root',{goalId:'g',keyResultId:'kr'}),item('child',{parentId:'root',goalId:'g',keyResultId:'kr'}),item('other',{goalId:'g'})],{...filters,scopeId:'kr'})
+    assert.equal(rows.length,1);assert.equal(rows[0].children?.length,1)
+  })
+  it('traces release goals through milestone tasks and outcomes without expanding task membership',()=>{
+    const items=[item('direct',{goalId:'g1',versionId:'v'}),item('milestone-task',{goalId:'g2',milestoneId:'m'}),item('unrelated',{goalId:'g4'})]
+    const results=[{id:'kr',goalId:'g3'}]
+    const relations=[{kind:'version_milestone' as const,sourceId:'v',targetId:'m',projectId:'p'},{kind:'milestone_result' as const,sourceId:'m',targetId:'kr',projectId:'p'}]
+    assert.deepEqual(relatedDeliveryGoalIds({id:'v',kind:'version'},items,results,relations),['g1','g2','g3'])
+    assert.deepEqual(filterProgressItems(items,{...filters,scopeId:'v'}).map(task=>task.id),['direct'])
   })
   it('uses calendar days across daylight-saving transitions and includes unscheduled work',()=>{
     const rows=filterProgressItems([item('root',{startDate:'2026-03-07',dueDate:'2026-03-09'}),item('unscheduled',{parentId:'root'})],filters)

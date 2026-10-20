@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -10,8 +10,11 @@ const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const electronPackageJson = JSON.parse(readFileSync(join(root, 'node_modules', 'electron', 'package.json'), 'utf8'))
 const appName = 'ForgeDesk'
 const packageArch = 'arm64'
+const profiling = process.argv.includes('--profile')
+const timings = []
+const started = performance.now()
 const artifactVersion = parseArtifactVersion(process.argv.slice(2))
-const distDir = join(root, 'dist')
+const distDir = profiling ? mkdtempSync(join(tmpdir(), 'forgedesk-build-baseline-')) : join(root, 'dist')
 const builderApp = join(distDir, `mac-${packageArch}`, `${appName}.app`)
 const tempApp = join(distDir, `${appName}.packaging.app`)
 const finalAppName = artifactVersion ? `${appName}-${artifactVersion}-${packageArch}.app` : `${appName}.app`
@@ -68,10 +71,16 @@ function findCachedElectronDist() {
 }
 
 function run(command, args) {
+  const stageStarted = performance.now()
+  console.log(`[build-stage:start] ${args[0] || command}`)
   const result = spawnSync(command, args, {
     cwd: root,
-    stdio: 'inherit'
+    stdio: 'inherit',
+    env: profiling ? { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'false', FORGEDESK_CODESIGN_IDENTITY: '-' } : process.env
   })
+  timings.push({ command, args, elapsedMs: Math.round(performance.now() - stageStarted), exitCode: result.status })
+  console.log(`[build-stage:end] ${args[0] || command}: ${timings.at(-1).elapsedMs}ms`)
+  if (profiling) writeFileSync(join(distDir, 'timings.json'), JSON.stringify({ timings, totalMs: performance.now() - started }, null, 2))
 
   if (result.error) {
     throw result.error
@@ -87,6 +96,7 @@ run(nodeBin, [join(root, 'scripts', 'rebuild-native.mjs')])
 run(nodeBin, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit'])
 run(nodeBin, [join(root, 'node_modules', 'electron-vite', 'bin', 'electron-vite.js'), 'build'])
 const electronBuilderArgs = [join(root, 'node_modules', 'electron-builder', 'cli.js'), '--mac', '--dir', '--publish', 'never', `--${packageArch}`]
+if (profiling) electronBuilderArgs.push(`--config.directories.output=${distDir}`, '--config.mac.identity=-', '--config.mac.notarize=false')
 const cachedElectronDist = findCachedElectronDist()
 
 if (cachedElectronDist) {
@@ -107,3 +117,4 @@ run('ditto', [builderApp, tempApp])
 renameSync(tempApp, finalApp)
 
 console.log(`Packaged ${finalApp} using electron-builder ${packageJson.version}`)
+if (profiling) console.log(`BUILD_BASELINE_REPORT ${join(distDir, 'timings.json')}`)

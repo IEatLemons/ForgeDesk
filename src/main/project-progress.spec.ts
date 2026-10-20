@@ -17,6 +17,11 @@ function fixture() {
 function managed(patch: Partial<LegacyProgressManagedTask> = {}): LegacyProgressManagedTask {
   return {id:'managed-1',title:'AI 工作',description:'工作说明',source:'forgedesk',projectId:'p',repositoryId:'repo',cwd:'/repo',stage:'completed',runStatus:'completed',createdAt:'2026-10-14T00:00:00Z',updatedAt:'2026-10-14T01:00:00Z',finishedAt:'2026-10-14T01:00:00Z',codexThreadId:'thread',branch:'codex/work',baseBranch:'main',baselineSha:'base',commitSha:'commit',targetBranch:'develop',autoExecute:false,hasChanges:true,subtasks:[],events:[],bindings:[],...patch}
 }
+function legacyGoal(db:DatabaseSync,service:ProjectProgressService,id:string):void {
+  const goal=service.getSnapshot().entities.find(entity=>entity.id===id)!
+  delete goal.progressMode
+  db.prepare('UPDATE project_goals SET data_json=? WHERE id=?').run(JSON.stringify(goal),id)
+}
 
 describe('native project progress',() => {
   it('rejects dependency deadlocks through parent acceptance and inherited dependencies', () => {
@@ -49,8 +54,9 @@ describe('native project progress',() => {
     assert.throws(()=>command({type:'arbitrary',id:item.id,expectedVersion:item.rowVersion}),/无效/)
   })
   it('invalidates confirmed goal and version achievement when their scope reopens', () => {
-    const {service,create,command,transition}=fixture(), root=create()
+    const {db,service,create,command,transition}=fixture(), root=create()
     const goal=command({type:'save-entity',kind:'goal',input:{title:'目标',projectId:'p'}}).entityId
+    legacyGoal(db,service,goal)
     const version=command({type:'save-entity',kind:'version',input:{title:'v1',projectId:'p'}}).entityId
     command({type:'move',id:root.id,expectedVersion:root.rowVersion,scope:{projectId:'p',goalId:goal,versionId:version,milestoneId:null}})
     transition(root.id,'accept')
@@ -143,8 +149,9 @@ describe('native project progress',() => {
     assert.equal(service.getSnapshot().stats.percent,null)
   })
   it('groups the same work into goals, milestones and versions without counting duplicate projections',() => {
-    const {service,command,create,transition}=fixture(),item=create()
+    const {db,service,command,create,transition}=fixture(),item=create()
     const goal=command({type:'save-entity',kind:'goal',input:{title:'账号体系',projectId:'p'}}).entityId
+    legacyGoal(db,service,goal)
     command({type:'move',id:item.id,expectedVersion:item.rowVersion,scope:{projectId:'p',goalId:goal,versionId:null,milestoneId:null}})
     assert.equal(service.getSnapshot().scopeStats[goal].total,1)
     assert.throws(()=>command({type:'save-entity',kind:'goal',input:{id:goal,title:'账号体系',projectId:'p',status:'achieved'},expectedVersion:1}),/未验收/)

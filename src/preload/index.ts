@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { parseGitIpcPayload } from './git-ipc'
-import type { ProgressAiInput, ProgressCommand, ProgressSnapshotQuery } from '../shared/project-progress'
+import type { ProgressAiInput, ProgressCommand, ProgressSnapshotQuery, ProgressHistoryQuery } from '../shared/project-progress'
 
 function invokeGitIpc<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args).then((payload: unknown) => parseGitIpcPayload<T>(channel, payload))
@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   refreshProjectRuntime: (input: { projectId: string; targetId: string }) => ipcRenderer.invoke('project:runtime:refresh', input),
   readProjectRuntimeLogs: (input: { projectId: string; targetId: string }) => ipcRenderer.invoke('project:runtime:logs', input),
   getProjectProgress: (query?: ProgressSnapshotQuery) => ipcRenderer.invoke('project-progress:snapshot', query),
+  getProjectProgressHistory: (query: ProgressHistoryQuery) => ipcRenderer.invoke('project-progress:history', query),
   runProjectProgressCommand: (command: ProgressCommand) => ipcRenderer.invoke('project-progress:command', command),
   previewProjectProgressMigration: (input: { legacyRaw: string | null }) => ipcRenderer.invoke('project-progress:migration:preview', input),
   activateProjectProgressMigration: (input: { batchId: string; inputHash: string; legacyRaw: string | null }) => ipcRenderer.invoke('project-progress:migration:activate', input),

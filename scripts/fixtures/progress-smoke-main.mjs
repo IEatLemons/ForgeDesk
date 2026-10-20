@@ -14,6 +14,7 @@ const service = new ProjectProgressService(()=>db,()=>new Date(),()=>{
   for(const window of BrowserWindow.getAllWindows())window.webContents.send('project-progress:updated')
 })
 ipcMain.handle('project-progress:snapshot',(_event,query)=>service.getSnapshot(query))
+ipcMain.handle('project-progress:history',(_event,query)=>service.getHistory(query))
 ipcMain.handle('project-progress:command',(_event,command)=>service.command(command))
 ipcMain.handle('project-progress:migration:preview',(_event,input)=>service.previewMigration(input.legacyRaw,[]))
 ipcMain.handle('project-progress:migration:activate',async (_event,input)=>{

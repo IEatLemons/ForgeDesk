@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
@@ -11,19 +11,61 @@ app.disableHardwareAcceleration()
 // Only this disposable QA launcher bypasses close prompts on termination.
 process.once('SIGTERM',()=>app.exit(0))
 const errors = []
+const performanceCalls = []
+if (process.argv.includes('--projects-perf')) {
+  const handle = ipcMain.handle.bind(ipcMain)
+  ipcMain.handle = (channel, listener) => handle(channel, async (...args) => {
+    const call = { channel, started: performance.now() }; performanceCalls.push(call)
+    try { return await listener(...args) } finally { call.ms = performance.now() - call.started }
+  })
+}
 app.on('web-contents-created', (_event, contents) => {
   contents.on('console-message', event => { if (event.level === 'error') errors.push(String(event.message)) })
   contents.on('render-process-gone', (_event, details) => errors.push(`Renderer gone: ${details.reason}`))
 })
 void import(pathToFileURL(join(root, 'out/main/index.js')).href).then(() => app.whenReady()).then(() => {
+let started = false
 const timer = setInterval(async () => {
+  if (started) return
   const window = BrowserWindow.getAllWindows()[0]
   if (!window || window.webContents.isLoading()) return
   const ready = await window.webContents.executeJavaScript('!!window.forgeDesk && !!document.querySelector("#root")').catch(()=>false)
-  if (!ready) return
+  if (!ready || started) return
+  started = true
   clearInterval(timer)
   window.setTitle('ForgeDesk · 正式界面隔离验收')
   console.log(`WORKSPACE_QA_READY ${directory}`)
+  if (process.argv.includes('--projects-perf')) {
+    try { await (await import('./project-list-performance.mjs')).measureProjectList(window, directory, performanceCalls) }
+    catch (error) { console.error('PROJECT_LIST_PERFORMANCE_FAILED '+error.stack); app.exit(1); return }
+    if (process.argv.includes('--exit')) { app.exit(0); return }
+  }
+  if (process.argv.includes('--okr')) {
+    try {
+      const report=await window.webContents.executeJavaScript(`(async()=>{
+        const api=window.forgeDesk,send=input=>api.runProjectProgressCommand({...input,commandId:crypto.randomUUID()});
+        const workspace=await api.createEmptyProject({name:'目标驱动验收项目',parentPath:${JSON.stringify(directory)}});
+        const projectId=workspace.projects.find(project=>project.name==='目标驱动验收项目').id;
+        const migration=await api.previewProjectProgressMigration({legacyRaw:null});
+        await api.activateProjectProgressMigration({batchId:migration.id,inputHash:migration.inputHash,legacyRaw:null});
+        const goal=(await send({type:'save-entity',kind:'goal',input:{projectId,title:'让项目具备稳定上线能力',description:'隔离验收：结果与任务执行分开统计'}})).entityId;
+        const kr=(await send({type:'save-key-result',input:{projectId,goalId:goal,title:'核心流程验收通过率达到 100%',measurement:'numeric',baselineValue:0,targetValue:100,direction:'increase',unit:'%',criteriaText:'依据测试记录人工核对通过率'}})).entityId;
+        const task=(await send({type:'create',input:{projectId,goalId:goal,keyResultId:kr,title:'补齐核心流程验收用例',acceptanceText:'用例可以独立执行并留存结果'}})).entityId;
+        const milestone=(await send({type:'save-entity',kind:'milestone',input:{projectId,title:'预发布验收通过'}})).entityId;
+        const version=(await send({type:'save-entity',kind:'version',input:{projectId,title:'验收版本'}})).entityId;
+        await send({type:'set-progress-relations',id:milestone,kind:'milestone_result',expectedVersion:1,targetIds:[kr]});
+        await send({type:'set-progress-relations',id:version,kind:'version_milestone',expectedVersion:1,targetIds:[milestone]});
+        await send({type:'measure-key-result',id:kr,expectedVersion:1,value:50,evidence:'第一轮通过率 50%'});
+        const snapshot=await api.getProjectProgress({projectId});
+        if(snapshot.goalStats[goal].percent!==50||snapshot.stats.done!==0||snapshot.scopeStats[version].total!==0)throw Error('Outcome and task statistics were conflated');
+        const history=await api.getProjectProgressHistory({object:{kind:'key_result',id:kr},projectId,limit:1});
+        if(history.events[0].eventType!=='key-result-measured'||!history.nextCursor)throw Error('Object history pagination failed');
+        return {projectId,goal,kr,task,milestone,version,goalProgress:snapshot.goalStats[goal],taskProgress:snapshot.stats,realBridge:true};
+      })()`)
+      console.log('WORKSPACE_QA_OKR_REPORT '+JSON.stringify(report))
+      window.webContents.reload()
+    } catch(error) { console.error('WORKSPACE_QA_OKR_FAILED '+error.stack) }
+  }
   if (process.argv.includes('--automated')) {
     try {
       const report = await window.webContents.executeJavaScript(`(async()=>{
@@ -97,8 +139,8 @@ const timer = setInterval(async () => {
       console.log('WORKSPACE_QA_GIT_REPORT '+JSON.stringify({repositoryId:repository.id,localRemote:remote,staging:true,commit:true,branch:true,push:true,fetch:true,pull:true,mergeConflict:true,conflictAbort:true,partialFailure:true,cancellation:true,submodule:true,unavailablePreserved:true,repositories:rescanned.repositories.filter(repo=>repo.projectId===report.projectId).length}))
       await invoke('createEmptyProject',{name:'用于验证项目切换与长名称展示的独立空项目（不配置仓库与外部系统）',parentPath:directory})
       await window.webContents.reload()
-      setTimeout(async () => { await writeFile(join(directory,'desktop.png'),(await window.capturePage()).toPNG()); console.log(`WORKSPACE_QA_RENDER_ERRORS ${JSON.stringify(errors)}`) }, 3000)
-    } catch (error) { console.error(`WORKSPACE_QA_FAILED ${error.message}`); window.webContents.reload() }
+      setTimeout(async () => { await writeFile(join(directory,'desktop.png'),(await window.capturePage()).toPNG()); console.log(`WORKSPACE_QA_RENDER_ERRORS ${JSON.stringify(errors)}`); if(process.argv.includes('--exit'))app.exit(errors.length ? 1 : 0) }, 3000)
+    } catch (error) { console.error(`WORKSPACE_QA_FAILED ${error.message}`); if(process.argv.includes('--exit'))app.exit(1);else window.webContents.reload() }
   }
 }, 300)
 }).catch(error=>console.error(`WORKSPACE_QA_BOOT_FAILED ${error.stack}`))

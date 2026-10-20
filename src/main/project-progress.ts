@@ -5,6 +5,7 @@ import type {
   ProgressScopeKind, ProgressSnapshotQuery, ProgressStats, ProjectProgressSnapshot,
   ProjectWorkItem, WorkScopeFields, WorkStatus
 } from '../shared/project-progress.js'
+import { keyResultPercent, keyResultReached, type ProgressKeyResult, type KeyResultInput, type ProgressRelation, type ProgressHistoryQuery, type ProgressHistoryPage, type ProgressDeliveryStats } from '../shared/project-progress.js'
 
 type Row = Record<string, unknown>
 export type ProgressDatabase = {
@@ -84,7 +85,7 @@ export function calculateProjectProgress(items: ProjectWorkItem[], asOf: string,
   const today = progressToday(asOf, timezone)
   const byId = new Map(items.map(item => [item.id,item])), byParent = new Map<string,ProjectWorkItem[]>()
   for (const item of items) if (item.parentId && item.status !== 'cancelled') byParent.set(item.parentId,[...(byParent.get(item.parentId) ?? []),item])
-  const roots = items.filter((item) => !item.parentId && item.trackingState === 'tracked' && item.status !== 'cancelled' && (!scopeId || [item.goalId, item.milestoneId, item.versionId].includes(scopeId)))
+  const roots = items.filter((item) => !item.parentId && item.trackingState === 'tracked' && item.status !== 'cancelled' && (!scopeId || [item.goalId, item.keyResultId, item.milestoneId, item.versionId].includes(scopeId)))
   const leaves = roots.flatMap((root) => {
     const children = byParent.get(root.id) ?? []
     return children.length ? children : [root]
@@ -100,6 +101,14 @@ export function calculateProjectProgress(items: ProjectWorkItem[], asOf: string,
     inbox: items.filter((item) => !item.parentId && item.trackingState === 'inbox' && !item.archivedAt).length,
     percent: leaves.length ? Math.round(count('done') / leaves.length * 100) : null
   }
+}
+
+export function calculateDeliveryProgress(entity: ProgressEntity, items: ProjectWorkItem[], results: ProgressKeyResult[], entities: ProgressEntity[], relations: ProgressRelation[]): ProgressDeliveryStats {
+  const tasks=items.filter(item=>!item.parentId && item.trackingState==='tracked' && item[`${entity.kind}Id` as 'goalId'|'milestoneId'|'versionId']===entity.id && item.status!=='cancelled')
+  const links=relations.filter(link=>link.sourceId===entity.id)
+  const checkpoints=entity.kind==='milestone'?links.map(link=>results.find(result=>result.id===link.targetId)):entity.kind==='version'?links.map(link=>entities.find(target=>target.id===link.targetId)):[]
+  const tasksAccepted=tasks.filter(task=>task.status==='done').length,checkpointsAccepted=checkpoints.filter(target=>target?.status==='achieved').length
+  return {tasksTotal:tasks.length,tasksAccepted,checkpointsTotal:checkpoints.length,checkpointsAccepted,readyForAcceptance:tasks.length+checkpoints.length>0 && tasksAccepted===tasks.length && checkpointsAccepted===checkpoints.length}
 }
 
 export function migrateProjectProgressTables(db: ProgressDatabase): void {
@@ -124,6 +133,9 @@ export function migrateProjectProgressTables(db: ProgressDatabase): void {
     CREATE TABLE IF NOT EXISTS progress_migration_batches (id TEXT PRIMARY KEY, input_hash TEXT NOT NULL, data_json TEXT NOT NULL, source_json TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS progress_migration_items (batch_id TEXT NOT NULL, source_key TEXT NOT NULL, work_item_id TEXT, data_json TEXT NOT NULL, PRIMARY KEY(batch_id,source_key));
     CREATE TABLE IF NOT EXISTS project_progress_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS project_key_results (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, goal_id TEXT NOT NULL, row_version INTEGER NOT NULL, data_json TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS idx_project_key_results_goal ON project_key_results(project_id,goal_id);
+    CREATE TABLE IF NOT EXISTS progress_relations (kind TEXT NOT NULL, project_id TEXT NOT NULL, source_id TEXT NOT NULL, target_id TEXT NOT NULL, PRIMARY KEY(kind,source_id,target_id));
   `)
   for (const table of Object.values(entityTables)) db.exec(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, row_version INTEGER NOT NULL, data_json TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_${table}_project ON ${table}(project_id);`)
 }
@@ -147,7 +159,7 @@ export class ProjectProgressService {
   }
   isActive(): boolean { return (this.db().prepare("SELECT value FROM project_progress_settings WHERE key='active'").get() as Row | undefined)?.value === '1' }
   private allItems(): ProjectWorkItem[] {
-    const items = this.db().prepare('SELECT data_json FROM project_work_items ORDER BY updated_at DESC,id').all().map(row => json<ProjectWorkItem>(row))
+    const items = this.db().prepare('SELECT data_json FROM project_work_items ORDER BY updated_at DESC,id').all().map(row => Object.assign({keyResultId:null},json<ProjectWorkItem>(row)))
     const children = new Map<string,ProjectWorkItem[]>()
     for (const item of items) if (item.parentId) {const group=children.get(item.parentId)??[];group.push(item);children.set(item.parentId,group)}
     for (const group of children.values()) group.sort((a,b)=>(a.sortOrder??0)-(b.sortOrder??0)||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))
@@ -157,9 +169,11 @@ export class ProjectProgressService {
   getItem(id: string): ProjectWorkItem {
     const row = this.db().prepare('SELECT data_json FROM project_work_items WHERE id=?').get(id)
     if (!row) throw new Error('项目任务不存在')
-    return json<ProjectWorkItem>(row)
+    return Object.assign({keyResultId:null},json<ProjectWorkItem>(row))
   }
-  private entities(): ProgressEntity[] { return Object.values(entityTables).flatMap((table) => this.db().prepare(`SELECT data_json FROM ${table}`).all().map((row) => json<ProgressEntity>(row))) }
+  private entities(): ProgressEntity[] { return Object.values(entityTables).flatMap((table) => this.db().prepare(`SELECT data_json FROM ${table}`).all().map((row) => {const entity=json<ProgressEntity>(row);return entity.kind==='goal'?{progressMode:'legacy_tasks' as const,...entity}:entity})) }
+  private keyResults(): ProgressKeyResult[] { return this.db().prepare('SELECT data_json FROM project_key_results ORDER BY rowid').all().map(row=>json<ProgressKeyResult>(row)) }
+  private relations(): ProgressRelation[] { return this.db().prepare('SELECT * FROM progress_relations').all().map(row=>{const value=row as Row;return {kind:value.kind as ProgressRelation['kind'],projectId:String(value.project_id),sourceId:String(value.source_id),targetId:String(value.target_id)}}) }
   private assertProject(id: string | null): void {
     if (id && !this.db().prepare('SELECT id FROM projects WHERE id=?').get(id)) throw new Error('项目不存在，请重新选择项目')
   }
@@ -192,6 +206,11 @@ export class ProjectProgressService {
     for (const [kind,id] of [['goal',item.goalId],['milestone',item.milestoneId],['version',item.versionId]] as const) {
       if (id && !entities.some((entity) => entity.id === id && entity.kind === kind && entity.projectId === item.projectId)) throw new Error('目标、里程碑或版本不属于当前项目')
     }
+    if (item.keyResultId && !this.keyResults().some(result=>result.id===item.keyResultId && result.projectId===item.projectId && result.goalId===item.goalId)) throw new Error('关键结果不属于当前项目或目标')
+    if (item.parentId) {
+      const parent=this.getItem(item.parentId)
+      if (['goalId','keyResultId','milestoneId','versionId'].some(key=>item[key as keyof WorkScopeFields]!==parent[key as keyof WorkScopeFields])) throw new Error('子任务必须继承父任务归属')
+    }
     this.validateDependencies(item)
   }
   private validateDependencies(item: ProjectWorkItem): void {
@@ -222,7 +241,7 @@ export class ProjectProgressService {
       id: uid('work-item'), projectId: parent?.projectId ?? input.projectId ?? null, parentId: parent?.id ?? null,
       sortOrder:parent?Math.max(-1,...this.allItems().filter(item=>item.parentId===parent.id).map(item=>item.sortOrder??0))+1:0,
       trackingState: (parent ? parent.trackingState : input.projectId ? 'tracked' : 'inbox'),
-      goalId: parent?.goalId ?? input.goalId ?? null, milestoneId: parent?.milestoneId ?? input.milestoneId ?? null, versionId: parent?.versionId ?? input.versionId ?? null,
+      goalId: parent ? parent.goalId : input.goalId ?? null, keyResultId: parent ? parent.keyResultId : input.keyResultId ?? null, milestoneId: parent ? parent.milestoneId : input.milestoneId ?? null, versionId: parent ? parent.versionId : input.versionId ?? null,
       title: input.title.trim(), description: input.description ?? '', acceptanceText: input.acceptanceText ?? '', status: 'todo', priority: input.priority ?? 'medium', ownerRef: input.ownerRef ?? '',
       startDate: input.startDate ?? null, dueDate: input.dueDate ?? null, tags: unique(input.tags ?? []), dependencyIds: [], blockers: [], origin: 'native', authority: 'native', completionBasis: null,
       startedAt: null, completedAt: null, cancelledAt: null, archivedAt: null, scopeRevision: 1, rowVersion: 1, createdAt: timestamp, updatedAt: timestamp
@@ -247,6 +266,17 @@ export class ProjectProgressService {
 
   private executeCommand(command: ProgressCommand): ProgressCommandResult {
     if (command.type === 'save-entity') return { entityId: this.saveEntity(command) }
+    if (command.type === 'save-key-result') return {entityId:this.saveKeyResult(command.input,command.expectedVersion,command.commandId)}
+    if (command.type === 'measure-key-result' || command.type === 'transition-key-result') return {entityId:this.changeKeyResult(command)}
+    if (command.type === 'set-progress-relations') return {entityId:this.setRelations(command)}
+    if (command.type === 'upgrade-goal') return {entityId:this.upgradeGoal(command)}
+    if (command.type === 'transition-entity') {
+      if (!['accept','reopen','cancel','archive'].includes(command.action)) throw new Error('无效计划操作')
+      const entity=this.entities().find(entity=>entity.id===command.id && entity.kind===command.kind)
+      if (!entity) throw new Error('目标或计划不存在')
+      const status=command.action==='accept'?(entity.kind==='version'?'closed':'achieved'):command.action==='cancel'?'cancelled':command.action==='archive'?'archived':entity.kind==='milestone'?'planned':'active'
+      return {entityId:this.saveEntity({type:'save-entity',kind:entity.kind,commandId:command.commandId,expectedVersion:command.expectedVersion,input:{...entity,status}})}
+    }
     if (command.type === 'apply-draft') return { entityId: this.applyDraft(command) }
     if (command.type === 'create') {
       const item = this.newItem(command.input)
@@ -282,7 +312,7 @@ export class ProjectProgressService {
       if (item.parentId) throw new Error('请移动整个父任务，子任务继承项目范围')
       if (['done','cancelled'].includes(item.status)) throw new Error('请先重开任务再调整归属与范围')
       this.assertNoActiveRun(item.id)
-      const scope = { projectId:command.scope.projectId || null,goalId:command.scope.goalId || null,milestoneId:command.scope.milestoneId || null,versionId:command.scope.versionId || null }
+      const scope = { projectId:command.scope.projectId || null,goalId:command.scope.goalId || null,keyResultId:command.scope.keyResultId || null,milestoneId:command.scope.milestoneId || null,versionId:command.scope.versionId || null }
       Object.assign(item,scope,{ trackingState: scope.projectId ? 'tracked' : 'inbox',scopeRevision:item.scopeRevision+1 })
       this.persistItem(item)
       const children = this.allItems().filter(work => work.parentId === item.id)
@@ -310,6 +340,7 @@ export class ProjectProgressService {
     // A project move must not strand incoming dependencies in another project.
     for (const work of this.allItems().filter((work) => work.dependencyIds.includes(item.id))) if (work.projectId !== item.projectId) throw new Error('请先处理其他任务对此任务的依赖，再移动项目')
     this.persistItem(item)
+    if (command.type==='move' && before.status!=='done') this.invalidateScopeAcceptance(before,command.commandId)
     if (item.parentId && (item.scopeRevision !== before.scopeRevision || item.title !== before.title)) {
       const parent = this.getItem(item.parentId)
       parent.scopeRevision++; parent.rowVersion++; parent.updatedAt = this.timestamp(); this.persistItem(parent)
@@ -353,35 +384,171 @@ export class ProjectProgressService {
 
   private saveEntity(command: Extract<ProgressCommand,{type:'save-entity'}>): string {
     const { input,kind } = command, table = entityTables[kind]
-    if (!table || !input.title.trim()) throw new Error('请输入有效的目标或计划名称')
+    if (!table || typeof input.title!=='string' || !input.title.trim()) throw new Error('请输入有效的目标或计划名称')
     if (!input.projectId) throw new Error('目标与计划必须关联项目')
     this.assertProject(input.projectId)
     const old = input.id ? this.entities().find((entity) => entity.id === input.id && entity.kind === kind) : undefined
     if (input.id && !old) throw new Error('目标或计划不存在')
     if (old) { this.assertVersion(old,command.expectedVersion ?? -1); if (old.projectId !== input.projectId) throw new Error('目标与计划不能跨项目移动') }
-    const statuses = kind === 'goal' ? ['draft','active','achieved','cancelled'] : kind === 'milestone' ? ['planned','achieved','cancelled'] : ['planned','active','closed','archived']
+    const statuses = kind === 'goal' ? ['draft','active','achieved','cancelled'] : kind === 'milestone' ? ['planned','achieved','cancelled'] : ['planned','active','closed','archived','cancelled']
     const status = input.status ?? old?.status ?? (kind === 'goal' ? 'active' : 'planned')
     if (!statuses.includes(status)) throw new Error('无效计划状态')
+    if (old && ['cancelled','archived'].includes(old.status) && ['achieved','closed'].includes(status)) throw new Error('请先显式重开目标或计划再验收')
     if (kind === 'version' && this.entities().some((entity) => entity.id !== old?.id && entity.kind === kind && entity.projectId === input.projectId && entity.title === input.title.trim())) throw new Error('项目内版本名称不能重复')
-    const entity: ProgressEntity = { id: old?.id ?? uid(kind), kind, projectId: input.projectId, title: input.title.trim(), description: input.description ?? old?.description ?? '', criteriaText: input.criteriaText ?? old?.criteriaText ?? '', ownerRef: input.ownerRef ?? old?.ownerRef ?? '', targetDate: date(input.targetDate === undefined ? old?.targetDate : input.targetDate), status, completedAt: old?.completedAt ?? null, rowVersion: (old?.rowVersion ?? 0)+1, createdAt: old?.createdAt ?? this.timestamp(), updatedAt: this.timestamp() }
+    const entity: ProgressEntity = { id: old?.id ?? uid(kind), kind, projectId: input.projectId, title: input.title.trim(), description: input.description ?? old?.description ?? '', criteriaText: input.criteriaText ?? old?.criteriaText ?? '', ownerRef: input.ownerRef ?? old?.ownerRef ?? '', targetDate: date(input.targetDate === undefined ? old?.targetDate : input.targetDate), status, completedAt: old?.completedAt ?? null, rowVersion: (old?.rowVersion ?? 0)+1, createdAt: old?.createdAt ?? this.timestamp(), updatedAt: this.timestamp(), ...(kind==='goal'?{progressMode:old?.progressMode??'key_results'}:{}) }
+    if ([entity.description,entity.criteriaText,entity.ownerRef].some(value=>typeof value!=='string')) throw new Error('目标资料必须为文本')
+    if (old && ['achieved','closed','archived','cancelled'].includes(old.status) && (entity.criteriaText!==old.criteriaText || entity.description!==old.description)) throw new Error('请先重开目标或计划再修改验收范围')
     if (['achieved','closed'].includes(status)) {
-      const work = this.allItems().filter((item) => !item.parentId && item.trackingState === 'tracked' && [item.goalId,item.milestoneId,item.versionId].includes(entity.id) && item.status !== 'cancelled')
-      if (!work.length || work.some((item) => item.status !== 'done')) throw new Error('尚有未验收工作或尚未关联任务，不能确认达成')
+      this.assertEntityReady(entity)
       entity.completedAt ??= this.timestamp()
     } else if (status !== 'archived') entity.completedAt = null
     this.db().prepare(`INSERT INTO ${table} VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET row_version=excluded.row_version,data_json=excluded.data_json`).run(entity.id,entity.projectId,entity.rowVersion,JSON.stringify(entity))
     this.event(entity,'saved',old ?? null,entity,command.commandId,'user',kind)
+    if (old && old.status!==entity.status && !['achieved','closed','archived'].includes(entity.status)) this.invalidateDelivery(entity.id,command.commandId)
     return entity.id
+  }
+
+  private assertEntityReady(entity: ProgressEntity): void {
+    if (entity.kind==='goal' && entity.progressMode==='key_results') {
+      const results=this.keyResults().filter(result=>result.goalId===entity.id && result.status!=='cancelled')
+      if (!results.length || results.some(result=>result.status!=='achieved')) throw new Error('关键结果尚未定义或尚未全部验收')
+      return
+    }
+    if (!calculateDeliveryProgress(entity,this.allItems(),this.keyResults(),this.entities(),this.relations()).readyForAcceptance) throw new Error('尚有未验收工作或检查点，或尚未关联任务／关键结果，不能确认达成')
+  }
+  private persistEntity(entity:ProgressEntity):void {
+    this.db().prepare(`UPDATE ${entityTables[entity.kind]} SET row_version=?,data_json=? WHERE id=?`).run(entity.rowVersion,JSON.stringify(entity),entity.id)
+  }
+  private reopenEntity(entity:ProgressEntity,commandId:string):void {
+    if (!['achieved','closed'].includes(entity.status)) return
+    const before=structuredClone(entity)
+    entity.status=entity.kind==='milestone'?'planned':'active';entity.completedAt=null;entity.rowVersion++;entity.updatedAt=this.timestamp()
+    this.persistEntity(entity);this.event(entity,'scope-reopened',before,entity,commandId,'system',entity.kind)
+    this.invalidateDelivery(entity.id,commandId)
+  }
+  private invalidateDelivery(targetId:string,commandId:string):void {
+    for (const relation of this.relations().filter(link=>link.targetId===targetId)) {
+      const entity=this.entities().find(entity=>entity.id===relation.sourceId)
+      if (entity) this.reopenEntity(entity,commandId)
+    }
+  }
+  private getKeyResult(id:string):ProgressKeyResult {
+    const result=this.keyResults().find(result=>result.id===id)
+    if (!result) throw new Error('关键结果不存在')
+    return result
+  }
+  private editableGoal(id:string):ProgressEntity {
+    const goal=this.entities().find(entity=>entity.id===id && entity.kind==='goal')
+    if (!goal) throw new Error('目标不存在')
+    this.assertProject(goal.projectId)
+    if (goal.progressMode!=='key_results') throw new Error('请先预览并升级旧目标')
+    if (['achieved','cancelled'].includes(goal.status)) throw new Error('请先重开目标再调整关键结果')
+    return goal
+  }
+  private persistKeyResult(result:ProgressKeyResult):void {
+    this.db().prepare('INSERT INTO project_key_results VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET row_version=excluded.row_version,data_json=excluded.data_json').run(result.id,result.projectId,result.goalId,result.rowVersion,JSON.stringify(result))
+  }
+  private saveKeyResult(input:KeyResultInput,expectedVersion:number|undefined,commandId:string):string {
+    const goal=this.editableGoal(input.goalId)
+    if (goal.projectId!==input.projectId) throw new Error('关键结果不属于当前项目或目标')
+    const old=input.id?this.getKeyResult(input.id):undefined
+    if (old) {
+      this.assertVersion(old,expectedVersion??-1)
+      if (old.goalId!==input.goalId || old.projectId!==input.projectId) throw new Error('关键结果不能跨目标移动')
+      if (old.status!=='active') throw new Error('请先重开关键结果再修改')
+      if (input.currentValue!==undefined && input.currentValue!==old.currentValue) throw new Error('请通过记录测量更新当前值')
+    }
+    const result:ProgressKeyResult={id:old?.id??uid('key-result'),projectId:input.projectId,goalId:input.goalId,title:input.title,measurement:input.measurement,criteriaText:input.criteriaText??old?.criteriaText??'',ownerRef:input.ownerRef??old?.ownerRef??'',targetDate:date(input.targetDate===undefined?old?.targetDate:input.targetDate),baselineValue:input.baselineValue??old?.baselineValue??null,currentValue:old?.currentValue??input.currentValue??input.baselineValue??null,targetValue:input.targetValue??old?.targetValue??null,direction:input.direction??old?.direction??'increase',unit:input.unit??old?.unit??'',status:'active',evidence:old?.evidence??'',completedAt:null,rowVersion:(old?.rowVersion??0)+1,createdAt:old?.createdAt??this.timestamp(),updatedAt:this.timestamp()}
+    if ([result.title,result.criteriaText,result.ownerRef,result.unit].some(value=>typeof value!=='string') || !result.title.trim() || !result.criteriaText.trim()) throw new Error('请填写关键结果名称和验收条件')
+    result.title=result.title.trim()
+    if (!['numeric','deliverable'].includes(result.measurement)) throw new Error('无效衡量类型')
+    if (!['increase','decrease'].includes(result.direction)) throw new Error('无效指标方向')
+    if (result.measurement==='numeric' && (![result.baselineValue,result.currentValue,result.targetValue].every(value=>typeof value==='number' && Number.isFinite(value)) || (result.direction==='increase'?result.targetValue!<=result.baselineValue!:result.targetValue!>=result.baselineValue!))) throw new Error('数值必须有限，且目标值须符合上升／下降方向并不同于基线')
+    if (result.measurement==='deliverable') {result.baselineValue=null;result.currentValue=null;result.targetValue=null}
+    this.persistKeyResult(result);this.event(result,'key-result-saved',old??null,result,commandId,'user','key_result')
+    return result.id
+  }
+  private changeKeyResult(command:Extract<ProgressCommand,{type:'measure-key-result'|'transition-key-result'}>):string {
+    const result=this.getKeyResult(command.id),before=structuredClone(result)
+    this.assertProject(result.projectId)
+    this.assertVersion(result,command.expectedVersion)
+    if (typeof command.evidence!=='string' || !command.evidence.trim()) throw new Error('请填写测量、验收或调整依据')
+    if (command.type==='measure-key-result') {
+      this.editableGoal(result.goalId)
+      if (result.status!=='active' || result.measurement!=='numeric') throw new Error('请先重开数值型关键结果再记录测量')
+      if (typeof command.value!=='number' || !Number.isFinite(command.value)) throw new Error('测量必须是有限数值')
+      result.currentValue=command.value
+    } else if (command.action==='reopen') {
+      if (result.status==='active') throw new Error('关键结果已经进行中')
+      result.status='active';result.completedAt=null
+      const goal=this.entities().find(entity=>entity.id===result.goalId)
+      if (goal?.status==='cancelled') throw new Error('请先重开目标')
+      if (goal) this.reopenEntity(goal,command.commandId)
+      this.invalidateDelivery(result.id,command.commandId)
+    } else {
+      this.editableGoal(result.goalId)
+      if (result.status!=='active') throw new Error('请先重开关键结果')
+      if (command.action==='accept') {
+        if (result.measurement==='numeric' && !keyResultReached(result)) throw new Error('指标尚未达标，不能验收')
+        result.status='achieved';result.completedAt=this.timestamp()
+      } else if (command.action==='cancel') {result.status='cancelled';this.invalidateDelivery(result.id,command.commandId)}
+      else throw new Error('无效关键结果操作')
+    }
+    result.evidence=command.evidence.trim();result.rowVersion++;result.updatedAt=this.timestamp();this.persistKeyResult(result)
+    this.event(result,command.type==='measure-key-result'?'key-result-measured':`key-result-${command.action}`,before,result,command.commandId,'user','key_result')
+    return result.id
+  }
+  private setRelations(command:Extract<ProgressCommand,{type:'set-progress-relations'}>):string {
+    if (!['milestone_result','version_milestone'].includes(command.kind)) throw new Error('无效交付关系')
+    const kind=command.kind==='milestone_result'?'milestone':'version'
+    const entity=this.entities().find(entity=>entity.id===command.id && entity.kind===kind)
+    if (!entity) throw new Error('计划不存在')
+    this.assertProject(entity.projectId)
+    this.assertVersion(entity,command.expectedVersion)
+    if (!['active','planned'].includes(entity.status)) throw new Error('请先重开计划再调整范围')
+    const ids=unique(command.targetIds),targets=command.kind==='milestone_result'?this.keyResults():this.entities().filter(entity=>entity.kind==='milestone')
+    if (ids.some(id=>!targets.some(target=>target.id===id && target.projectId===entity.projectId))) throw new Error('关联对象不存在或不属于当前项目')
+    const before=this.relations().filter(link=>link.sourceId===entity.id)
+    this.db().prepare('DELETE FROM progress_relations WHERE source_id=? AND kind=?').run(entity.id,command.kind)
+    for (const id of ids) this.db().prepare('INSERT INTO progress_relations VALUES(?,?,?,?)').run(command.kind,entity.projectId,entity.id,id)
+    entity.rowVersion++;entity.updatedAt=this.timestamp();this.persistEntity(entity)
+    this.event(entity,'relations-changed',before,this.relations().filter(link=>link.sourceId===entity.id),command.commandId,'user',entity.kind)
+    this.invalidateDelivery(entity.id,command.commandId)
+    return entity.id
+  }
+  private upgradeGoal(command:Extract<ProgressCommand,{type:'upgrade-goal'}>):string {
+    const goal=this.entities().find(entity=>entity.id===command.id && entity.kind==='goal')
+    if (!goal) throw new Error('目标不存在')
+    this.assertProject(goal.projectId)
+    this.assertVersion(goal,command.expectedVersion)
+    if (goal.progressMode!=='legacy_tasks') throw new Error('目标已使用关键结果，无需重复升级')
+    if (goal.status==='cancelled') throw new Error('请先重开目标')
+    if (!Array.isArray(command.keyResults) || !command.keyResults.length) throw new Error('至少定义一个有效关键结果')
+    const before=structuredClone(goal)
+    goal.progressMode='key_results';goal.status=goal.status==='achieved'?'active':goal.status;goal.completedAt=null;goal.rowVersion++;goal.updatedAt=this.timestamp();this.persistEntity(goal)
+    for (const input of command.keyResults) {
+      if (input.id || input.goalId!==goal.id || input.projectId!==goal.projectId) throw new Error('升级结果必须是属于当前目标的新记录')
+      this.saveKeyResult(input,undefined,command.commandId)
+    }
+    this.event(goal,'goal-upgraded',before,goal,command.commandId,'user','goal')
+    return goal.id
+  }
+
+  getHistory(query:ProgressHistoryQuery):ProgressHistoryPage {
+    if (!query?.object || typeof query.object.id!=='string') throw new Error('缺少历史对象')
+    const {kind,id}=query.object
+    const target=kind==='task'?this.getItem(id):kind==='key_result'?this.getKeyResult(id):this.entities().find(entity=>entity.id===id && entity.kind===kind)
+    if (!target || (query.projectId!==undefined && target.projectId!==query.projectId)) throw new Error('历史对象不存在或不属于当前项目')
+    const cursor=query.cursor===undefined?Number.MAX_SAFE_INTEGER:Number(query.cursor)
+    if (!Number.isSafeInteger(cursor) || cursor<=0) throw new Error('无效历史游标')
+    const limit=Math.max(1,Math.min(100,Number.isFinite(query.limit)?Math.floor(query.limit!):30))
+    const rows=this.db().prepare('SELECT rowid AS sequence,data_json FROM progress_events WHERE entity_id=? AND rowid<? AND json_extract(data_json,\'$.entityType\')=? ORDER BY rowid DESC LIMIT ?').all(id,cursor,kind,limit+1) as Row[]
+    return {events:rows.slice(0,limit).map(row=>json<ProgressEvent>(row)),nextCursor:rows.length>limit?String(rows[limit-1].sequence):null}
   }
 
   private invalidateScopeAcceptance(item: ProjectWorkItem, commandId: string): void {
     if (item.trackingState !== 'tracked') return
-    for (const entity of this.entities().filter(entity => [item.goalId,item.milestoneId,item.versionId].includes(entity.id) && ['achieved','closed'].includes(entity.status))) {
-      const before = structuredClone(entity)
-      entity.status = entity.kind === 'milestone' ? 'planned' : 'active'; entity.completedAt = null; entity.rowVersion++; entity.updatedAt = this.timestamp()
-      this.db().prepare(`UPDATE ${entityTables[entity.kind]} SET row_version=?,data_json=? WHERE id=?`).run(entity.rowVersion,JSON.stringify(entity),entity.id)
-      this.event(entity,'scope-reopened',before,entity,commandId,'system',entity.kind)
-    }
+    for (const entity of this.entities().filter(entity => [item.goalId,item.milestoneId,item.versionId].includes(entity.id) && !(entity.kind==='goal' && entity.progressMode==='key_results'))) this.reopenEntity(entity,commandId)
   }
   private executions(): ProgressExecution[] { return this.db().prepare('SELECT data_json FROM task_executions ORDER BY rowid').all().map((row) => json<ProgressExecution>(row)) }
   private drafts(): ProgressPlanDraft[] { return this.db().prepare('SELECT data_json FROM task_plan_drafts').all().map((row) => json<ProgressPlanDraft>(row)) }
@@ -438,14 +605,25 @@ export class ProjectProgressService {
     const archivedProjects = new Set(query.projectId || query.includeArchivedProjects ? [] : this.db().prepare('SELECT * FROM projects').all().filter(row => !!(row as Row).archived_at).map(row => String((row as Row).id)))
     const visibleProject = (id: string | null) => query.projectId ? id === query.projectId : !id || !archivedProjects.has(id)
     const items = this.allItems().filter((item) => visibleProject(item.projectId))
-    const entities = this.entities().filter((entity) => visibleProject(entity.projectId))
+    const projectIds=new Set(this.db().prepare('SELECT id FROM projects').all().map(row=>String((row as Row).id)))
+    const entities = this.entities().filter((entity) => projectIds.has(entity.projectId) && visibleProject(entity.projectId))
+    const entityIds=new Set(entities.map(entity=>entity.id))
+    const keyResults=this.keyResults().filter(result=>entityIds.has(result.goalId))
+    const resultIds=new Set(keyResults.map(result=>result.id))
+    const relations=this.relations().filter(link=>entityIds.has(link.sourceId) && (entityIds.has(link.targetId)||resultIds.has(link.targetId)))
+    const today=progressToday(asOf,timezone)
+    const keyResultStats=Object.fromEntries(keyResults.map(result=>[result.id,{percent:Math.round(keyResultPercent(result)),readyForAcceptance:result.status==='active' && keyResultReached(result),support:calculateProjectProgress(items,asOf,timezone,result.id)}]))
+    const goalStats=Object.fromEntries(entities.filter(entity=>entity.kind==='goal').map(goal=>{
+      const results=keyResults.filter(result=>result.goalId===goal.id && result.status!=='cancelled'),support=calculateProjectProgress(items,asOf,timezone,goal.id)
+      return [goal.id,{total:results.length,achieved:results.filter(result=>result.status==='achieved').length,percent:goal.progressMode==='legacy_tasks'?support.percent:results.length?Math.round(results.reduce((sum,result)=>sum+keyResultPercent(result),0)/results.length):null,readyForAcceptance:goal.progressMode==='legacy_tasks'?support.rootTasks>0 && items.filter(item=>!item.parentId && item.goalId===goal.id && item.status!=='cancelled').every(item=>item.status==='done'):results.length>0 && results.every(result=>result.status==='achieved'),unfinishedTasks:items.filter(item=>!item.parentId && item.goalId===goal.id && !['done','cancelled'].includes(item.status)).length,overdue:results.filter(result=>result.status!=='achieved' && result.targetDate && result.targetDate<today).length,blocked:support.blocked}]
+    }))
     const ids = new Set(items.map((item) => item.id))
     const migration = this.latestMigration()
     return {
-      active: this.isActive(), items, entities, executions: this.executions().filter((run) => ids.has(run.workItemId)), drafts: this.drafts().filter((draft) => ids.has(draft.workItemId)),
+      active: this.isActive(), items, entities, keyResults,relations,goalStats,keyResultStats,deliveryStats:Object.fromEntries(entities.filter(entity=>entity.kind!=='goal').map(entity=>[entity.id,calculateDeliveryProgress(entity,items,keyResults,entities,relations)])), executions: this.executions().filter((run) => ids.has(run.workItemId)), drafts: this.drafts().filter((draft) => ids.has(draft.workItemId)),
       events: this.db().prepare('SELECT data_json FROM progress_events ORDER BY occurred_at DESC,rowid DESC LIMIT 500').all().map((row) => json<ProgressEvent>(row)).filter((event) => visibleProject(event.projectId)),
       sourceLinks:this.db().prepare('SELECT * FROM work_item_source_links').all().map(row=>row as Row).filter(row=>ids.has(String(row.work_item_id))).map(row=>({sourceSystem:String(row.source_system),sourceScope:String(row.source_scope),sourceType:String(row.source_type),sourceId:String(row.source_id),workItemId:String(row.work_item_id)})),
-      stats: calculateProjectProgress(items,asOf,timezone,query.scopeId), scopeStats: Object.fromEntries(entities.map((entity) => [entity.id,calculateProjectProgress(items,asOf,timezone,entity.id)])), migration, asOf, timezone
+      stats: calculateProjectProgress(items,asOf,timezone,query.scopeId), scopeStats: Object.fromEntries([...entities,...keyResults].map((entity) => [entity.id,calculateProjectProgress(items,asOf,timezone,entity.id)])), migration, asOf, timezone
     }
   }
 
@@ -689,7 +867,7 @@ export class ProjectProgressService {
       for (const root of items.filter(item => !item.parentId)) this.assertNoActiveRun(root.id)
       for (const item of items) {
         const before = structuredClone(item)
-        item.projectId = null; item.trackingState = 'inbox'; item.goalId = null; item.milestoneId = null; item.versionId = null; item.rowVersion++; item.scopeRevision++; item.updatedAt = this.timestamp()
+        item.projectId = null; item.trackingState = 'inbox'; item.goalId = null; item.keyResultId=null; item.milestoneId = null; item.versionId = null; item.rowVersion++; item.scopeRevision++; item.updatedAt = this.timestamp()
         this.persistItem(item); this.event(item,'project-removed',before,item,`detach-${projectId}`,'system')
       }
     })

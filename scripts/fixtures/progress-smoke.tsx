@@ -15,7 +15,7 @@ if(!window.forgeDesk){
     if(operation==='command'||operation==='activate')for(const listener of listeners)listener()
     return value.result
   }
-  window.forgeDesk={getProjectProgress:query=>invoke('snapshot',query),runProjectProgressCommand:command=>invoke('command',command),previewProjectProgressMigration:input=>invoke('preview',input),activateProjectProgressMigration:input=>invoke('activate',input),runProjectProgressAi:input=>invoke('ai',input),onProjectProgressUpdated:listener=>{listeners.add(listener);return()=>listeners.delete(listener)},listManagedTasks:()=>invoke('managed')} as typeof window.forgeDesk
+  window.forgeDesk={getProjectProgress:query=>invoke('snapshot',query),getProjectProgressHistory:query=>invoke('history',query),runProjectProgressCommand:command=>invoke('command',command),previewProjectProgressMigration:input=>invoke('preview',input),activateProjectProgressMigration:input=>invoke('activate',input),runProjectProgressAi:input=>invoke('ai',input),onProjectProgressUpdated:listener=>{listeners.add(listener);return()=>listeners.delete(listener)},listManagedTasks:()=>invoke('managed')} as typeof window.forgeDesk
 }
 useForgeDeskStore.setState({projects:[{id:'qa-project',name:'隔离验收项目',description:'无仓库、无 AI 的人工项目',status:'ready',owner:'QA',workspacePath:'/tmp/qa-project',createdAt:new Date().toISOString(),isFavorite:false}],repositories:[],loadingWorkspace:false})
 if(!localStorage.getItem(taskListStorageKey))localStorage.setItem(taskListStorageKey,JSON.stringify([{id:'qa-legacy',title:'历史人工待办',notes:'迁移后日期、标签与原文均应保留',status:'todo',priority:'high',projectId:'qa-project',startDate:'2026-10-14',dueDate:'2026-10-16',tags:['历史'],subtasks:[],createdAt:'2026-10-14T00:00:00Z',updatedAt:'2026-10-14T00:00:00Z'}]))

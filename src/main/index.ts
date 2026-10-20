@@ -7,6 +7,8 @@ import { homedir, tmpdir } from 'node:os'
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import Database from 'better-sqlite3'
 import simpleGit from 'simple-git'
+import { QuickBuildOutputReader, validateQuickBuildArtifact } from './quick-build'
+import type { QuickBuildStartInput, QuickBuildRestartInput, QuickBuildTask as QuickBuildTaskSnapshot } from '../shared/quick-build'
 import { setProjectArchived } from './project-archive'
 import { ProjectRuntimeService } from './project-runtime'
 import { AsyncReadCache } from './async-read-cache'
@@ -121,7 +123,7 @@ import {
 } from './codex-project-monitor'
 import { CursorMonitorService } from './cursor-monitor'
 import { ProjectProgressService, migrateProjectProgressTables } from './project-progress'
-import type { ProgressAiInput, ProgressCommand, ProgressSnapshotQuery } from '../shared/project-progress'
+import type { ProgressAiInput, ProgressCommand, ProgressSnapshotQuery, ProgressHistoryQuery } from '../shared/project-progress'
 import {
   deleteProjectGroup,
   listProjectGroups,
@@ -968,37 +970,9 @@ type AppRuntimeInfo = {
 
 type QuickBuildTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
-type QuickBuildStartInput = {
-  cwd?: string
-}
-
-type QuickBuildRestartInput = {
-  cwd?: string
-}
-
 type QuickBuildRestartResult = {
   appPath: string
   restarted: boolean
-}
-
-type QuickBuildTaskSnapshot = {
-  id: string
-  command: string
-  cwd: string
-  status: QuickBuildTaskStatus
-  phase: string
-  hint: string
-  lastOutputAt: string
-  processPid?: number
-  startedAt: string
-  updatedAt: string
-  finishedAt?: string
-  log: string
-  stdout: string
-  stderr: string
-  exitCode: number | null
-  signal?: string
-  error?: string
 }
 
 type GitExecutionOptions = {
@@ -1087,7 +1061,8 @@ const projectDeploymentTaskProcesses = new Map<string, ChildProcessWithoutNullSt
 const releaseTaskMaxLogLength = 1024 * 1024
 const releaseTaskHistoryLimit = 20
 const releasePublishPhaseTotal = 9
-const quickBuildCommand = 'pnpm package:mac:legacy'
+const quickBuildCommand = 'pnpm build:quick'
+let quickBuildUpdateTimer: ReturnType<typeof setTimeout> | undefined
 const quickBuildMaxLogLength = 1024 * 1024
 let quickBuildTask: QuickBuildTaskSnapshot | null = null
 let quickBuildProcess: ChildProcessWithoutNullStreams | null = null
@@ -1389,7 +1364,7 @@ function installApplicationMenu(): void {
 }
 
 function hasForgeDeskPackage(candidatePath: string): boolean {
-  if (resolve(candidatePath).split(/[\\/]/).some((part) => part.endsWith('.asar'))) {
+  if (resolve(candidatePath).split(/[\\/]/).some((part) => part.endsWith('.asar') || part.endsWith('.app'))) {
     return false
   }
 
@@ -1430,6 +1405,10 @@ function findForgeDeskProjectRoot(startPath: string): string | null {
 }
 
 function resolveForgeDeskProjectRoot(): string {
+  try {
+    const manifest = JSON.parse(readFileSync(join(process.resourcesPath, 'quick-build.json'), 'utf8'))
+    if (manifest.formatVersion === 1 && typeof manifest.sourceRoot === 'string' && hasForgeDeskPackage(manifest.sourceRoot)) return resolve(manifest.sourceRoot)
+  } catch { /* A release or development build has no quick-build manifest. */ }
   const candidates = [
     process.env.FORGEDESK_PROJECT_ROOT,
     process.env.INIT_CWD,
@@ -1601,12 +1580,13 @@ function getQuickBuildTaskSnapshot(task = quickBuildTask): QuickBuildTaskSnapsho
   return task ? { ...task } : null
 }
 
-function sendQuickBuildTaskUpdate(task: QuickBuildTaskSnapshot): void {
-  const snapshot = getQuickBuildTaskSnapshot(task)
-
-  for (const window of BrowserWindow.getAllWindows()) {
-    window.webContents.send('quick-build:task-updated', snapshot)
+function sendQuickBuildTaskUpdate(task: QuickBuildTaskSnapshot, immediate = false): void {
+  const send = () => {
+    quickBuildUpdateTimer = undefined
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('quick-build:task-updated', getQuickBuildTaskSnapshot(task))
   }
+  if (immediate || task.status !== 'running') { clearTimeout(quickBuildUpdateTimer); send() }
+  else if (!quickBuildUpdateTimer) quickBuildUpdateTimer = setTimeout(send, 200)
 }
 
 function updateQuickBuildTask(task: QuickBuildTaskSnapshot, patch: Partial<QuickBuildTaskSnapshot>): void {
@@ -1632,9 +1612,7 @@ function appendQuickBuildOutput(task: QuickBuildTaskSnapshot, stream: 'stdout' |
 
   updateQuickBuildTask(task, stream === 'stdout' ? { stdout: nextOutput, lastOutputAt: new Date().toISOString() } : { stderr: nextOutput, lastOutputAt: new Date().toISOString() })
 
-  for (const line of lines) {
-    appendQuickBuildLog(task, `${stream}: ${line}`)
-  }
+  if (lines.length) appendQuickBuildLog(task, lines.map(line => `${stream}: ${line}`).join('\n'))
 }
 
 function resolveQuickBuildCwd(input: QuickBuildStartInput = {}): string {
@@ -1662,11 +1640,22 @@ function resolveQuickBuildCwd(input: QuickBuildStartInput = {}): string {
 async function runQuickBuildTask(task: QuickBuildTaskSnapshot): Promise<void> {
   try {
     const scriptEnv = await createScriptExecutionEnv(process.env)
+    if (getQuickBuildTaskSnapshot(task)?.status !== 'running') {
+      updateQuickBuildTask(task, { finishedAt: new Date().toISOString(), elapsedMs: Date.now() - Date.parse(task.startedAt) })
+      return
+    }
+    scriptEnv.FORGEDESK_QUICK_ARCH = process.arch
+    scriptEnv.pnpm_config_verify_deps_before_run = 'false'
+    scriptEnv.npm_config_verify_deps_before_run = 'false'
+    scriptEnv.pnpm_config_pm_on_fail = 'error'
+    scriptEnv.npm_config_manage_package_manager_versions = 'false'
 
     appendQuickBuildLog(task, `[ForgeDesk] 当前目录：${task.cwd}`)
     appendQuickBuildLog(task, `[ForgeDesk] 快速构建开始：${new Date(task.startedAt).toLocaleString('zh-CN', { hour12: false })}`)
 
-    const child = spawn('/bin/zsh', ['-lc', task.command], {
+    // createScriptExecutionEnv already loads the login-shell PATH. Running a
+    // second login shell repeats startup scripts and can invoke shell aliases.
+    const child = spawn('pnpm', ['build:quick', ...(task.command === `${quickBuildCommand} --force` ? ['--force'] : [])], {
       cwd: task.cwd,
       detached: true,
       env: scriptEnv
@@ -1679,8 +1668,19 @@ async function runQuickBuildTask(task: QuickBuildTaskSnapshot): Promise<void> {
       processPid: child.pid
     })
 
-    child.stdout.on('data', (chunk: Buffer) => appendQuickBuildOutput(task, 'stdout', chunk.toString()))
-    child.stderr.on('data', (chunk: Buffer) => appendQuickBuildOutput(task, 'stderr', chunk.toString()))
+    const reader = new QuickBuildOutputReader()
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      if (task.status !== 'running') return
+      for (const event of reader.push(chunk)) {
+        if (event.stage) {
+          const stage = event.stage
+          updateQuickBuildTask(task, { phase: stage.title, stages: [...(task.stages ?? []).filter(current => current.id !== stage.id), stage] })
+        } else updateQuickBuildTask(task, event)
+      }
+      appendQuickBuildOutput(task, 'stdout', chunk)
+    })
+    child.stderr.on('data', (chunk: string) => { if(task.status === 'running')appendQuickBuildOutput(task, 'stderr', chunk) })
 
     const result = await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; error?: string }>((resolveResult) => {
       let settled = false
@@ -1697,7 +1697,7 @@ async function runQuickBuildTask(task: QuickBuildTaskSnapshot): Promise<void> {
         appendQuickBuildOutput(task, 'stderr', error.message)
         finish({ exitCode: null, signal: null, error: error.message })
       })
-      child.on('exit', (exitCode, signal) => finish({ exitCode, signal }))
+      child.on('close', (exitCode, signal) => finish({ exitCode, signal }))
     })
 
     const finishedAt = new Date().toISOString()
@@ -1718,10 +1718,12 @@ async function runQuickBuildTask(task: QuickBuildTaskSnapshot): Promise<void> {
     }
 
     const succeeded = result.exitCode === 0
+    if (succeeded) validateQuickBuildArtifact(task)
 
     appendQuickBuildLog(task, succeeded ? '[ForgeDesk] 快速构建完成' : `[ForgeDesk] 快速构建失败：退出码 ${result.exitCode ?? '-'}`)
     updateQuickBuildTask(task, {
       exitCode: result.exitCode,
+      elapsedMs: Date.now() - Date.parse(task.startedAt),
       finishedAt,
       hint: succeeded ? '快速构建已完成。' : '快速构建未成功完成，请查看构建日志。',
       phase: succeeded ? '构建完成' : '构建失败',
@@ -1764,10 +1766,12 @@ function startQuickBuildTask(input: QuickBuildStartInput = {}): QuickBuildTaskSn
   }
 
   const cwd = resolveQuickBuildCwd(input)
+  const sourcePackage = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8'))
+  if (typeof sourcePackage.scripts?.['build:quick'] !== 'string') throw new Error('此源码版本尚不支持增量快速构建，请选择新版源码或使用完整打包命令')
   const now = new Date().toISOString()
   const task: QuickBuildTaskSnapshot = {
     id: randomUUID(),
-    command: quickBuildCommand,
+    command: quickBuildCommand + (input.force ? ' --force' : ''),
     cwd,
     status: 'running',
     phase: '等待后台任务启动',
@@ -1782,7 +1786,7 @@ function startQuickBuildTask(input: QuickBuildStartInput = {}): QuickBuildTaskSn
   }
 
   quickBuildTask = task
-  sendQuickBuildTaskUpdate(task)
+  sendQuickBuildTaskUpdate(task, true)
   appendQuickBuildLog(task, '快速构建任务已进入后台')
   void runQuickBuildTask(task)
 
@@ -1799,26 +1803,15 @@ function resolveQuickBuildRestartCwd(input: QuickBuildRestartInput = {}): string
   return resolveQuickBuildCwd()
 }
 
-function openMacAppInstance(appPath: string): Promise<void> {
-  return new Promise((resolveOpen, rejectOpen) => {
-    execFile('open', ['-n', appPath], { timeout: 10000 }, (error, _stdout, stderr) => {
-      if (error) {
-        rejectOpen(new Error(stderr?.trim() || error.message))
-        return
-      }
-
-      resolveOpen()
-    })
-  })
-}
-
 async function restartQuickBuildApp(input: QuickBuildRestartInput = {}, ownerWindow: BrowserWindow | null = getPrimaryWindow()): Promise<QuickBuildRestartResult> {
   if (process.platform !== 'darwin') {
     throw new Error('快速重启只支持 macOS app')
   }
 
   const cwd = resolveQuickBuildRestartCwd(input)
-  const appPath = join(cwd, 'dist', 'ForgeDesk.app')
+  if (!quickBuildTask || quickBuildTask.status !== 'succeeded' || resolve(quickBuildTask.cwd) !== resolve(cwd) || input.taskId && input.taskId !== quickBuildTask.id) throw new Error('请选择本次成功构建的任务后再重启')
+  const appPath = validateQuickBuildArtifact(quickBuildTask)
+  await new Promise<void>((yes, no) => execFile('codesign', ['--verify', '--deep', '--strict', appPath], { timeout: 30000 }, error => error ? no(error) : yes()))
 
   let appStats
 
@@ -1838,10 +1831,11 @@ async function restartQuickBuildApp(input: QuickBuildRestartInput = {}, ownerWin
     return { appPath, restarted: false }
   }
 
-  await openMacAppInstance(appPath)
-
-  forceQuitRequested = true
   await stopRunningCloseGuardActivities()
+  // Electron's relauncher waits for this process to exit. Opening the new app
+  // first would make it lose the shared profile lock and immediately quit.
+  app.relaunch({ execPath: join(appPath, 'Contents', 'MacOS', 'ForgeDesk'), args: [] })
+  forceQuitRequested = true
   setTimeout(() => app.quit(), 100)
 
   return { appPath, restarted: true }
@@ -8511,6 +8505,7 @@ async function executeManagedProgressTask(input: { taskId: string; baseBranch?: 
 ipcMain.handle('managed-tasks:execute', async (_event, input: { taskId: string; baseBranch?: string }) => executeManagedProgressTask(input))
 
 ipcMain.handle('project-progress:snapshot', (_event, query?: ProgressSnapshotQuery) => projectProgressService.getSnapshot(query))
+ipcMain.handle('project-progress:history', (_event, query: ProgressHistoryQuery) => projectProgressService.getHistory(query))
 ipcMain.handle('project-progress:command', (_event, command: ProgressCommand) => projectProgressService.command(command))
 ipcMain.handle('project-progress:migration:preview', (_event, input: { legacyRaw: string | null }) => {
   if (input.legacyRaw !== null && typeof input.legacyRaw !== 'string') throw new Error('无效的旧待办存储')

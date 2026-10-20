@@ -38,6 +38,7 @@ if(browserOnly){
       const input=JSON.parse(body||'{}')
       let result
       if(request.url==='/snapshot')result=service.getSnapshot(input)
+      else if(request.url==='/history')result=service.getHistory(input)
       else if(request.url==='/command')result=service.command(input)
       else if(request.url==='/preview')result=service.previewMigration(input.legacyRaw,[])
       else if(request.url==='/activate'){

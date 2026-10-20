@@ -4134,6 +4134,43 @@ button.app-status-bar-item:hover {
   font-weight: 600;
 }
 
+.app-status-bar-build-log {
+  flex-shrink: 0;
+}
+
+.quick-build-log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.quick-build-log-hint {
+  margin: 10px 0;
+  font-size: 12px;
+}
+
+.quick-build-log-output {
+  min-height: 240px;
+  max-height: min(50vh, 520px);
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--app-text);
+  background: var(--subtle-bg);
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.quick-build-log-output:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 .app-status-bar-quick-build.is-running {
   color: #a16207;
   background: rgba(250, 204, 21, 0.16);

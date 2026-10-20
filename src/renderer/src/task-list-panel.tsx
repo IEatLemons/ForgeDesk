@@ -34,6 +34,7 @@ import {
 } from '@ant-design/icons'
 import { useMemo, useState } from 'react'
 import type { Project } from './data'
+import { TaskDatePicker } from './task-date-picker'
 import { useForgeDeskStore } from './store'
 import {
   createTaskGanttRange,
@@ -156,30 +157,6 @@ function formatTaskTimestamp(value: string | null): string {
   return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-function formatTaskDateTimeInput(value: string | null): string {
-  if (!value) {
-    return ''
-  }
-
-  const timestamp = new Date(value)
-
-  if (Number.isNaN(timestamp.getTime())) {
-    return ''
-  }
-
-  const pad = (part: number): string => `${part}`.padStart(2, '0')
-  return `${timestamp.getFullYear()}-${pad(timestamp.getMonth() + 1)}-${pad(timestamp.getDate())}T${pad(timestamp.getHours())}:${pad(timestamp.getMinutes())}`
-}
-
-function parseTaskDateTimeInput(value: string): string | null {
-  if (!value) {
-    return null
-  }
-
-  const timestamp = new Date(value)
-  return Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString()
-}
-
 function getProjectName(projects: Project[], projectId: string | null): string {
   if (!projectId) {
     return '未关联项目'
@@ -250,19 +227,19 @@ function TaskSubtaskCompletionControl({
   onChange: (completedAt: string | null) => void
 }): JSX.Element {
   const [open, setOpen] = useState(false)
-  const [draft, setDraft] = useState(() => formatTaskDateTimeInput(subtask.completedAt))
+  const [draft, setDraft] = useState<string | null>(subtask.completedAt)
   const label = subtask.completedAt ? formatTaskTimestamp(subtask.completedAt) : subtask.done ? '补记时间' : '记录时间'
 
   function handleOpenChange(nextOpen: boolean): void {
     setOpen(nextOpen)
 
     if (nextOpen) {
-      setDraft(formatTaskDateTimeInput(subtask.completedAt))
+      setDraft(subtask.completedAt)
     }
   }
 
   function save(): void {
-    const completedAt = parseTaskDateTimeInput(draft)
+    const completedAt = draft
 
     if (!completedAt) {
       return
@@ -274,7 +251,7 @@ function TaskSubtaskCompletionControl({
 
   function clear(): void {
     onChange(null)
-    setDraft('')
+    setDraft(null)
     setOpen(false)
   }
 
@@ -287,7 +264,7 @@ function TaskSubtaskCompletionControl({
       content={(
         <div className="task-subtask-time-editor">
           <Typography.Text type="secondary">可单独设置该子任务的完成时间</Typography.Text>
-          <Input type="datetime-local" value={draft} onChange={(event) => setDraft(event.target.value)} />
+          <TaskDatePicker showTime value={draft} onChange={setDraft} />
           <Space size={6}>
             <Button type="primary" size="small" disabled={!draft} onClick={save}>保存</Button>
             <Button size="small" onClick={clear} disabled={!subtask.done && !draft}>清除</Button>
@@ -1022,10 +999,10 @@ export function TaskListPanel(): JSX.Element {
               <Select options={projectFormOptions} />
             </Form.Item>
             <Form.Item name="startDate" label="开始日期">
-              <Input className="task-date-picker" type="date" />
+              <TaskDatePicker className="task-date-picker" />
             </Form.Item>
             <Form.Item name="dueDate" label="截止日期">
-              <Input className="task-date-picker" type="date" />
+              <TaskDatePicker className="task-date-picker" />
             </Form.Item>
             <Form.Item name="tags" label="标签">
               <Select mode="tags" placeholder="输入后回车" tokenSeparators={[',', '，']} options={taskTags.map((tag) => ({ label: tag, value: tag }))} />

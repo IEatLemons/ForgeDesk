@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ProjectProgressSnapshot } from '../../shared/project-progress'
+import { useWorkspaceVisible } from './workspace-visibility'
 
 export function useProjectProgress(projectId?: string, includeArchivedProjects = false) {
+  const visible = useWorkspaceVisible()
+  const loadedQuery = useRef<string>()
   const [snapshot,setSnapshot]=useState<ProjectProgressSnapshot|null>(null)
   const [error,setError]=useState('')
   const [loading,setLoading]=useState(true)
@@ -17,13 +20,16 @@ export function useProjectProgress(projectId?: string, includeArchivedProjects =
     finally{if(revision===request.current)setLoading(false)}
   },[projectId,includeArchivedProjects])
   useEffect(()=>{
-    setLoading(true); setSnapshot(null); void refresh()
+    if (!visible) return
+    const key = JSON.stringify([projectId, includeArchivedProjects])
+    if (loadedQuery.current !== key) { loadedQuery.current = key; setLoading(true); setSnapshot(null) }
+    void refresh()
     let timer:ReturnType<typeof setTimeout>|undefined
     const update=()=>{clearTimeout(timer);timer=setTimeout(()=>void refresh(),80)}
     const unsubscribe=window.forgeDesk?.onProjectProgressUpdated?.(update)
     window.addEventListener('focus',update)
     const interval=setInterval(update,60000)
     return()=>{request.current++;unsubscribe?.();clearTimeout(timer);clearInterval(interval);window.removeEventListener('focus',update)}
-  },[refresh])
+  },[refresh,visible])
   return {snapshot,error,loading,refresh}
 }
