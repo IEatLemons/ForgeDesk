@@ -267,6 +267,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   getCodexRuntimeStatus: (verify?: boolean) => ipcRenderer.invoke('codex:runtime:status', verify),
   getCodexActivitySnapshot: () => ipcRenderer.invoke('codex:activity:snapshot'),
   listCodexSessions: () => ipcRenderer.invoke('codex:sessions:list'),
+  listCodexModels: () => ipcRenderer.invoke('codex:models:list'),
   getCodexSession: (sessionId: string) => ipcRenderer.invoke('codex:sessions:get', sessionId),
   toggleCodexSessionPin: (sessionId: string) => ipcRenderer.invoke('codex:sessions:pin', sessionId),
   archiveCodexSessions: (input: CodexSessionBatchActionInput) => ipcRenderer.invoke('codex:sessions:archive', input),

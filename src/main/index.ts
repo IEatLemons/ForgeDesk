@@ -70,7 +70,7 @@ import {
   type AiProjectResourceLinkInput
 } from './ai-project-resource-links'
 import { CodexActivityService, type CodexActivitySnapshot } from './codex-activity'
-import { CodexAppServerThreadService, type CodexAppServerNotification } from './codex-app-server'
+import { CodexAppServerThreadService, readCodexAppServerModels, type CodexAppServerNotification } from './codex-app-server'
 import {
   ManagedTaskService,
   migrateManagedTaskTables,
@@ -8644,6 +8644,12 @@ ipcMain.handle('managed-tasks:publish', async (_event, input: { taskId: string; 
 ipcMain.handle('codex:activity:snapshot', async (): Promise<CodexActivitySnapshot> => codexActivityService.snapshot())
 
 ipcMain.handle('codex:sessions:list', async (): Promise<CodexSessionsSnapshot> => codexSessionService.list())
+
+ipcMain.handle('codex:models:list', async () => {
+  const codexHome = await resolveCodexHome(app.getPath('userData'))
+  const command = await findLocalAiCommand('codex-cli', { env: { ...process.env, CODEX_HOME: codexHome } })
+  return readCodexAppServerModels({ command, codexHome })
+})
 
 ipcMain.handle('codex:sessions:get', async (_event, sessionId: string): Promise<CodexSessionDetail> => codexSessionService.get(sessionId))
 

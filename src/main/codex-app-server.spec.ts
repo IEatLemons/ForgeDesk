@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { describe, it } from 'node:test'
-import { CodexAppServerThreadService, readCodexAppServerSnapshot, type CodexAppServerSpawnProcess } from './codex-app-server.js'
+import { CodexAppServerThreadService, readCodexAppServerModels, readCodexAppServerSnapshot, type CodexAppServerSpawnProcess } from './codex-app-server.js'
 
 class FakeAppServerProcess extends EventEmitter {
   readonly stdin = new PassThrough()
@@ -17,7 +17,7 @@ class FakeAppServerProcess extends EventEmitter {
   }
 }
 
-function fakeSpawn(): { spawn: CodexAppServerSpawnProcess; process: FakeAppServerProcess; requests: Array<Record<string, unknown>> } {
+function fakeSpawn(respond?: (request: Record<string, unknown>) => { result?: unknown; error?: { code: number; message: string } } | undefined): { spawn: CodexAppServerSpawnProcess; process: FakeAppServerProcess; requests: Array<Record<string, unknown>> } {
   const process = new FakeAppServerProcess()
   const requests: Array<Record<string, unknown>> = []
   process.stdin.on('data', (chunk) => {
@@ -25,6 +25,11 @@ function fakeSpawn(): { spawn: CodexAppServerSpawnProcess; process: FakeAppServe
       const request = JSON.parse(line) as Record<string, unknown>
       requests.push(request)
       if (request.id === undefined) continue
+      const response = respond?.(request)
+      if (response) {
+        process.stdout.write(`${JSON.stringify({ id: request.id, ...response })}\n`)
+        continue
+      }
       const method = request.method
       const result = method === 'account/read'
         ? { account: { type: 'chatgpt', email: 'live@example.com', planType: 'pro' }, requiresOpenaiAuth: true }
@@ -68,6 +73,53 @@ function fakeSpawn(): { spawn: CodexAppServerSpawnProcess; process: FakeAppServe
 }
 
 describe('Codex App Server adapter', () => {
+  it('loads all visible models in server order, preserving display names and inference model identifiers', async () => {
+    const fake = fakeSpawn((request) => {
+      if (request.method !== 'model/list') return undefined
+      const params = request.params as { cursor: string | null }
+      return { result: params.cursor === null
+        ? { data: [
+            { id: 'catalog-a', model: 'model-a', displayName: 'Model A', isDefault: true },
+            { id: 'hidden', model: 'hidden-model', hidden: true },
+            { displayName: 'Invalid row' }
+          ], nextCursor: 'page-2' }
+        : { data: [
+            { id: 'catalog-a', model: 'model-a', displayName: 'Duplicate' },
+            { id: 'model-b' }
+          ], nextCursor: null } }
+    })
+    const models = await readCodexAppServerModels({ command: '/fake/codex', codexHome: '/tmp/codex-profile', spawnProcess: fake.spawn })
+    assert.deepEqual(models, [
+      { id: 'catalog-a', model: 'model-a', displayName: 'Model A', isDefault: true },
+      { id: 'model-b', model: 'model-b', displayName: 'model-b', isDefault: false }
+    ])
+    assert.equal(fake.requests[0]?.method, 'initialize')
+    assert.deepEqual(fake.requests.filter((request) => request.method === 'model/list').map((request) => request.params), [
+      { limit: 100, includeHidden: false, cursor: null },
+      { limit: 100, includeHidden: false, cursor: 'page-2' }
+    ])
+    assert.equal(fake.process.killed, true)
+  })
+
+  it('accepts an empty catalog without inventing fallback models', async () => {
+    const fake = fakeSpawn((request) => request.method === 'model/list' ? { result: { data: [], nextCursor: null } } : undefined)
+    assert.deepEqual(await readCodexAppServerModels({ command: '/fake/codex', codexHome: '/tmp/codex', spawnProcess: fake.spawn }), [])
+    assert.equal(fake.process.killed, true)
+  })
+
+  it('reports catalog errors and always releases the app-server process', async () => {
+    for (const response of [
+      { error: { code: -32000, message: 'Unauthorized: login required' } },
+      { result: { models: [] } },
+      { result: { data: [], nextCursor: 'repeated-cursor' } }
+    ]) {
+      const fake = fakeSpawn((request) => request.method === 'model/list' ? response : undefined)
+      await assert.rejects(readCodexAppServerModels({ command: '/fake/codex', codexHome: '/tmp/codex', spawnProcess: fake.spawn }), /Unauthorized|有效模型列表|游标重复/)
+      assert.equal(fake.process.killed, true)
+    }
+    await assert.rejects(readCodexAppServerModels({ command: '', codexHome: '/tmp/codex' }), /未检测到/)
+  })
+
   it('performs the initialize handshake and normalizes live account, limits and usage data', async () => {
     const fake = fakeSpawn()
     const snapshot = await readCodexAppServerSnapshot({

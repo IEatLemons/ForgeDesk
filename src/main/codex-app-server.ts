@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import type { CodexModel } from '../shared/codex-models.js'
 
 type JsonObject = Record<string, unknown>
 
@@ -368,6 +369,31 @@ export class CodexAppServerThreadService {
     spawnProcess?: CodexAppServerSpawnProcess
   }) {}
 
+  async listModels(): Promise<CodexModel[]> {
+    const models = new Map<string, CodexModel>()
+    const cursors = new Set<string>()
+    let cursor: string | null = null
+    do {
+      const result = asObject(await this.request('model/list', { limit: 100, includeHidden: false, cursor }))
+      if (!Array.isArray(result.data)) throw new CodexAppServerError('protocol', 'Codex App Server 未返回有效模型列表')
+      for (const value of result.data) {
+        const entry = asObject(value)
+        const model = asString(entry.model) || asString(entry.id)
+        if (!model || entry.hidden === true || models.has(model)) continue
+        models.set(model, {
+          id: asString(entry.id) || model,
+          model,
+          displayName: asString(entry.displayName) || model,
+          isDefault: entry.isDefault === true
+        })
+      }
+      cursor = asString(result.nextCursor) || null
+      if (cursor && cursors.has(cursor)) throw new CodexAppServerError('protocol', 'Codex 模型列表分页游标重复')
+      if (cursor) cursors.add(cursor)
+    } while (cursor)
+    return [...models.values()]
+  }
+
   async startThread(input: { cwd: string; title: string; model?: string; sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access' }): Promise<CodexAppServerThread> {
     const result = await this.request('thread/start', { cwd: input.cwd, model: input.model || null, sandbox: input.sandbox || 'workspace-write' })
     const thread = threadFromResponse(result)
@@ -449,6 +475,19 @@ export class CodexAppServerThreadService {
 
 function defaultSpawnProcess(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; stdio: ['pipe', 'pipe', 'pipe'] }): ChildProcessWithoutNullStreams {
   return spawn(command, args, options)
+}
+
+export async function readCodexAppServerModels(input: {
+  command: string
+  codexHome: string
+  spawnProcess?: CodexAppServerSpawnProcess
+}): Promise<CodexModel[]> {
+  const service = new CodexAppServerThreadService(input)
+  try {
+    return await service.listModels()
+  } finally {
+    await service.dispose()
+  }
 }
 
 export function normalizeCodexAppServerRateLimits(value: unknown): CodexAppServerRateLimits | null {

@@ -95,6 +95,7 @@ import type { FormInstance } from 'antd/es/form'
 import forgedeskLogoUrl from './assets/forgedesk-logo.svg'
 import { AI_CODING_ASSISTANT_NAME } from './ai-coding-assistant'
 import { WorkspaceShell } from './workspace-shell'
+import { WorkspaceTerminalPanel } from './workspace-terminal-panel'
 import { ProjectDirectory } from './project-directory'
 import { QuickBuildPanel } from './quick-build-panel'
 import { WorkspaceVisibilityProvider, useWorkspaceVisible } from './workspace-visibility'
@@ -23835,7 +23836,11 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       else if(project)openTerminalRequest(createProjectTerminalOpenRequest(project))
       else setActiveKey('terminal')
     }
-    const terminal = <div className="workspace-terminal-host" hidden={!terminalVisible}><div className="workspace-terminal-heading"><Typography.Text strong>终端 · 导航切换时保持运行</Typography.Text><Space><Button size="small" onClick={()=>setTerminalRemoteDrawerOpen(true)}>远程连接</Button><Button size="small" onClick={()=>setTerminalVisible(false)}>收起</Button></Space></div><div className="workspace-terminal-body">{terminalVisited ? <TerminalWorkspace autoOpen={false} defaultTitle="ForgeDesk CLI" openRequest={terminalOpenRequest} projectId={terminalOpenRequest?.projectId} resolvedTheme={resolvedTheme} /> : null}</div></div>
+    const terminal = (
+      <WorkspaceTerminalPanel visible={terminalVisible} onHide={() => setTerminalVisible(false)} onOpenRemote={() => setTerminalRemoteDrawerOpen(true)}>
+        {terminalVisited ? <TerminalWorkspace autoOpen={false} defaultTitle="ForgeDesk CLI" openRequest={terminalOpenRequest} projectId={terminalOpenRequest?.projectId} resolvedTheme={resolvedTheme} /> : null}
+      </WorkspaceTerminalPanel>
+    )
     return <div className={`workspace-production-root${usesCustomTitleBar?' with-titlebar':''}`}>
       <AppTitleBar appMode={appMode} breadcrumbs={[routeLabel(route)]} onAppModeChange={handleAppModeChange} onOpenCodex={openCodex} onOpenCodexMonitor={openCodexMonitor} onOpenForgeProject={openForgeProjectFromCodex} showAppModeSwitcher={chromePreferences.appModeSwitcher==='top'} showCodexStatus={chromePreferences.codexStatus==='top'} />
       {appUpdateBanner}

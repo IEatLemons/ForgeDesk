@@ -112,37 +112,39 @@ describe('codex session service', () => {
     }
   })
 
-  it('resumes a native session with its id, cwd, and image arguments', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'forgedesk-codex-resume-'))
-    const filePath = join(directory, 'session.jsonl')
-    const calls: Array<{ file: string; args: string[]; cwd: string }> = []
+  for (const model of [undefined, 'codex-selected-model']) {
+    it(`resumes a native session with its id, cwd, images, and ${model ? 'selected model' : 'Codex default model'}`, async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'forgedesk-codex-resume-'))
+      const filePath = join(directory, 'session.jsonl')
+      const calls: Array<{ file: string; args: string[]; cwd: string }> = []
 
-    class FakeProcess extends EventEmitter {
-      stdout = new EventEmitter()
-      stderr = new EventEmitter()
-      kill(): boolean { return true }
-    }
+      class FakeProcess extends EventEmitter {
+        stdout = new EventEmitter()
+        stderr = new EventEmitter()
+        kill(): boolean { return true }
+      }
 
-    try {
-      await writeFile(filePath, [response('user', [{ type: 'input_text', text: '原始请求' }]), event('task_complete')].join('\n'))
-      const stateRows = createStateRows([{ cwd: '/tmp/ForgeDesk', filePath, id: 'session-1', title: '原始请求' }])
-      const service = new CodexSessionService({
-        findCodexCommand: async () => '/usr/local/bin/codex',
-        spawnCodex: (file, args, options) => {
-          calls.push({ args, cwd: options.cwd, file })
-          return new FakeProcess() as never
-        },
-        readStateRows: async () => stateRows,
-        sessionsDirectory: directory
-      })
+      try {
+        await writeFile(filePath, [response('user', [{ type: 'input_text', text: '原始请求' }]), event('task_complete')].join('\n'))
+        const stateRows = createStateRows([{ cwd: '/tmp/ForgeDesk', filePath, id: 'session-1', title: '原始请求' }])
+        const service = new CodexSessionService({
+          findCodexCommand: async () => '/usr/local/bin/codex',
+          spawnCodex: (file, args, options) => {
+            calls.push({ args, cwd: options.cwd, file })
+            return new FakeProcess() as never
+          },
+          readStateRows: async () => stateRows,
+          sessionsDirectory: directory
+        })
 
-      await service.sendMessage({ content: '继续检查', images: ['/tmp/reference.png'], sessionId: 'session-1' })
-      assert.deepEqual(calls[0]?.args, ['exec', 'resume', '--json', '--skip-git-repo-check', '--image', '/tmp/reference.png', 'session-1', '继续检查'])
-      assert.equal(calls[0]?.cwd, '/tmp/ForgeDesk')
-    } finally {
-      await rm(directory, { force: true, recursive: true })
-    }
-  })
+        await service.sendMessage({ content: '继续检查', images: ['/tmp/reference.png'], model, sessionId: 'session-1' })
+        assert.deepEqual(calls[0]?.args, ['exec', 'resume', '--json', '--skip-git-repo-check', ...(model ? ['--model', model] : []), '--image', '/tmp/reference.png', 'session-1', '继续检查'])
+        assert.equal(calls[0]?.cwd, '/tmp/ForgeDesk')
+      } finally {
+        await rm(directory, { force: true, recursive: true })
+      }
+    })
+  }
 
   it('keeps a long-running session running when its lifecycle event is outside the summary tail', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'forgedesk-codex-summary-tail-'))

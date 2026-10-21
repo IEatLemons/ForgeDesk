@@ -3089,6 +3089,7 @@ interface Window {
     getCodexRuntimeStatus: (verify?: boolean) => Promise<AiRuntimeStatus>
     getCodexActivitySnapshot: () => Promise<CodexActivitySnapshot>
     listCodexSessions: () => Promise<CodexSessionsSnapshot>
+    listCodexModels: () => Promise<import('../../shared/codex-models').CodexModel[]>
     getCodexSession: (sessionId: string) => Promise<CodexSessionDetail>
     toggleCodexSessionPin: (sessionId: string) => Promise<CodexSessionSummary>
     archiveCodexSessions: (input: CodexSessionBatchActionInput) => Promise<CodexSessionBatchActionResult>

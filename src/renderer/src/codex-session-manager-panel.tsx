@@ -23,12 +23,14 @@ import {
   ThunderboltOutlined,
   ToolOutlined,
   UndoOutlined,
+  WarningOutlined,
   ZoomInOutlined,
   ZoomOutOutlined
 } from '@ant-design/icons'
 import { Badge, Button, Checkbox, Empty, Input, Layout, List, Modal, Select, Space, Spin, Tag, Tooltip, Typography, message } from 'antd'
 import type { ClipboardEvent as ReactClipboardEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { CodexModel } from '../../shared/codex-models'
 import type { CodexConversationItem, CodexProjectMonitorSnapshot, CodexSessionBatchAction, CodexSessionDetail, CodexSessionEvent, CodexSessionSummary, CodexSessionsSnapshot, CodexUncommittedAlert } from './data'
 import { CodexProjectMonitor, type CodexProjectGroup } from './codex-project-monitor'
 import { CodexSitesPanel } from './codex-sites-panel'
@@ -486,7 +488,11 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded 
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [sending, setSending] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
-  const [configuredModel, setConfiguredModel] = useState('')
+  const [models, setModels] = useState<CodexModel[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [modelsError, setModelsError] = useState('')
+  const modelsRequestIdRef = useRef(0)
+  const loadingModelsRef = useRef(false)
   const [selectedModel, setSelectedModel] = useState(CODEX_DEFAULT_MODEL_VALUE)
   const [viewMode, setViewMode] = useState<'monitor' | 'conversation'>(() => focusSessionId?.trim() ? 'conversation' : 'monitor')
   const [sitesOpen, setSitesOpen] = useState(false)
@@ -540,9 +546,33 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded 
   const projectRunningCount = selectedProjectSessions.filter((session) => session.status === 'running').length
   const projectArchivedCount = snapshot.sessions.filter((session) => session.projectKey === selectedProject?.key && session.archived).length
   const modelOptions = useMemo(() => [
-    { label: '默认模型', value: CODEX_DEFAULT_MODEL_VALUE },
-    ...(configuredModel ? [{ label: configuredModel, value: configuredModel }] : [])
-  ], [configuredModel])
+    { label: '默认模型（跟随 Codex）', value: CODEX_DEFAULT_MODEL_VALUE },
+    ...models.map((model) => ({ label: model.displayName, value: model.model }))
+  ], [models])
+
+  async function loadModels(): Promise<void> {
+    if (!window.forgeDesk || loadingModelsRef.current) return
+    const requestId = ++modelsRequestIdRef.current
+    loadingModelsRef.current = true
+    setLoadingModels(true)
+    try {
+      const nextModels = await window.forgeDesk.listCodexModels()
+      if (requestId !== modelsRequestIdRef.current) return
+      setModels(nextModels)
+      setModelsError(nextModels.length ? '' : 'Codex 暂未返回可选模型，可使用默认模型；重新打开下拉框重试。')
+      setSelectedModel((current) => nextModels.some((model) => model.model === current) ? current : CODEX_DEFAULT_MODEL_VALUE)
+    } catch (error) {
+      if (requestId !== modelsRequestIdRef.current) return
+      setModels([])
+      setSelectedModel(CODEX_DEFAULT_MODEL_VALUE)
+      setModelsError(`${getErrorMessage(error, '读取 Codex 模型列表失败')}；可使用默认模型，重新打开下拉框重试。`)
+    } finally {
+      if (requestId === modelsRequestIdRef.current) {
+        loadingModelsRef.current = false
+        setLoadingModels(false)
+      }
+    }
+  }
 
   async function refresh(): Promise<void> {
     if (!window.forgeDesk) {
@@ -597,20 +627,11 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded 
   }, [viewMode])
 
   useEffect(() => {
-    let active = true
-    const loadModel = async (): Promise<void> => {
-      try {
-        const settings = await window.forgeDesk?.getAiSettings()
-        if (!active) return
-        const model = settings?.model?.trim() || ''
-        setConfiguredModel(model)
-        setSelectedModel(model || CODEX_DEFAULT_MODEL_VALUE)
-      } catch {
-        if (active) setConfiguredModel('')
-      }
+    void loadModels()
+    return () => {
+      modelsRequestIdRef.current += 1
+      loadingModelsRef.current = false
     }
-    loadModel().catch(() => undefined)
-    return () => { active = false }
   }, [])
 
   useEffect(() => {
@@ -1024,18 +1045,24 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded 
                       <Typography.Text type="secondary">Enter 发送 · Shift + Enter 换行</Typography.Text>
                     </div>
                     <div className="codex-session-composer-trailing">
-                      <div className="codex-session-model-picker">
-                        <ThunderboltOutlined />
-                        <Select
-                          aria-label="选择模型"
-                          bordered={false}
-                          className="codex-session-model-select"
-                          disabled={isRunning || sending}
-                          options={modelOptions}
-                          onChange={(value: string) => setSelectedModel(value)}
-                          value={selectedModel}
-                        />
-                      </div>
+                      <Tooltip title={modelsError || '模型列表来自 Codex；默认模型跟随 Codex 配置。'}>
+                        <div className="codex-session-model-picker">
+                          {modelsError ? <WarningOutlined aria-label={modelsError} /> : <ThunderboltOutlined />}
+                          <Select
+                            aria-label="选择 Codex 模型"
+                            bordered={false}
+                            className="codex-session-model-select"
+                            disabled={isRunning || sending}
+                            loading={loadingModels}
+                            status={modelsError ? 'warning' : undefined}
+                            popupMatchSelectWidth={260}
+                            options={modelOptions}
+                            onDropdownVisibleChange={(open) => { if (open) void loadModels() }}
+                            onChange={(value: string) => setSelectedModel(value)}
+                            value={selectedModel}
+                          />
+                        </div>
+                      </Tooltip>
                       <Tooltip title="语音输入暂未接入">
                         <Button type="text" icon={<AudioOutlined />} aria-label="语音输入" disabled />
                       </Tooltip>

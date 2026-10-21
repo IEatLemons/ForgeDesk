@@ -51,9 +51,19 @@ body:has(.workspace-production-root.with-titlebar) .ant-drawer { top:var(--app-t
 .workspace-list-row p { color:#7b8581;font-size:12px;margin:7px 0 0;overflow-wrap:anywhere; }
 .workspace-list-row strong { overflow-wrap:anywhere; }
 .workspace-toolbar { display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:20px; }
-.workspace-terminal-host { border-top:1px solid #e4e8ef;height:290px;min-height:160px;display:flex;flex-direction:column; }
+.workspace-terminal-host { position:relative;flex-shrink:0;border-top:1px solid var(--terminal-panel-border);min-height:160px;min-width:0;display:flex;flex-direction:column;background:var(--terminal-panel-bg); }
+.workspace-terminal-host.is-fullscreen { position:fixed;inset:0 0 var(--app-status-bar-height,24px);z-index:900;border-top:0; }
+.workspace-production-root.with-titlebar .workspace-terminal-host.is-fullscreen { top:var(--app-titlebar-height,40px); }
+.workspace-terminal-resize-handle { position:absolute;z-index:2;top:-4px;left:0;right:0;height:8px;cursor:ns-resize;touch-action:none; }
+.workspace-terminal-resize-handle::after { content:'';position:absolute;inset:3px 0;background:transparent;transition:background 120ms; }
+.workspace-terminal-resize-handle:hover::after,.workspace-terminal-resize-handle:focus-visible::after,.workspace-terminal-host.is-resizing .workspace-terminal-resize-handle::after { background:var(--primary); }
+.workspace-terminal-resize-handle:focus-visible { outline:2px solid var(--primary);outline-offset:-2px; }
+.workspace-terminal-host.is-resizing { user-select:none; }
+.workspace-terminal-host.is-resizing .workspace-terminal-body { pointer-events:none; }
 .workspace-terminal-host[hidden] { display:none; }
-.workspace-terminal-heading { display:flex;align-items:center;justify-content:space-between;padding:8px 20px;background:#fff; }
+.workspace-terminal-heading { display:flex;flex-shrink:0;align-items:center;justify-content:space-between;gap:12px;padding:8px 20px;background:var(--terminal-panel-header-bg); }
+.workspace-terminal-heading > .ant-typography { min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis; }
+.workspace-terminal-heading > .ant-space { flex-shrink:0; }
 .workspace-terminal-host .terminal-workspace { flex:1;min-height:0;height:100%; }
 .workspace-terminal-body { flex:1;min-height:0;overflow:hidden; }
 .workspace-mobile-button { display:none; }
@@ -122,7 +132,7 @@ body:has(.workspace-production-root.with-titlebar) .ant-drawer { top:var(--app-t
 [data-theme='dark'] .workspace-topbar,[data-theme='dark'] .workspace-panel,[data-theme='dark'] .workspace-stat-grid > button,[data-theme='dark'] .workspace-stat-grid > div,[data-theme='dark'] .workspace-terminal-heading { background:#101721;border-color:#263244; }
 [data-theme='dark'] .workspace-sidebar-footer,[data-theme='dark'] .workspace-list-row,[data-theme='dark'] .workspace-secondary-directory,[data-theme='dark'] .workspace-project-switch { border-color:#263244; }
 @media(max-width:1000px) { .workspace-content { padding:22px 18px; }.workspace-sidebar { width:210px; } }
-@media(max-width:800px) { .workspace-sidebar { display:none; }.workspace-mobile-button { display:inline-flex; }.workspace-stat-grid { grid-template-columns:1fr;gap:12px; }.workspace-topbar { padding:0 10px; }.workspace-topbar .ant-breadcrumb li:not(:last-child) { display:none; }.workspace-topbar .ant-breadcrumb { margin-left:4px; }.workspace-topbar .ant-breadcrumb li:last-child { overflow:hidden;text-overflow:ellipsis;max-width:130px; }.workspace-page-heading { align-items:flex-start;flex-direction:column;gap:14px; }.workspace-list-row { flex-wrap:wrap; }.workspace-terminal-host { height:260px; }.workspace-content { padding:20px 14px; } }
+@media(max-width:800px) { .workspace-sidebar { display:none; }.workspace-mobile-button { display:inline-flex; }.workspace-stat-grid { grid-template-columns:1fr;gap:12px; }.workspace-topbar { padding:0 10px; }.workspace-topbar .ant-breadcrumb li:not(:last-child) { display:none; }.workspace-topbar .ant-breadcrumb { margin-left:4px; }.workspace-topbar .ant-breadcrumb li:last-child { overflow:hidden;text-overflow:ellipsis;max-width:130px; }.workspace-page-heading { align-items:flex-start;flex-direction:column;gap:14px; }.workspace-list-row { flex-wrap:wrap; }.workspace-content { padding:20px 14px; } }
 @media(max-width:800px) and (min-width:560px) { .workspace-stat-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(max-width:1100px) { .repository-workspace-heading { flex-wrap:wrap; }.repository-workspace-identity { flex-basis:100%; }.repository-workspace-actions { margin-left:40px; }.repository-branches-panel { gap:16px; } }
 @media(max-width:800px) { .repository-directory-row { gap:14px;flex-wrap:wrap;padding:16px; }.repository-directory-info { flex-basis:100%; }.repository-directory-shortcuts { margin-left:auto; }.repository-workspace-branch { width:210px;max-width:45%; }.repository-workspace-actions { margin-left:0; }.repository-workspace-location { margin-left:0; }.repository-branches-panel { grid-template-columns:1fr; }.repository-workspace-picker { max-width:200px; } }
