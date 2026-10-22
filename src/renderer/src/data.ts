@@ -1454,6 +1454,8 @@ export type ServiceConnection = {
   name: string
   token: string
   tokenConfigured: boolean
+  authMethod?: 'token' | 'oauth'
+  oauth?: import('../../shared/railway-oauth').RailwayOAuthSummary
   teamId: string
   workspaceId: string
   railwayTokenType: RailwayTokenType
@@ -1470,6 +1472,7 @@ export type ServiceConnectionInput = {
   teamId?: string
   workspaceId?: string
   railwayTokenType?: RailwayTokenType
+  authMethod?: 'token' | 'oauth'
 }
 
 export type ProjectServiceEnvironment = {

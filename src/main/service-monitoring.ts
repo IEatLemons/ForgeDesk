@@ -1,3 +1,5 @@
+import { getRailwayOAuthManager, migrateRailwayOAuthTable } from './railway-oauth.js'
+import type { RailwayOAuthSummary } from '../shared/railway-oauth.js'
 import {
   addVercelProjectDomain,
   cancelRailwayDeployment,
@@ -14,7 +16,7 @@ import {
   promoteVercelDeployment,
   readRailwayDeployment,
   readRailwayDeploymentLogs,
-  readRailwayEnvironmentLogs,
+  readRailwayRuntimeLogs,
   readVercelDeploymentLogs,
   readVercelEnvVar,
   readVercelRuntimeLogs,
@@ -77,6 +79,7 @@ export type ServiceConnectionInput = {
   teamId?: string
   workspaceId?: string
   railwayTokenType?: RailwayTokenType
+  authMethod?: 'token' | 'oauth'
 }
 
 export type ServiceConnectionRecord = {
@@ -86,6 +89,8 @@ export type ServiceConnectionRecord = {
   name: string
   token: string
   tokenConfigured: boolean
+  authMethod?: 'token' | 'oauth'
+  oauth?: RailwayOAuthSummary
   teamId: string
   workspaceId: string
   railwayTokenType: RailwayTokenType
@@ -571,6 +576,9 @@ export function migrateServiceMonitoringTables(db: DatabaseLike): void {
     CREATE INDEX IF NOT EXISTS idx_project_service_bindings_project ON project_service_bindings(project_id);
   `)
 
+  addColumnIfMissing(db, 'global_service_connections', 'auth_method', "TEXT NOT NULL DEFAULT 'token'")
+  migrateRailwayOAuthTable(db)
+
   addColumnIfMissing(db, 'project_services', 'external_project_name', "TEXT NOT NULL DEFAULT ''")
   addColumnIfMissing(db, 'project_services', 'external_project_alias', "TEXT NOT NULL DEFAULT ''")
   addColumnIfMissing(db, 'global_services', 'external_project_name', "TEXT NOT NULL DEFAULT ''")
@@ -587,8 +595,10 @@ function addColumnIfMissing(db: DatabaseLike, table: string, column: string, def
   }
 }
 
-function mapConnectionRow(row: Record<string, unknown>): ServiceConnectionRecord {
+function mapConnectionRow(row: Record<string, unknown>, db?: DatabaseLike): ServiceConnectionRecord {
   const token = String(row.token ?? '')
+  const authMethod = row.auth_method === 'oauth' && row.provider === 'railway' ? 'oauth' : 'token'
+  const oauth = authMethod === 'oauth' && db ? getRailwayOAuthManager(db).summary(String(row.id)) : undefined
 
   return {
     id: String(row.id),
@@ -596,7 +606,9 @@ function mapConnectionRow(row: Record<string, unknown>): ServiceConnectionRecord
     provider: normalizeProvider(String(row.provider)),
     name: String(row.name ?? ''),
     token: '',
-    tokenConfigured: Boolean(token),
+    tokenConfigured: authMethod === 'oauth' ? oauth?.status === 'connected' : Boolean(token),
+    authMethod,
+    ...(oauth ? { oauth } : {}),
     teamId: String(row.team_id ?? ''),
     workspaceId: String(row.workspace_id ?? ''),
     railwayTokenType: normalizeRailwayTokenType(row.railway_token_type),
@@ -605,10 +617,16 @@ function mapConnectionRow(row: Record<string, unknown>): ServiceConnectionRecord
   }
 }
 
-function mapConnectionSecretRow(row: Record<string, unknown>): ServiceConnectionRecord {
+type ServiceConnectionSecret = ServiceConnectionRecord & { resolveToken?: () => Promise<string>; onUnauthorized?: () => void }
+
+function mapConnectionSecretRow(row: Record<string, unknown>, db: DatabaseLike): ServiceConnectionSecret {
   return {
-    ...mapConnectionRow(row),
-    token: String(row.token ?? '')
+    ...mapConnectionRow(row, db),
+    token: row.auth_method === 'oauth' ? '' : String(row.token ?? ''),
+    ...(row.auth_method === 'oauth' ? {
+      resolveToken: () => getRailwayOAuthManager(db).accessToken(String(row.id)),
+      onUnauthorized: () => getRailwayOAuthManager(db).disconnect(String(row.id))
+    } : {})
   }
 }
 
@@ -616,13 +634,13 @@ export function listServiceConnections(db: DatabaseLike): ServiceConnectionRecor
   return db
     .prepare('SELECT * FROM global_service_connections ORDER BY created_at ASC')
     .all()
-    .map((row) => mapConnectionRow(row as Record<string, unknown>))
+    .map((row) => mapConnectionRow(row as Record<string, unknown>, db))
 }
 
-function getServiceConnectionSecret(db: DatabaseLike, connectionId: string): ServiceConnectionRecord | null {
+function getServiceConnectionSecret(db: DatabaseLike, connectionId: string): ServiceConnectionSecret | null {
   const row = db.prepare('SELECT * FROM global_service_connections WHERE id = ?').get(connectionId) as Record<string, unknown> | undefined
 
-  return row ? mapConnectionSecretRow(row) : null
+  return row ? mapConnectionSecretRow(row, db) : null
 }
 
 export function saveServiceConnection(db: DatabaseLike, input: ServiceConnectionInput): ServiceConnectionRecord {
@@ -630,7 +648,8 @@ export function saveServiceConnection(db: DatabaseLike, input: ServiceConnection
   const name = trimText(input.name) || (provider === 'vercel' ? 'Vercel' : 'Railway')
   const editing = input.id ? getServiceConnectionSecret(db, input.id) : null
   const id = editing?.id ?? input.id ?? createId('service-connection')
-  const token = input.token === undefined ? editing?.token ?? '' : trimText(input.token)
+  const authMethod = provider === 'railway' ? input.authMethod ?? editing?.authMethod ?? 'token' : 'token'
+  const token = authMethod === 'oauth' ? '' : input.token === undefined ? editing?.token ?? '' : trimText(input.token)
   const now = nowIso()
 
   if (editing) {
@@ -650,13 +669,16 @@ export function saveServiceConnection(db: DatabaseLike, input: ServiceConnection
     ).run(id, provider, name, token, trimText(input.teamId), trimText(input.workspaceId), normalizeRailwayTokenType(input.railwayTokenType), now, now)
   }
 
+  db.prepare('UPDATE global_service_connections SET auth_method = ? WHERE id = ?').run(authMethod, id)
+  if (editing?.authMethod === 'oauth' && authMethod !== 'oauth') getRailwayOAuthManager(db).disconnect(id, true)
+
   const row = db.prepare('SELECT * FROM global_service_connections WHERE id = ?').get(id)
 
   if (!row) {
     throw new Error('服务连接保存失败')
   }
 
-  return mapConnectionRow(row as Record<string, unknown>)
+  return mapConnectionRow(row as Record<string, unknown>, db)
 }
 
 function deleteGlobalService(db: DatabaseLike, serviceId: string): void {
@@ -674,6 +696,7 @@ export function deleteServiceConnection(db: DatabaseLike, connectionId: string):
   if (!connection) {
     throw new Error('服务连接不存在')
   }
+  if (connection.authMethod === 'oauth') getRailwayOAuthManager(db).disconnect(connectionId, true)
 
   const services = db.prepare('SELECT id FROM global_services WHERE connection_id = ?').all(connectionId) as Array<Record<string, unknown>>
 
@@ -1160,7 +1183,7 @@ export async function createVercelProjectDeploymentService(
   fetcher: ServiceProviderFetch = fetch
 ): Promise<ProjectServiceRecord> {
   const connection = getServiceConnectionSecret(db, input.connectionId)
-  if (!connection?.token) throw new Error('请先配置 Vercel Token')
+  if (!connection?.token && connection?.authMethod !== 'oauth') throw new Error('请先配置 Vercel Token')
 
   const created = await createVercelProject(connection, {
     name: input.name,
@@ -1389,7 +1412,7 @@ export async function syncServiceConnection(db: DatabaseLike, connectionId: stri
     throw new Error('服务连接不存在')
   }
 
-  if (!connection.token) {
+  if (!connection.token && connection.authMethod !== 'oauth') {
     throw new Error('请先配置平台 Token')
   }
 
@@ -1403,7 +1426,7 @@ export async function syncServiceConnection(db: DatabaseLike, connectionId: stri
 
 type VercelServiceContext = {
   service: ProjectServiceRecord
-  connection: ServiceConnectionRecord
+  connection: ServiceConnectionSecret
   projectId: string
 }
 
@@ -1430,7 +1453,7 @@ function getVercelServiceContext(db: DatabaseLike, serviceId: string): VercelSer
 
   const connection = getServiceConnectionSecret(db, service.connectionId)
 
-  if (!connection?.token) {
+  if (!connection?.token && connection?.authMethod !== 'oauth') {
     throw new Error('请先配置 Vercel Token')
   }
 
@@ -1462,7 +1485,7 @@ function getRailwayServiceContext(db: DatabaseLike, serviceId: string): RailwayS
 
   const connection = getServiceConnectionSecret(db, service.connectionId)
 
-  if (!connection?.token) {
+  if (!connection?.token && connection?.authMethod !== 'oauth') {
     throw new Error('请先配置 Railway Token')
   }
 
@@ -1800,7 +1823,7 @@ export async function listServiceEnvironmentLogs(
   if (service.provider === 'railway') {
     const connection = getServiceConnectionSecret(db, service.connectionId)
 
-    if (!connection?.token) {
+    if (!connection?.token && connection?.authMethod !== 'oauth') {
       throw new Error('请先配置 Railway Token')
     }
 
@@ -1813,7 +1836,7 @@ export async function listServiceEnvironmentLogs(
 
   const connection = getServiceConnectionSecret(db, service.connectionId)
 
-  if (!connection?.token) {
+  if (!connection?.token && connection?.authMethod !== 'oauth') {
     throw new Error('请先配置 Vercel Token')
   }
 
@@ -1835,17 +1858,17 @@ export async function listServiceRuntimeLogs(
   const environment = service.environments.find((item) => item.name === environmentName)
 
   if (service.provider === 'railway') {
-    if (!environment?.externalEnvironmentId) {
+    if (!environment?.latestDeploymentId) {
       return []
     }
 
     const connection = getServiceConnectionSecret(db, service.connectionId)
 
-    if (!connection?.token) {
+    if (!connection?.token && connection?.authMethod !== 'oauth') {
       throw new Error('请先配置 Railway Token')
     }
 
-    return readRailwayEnvironmentLogs(connection, environment.externalEnvironmentId, fetcher)
+    return readRailwayRuntimeLogs(connection, environment.latestDeploymentId, fetcher)
   }
 
   const { connection, projectId } = getVercelServiceContext(db, serviceId)

@@ -6,6 +6,9 @@ export type ServiceProviderFetch = (input: string | URL, init?: RequestInit) => 
 
 export type ServiceProviderConnection = {
   token: string
+  authMethod?: 'token' | 'oauth'
+  resolveToken?: () => Promise<string>
+  onUnauthorized?: () => void
   teamId?: string
   workspaceId?: string
   railwayTokenType?: RailwayTokenType
@@ -144,7 +147,7 @@ export type VercelDomainConfig = {
   raw: Record<string, unknown>
 }
 
-const railwayGraphqlEndpoint = 'https://backboard.railway.app/graphql/v2'
+const railwayGraphqlEndpoint = 'https://backboard.railway.com/graphql/v2'
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
@@ -910,7 +913,7 @@ function getRailwayHeaders(connection: ServiceProviderConnection): Record<string
     'Content-Type': 'application/json'
   }
 
-  if (connection.railwayTokenType === 'project') {
+  if (connection.authMethod !== 'oauth' && connection.railwayTokenType === 'project') {
     headers['Project-Access-Token'] = connection.token
   } else {
     headers.Authorization = `Bearer ${connection.token}`
@@ -947,21 +950,25 @@ async function readRailwayGraphql(
   variables: Record<string, unknown>,
   fetcher: ServiceProviderFetch
 ): Promise<Record<string, unknown>> {
-  const json = asRecord(
-    await readJsonResponse(
-      await fetcher(railwayGraphqlEndpoint, {
-        method: 'POST',
-        headers: getRailwayHeaders(connection),
-        body: JSON.stringify({ query, variables })
-      }),
-      context
-    )
-  )
-  const errors = asArray(json.errors).map((error) => stringField(asRecord(error), 'message')).filter(Boolean)
+  const token = connection.resolveToken ? await connection.resolveToken() : connection.token
+  const response = await fetcher(railwayGraphqlEndpoint, {
+    method: 'POST', headers: getRailwayHeaders({ ...connection, token }),
+    signal: AbortSignal.timeout(30_000), body: JSON.stringify({ query, variables })
+  })
+  if (response.status === 401 && connection.authMethod === 'oauth') {
+    connection.onUnauthorized?.()
+    throw new Error('Railway 授权已失效，需要重新登录')
+  }
+  // Error bodies can contain request details; never forward credentials to IPC.
+  if (!response.ok) throw new Error(`${context}失败：HTTP ${response.status}`)
+  const json = asRecord(await response.json())
+  const errors = asArray(json.errors).map((error) => stringField(asRecord(error), 'message'))
+    .filter(Boolean).map((message) => token ? message.split(token).join('[已隐藏]') : message)
 
   if (errors.length > 0) {
     throw new Error(`${context}失败：${errors.join('; ')}`)
   }
+  if (!json.data || typeof json.data !== 'object') throw new Error(`${context}失败：Railway 返回无效数据`)
 
   return asRecord(json.data)
 }
@@ -1177,6 +1184,26 @@ async function listRailwayAccountProjects(connection: ServiceProviderConnection,
 }
 
 async function listRailwayProjects(connection: ServiceProviderConnection, fetcher: ServiceProviderFetch): Promise<Record<string, unknown>[]> {
+  if (connection.authMethod === 'oauth') {
+    const data = await readRailwayGraphql(connection, '读取 Railway 授权项目', `
+      query ForgeDeskRailwayOAuthProjects {
+        externalWorkspaces { id projects { id name } }
+      }`, {}, fetcher)
+    const ids = new Set(asArray(data.externalWorkspaces).flatMap((workspace) =>
+      asArray(asRecord(workspace).projects).map((project) => stringField(asRecord(project), 'id')).filter(Boolean)))
+    const projects: Record<string, unknown>[] = []
+    for (const id of ids) {
+      const detail = await readRailwayGraphql(connection, '读取 Railway 授权项目详情', `
+        query ForgeDeskRailwayOAuthProject($id: String!) {
+          project(id: $id) {
+            id name services { edges { node { id name } } }
+            environments { edges { node { id name } } }
+          }
+        }`, { id }, fetcher)
+      if (stringField(asRecord(detail.project), 'id')) projects.push(asRecord(detail.project))
+    }
+    return projects
+  }
   const tokenType = getRailwayTokenType(connection)
 
   if (tokenType === 'project') {
@@ -1201,6 +1228,7 @@ async function listRailwayProjects(connection: ServiceProviderConnection, fetche
 }
 
 function getRailwayEmptySyncMessage(connection: ServiceProviderConnection): string {
+  if (connection.authMethod === 'oauth') return 'Railway 未同步到服务，请重新授权并选择包含服务的项目。'
   const tokenType = getRailwayTokenType(connection)
   const workspaceId = connection.workspaceId?.trim()
 
@@ -1528,7 +1556,7 @@ export async function readRailwayDeploymentLogs(
     '读取 Railway 部署日志',
     `
       query ForgeDeskRailwayDeploymentLogs($deploymentId: String!, $limit: Int) {
-        deploymentLogs(deploymentId: $deploymentId, limit: $limit) {
+        buildLogs(deploymentId: $deploymentId, limit: $limit) {
           timestamp
           severity
           message
@@ -1539,7 +1567,19 @@ export async function readRailwayDeploymentLogs(
     fetcher
   )
 
-  return asArray(data.deploymentLogs).map((log) => normalizeRailwayLogLine(log, 'deployment'))
+  return asArray(data.buildLogs).map((log) => normalizeRailwayLogLine(log, 'build'))
+}
+
+export async function readRailwayRuntimeLogs(
+  connection: ServiceProviderConnection,
+  deploymentId: string,
+  fetcher: ServiceProviderFetch = fetch
+): Promise<ProviderDeploymentLogLine[]> {
+  const data = await readRailwayGraphql(connection, '读取 Railway 运行日志', `
+    query ForgeDeskRailwayRuntimeLogs($deploymentId: String!, $limit: Int) {
+      deploymentLogs(deploymentId: $deploymentId, limit: $limit) { timestamp severity message }
+    }`, { deploymentId, limit: 100 }, fetcher)
+  return asArray(data.deploymentLogs).map((log) => normalizeRailwayLogLine(log, 'runtime'))
 }
 
 export async function readRailwayEnvironmentLogs(

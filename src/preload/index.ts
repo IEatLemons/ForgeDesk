@@ -1,3 +1,4 @@
+import type { RailwayOAuthLoginInput } from '../shared/railway-oauth'
 import { contextBridge, ipcRenderer } from 'electron'
 import { parseGitIpcPayload } from './git-ipc'
 import type { ProgressAiInput, ProgressCommand, ProgressSnapshotQuery, ProgressHistoryQuery } from '../shared/project-progress'
@@ -159,6 +160,9 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   previewRedisValue: (connectionId: string, input: { key: string; limit?: number }) => ipcRenderer.invoke('data-source:redis:value', connectionId, input),
   listS3Objects: (connectionId: string, input?: { prefix?: string; continuationToken?: string; limit?: number }) => ipcRenderer.invoke('data-source:s3:objects', connectionId, input),
   previewS3Object: (connectionId: string, input: { key: string }) => ipcRenderer.invoke('data-source:s3:object', connectionId, input),
+  loginRailwayOAuth: (input: RailwayOAuthLoginInput) => ipcRenderer.invoke('service:railway:oauth:login', input),
+  cancelRailwayOAuth: () => ipcRenderer.invoke('service:railway:oauth:cancel'),
+  disconnectRailwayOAuth: (connectionId: string) => ipcRenderer.invoke('service:railway:oauth:disconnect', connectionId),
   listServiceConnections: () => ipcRenderer.invoke('service:connections:list'),
   saveServiceConnection: (input: ServiceConnectionInput) => ipcRenderer.invoke('service:connection:save', input),
   deleteServiceConnection: (connectionId: string) => ipcRenderer.invoke('service:connection:delete', connectionId),

@@ -1053,6 +1053,8 @@ type ServiceConnectionRecord = {
   name: string
   token: string
   tokenConfigured: boolean
+  authMethod?: 'token' | 'oauth'
+  oauth?: import('../../shared/railway-oauth').RailwayOAuthSummary
   teamId: string
   workspaceId: string
   railwayTokenType: RailwayTokenType
@@ -1069,6 +1071,7 @@ type ServiceConnectionInput = {
   teamId?: string
   workspaceId?: string
   railwayTokenType?: RailwayTokenType
+  authMethod?: 'token' | 'oauth'
 }
 
 type ProjectServiceEnvironmentRecord = {
@@ -2993,6 +2996,9 @@ interface Window {
     previewRedisValue: (connectionId: string, input: { key: string; limit?: number }) => Promise<DataSourceRedisValuePreview>
     listS3Objects: (connectionId: string, input?: { prefix?: string; continuationToken?: string; limit?: number }) => Promise<DataSourceS3ListResult>
     previewS3Object: (connectionId: string, input: { key: string }) => Promise<DataSourceS3ObjectPreview>
+    loginRailwayOAuth: (input: import('../../shared/railway-oauth').RailwayOAuthLoginInput) => Promise<ServiceConnectionRecord>
+    cancelRailwayOAuth: () => Promise<void>
+    disconnectRailwayOAuth: (connectionId: string) => Promise<ServiceConnectionRecord>
     listServiceConnections: () => Promise<ServiceConnectionRecord[]>
     saveServiceConnection: (input: ServiceConnectionInput) => Promise<ServiceConnectionRecord>
     deleteServiceConnection: (connectionId: string) => Promise<ServiceConnectionRecord[]>

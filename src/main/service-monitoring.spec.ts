@@ -117,6 +117,13 @@ function createDatabase(): TestDatabase {
         }
       }
 
+      if (sql.includes('SET auth_method = ?')) {
+        return { all: () => [], get: () => undefined, run: (authMethod, id) => {
+          const connection = serviceConnections.find((item) => item.id === id)
+          if (connection) connection.auth_method = authMethod
+        } }
+      }
+
       if (sql.includes('UPDATE global_service_connections')) {
         return {
           all: () => [],
@@ -1156,22 +1163,22 @@ describe('service monitoring storage', () => {
       const body = JSON.parse(String(init?.body ?? '{}')) as { query: string; variables: Record<string, unknown> }
       requests.push(body.query)
 
+      if (body.query.includes('buildLogs(')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ data: { buildLogs: [{ timestamp: '2026-06-23T00:00:00.000Z', severity: 'info', message: 'build ready' }] } }),
+          text: async () => '{}'
+        } as Response
+      }
+
       if (body.query.includes('deploymentLogs(')) {
         return {
           ok: true,
           status: 200,
           statusText: 'OK',
-          json: async () => ({ data: { deploymentLogs: [{ timestamp: '2026-06-23T00:00:00.000Z', severity: 'info', message: 'build ready' }] } }),
-          text: async () => '{}'
-        } as Response
-      }
-
-      if (body.query.includes('environmentLogs(')) {
-        return {
-          ok: true,
-          status: 200,
-          statusText: 'OK',
-          json: async () => ({ data: { environmentLogs: [{ timestamp: '2026-06-23T00:01:00.000Z', severity: 'info', message: 'runtime ready' }] } }),
+          json: async () => ({ data: { deploymentLogs: [{ timestamp: '2026-06-23T00:01:00.000Z', severity: 'info', message: 'runtime ready' }] } }),
           text: async () => '{}'
         } as Response
       }

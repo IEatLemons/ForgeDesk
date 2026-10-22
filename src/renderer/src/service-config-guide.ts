@@ -7,6 +7,7 @@ export type ServiceProviderGuide = {
   docsUrl: string
   dashboardUrl: string
   projectTokenDocsUrl?: string
+  oauthRegistrationUrl?: string
   steps: string[]
 }
 
@@ -30,6 +31,7 @@ const providerGuides: Record<ServiceProviderGuideProvider, ServiceProviderGuide>
     docsUrl: 'https://docs.railway.com/integrations/api',
     dashboardUrl: 'https://railway.com/dashboard',
     projectTokenDocsUrl: 'https://docs.railway.com/integrations/api#project-token',
+    oauthRegistrationUrl: 'https://docs.railway.com/integrations/oauth/creating-an-app',
     steps: [
       '账号或 Workspace Token 在 Account Tokens 页面创建，Token 类型选择 Account 或 Workspace。',
       'Account Token 不填 Workspace ID 时会同步个人项目并尝试发现可访问 Workspace；同步指定 Workspace 项目时请填写 Workspace ID。',

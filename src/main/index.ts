@@ -1,4 +1,6 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, Notification, powerMonitor, shell, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, Notification, powerMonitor, safeStorage, shell, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron'
+import { RailwayOAuthManager, getRailwayOAuthManager } from './railway-oauth'
+import type { RailwayOAuthLoginInput } from '../shared/railway-oauth'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { execFile, spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
@@ -2318,6 +2320,7 @@ function getDatabase(): Database.Database {
   database.pragma('journal_mode = WAL')
   database.pragma('foreign_keys = ON')
   migrateDatabase(database)
+  new RailwayOAuthManager(database, { codec: safeStorage, openExternal: (url) => shell.openExternal(url) })
   return database
 }
 
@@ -7722,6 +7725,36 @@ ipcMain.handle(
 
 ipcMain.handle('service:connections:list', async (): Promise<ServiceConnectionRecord[]> => listServiceConnectionRecords(getDatabase()))
 
+ipcMain.handle('service:railway:oauth:login', async (_event, input: RailwayOAuthLoginInput): Promise<ServiceConnectionRecord> => {
+  if (!input || typeof input.clientId !== 'string' || typeof input.name !== 'string') throw new Error('Railway 登录参数无效')
+  const db = getDatabase()
+  const existing = input.connectionId ? listServiceConnectionRecords(db).find((connection) => connection.id === input.connectionId) : undefined
+  if (input.connectionId && existing?.provider !== 'railway') throw new Error('Railway 连接不存在')
+  const manager = getRailwayOAuthManager(db)
+  const grant = await manager.login(input.clientId)
+  // A connection can be deleted or edited while the browser is open.
+  if (existing && !listServiceConnectionRecords(db).some((connection) => connection.id === existing.id && connection.updatedAt === existing.updatedAt)) {
+    throw new Error('Railway 连接已变更，请重新登录')
+  }
+  return db.transaction(() => {
+    const connection = saveServiceConnectionRecord(db, {
+      id: existing?.id, provider: 'railway', name: input.name, authMethod: 'oauth', railwayTokenType: 'account'
+    })
+    manager.save(connection.id, grant)
+    return listServiceConnectionRecords(db).find((item) => item.id === connection.id)!
+  })()
+})
+
+ipcMain.handle('service:railway:oauth:cancel', () => getRailwayOAuthManager(getDatabase()).cancelLogin())
+
+ipcMain.handle('service:railway:oauth:disconnect', (_event, connectionId: string): ServiceConnectionRecord => {
+  const db = getDatabase()
+  const connection = listServiceConnectionRecords(db).find((item) => item.id === connectionId)
+  if (!connection || connection.provider !== 'railway' || connection.authMethod !== 'oauth') throw new Error('Railway OAuth 连接不存在')
+  getRailwayOAuthManager(db).disconnect(connectionId)
+  return listServiceConnectionRecords(db).find((item) => item.id === connectionId)!
+})
+
 ipcMain.handle('service:connection:save', async (_event, input: ServiceConnectionInput): Promise<ServiceConnectionRecord> => saveServiceConnectionRecord(getDatabase(), input))
 
 ipcMain.handle('service:connection:delete', async (_event, connectionId: string): Promise<ServiceConnectionRecord[]> =>
@@ -9343,6 +9376,7 @@ app.on('before-quit', (event) => {
 })
 
 app.on('will-quit', () => {
+  if (database) getRailwayOAuthManager(database).cancelLogin()
   releaseSingleProcessFileLock?.()
   resourceMonitorService.stop()
   if (storageGovernanceTimer) clearInterval(storageGovernanceTimer)

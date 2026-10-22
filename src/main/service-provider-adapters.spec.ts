@@ -17,6 +17,7 @@ import {
   readRailwayDeployment,
   readRailwayDeploymentLogs,
   readRailwayEnvironmentLogs,
+  readRailwayRuntimeLogs,
   readVercelEnvVar,
   readVercelRuntimeLogs,
   redeployRailwayDeployment,
@@ -862,14 +863,14 @@ describe('service provider adapters', () => {
       const { query, variables } = parseGraphqlBody(init)
       requests.push(query)
 
-      if (query.includes('deploymentLogs(')) {
+      if (query.includes('buildLogs(')) {
         assert.equal(variables.deploymentId, 'dep_1')
-        return createJsonResponse({ data: { deploymentLogs: [{ timestamp: '2026-06-23T00:00:00.000Z', severity: 'info', message: 'build started' }] } })
+        return createJsonResponse({ data: { buildLogs: [{ timestamp: '2026-06-23T00:00:00.000Z', severity: 'info', message: 'build started' }] } })
       }
 
-      if (query.includes('environmentLogs(')) {
-        assert.equal(variables.environmentId, 'env_1')
-        return createJsonResponse({ data: { environmentLogs: [{ timestamp: '2026-06-23T00:01:00.000Z', severity: 'warn', message: 'runtime warning' }] } })
+      if (query.includes('deploymentLogs(')) {
+        assert.equal(variables.deploymentId, 'dep_1')
+        return createJsonResponse({ data: { deploymentLogs: [{ timestamp: '2026-06-23T00:01:00.000Z', severity: 'warn', message: 'runtime warning' }] } })
       }
 
       if (query.includes('variables(')) {
@@ -915,7 +916,7 @@ describe('service provider adapters', () => {
       fetcher
     )
     const buildLogs = await readRailwayDeploymentLogs({ token: 'railway-token', railwayTokenType: 'account' }, 'dep_1', fetcher)
-    const runtimeLogs = await readRailwayEnvironmentLogs({ token: 'railway-token', railwayTokenType: 'account' }, 'env_1', fetcher)
+    const runtimeLogs = await readRailwayRuntimeLogs({ token: 'railway-token', railwayTokenType: 'account' }, 'dep_1', fetcher)
 
     assert.equal(deployments[0].id, 'dep_1')
     assert.equal(deployments[0].commitSha, 'abc123')

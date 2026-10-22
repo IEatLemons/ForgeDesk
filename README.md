@@ -12,7 +12,7 @@ It organizes work around projects first, then repositories, people, environments
 - company Gitea and GitHub CI/CD same-branch alignment checks
 - Person and Git identity mapping
 - Environment management
-- Vercel and Railway provider placeholders
+- Vercel and Railway connections, deployment monitoring, and Railway Native OAuth
 - AI project daily report scaffold
 
 ## Tech Stack
@@ -26,6 +26,8 @@ It organizes work around projects first, then repositories, people, environments
 - chokidar
 - Zustand
 - ECharts
+
+Railway Native OAuth 注册、回调配置和 Token 兼容说明见 [Railway 对接指南](docs/railway-integration.md)。
 
 ## Development
 

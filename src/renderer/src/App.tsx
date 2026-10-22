@@ -1,3 +1,4 @@
+import { railwayOAuthRedirectUri } from '../../shared/railway-oauth'
 import {
   Alert,
   AutoComplete,
@@ -899,6 +900,8 @@ type RepositoryRemoteForm = {
 }
 
 type ServiceConnectionForm = {
+  authMethod?: 'token' | 'oauth'
+  clientId?: string
   provider: ServiceProviderType
   name: string
   token?: string
@@ -6779,7 +6782,9 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
       token: '',
       teamId: connection?.teamId ?? '',
       workspaceId: connection?.workspaceId ?? '',
-      railwayTokenType: connection?.railwayTokenType ?? 'workspace'
+      railwayTokenType: connection?.railwayTokenType ?? 'workspace',
+      authMethod: connection?.authMethod ?? (provider === 'railway' ? 'oauth' : 'token'),
+      clientId: connection?.oauth?.clientId ?? ''
     })
     setConnectionModalOpen(true)
   }
@@ -6794,20 +6799,23 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
     setSavingConnection(true)
 
     try {
-      await window.forgeDesk.saveServiceConnection({
-        id: editingConnection?.id,
-        provider: values.provider,
-        name: values.name.trim() || getServiceProviderLabel(values.provider),
-        token: token || undefined,
-        teamId: values.teamId,
-        workspaceId: values.workspaceId,
-        railwayTokenType: values.railwayTokenType
-      })
+      const savedConnection = values.provider === 'railway' && values.authMethod === 'oauth'
+        ? await window.forgeDesk.loginRailwayOAuth({ connectionId: editingConnection?.id, name: values.name, clientId: values.clientId ?? '' })
+        : await window.forgeDesk.saveServiceConnection({
+            id: editingConnection?.id,
+            provider: values.provider,
+            name: values.name.trim() || getServiceProviderLabel(values.provider),
+            token: token || undefined,
+            teamId: values.teamId,
+            workspaceId: values.workspaceId,
+            railwayTokenType: values.railwayTokenType,
+            authMethod: 'token'
+          })
       setConnectionModalOpen(false)
       setEditingConnection(null)
       connectionForm.resetFields()
       await loadServiceSettings()
-      message.success('服务连接已保存')
+      message.success(savedConnection.oauth && !savedConnection.oauth.persistent ? '已登录；系统安全存储不可用，重启后需要重新登录' : '服务连接已保存')
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
@@ -6833,6 +6841,7 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
       message.error(getErrorMessage(error))
     } finally {
       setSyncingConnectionId(null)
+      void window.forgeDesk.listServiceConnections().then(setConnections).catch(() => undefined)
     }
   }
 
@@ -6856,6 +6865,7 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
       message.error(getErrorMessage(error))
     } finally {
       setWorkingConnectionId(null)
+      void window.forgeDesk.listServiceConnections().then(setConnections).catch(() => undefined)
     }
   }
 
@@ -7064,10 +7074,10 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
     { title: '平台', dataIndex: 'provider', key: 'provider', width: 110, render: (provider) => <Tag>{getServiceProviderLabel(provider)}</Tag> },
     { title: '连接', dataIndex: 'name', key: 'name', render: (name) => <Typography.Text strong>{name}</Typography.Text> },
     {
-      title: 'Token',
+      title: '认证',
       key: 'token',
       width: 110,
-      render: (_, connection) => <Tag color={connection.tokenConfigured ? 'green' : 'red'}>{connection.tokenConfigured ? '已配置' : '未配置'}</Tag>
+      render: (_, connection) => <Tag color={connection.tokenConfigured ? 'green' : 'red'}>{connection.authMethod === 'oauth' ? connection.tokenConfigured ? 'OAuth 已登录' : '需要重新登录' : connection.tokenConfigured ? '已配置' : '未配置'}</Tag>
     },
     {
       title: '范围',
@@ -7077,7 +7087,7 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
         connection.provider === 'vercel' ? (
           <TableText value={connection.teamId || 'Personal'} />
         ) : (
-          <TableText value={connection.railwayTokenType === 'project' ? 'Project Token' : connection.workspaceId || connection.railwayTokenType} />
+          <TableText value={connection.authMethod === 'oauth' ? connection.oauth?.accountName || 'OAuth 所选项目' : connection.railwayTokenType === 'project' ? 'Project Token' : connection.workspaceId || connection.railwayTokenType} />
         )
     },
     {
@@ -7292,6 +7302,7 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
 
   const connectionProvider = Form.useWatch('provider', connectionForm) ?? editingConnection?.provider ?? 'vercel'
   const connectionRailwayTokenType = Form.useWatch('railwayTokenType', connectionForm) ?? editingConnection?.railwayTokenType ?? 'workspace'
+  const connectionAuthMethod = Form.useWatch('authMethod', connectionForm) ?? editingConnection?.authMethod ?? 'token'
   const connectionGuide = getServiceProviderGuide(connectionProvider)
   const serviceProvider = Form.useWatch('provider', serviceForm) ?? editingService?.provider ?? 'vercel'
   const serviceGuide = getServiceProviderGuide(serviceProvider)
@@ -7611,11 +7622,12 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
           <Modal
             title={editingConnection ? `编辑连接：${editingConnection.name}` : '新增服务连接'}
             open={connectionModalOpen}
-            okText="保存"
+            okText={connectionProvider === 'railway' && connectionAuthMethod === 'oauth' ? '登录并保存' : '保存'}
             cancelText="取消"
             confirmLoading={savingConnection}
             onOk={saveConnection}
             onCancel={() => {
+              if (savingConnection) void window.forgeDesk?.cancelRailwayOAuth().catch((error) => message.error(getErrorMessage(error)))
               setConnectionModalOpen(false)
               setEditingConnection(null)
               connectionForm.resetFields()
@@ -7626,6 +7638,7 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
                 <Col span={12}>
                   <Form.Item name="provider" label="平台" rules={[{ required: true, message: '请选择平台' }]}>
                     <Select
+                      disabled={savingConnection}
                       options={[
                         { label: 'Vercel', value: 'vercel' },
                         { label: 'Railway', value: 'railway' }
@@ -7635,10 +7648,41 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
                 </Col>
                 <Col span={12}>
                   <Form.Item name="name" label="连接名称" rules={[{ required: true, message: '请输入连接名称' }]}>
-                    <Input placeholder="Production" />
+                    <Input disabled={savingConnection} placeholder="Production" />
                   </Form.Item>
                 </Col>
               </Row>
+              {connectionProvider === 'railway' && (
+                <Form.Item name="authMethod" label="认证方式">
+                  <Select options={[{ label: 'Railway OAuth 登录', value: 'oauth' }, { label: 'API Token', value: 'token' }]} disabled={savingConnection} />
+                </Form.Item>
+              )}
+              {connectionProvider === 'railway' && connectionAuthMethod === 'oauth' ? (
+                <>
+                  <Form.Item name="clientId" label="Native Client ID" rules={[{ required: true, whitespace: true, message: '请输入 Railway Native Client ID' }]}>
+                    <Input disabled={savingConnection} placeholder="Workspace → Developer → Native OAuth App" />
+                  </Form.Item>
+                  <Alert type="info" showIcon message="使用系统浏览器登录 Railway" description={
+                    <Space direction="vertical">
+                      <Typography.Text>由 Workspace 管理员注册 Native 应用，将以下地址完整登记为 Redirect URI。登录时选择允许 ForgeDesk 管理的项目。</Typography.Text>
+                      <Typography.Text code copyable>{railwayOAuthRedirectUri}</Typography.Text>
+                      <Typography.Link href={connectionGuide.oauthRegistrationUrl} target="_blank" rel="noreferrer">Native 应用注册指引</Typography.Link>
+                      {savingConnection && <Typography.Text>正在等待浏览器授权，可点击“取消”终止登录。</Typography.Text>}
+                      {editingConnection?.oauth && <Typography.Text>{editingConnection.oauth.status === 'connected' ? `已登录：${editingConnection.oauth.accountName}` : '需要重新登录'}{editingConnection.oauth.status === 'connected' && !editingConnection.oauth.persistent ? '（当前会话有效，重启后需登录）' : ''}</Typography.Text>}
+                      {editingConnection?.authMethod === 'oauth' && (
+                        <Button disabled={savingConnection} onClick={async () => {
+                          try {
+                            const updated = await window.forgeDesk.disconnectRailwayOAuth(editingConnection.id)
+                            setEditingConnection(updated)
+                            await loadServiceSettings()
+                            message.success('OAuth 已断开，服务绑定已保留')
+                          } catch (error) { message.error(getErrorMessage(error)) }
+                        }}>断开 OAuth</Button>
+                      )}
+                    </Space>
+                  } />
+                </>
+              ) : <>
               <Form.Item name="token" label="Token">
                 <Input.Password placeholder={editingConnection?.tokenConfigured ? '已保存，留空不变' : '平台 API Token'} />
               </Form.Item>
@@ -7708,6 +7752,7 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
                   </Col>
                 </Row>
               )}
+              </>}
             </Form>
           </Modal>
 
