@@ -1,5 +1,6 @@
 import {
   AudioOutlined,
+  BranchesOutlined,
   CheckCircleOutlined,
   DeleteOutlined,
   CloseCircleOutlined,
@@ -37,11 +38,13 @@ import { CodexSitesPanel } from './codex-sites-panel'
 import { getErrorMessage } from './error-messages'
 import { ModuleBackButton } from './module-navigation'
 import { useForgeDeskStore } from './store'
+import { filterCodexMonitorSnapshot, getCodexSessionWorkspace } from './codex-session-view'
 
 type CodexSessionManagerPanelProps = {
   workspaceView?: 'activity' | 'sessions' | 'directories'
   projectFilter?: string
   toolFilter?: string
+  showArchivedProjects?: boolean
   onOpenDirectoryTerminal?: (cwd: string) => void
   backLabel?: string
   embedded?: boolean
@@ -467,11 +470,14 @@ function ConversationActivity({ items }: { items: CodexConversationItem[] }): JS
   )
 }
 
-export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded = false, focusAlert, focusSessionId, onBack, onFocusSessionHandled, onOpenForgeProject, usesCustomTitleBar, workspaceView, projectFilter, toolFilter, onOpenDirectoryTerminal }: CodexSessionManagerPanelProps): JSX.Element {
+export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded = false, focusAlert, focusSessionId, onBack, onFocusSessionHandled, onOpenForgeProject, usesCustomTitleBar, workspaceView, projectFilter, toolFilter, showArchivedProjects: showArchivedProjectsProp, onOpenDirectoryTerminal }: CodexSessionManagerPanelProps): JSX.Element {
   const forgeProjects = useForgeDeskStore((state) => state.projects)
+  const [includeArchivedProjects, setIncludeArchivedProjects] = useState(false)
+  const showArchivedProjects = showArchivedProjectsProp ?? includeArchivedProjects
+  const selectableForgeProjects = forgeProjects.filter((project) => showArchivedProjects || !project.archivedAt)
   const [snapshot, setSnapshot] = useState<CodexSessionsSnapshot>(() => emptySnapshot())
   const [monitorSnapshot, setMonitorSnapshot] = useState<CodexProjectMonitorSnapshot | null>(null)
-  const [detail, setDetail] = useState<CodexSessionDetail | null>(null)
+  const [loadedDetail, setDetail] = useState<CodexSessionDetail | null>(null)
   const [selectedProjectKey, setSelectedProjectKey] = useState('')
   const [selectedSessionId, setSelectedSessionId] = useState('')
   const [requestedSessionId, setRequestedSessionId] = useState(() => focusSessionId?.trim() || '')
@@ -504,23 +510,20 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded 
   useEffect(() => { if (workspaceView) setViewMode(workspaceView === 'sessions' ? 'conversation' : 'monitor') }, [workspaceView, focusSessionId])
   const visibleMonitor = useMemo(() => {
     if (!monitorSnapshot) return null
-    const matches = (project: CodexProjectMonitorSnapshot['projects'][number]) => (!projectFilter || project.forgeProjectId === projectFilter) && (!toolFilter || (project.providerId || 'codex') === toolFilter)
-    const projects=monitorSnapshot.projects.filter(matches),cursorProjects=monitorSnapshot.cursor?.projects.filter(matches)??[]
-    const all=[...projects,...cursorProjects]
-    const alerts=monitorSnapshot.alerts.filter(alert=>all.some(project=>project.key===alert.codexKey))
-    return { ...monitorSnapshot, projects, running:all.reduce((sum,project)=>sum+project.runningCount,0),uncommitted:alerts.length,alerts,cursor: monitorSnapshot.cursor ? {...monitorSnapshot.cursor,projects:cursorProjects,running:cursorProjects.reduce((sum,project)=>sum+project.runningCount,0)} : undefined }
-  }, [monitorSnapshot, projectFilter, toolFilter])
+    return filterCodexMonitorSnapshot(monitorSnapshot, forgeProjects, { projectId: projectFilter, providerId: toolFilter, showArchivedProjects })
+  }, [monitorSnapshot, forgeProjects, projectFilter, toolFilter, showArchivedProjects])
 
   const filteredProjects = useMemo<CodexProjectGroup[]>(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase()
     const archived = sessionListMode === 'archived'
-    return snapshot.projects.filter(project => (!projectFilter || visibleMonitor?.projects.some(item => item.key === project.key)) && toolFilter !== 'cursor').map((project) => {
+    return snapshot.projects.filter(project => visibleMonitor?.projects.some(item => item.key === project.key) && toolFilter !== 'cursor').map((project) => {
       const sessions = snapshot.sessions.filter((session) => {
         if (session.projectKey !== project.key) return false
         if (session.archived !== archived) return false
         if (statusFilter !== 'all' && session.status !== statusFilter) return false
         if (!normalizedQuery) return true
-        return [session.title, session.cwd, session.preview, session.id].some((value) => value.toLocaleLowerCase().includes(normalizedQuery))
+        const workspace = getCodexSessionWorkspace(session, visibleMonitor?.projects ?? [])
+        return [session.title, session.cwd, session.preview, session.id, workspace?.branch || '', workspace?.path || ''].some((value) => value.toLocaleLowerCase().includes(normalizedQuery))
           || project.name.toLocaleLowerCase().includes(normalizedQuery)
           || project.cwd.toLocaleLowerCase().includes(normalizedQuery)
       })
@@ -535,9 +538,25 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded 
     }).filter(({ sessions }) => sessions.length > 0)
   }, [query, sessionListMode, snapshot.projects, snapshot.sessions, statusFilter, visibleMonitor, projectFilter, toolFilter])
 
+  const filteredSnapshot = useMemo(() => {
+    const sessions = filteredProjects.flatMap((project) => project.sessions)
+    return {
+      ...snapshot,
+      projects: filteredProjects.map((project) => project.project),
+      sessions,
+      running: sessions.filter((session) => session.status === 'running').length,
+      completed: sessions.filter((session) => session.status === 'completed').length,
+      aborted: sessions.filter((session) => session.status === 'aborted').length
+    }
+  }, [snapshot, filteredProjects])
+
   const selectedProject = filteredProjects.find(({ project }) => project.key === selectedProjectKey)?.project ?? filteredProjects[0]?.project ?? null
   const selectedProjectSessions = filteredProjects.find(({ project }) => project.key === selectedProject?.key)?.sessions ?? []
   const selectedSummary = selectedProjectSessions.find((session) => session.id === selectedSessionId) ?? null
+  const detail = loadedDetail?.id === selectedSummary?.id ? loadedDetail : null
+  const selectedWorkspace = useMemo(() => selectedSummary && visibleMonitor ? getCodexSessionWorkspace(selectedSummary, visibleMonitor.projects) : null, [selectedSummary, visibleMonitor])
+  const selectedWorkspaceGit = selectedWorkspace?.worktree?.git ?? selectedWorkspace?.project.git
+  const workspaceBySessionId = useMemo(() => new Map(snapshot.sessions.map((session) => [session.id, getCodexSessionWorkspace(session, visibleMonitor?.projects ?? [])])), [snapshot.sessions, visibleMonitor])
   const isRunning = detail ? detail.status === 'running' : selectedSummary?.status === 'running'
   const selectableSessions = selectedProjectSessions.filter((session) => sessionListMode === 'archived' || session.status !== 'running')
   const selectedVisibleSessionIds = selectableSessions.filter((session) => selectedSessionIds.has(session.id)).map((session) => session.id)
@@ -689,11 +708,17 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded 
     if (!requestedSessionId) return
     const session = snapshot.sessions.find((item) => item.id === requestedSessionId)
     if (!session) return
+    const owner = monitorSnapshot?.projects.find((project) => project.key === session.projectKey)
+    if (!showArchivedProjects && forgeProjects.some((project) => project.id === owner?.forgeProjectId && project.archivedAt)) {
+      setRequestedSessionId('')
+      message.info('此对话所属项目已归档，启用“显示已归档项目”后可查看。')
+      return
+    }
     setSelectedProjectKey(session.projectKey)
     setSelectedSessionId(session.id)
     setViewMode('conversation')
     setRequestedSessionId('')
-  }, [requestedSessionId, snapshot.sessions])
+  }, [requestedSessionId, snapshot.sessions, monitorSnapshot, forgeProjects, showArchivedProjects])
 
   useEffect(() => {
     if (!window.forgeDesk) return undefined
@@ -926,10 +951,11 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded 
         <Typography.Text type="secondary">项目</Typography.Text>
         <Typography.Text type="secondary">{filteredProjects.length}</Typography.Text>
       </div>
+      {showArchivedProjectsProp === undefined ? <Checkbox className="codex-session-archive-filter" checked={showArchivedProjects} onChange={(event) => setIncludeArchivedProjects(event.target.checked)}>显示已归档项目</Checkbox> : null}
       <div className="codex-session-project-list">
         {loading && filteredProjects.length === 0 ? <div className="codex-session-list-empty"><Spin size="small" /></div> : filteredProjects.length > 0 ? filteredProjects.map(({ project }) => (
           <button className={`codex-session-project-row${viewMode === 'conversation' && project.key === selectedProject?.key ? ' is-active' : ''}`} key={project.key} type="button" onClick={() => { setSelectedProjectKey(project.key); setSelectedSessionId(''); setViewMode('conversation') }}>
-            <span className="codex-session-project-row-title">{project.name}</span>
+            <span className="codex-session-project-row-title">{project.name}{forgeProjects.some((item) => item.archivedAt && item.id === visibleMonitor?.projects.find((item) => item.key === project.key)?.forgeProjectId) ? <Tag>项目已归档</Tag> : null}</span>
             <span className="codex-session-project-row-path" title={project.cwd}>{project.cwd || '未记录工作目录'}</span>
             <span className="codex-session-project-row-meta"><span>{project.sessionCount} 个会话</span>{project.runningCount > 0 ? <Badge status="processing" text={`${project.runningCount} 进行中`} /> : null}</span>
           </button>
@@ -938,7 +964,7 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded 
     </aside>
   )
 
-  if (workspaceView === 'directories') return <section><Typography.Title level={3}>工作目录</Typography.Title><Typography.Paragraph type="secondary">来自本机 Codex 和 Cursor 的真实工作目录与项目关联。Cursor 不读取历史会话。</Typography.Paragraph><Button loading={refreshing} onClick={()=>void refresh()}>刷新</Button>{snapshot.error ? <Typography.Paragraph type="danger">{snapshot.error}</Typography.Paragraph> : null}<List dataSource={[...(visibleMonitor?.projects ?? []),...(visibleMonitor?.cursor?.projects ?? [])]} locale={{emptyText:'尚未检测到工作目录'}} renderItem={item=><List.Item actions={[<Button key="terminal" onClick={()=>onOpenDirectoryTerminal?.(item.cwd)}>终端</Button>,...(item.forgeProjectId ? [<Button key="project" onClick={()=>onOpenForgeProject?.(item.forgeProjectId!)}>关联项目</Button>] : [])]}><List.Item.Meta title={<Space>{item.cwd}<Tag>{item.providerId || 'codex'}</Tag></Space>} description={<Select aria-label="关联 ForgeDesk 项目" allowClear style={{minWidth:200}} value={item.forgeProjectId||undefined} options={forgeProjects.map(project=>({value:project.id,label:project.name}))} onChange={id=>void (id?window.forgeDesk.saveAiProjectResourceLink({providerId:item.providerId||'codex',projectId:id,resourcePath:item.cwd}):window.forgeDesk.deleteAiProjectResourceLink({providerId:item.providerId||'codex',resourcePath:item.cwd})).then(()=>refresh()).catch(error=>message.error(String(error)))}/>} /></List.Item>} /></section>
+  if (workspaceView === 'directories') return <section><Typography.Title level={3}>工作目录</Typography.Title><Typography.Paragraph type="secondary">来自本机 Codex 和 Cursor 的真实工作目录与项目关联。Cursor 不读取历史会话。</Typography.Paragraph><Button loading={refreshing} onClick={()=>void refresh()}>刷新</Button>{snapshot.error ? <Typography.Paragraph type="danger">{snapshot.error}</Typography.Paragraph> : null}<List dataSource={[...(visibleMonitor?.projects ?? []),...(visibleMonitor?.cursor?.projects ?? [])]} locale={{emptyText:'尚未检测到工作目录'}} renderItem={item=><List.Item actions={[<Button key="terminal" onClick={()=>onOpenDirectoryTerminal?.(item.cwd)}>终端</Button>,...(item.forgeProjectId ? [<Button key="project" onClick={()=>onOpenForgeProject?.(item.forgeProjectId!)}>关联项目</Button>] : [])]}><List.Item.Meta title={<Space>{item.cwd}<Tag>{item.providerId || 'codex'}</Tag></Space>} description={<Select aria-label="关联 ForgeDesk 项目" allowClear style={{minWidth:200}} value={item.forgeProjectId||undefined} options={selectableForgeProjects.map(project=>({value:project.id,label:project.archivedAt?`${project.name}（已归档）`:project.name}))} onChange={id=>void (id?window.forgeDesk.saveAiProjectResourceLink({providerId:item.providerId||'codex',projectId:id,resourcePath:item.cwd}):window.forgeDesk.deleteAiProjectResourceLink({providerId:item.providerId||'codex',resourcePath:item.cwd})).then(()=>refresh()).catch(error=>message.error(String(error)))}/>} /></List.Item>} /></section>
   return (
     <>
       <Layout className={`${shellClassName}${viewMode === 'monitor' ? ' is-monitor' : ''}`}>
@@ -974,6 +1000,7 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded 
             <div className={`codex-session-row${session.id === selectedSummary?.id ? ' is-active' : ''}${session.status === 'running' ? ' is-running' : ''}`} key={session.id} role="button" tabIndex={0} onClick={() => setSelectedSessionId(session.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedSessionId(session.id) } }}>
               <span className="codex-session-row-heading"><span className="codex-session-row-title">{selectionMode ? <Checkbox checked={selectedSessionIds.has(session.id)} disabled={sessionListMode === 'active' && session.status === 'running'} onClick={(event) => event.stopPropagation()} onChange={() => toggleSessionSelection(session.id)} /> : null}{session.pinned ? <PushpinFilled className="codex-session-pin-icon" /> : null}{session.title}</span><span className="codex-session-row-actions"><Badge status={statusTone(session.status)} text={statusLabels[session.status]} /><Tooltip title={session.pinned ? '取消 Codex 原生置顶' : '使用 Codex 原生置顶'}><span className="codex-session-pin-button" role="button" tabIndex={0} aria-label={session.pinned ? `取消 Codex 原生置顶 ${session.title}` : `使用 Codex 原生置顶 ${session.title}`} onClick={(event) => { event.stopPropagation(); togglePinSession(session).catch(() => undefined) }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); togglePinSession(session).catch(() => undefined) } }}>{session.pinned ? <PushpinFilled /> : <PushpinOutlined />}</span></Tooltip></span></span>
               <span className="codex-session-row-preview">{session.preview || '暂无用户消息'}</span>
+              {workspaceBySessionId.get(session.id) ? <span className="codex-session-row-worktree" title={workspaceBySessionId.get(session.id)?.path}><BranchesOutlined /> {workspaceBySessionId.get(session.id)?.label}{workspaceBySessionId.get(session.id)?.branch ? ` · ${workspaceBySessionId.get(session.id)?.branch}` : ''}</span> : null}
               <span className="codex-session-row-meta"><span>{session.archived ? '已归档' : formatRelativeTime(session.updatedAt)}</span><span>{shortenPath(session.id, 18)}</span></span>
             </div>
           )) : <div className="codex-session-list-empty">暂无匹配会话</div>}
@@ -992,10 +1019,21 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded 
           <Space wrap>
             <Button icon={<DashboardOutlined />} onClick={openProjectMonitor}>全部项目</Button>
             <Button icon={<GlobalOutlined />} onClick={() => setSitesOpen(true)}>Sites</Button>
-            <Badge status={snapshot.available ? 'success' : 'error'} text={snapshot.available ? `已连接 · ${snapshot.running} 个进行中` : '会话目录不可用'} />
+            <Badge status={snapshot.available ? 'success' : 'error'} text={snapshot.available ? `已连接 · ${visibleMonitor?.running ?? 0} 个进行中` : '会话目录不可用'} />
             {selectedSummary ? <Button icon={<CopyOutlined />} onClick={() => copyValue(selectedSummary.filePath, '会话路径已复制')}>复制路径</Button> : null}
           </Space>
         </header>
+
+        {selectedWorkspace ? <section className="codex-session-worktree-info" aria-label="对话工作树信息">
+          <Space wrap size={[8, 6]}>
+            <Tag color={selectedWorkspace.worktree && !selectedWorkspace.worktree.isMain ? 'blue' : undefined}><BranchesOutlined /> {selectedWorkspace.label}</Tag>
+            {selectedWorkspace.branch ? <Typography.Text code>{selectedWorkspace.branch}</Typography.Text> : null}
+            {selectedWorkspaceGit?.repositoryAvailable ? <Typography.Text type="secondary">{selectedWorkspaceGit.hasChanges ? `${selectedWorkspaceGit.filesChanged} 个文件待提交 · +${selectedWorkspaceGit.additions} -${selectedWorkspaceGit.deletions}` : '工作树干净'}</Typography.Text> : null}
+            {onOpenDirectoryTerminal && selectedWorkspace.path ? <Button size="small" icon={<CodeOutlined />} onClick={() => onOpenDirectoryTerminal(selectedWorkspace.path)}>打开终端</Button> : null}
+          </Space>
+          <Typography.Text type="secondary" className="codex-session-worktree-path" title={selectedWorkspace.path}>工作树：{selectedWorkspace.path || '未记录目录'}</Typography.Text>
+          {selectedWorkspace.mainPath && selectedWorkspace.mainPath !== selectedWorkspace.path ? <Typography.Text type="secondary" className="codex-session-worktree-path" title={selectedWorkspace.mainPath}>主仓库：{selectedWorkspace.mainPath}</Typography.Text> : null}
+        </section> : null}
 
         {snapshot.error ? <div className="codex-session-alert">{snapshot.error}</div> : null}
 
@@ -1085,9 +1123,9 @@ export function CodexSessionManagerPanel({ backLabel = '返回总览', embedded 
       </>}
       {viewMode === 'monitor' ? (
         <CodexProjectMonitor
-          forgeProjects={forgeProjects}
+          forgeProjects={selectableForgeProjects}
           monitorSnapshot={visibleMonitor}
-          snapshot={{...snapshot,projects:filteredProjects.map(item=>item.project),sessions:filteredProjects.flatMap(item=>item.sessions)}}
+          snapshot={filteredSnapshot}
           projectGroups={filteredProjects}
           selectedProjectKey={selectedProject?.key || ''}
           selectedSummary={selectedSummary}

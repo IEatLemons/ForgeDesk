@@ -2241,6 +2241,12 @@
   background: var(--subtle-bg);
 }
 
+.codex-session-archive-filter { margin:0 14px 12px;font-size:12px; }
+.codex-session-row-worktree { display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--app-muted);font-size:11px;line-height:1.6; }
+.codex-session-worktree-info { flex-shrink:0;display:flex;flex-direction:column;gap:6px;padding:12px 28px;border-bottom:1px solid var(--app-border);background:var(--panel-bg);font-size:12px; }
+.codex-session-worktree-info .ant-tag { margin-inline-end:0; }
+.codex-session-worktree-path { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px; }
+
 .codex-session-conversation {
   display: grid;
   align-content: start;
