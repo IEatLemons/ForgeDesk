@@ -11893,6 +11893,7 @@ function GitMergeModal({
   const [savingAiSettings, setSavingAiSettings] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
   const [merging, setMerging] = useState(false)
+  const [mergeError, setMergeError] = useState<GitErrorGuidance | null>(null)
   const [suggestingFilePath, setSuggestingFilePath] = useState<string | null>(null)
   const [previewSuggestion, setPreviewSuggestion] = useState<AiConflictSuggestion | null>(null)
   const [applyingSuggestion, setApplyingSuggestion] = useState(false)
@@ -11973,6 +11974,7 @@ function GitMergeModal({
     const nextTarget = selectedRepository.currentBranch || selectedRepository.defaultBranch
     setStatus(null)
     setAnalysis(null)
+    setMergeError(null)
     setPreviewSuggestion(null)
     setTargetBranch(nextTarget)
     setSourceBranch(chooseDefaultSource(selectedRepository, nextTarget))
@@ -11985,6 +11987,7 @@ function GitMergeModal({
     }
 
     setMerging(true)
+    setMergeError(null)
 
     try {
       const result = await window.forgeDesk.gitMerge(selectedRepository.id, { source: nextAnalysis.source })
@@ -12003,10 +12006,12 @@ function GitMergeModal({
       if (result.status.conflicts.length > 0) {
         message.warning('合并产生冲突，可以在弹窗里请求 AI 建议')
       } else {
-        message.warning(result.stderr || result.stdout || '合并没有完成，请查看提示')
+        setMergeError(createGitErrorGuidance(result.stderr || result.stdout || '合并没有完成，请查看提示', '合并分支'))
       }
+      setAnalysis(null)
     } catch (error) {
-      message.error(getErrorMessage(error))
+      setMergeError(createGitErrorGuidance(error, '合并分支'))
+      setAnalysis(null)
     } finally {
       setMerging(false)
     }
@@ -12039,6 +12044,7 @@ function GitMergeModal({
 
     setAnalyzing(true)
     setAnalysis(null)
+    setMergeError(null)
 
     try {
       const nextAnalysis = await window.forgeDesk.analyzeRepositoryMerge(selectedRepository.id, {
@@ -12188,10 +12194,10 @@ function GitMergeModal({
         >
           AI 设置
         </Button>,
-        <Button key="confirm" disabled={!analysis?.ok} loading={merging} onClick={() => analysis && confirmMerge(analysis)}>
+        <Button key="confirm" disabled={!analysis?.ok || analyzing || loadingStatus} loading={merging} onClick={() => analysis && confirmMerge(analysis)}>
           确认合并
         </Button>,
-        <Button key="analyze" type="primary" loading={analyzing} disabled={!sourceBranch || !targetBranch} onClick={analyzeMerge}>
+        <Button key="analyze" type="primary" loading={analyzing} disabled={!sourceBranch || !targetBranch || merging} onClick={analyzeMerge}>
           分析
         </Button>
       ]}
@@ -12235,6 +12241,8 @@ function GitMergeModal({
           </Typography.Text>
           {currentBranch && <Tag color={targetBranch === currentBranch ? 'blue' : 'orange'}>当前分支：{currentBranch}</Tag>}
         </div>
+
+        <GitErrorNotice guidance={mergeError} onClose={() => setMergeError(null)} />
 
         <Alert
           type={analysisType}

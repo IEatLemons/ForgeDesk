@@ -29,6 +29,19 @@ export function createGitErrorGuidance(error: unknown, actionName = 'Git 操作'
   const normalizedMessage = normalizeRemoteError(rawMessage)
   const lowerMessage = normalizedMessage.toLowerCase()
 
+  if (lowerMessage.includes('index.lock')) {
+    return {
+      title: `${actionName}失败：Git 索引被锁定`,
+      summary: '仓库存在 index.lock，Git 无法写入索引。可能有其他 Git 操作正在运行，也可能是之前异常退出后留下的锁文件。',
+      actions: [
+        '等待该仓库正在进行的提交、合并或其他 Git 操作结束，再重试。',
+        '如果锁一直存在，请先确认没有 Git 进程使用该仓库，再删除错误路径中的 index.lock。',
+        '清理后点击“分析”重新检查仓库，再确认合并。'
+      ],
+      rawMessage: normalizedMessage
+    }
+  }
+
   if (
     lowerMessage.includes('repository not found') ||
     lowerMessage.includes('does not appear to be a git repository') ||

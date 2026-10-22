@@ -14,6 +14,7 @@ import type { QuickBuildStartInput, QuickBuildRestartInput, QuickBuildTask as Qu
 import { setProjectArchived } from './project-archive'
 import { ProjectRuntimeService } from './project-runtime'
 import { AsyncReadCache } from './async-read-cache'
+import { getRepositoryIndexLockIssue } from './git-index-lock'
 import { requestCommitMessageSuggestion, type CommitMessageSuggestion } from './ai-commit-message-assistant'
 import { requestConflictResolutionSuggestion, type ConflictResolutionSuggestion } from './ai-conflict-assistant'
 import { requestReleaseSuggestion, type ReleaseSuggestion } from './ai-release-assistant'
@@ -3267,7 +3268,7 @@ async function scanRepository(localPath: string, context: RepositoryScanContext 
     return context.repositoryKind === 'submodule' ? createUnavailableRepositoryScan(normalizedPath, context) : null
   }
 
-  const git = simpleGit(normalizedPath)
+  const git = simpleGit(normalizedPath).env('GIT_OPTIONAL_LOCKS', '0')
   const [status, log, gitRemotes, branchInfo, localUserName, localUserEmail, effectiveUserName, effectiveUserEmail, branchName, checkedOutCommit] = await Promise.all([
     git.status(),
     git.log({ maxCount: 1 }).catch(() => ({ latest: undefined })),
@@ -4366,7 +4367,7 @@ async function getRepositoryWorkspaceStatus(repositoryId: string): Promise<GitWo
 async function loadRepositoryWorkspaceStatus(repositoryId: string): Promise<GitWorkspaceStatus> {
   const repository = getRepositoryOrThrow(repositoryId)
   const [statusOutput, branch, headHash] = await Promise.all([
-    runGitInPathStrict(repository.localPath, ['status', '--porcelain=v1', '-z'], { preserveOutput: true }),
+    runGitInPathStrict(repository.localPath, ['status', '--porcelain=v1', '-z'], { preserveOutput: true, env: { GIT_OPTIONAL_LOCKS: '0' } }),
     runGitInPath(repository.localPath, ['branch', '--show-current']),
     runGitInPath(repository.localPath, ['rev-parse', '--verify', 'HEAD'])
   ])
@@ -4401,12 +4402,15 @@ function mergeTreeCheckIsUnsupported(result: GitCommandResult): boolean {
 
 async function analyzeRepositoryMerge(repositoryId: string, input: GitMergeAnalysisInput): Promise<GitMergeAnalysis> {
   const repository = getRepositoryOrThrow(repositoryId)
-  const status = await getRepositoryWorkspaceStatus(repositoryId)
+  const status = await loadRepositoryWorkspaceStatus(repositoryId)
   const currentBranch = status.branch || repository.currentBranch || 'HEAD'
   const source = input.source.trim()
   const target = input.target.trim()
   const issues: string[] = []
   const warnings: string[] = []
+
+  const indexLockIssue = await getRepositoryIndexLockIssue(repository.localPath, runGitInPathStrict)
+  if (indexLockIssue) issues.push(indexLockIssue)
 
   if (!source) {
     issues.push('请选择要合并进来的分支')
@@ -4513,6 +4517,10 @@ async function analyzeRepositoryMerge(repositoryId: string, input: GitMergeAnaly
 
 async function runRepositoryWriteOperation(repositoryId: string, args: string[], options: GitExecutionOptions = {}): Promise<GitOperationResult> {
   const repository = getRepositoryOrThrow(repositoryId)
+  if (['add', 'commit', 'merge', 'pull'].includes(args[0])) {
+    const indexLockIssue = await getRepositoryIndexLockIssue(repository.localPath, runGitInPathStrict)
+    if (indexLockIssue) throw new Error(indexLockIssue)
+  }
   const result = await runGitInPathResult(repository.localPath, args, options)
   if (isGitOperationCancelled(options.operationId)) {
     throw new Error('Git 操作已终止')

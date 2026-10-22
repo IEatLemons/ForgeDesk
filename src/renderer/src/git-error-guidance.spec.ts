@@ -3,6 +3,19 @@ import { describe, it } from 'node:test'
 import { createGitErrorGuidance } from './git-error-guidance.js'
 
 describe('git error guidance', () => {
+  it('explains both native Git lock errors and preflight lock errors', () => {
+    for (const error of [
+      "Error invoking remote method 'repository:git-merge': Error: Unable to create '/repo/.git/index.lock': File exists. Updating ebfe6ca..b32c7b7",
+      '检测到 Git 索引锁 index.lock：/repo/.git/index.lock。'
+    ]) {
+      const guidance = createGitErrorGuidance(error, '合并分支')
+      assert.equal(guidance.title, '合并分支失败：Git 索引被锁定')
+      assert.match(guidance.summary, /异常退出/)
+      assert.ok(guidance.actions.some((action) => action.includes('先确认没有 Git 进程')))
+      assert.match(guidance.rawMessage, /\/repo\/\.git\/index.lock/)
+    }
+  })
+
   it('explains SSH public key permission failures in Chinese', () => {
     const guidance = createGitErrorGuidance(
       new Error(
