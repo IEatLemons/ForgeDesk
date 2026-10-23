@@ -2,12 +2,18 @@
 
 ForgeDesk 支持 API Token 和 Native OAuth 两种 Railway 认证方式。GraphQL 地址为 `https://backboard.railway.com/graphql/v2`。
 
+## 项目内管理连接
+
+进入 **项目 → 项目设置 → 运行配置 → 服务配置 → 平台连接与凭据**，点击 **配置 Railway Token / 连接**。默认使用 API Token，可切换 OAuth。每个 ForgeDesk 项目独立保存连接、同步服务和发布目标；同步后服务自动归入当前项目，无需到全局服务中心绑定。全局服务中心保留部署汇总，设置目录不再提供全局凭据入口。
+
+已有项目绑定会自动迁移；曾在多个项目共用的连接和服务会拆为各项目自己的记录，并保留环境、域名、监控记录、部署缓存和已保存的发布目标。OAuth 副本保留 Client ID，但需要重新登录，避免两个项目共用会轮换的刷新令牌。尚未绑定任何项目的旧全局连接仍保留在本地数据库，需在目标项目重新配置。
+
 ## 注册 Native OAuth 应用
 
 1. 由 Railway Workspace 管理员打开 **Workspace Settings → Developer → New OAuth App**。
 2. 应用名称填写 ForgeDesk，类型选择 **Native / Public**。
 3. 将 Redirect URI 精确设置为 `http://127.0.0.1:43827/oauth/railway/callback`。主机、端口、路径与末尾斜杠必须一致。
-4. 复制 Client ID，在 ForgeDesk 的服务配置中新增 Railway 连接，选择 **Railway OAuth 登录**，填写 Client ID 和连接名称。
+4. 复制 Client ID，在 ForgeDesk 当前项目的运行配置 / 服务配置中新增 Railway 连接，选择 **Railway OAuth 登录**，填写 Client ID 和连接名称。
 5. 点击 **登录并保存**，在系统浏览器同意授权并选择项目。成功后在 ForgeDesk 点击同步。
 
 Native 应用不使用 Client Secret。ForgeDesk 采用授权码流程、PKCE S256、state、nonce 和 ID Token 签名校验。发现地址为 `https://backboard.railway.com/oauth/.well-known/openid-configuration`，当前签名算法为 ES256。
@@ -36,7 +42,7 @@ Native 应用不使用 Client Secret。ForgeDesk 采用授权码流程、PKCE S2
 
 ## 验证
 
-`pnpm exec tsc --noEmit` 检查类型；`node scripts/run-tests.mjs railway-oauth service-provider-adapters service-monitoring service-config-guide service-monitor-view` 验证本地模拟授权与适配器。OAuth 测试需要允许监听 `127.0.0.1:43827`，不需要真实账号，也不会部署 Railway 服务。
+`pnpm exec tsc --noEmit` 检查类型；`node scripts/run-tests.mjs railway-oauth service-provider-adapters service-monitoring project-service-ownership project-deployment service-config-guide service-monitor-view` 验证本地模拟授权与适配器。OAuth 测试需要允许监听 `127.0.0.1:43827`，不需要真实账号，也不会部署 Railway 服务。
 
 真实验收需要已注册的 Native Client ID：完成浏览器授权、同步所选项目、读取状态和日志、重启恢复以及过期刷新验证。缺少该配置时不能宣称真实登录已验证。
 

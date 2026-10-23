@@ -1549,6 +1549,7 @@ export type ProjectServiceInput = {
 }
 
 export type ServiceExternalProjectAliasInput = {
+  projectId?: string
   provider: ServiceProviderType
   externalProjectId: string
   alias?: string

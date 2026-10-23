@@ -1,3 +1,4 @@
+import { migrateProjectServiceOwnership } from './project-service-ownership.js'
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, Notification, powerMonitor, safeStorage, shell, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron'
 import { RailwayOAuthManager, getRailwayOAuthManager } from './railway-oauth'
 import type { RailwayOAuthLoginInput } from '../shared/railway-oauth'
@@ -2451,6 +2452,7 @@ function migrateDatabase(db: Database.Database): void {
   migrateCodemagicRepositoryBindingTable(db)
   migrateReleasePublishTaskTable(db)
   migrateProjectDeploymentTables(db)
+  migrateProjectServiceOwnership(db)
   recoverProjectDeploymentTasks(db)
   migrateMonthlyPerformanceTables(db)
   migrateResourceGovernanceTables(db)
@@ -7731,12 +7733,13 @@ ipcMain.handle(
     previewDataSourceS3Object(getDatabase(), connectionId, input)
 )
 
-ipcMain.handle('service:connections:list', async (): Promise<ServiceConnectionRecord[]> => listServiceConnectionRecords(getDatabase()))
+ipcMain.handle('service:connections:list', async (_event, projectId?: string): Promise<ServiceConnectionRecord[]> => listServiceConnectionRecords(getDatabase(), projectId))
 
 ipcMain.handle('service:railway:oauth:login', async (_event, input: RailwayOAuthLoginInput): Promise<ServiceConnectionRecord> => {
   if (!input || typeof input.clientId !== 'string' || typeof input.name !== 'string') throw new Error('Railway 登录参数无效')
   const db = getDatabase()
-  const existing = input.connectionId ? listServiceConnectionRecords(db).find((connection) => connection.id === input.connectionId) : undefined
+  if (!input.projectId) throw new Error('请在项目运行配置中添加连接')
+  const existing = input.connectionId ? listServiceConnectionRecords(db, input.projectId).find((connection) => connection.id === input.connectionId) : undefined
   if (input.connectionId && existing?.provider !== 'railway') throw new Error('Railway 连接不存在')
   const manager = getRailwayOAuthManager(db)
   const grant = await manager.login(input.clientId)
@@ -7746,7 +7749,7 @@ ipcMain.handle('service:railway:oauth:login', async (_event, input: RailwayOAuth
   }
   return db.transaction(() => {
     const connection = saveServiceConnectionRecord(db, {
-      id: existing?.id, provider: 'railway', name: input.name, authMethod: 'oauth', railwayTokenType: 'account'
+      id: existing?.id, projectId: input.projectId, provider: 'railway', name: input.name, authMethod: 'oauth', railwayTokenType: 'account'
     })
     manager.save(connection.id, grant)
     return listServiceConnectionRecords(db).find((item) => item.id === connection.id)!
@@ -7763,7 +7766,10 @@ ipcMain.handle('service:railway:oauth:disconnect', (_event, connectionId: string
   return listServiceConnectionRecords(db).find((item) => item.id === connectionId)!
 })
 
-ipcMain.handle('service:connection:save', async (_event, input: ServiceConnectionInput): Promise<ServiceConnectionRecord> => saveServiceConnectionRecord(getDatabase(), input))
+ipcMain.handle('service:connection:save', async (_event, input: ServiceConnectionInput): Promise<ServiceConnectionRecord> => {
+  if (!input.projectId) throw new Error('请在项目运行配置中添加连接')
+  return saveServiceConnectionRecord(getDatabase(), input)
+})
 
 ipcMain.handle('service:connection:delete', async (_event, connectionId: string): Promise<ServiceConnectionRecord[]> =>
   deleteServiceConnectionRecord(getDatabase(), connectionId)
@@ -7796,16 +7802,18 @@ ipcMain.handle('project:service:bind', async (_event, input: { projectId: string
   bindProjectServiceRecord(getDatabase(), input)
 )
 
-ipcMain.handle('project:services:sync', async (_event, connectionId?: string): Promise<ProjectServiceRecord[]> => {
+ipcMain.handle('project:services:sync', async (_event, connectionId?: string, projectId?: string): Promise<ProjectServiceRecord[]> => {
+  if (!projectId) throw new Error('请在项目内同步服务')
   const connections = connectionId
-    ? listServiceConnectionRecords(getDatabase()).filter((connection) => connection.id === connectionId)
-    : listServiceConnectionRecords(getDatabase())
+    ? listServiceConnectionRecords(getDatabase(), projectId).filter((connection) => connection.id === connectionId)
+    : listServiceConnectionRecords(getDatabase(), projectId)
+  if (connectionId && !connections.length) throw new Error('当前项目的平台连接不存在')
 
   for (const connection of connections) {
     await syncServiceConnection(getDatabase(), connection.id)
   }
 
-  return listAllProjectServiceRecords(getDatabase())
+  return listProjectServiceRecords(getDatabase(), projectId)
 })
 
 ipcMain.handle('service:monitor:check', async (_event, projectId?: string): Promise<ProjectServiceRecord[]> => checkProjectServicesNow(projectId))

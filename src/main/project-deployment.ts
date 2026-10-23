@@ -1,3 +1,4 @@
+import { listProjectServices, listServiceConnections } from './service-monitoring.js'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { basename, extname, relative, resolve } from 'node:path'
 
@@ -482,8 +483,8 @@ export function validateProjectDeploymentConfig(
     if (!config.composeFile.trim() && !config.dockerfile.trim()) issues.push('Docker/Compose 需要填写 Dockerfile 或 Compose 文件')
   }
   if (config.provider === 'vercel' || config.provider === 'railway') {
-    if (!target?.connectionId) warnings.push('还没有绑定平台连接，请先在服务中心配置并选择连接')
-    if (!target?.serviceId) issues.push(`还没有绑定已有 ${config.provider === 'vercel' ? 'Vercel' : 'Railway'} 服务，请先在项目设置 / 服务配置中完成实际绑定`)
+    if (!target?.connectionId) warnings.push('还没有绑定平台连接，请在当前项目的运行配置中配置 Token 并选择连接')
+    if (!target?.serviceId) issues.push(`还没有绑定已有 ${config.provider === 'vercel' ? 'Vercel' : 'Railway'} 服务，请先在当前项目的运行配置中配置连接并同步服务`)
   }
 
   const sourcePath = root ? `${root}/` : ''
@@ -734,6 +735,14 @@ export function getProjectDeploymentTarget(db: DatabaseLike, targetId: string): 
 
 export function saveProjectDeploymentTarget(db: DatabaseLike, input: ProjectDeploymentTargetInput): ProjectDeploymentTarget {
   const existing = input.id ? getProjectDeploymentTarget(db, input.id) : null
+  if (existing && existing.projectId !== input.projectId) throw new Error('不能修改其他项目的发布目标')
+  if (input.provider === 'vercel' || input.provider === 'railway') {
+    const connection = input.connectionId ? listServiceConnections(db, input.projectId).find(item => item.id === input.connectionId && item.provider === input.provider) : undefined
+    const service = input.serviceId ? listProjectServices(db, input.projectId).find(item => item.id === input.serviceId && item.provider === input.provider) : undefined
+    if (input.connectionId && !connection) throw new Error('请选择当前项目的平台连接')
+    if (input.serviceId && !service) throw new Error('请选择当前项目的服务')
+    if (service && service.connectionId !== (input.connectionId || '')) throw new Error('服务与平台连接不匹配')
+  }
   const id = existing?.id ?? input.id ?? createId('deployment-target')
   const now = nowIso()
   const provider = normalizeProvider(input.provider)

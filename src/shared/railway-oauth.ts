@@ -2,6 +2,7 @@ export const railwayOAuthRedirectUri = 'http://127.0.0.1:43827/oauth/railway/cal
 export const railwayOAuthScopes = 'openid email profile offline_access project:member'
 
 export type RailwayOAuthLoginInput = {
+  projectId?: string
   connectionId?: string
   name: string
   clientId: string

@@ -1148,6 +1148,7 @@ type ProjectServiceInput = {
 }
 
 type ServiceExternalProjectAliasInput = {
+  projectId?: string
   provider: ServiceProviderType
   externalProjectId: string
   alias?: string
@@ -2999,7 +3000,7 @@ interface Window {
     loginRailwayOAuth: (input: import('../../shared/railway-oauth').RailwayOAuthLoginInput) => Promise<ServiceConnectionRecord>
     cancelRailwayOAuth: () => Promise<void>
     disconnectRailwayOAuth: (connectionId: string) => Promise<ServiceConnectionRecord>
-    listServiceConnections: () => Promise<ServiceConnectionRecord[]>
+    listServiceConnections: (projectId?: string) => Promise<ServiceConnectionRecord[]>
     saveServiceConnection: (input: ServiceConnectionInput) => Promise<ServiceConnectionRecord>
     deleteServiceConnection: (connectionId: string) => Promise<ServiceConnectionRecord[]>
     testServiceConnection: (connectionId: string) => Promise<{ ok: boolean; message: string; serviceCount: number }>
@@ -3008,7 +3009,7 @@ interface Window {
     saveProjectService: (input: ProjectServiceInput) => Promise<ProjectServiceRecord>
     saveServiceExternalProjectAlias: (input: ServiceExternalProjectAliasInput) => Promise<ProjectServiceRecord[]>
     bindProjectService: (input: { projectId: string; serviceId: string; repositoryId?: string }) => Promise<ProjectServiceRecord[]>
-    syncProjectServices: (connectionId?: string) => Promise<ProjectServiceRecord[]>
+    syncProjectServices: (connectionId?: string, projectId?: string) => Promise<ProjectServiceRecord[]>
     checkProjectServices: (projectId?: string) => Promise<ProjectServiceRecord[]>
     listLatestServiceMonitorChecks: (projectId: string) => Promise<ServiceMonitorCheckRecord[]>
     listServiceMonitorHistory: (projectId: string) => Promise<ServiceMonitorCheckRecord[]>

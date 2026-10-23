@@ -117,6 +117,14 @@ function createDatabase(): TestDatabase {
         }
       }
 
+      if (sql.includes('SET project_id = ? WHERE id = ?')) {
+        const records = sql.includes('global_service_connections') ? serviceConnections : projectServices
+        return { all: () => [], get: () => undefined, run: (projectId, id) => {
+          const record = records.find(item => item.id === id)
+          if (record) record.project_id = projectId
+        } }
+      }
+
       if (sql.includes('SET auth_method = ?')) {
         return { all: () => [], get: () => undefined, run: (authMethod, id) => {
           const connection = serviceConnections.find((item) => item.id === id)
@@ -190,9 +198,9 @@ function createDatabase(): TestDatabase {
         }
       }
 
-      if (sql.includes("SELECT services.*, '' AS bound_project_id")) {
+      if (sql.includes("SELECT services.*, services.project_id AS bound_project_id")) {
         return {
-          all: () => projectServices.map((service) => ({ ...service, bound_project_id: '', bound_repository_id: service.repository_id })),
+          all: () => projectServices.map((service) => ({ ...service, bound_project_id: service.project_id ?? '', bound_repository_id: service.repository_id })),
           get: () => undefined,
           run: () => undefined
         }

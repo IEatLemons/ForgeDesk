@@ -42,6 +42,7 @@ type Props = {
   repositories: Repository[]
   open: boolean
   configurationOnly?: boolean
+  onConfigureConnection?: () => void
 }
 
 const providerOptions: Array<{ value: DeploymentProviderType; label: string; description: string }> = [
@@ -98,7 +99,7 @@ function taskLabel(status: ProjectDeploymentTask['status']): string {
   return '进行中'
 }
 
-export function ProjectDeploymentPanel({ project, repositories, open, configurationOnly = false }: Props): JSX.Element {
+export function ProjectDeploymentPanel({ project, repositories, open, configurationOnly = false, onConfigureConnection }: Props): JSX.Element {
   const [provider, setProvider] = useState<DeploymentProviderType>('vercel')
   const [sourceMode, setSourceMode] = useState<DeploymentSourceMode>('git')
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
@@ -121,7 +122,7 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
 
   const selectedRepository = repositories.find((item) => item.id === repositoryId) ?? repositories[0]
   const selectedTarget = targets.find((item) => item.id === targetId) ?? null
-  const providerServices = services.filter((service) => service.provider === provider)
+  const providerServices = services.filter((service) => service.provider === provider && (!connectionId || service.connectionId === connectionId))
   const selectedService = providerServices.find((service) => service.id === serviceId) ?? null
   const environments = selectedService?.environments ?? []
   const runningTask = tasks.find((task) => task.status === 'running')
@@ -138,7 +139,7 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
       const [nextTargets, nextServices, nextConnections, nextTasks] = await Promise.all([
         window.forgeDesk.listProjectDeploymentTargets(project.id),
         window.forgeDesk.listProjectServices(project.id),
-        window.forgeDesk.listServiceConnections(),
+        window.forgeDesk.listServiceConnections(project.id),
         window.forgeDesk.listProjectDeploymentTasks(project.id)
       ])
       setTargets(nextTargets)
@@ -160,6 +161,14 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
     setPreparation(null)
     load().catch((error) => message.error(getErrorMessage(error)))
   }, [open, project.id, repositories.map(repository=>repository.id).join('|')])
+
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === project.id) void load()
+    }
+    window.addEventListener('project-services-changed', refresh)
+    return () => window.removeEventListener('project-services-changed', refresh)
+  }, [project.id, open])
 
   useEffect(() => {
     if (!open || !repositoryId) return
@@ -457,13 +466,22 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
             <Row gutter={[12, 12]}>
               {(provider === 'vercel' || provider === 'railway') ? (
                 <Col xs={24} md={8}>
-                  <Typography.Text strong>平台连接</Typography.Text>
+                  <Space wrap>
+                    <Typography.Text strong>项目平台连接</Typography.Text>
+                    <Button size="small" type="link" onClick={() => {
+                      if (onConfigureConnection) onConfigureConnection()
+                      else {
+                        window.dispatchEvent(new CustomEvent('project-platform-configure', { detail: project.id }))
+                        window.requestAnimationFrame(() => document.getElementById('project-service-settings')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+                      }
+                    }}>配置 Token / 连接</Button>
+                  </Space>
                   <Select
                     allowClear
                     style={{ width: '100%', marginTop: 8 }}
                     value={connectionId || undefined}
                     options={connections.filter((connection) => connection.provider === provider).map((connection) => ({ label: connection.name, value: connection.id }))}
-                    onChange={(value) => setConnectionId(value ?? '')}
+                    onChange={(value) => { setConnectionId(value ?? ''); setServiceId(''); setEnvironmentName(''); setPreparation(null) }}
                     placeholder="选择平台连接"
                   />
                 </Col>
@@ -484,7 +502,7 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
           ) : null}
           {(provider === 'vercel' || provider === 'railway') ? (
             <>
-              <Typography.Text type="secondary">目标层级：平台连接 → 已同步服务 → 环境。请先在项目设置 / 服务配置中绑定已有的 Vercel 或 Railway 项目；同一个 ForgeDesk 项目可以绑定多个平台项目。</Typography.Text>
+              <Typography.Text type="secondary">目标层级：项目平台连接 → 已同步服务 → 环境。请在本页“平台连接与凭据”中配置 Token 并同步服务。</Typography.Text>
             </>
           ) : null}
           {serviceId && environments.length > 0 ? (

@@ -399,11 +399,10 @@ import {
   type SystemLogEntry,
   type SystemLogLevel
 } from './service-deployments-view'
-import { getServiceProviderGuide, type ServiceProviderGuideProvider } from './service-config-guide'
+import { getServiceProviderGuide } from './service-config-guide'
 import {
   createRailwayProjectEnvironmentGroups,
   createServiceDetailSummary,
-  createServiceProviderOverview,
   createServiceProviderSections,
   getServiceEnvironmentLogActions,
   getMonitorableServiceDomains,
@@ -923,11 +922,6 @@ type ProjectServiceForm = {
   domainsText?: string
 }
 
-type ProjectServiceBindingForm = {
-  serviceId: string
-  repositoryId?: string
-}
-
 type ServiceExternalProjectAliasForm = {
   alias?: string
 }
@@ -1294,45 +1288,6 @@ function parseServiceDomainsText(value = ''): Array<{ domain: string; enabled: b
 
 function formatServiceDomainsText(domains: ProjectServiceDomain[]): string {
   return domains.map((domain) => domain.domain).join('\n')
-}
-
-function ServiceProviderGuidePanel({ provider }: { provider: ServiceProviderGuideProvider }): JSX.Element {
-  const guide = getServiceProviderGuide(provider)
-
-  return (
-    <div className="service-guide-box">
-      <div className="service-guide-heading">
-        <Space direction="vertical" size={2}>
-          <Space size={6} wrap>
-            <Tag>{guide.title}</Tag>
-            <Typography.Text strong>{guide.title} 配置入口</Typography.Text>
-          </Space>
-          <Typography.Text type="secondary">Token 保存后只显示已配置，不会展示明文。</Typography.Text>
-        </Space>
-        <Space wrap size={8} className="service-guide-actions">
-          <Button size="small" icon={<LinkOutlined />} href={guide.primaryTokenUrl} target="_blank" rel="noreferrer">
-            Token 页面
-          </Button>
-          {guide.projectTokenDocsUrl ? (
-            <Button size="small" href={guide.projectTokenDocsUrl} target="_blank" rel="noreferrer">
-              Project Token
-            </Button>
-          ) : null}
-          <Button size="small" href={guide.dashboardUrl} target="_blank" rel="noreferrer">
-            控制台
-          </Button>
-          <Button size="small" href={guide.docsUrl} target="_blank" rel="noreferrer">
-            API 文档
-          </Button>
-        </Space>
-      </div>
-      <ol className="service-guide-steps">
-        {guide.steps.map((step) => (
-          <li key={step}>{step}</li>
-        ))}
-      </ol>
-    </div>
-  )
 }
 
 function formatShortCommit(commitHash: string): string {
@@ -6732,37 +6687,29 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
   const [serviceLogLoading, setServiceLogLoading] = useState(false)
   const [serviceLogError, setServiceLogError] = useState('')
   const [detailServiceId, setDetailServiceId] = useState<string | null>(null)
-  const [bindingProvider, setBindingProvider] = useState<ServiceProviderType | null>(null)
-  const [selectedServiceProvider, setSelectedServiceProvider] = useState<ServiceProviderType | null>(null)
   const [connectionModalOpen, setConnectionModalOpen] = useState(false)
   const [serviceModalOpen, setServiceModalOpen] = useState(false)
-  const [bindingModalOpen, setBindingModalOpen] = useState(false)
   const [savingConnection, setSavingConnection] = useState(false)
   const [savingService, setSavingService] = useState(false)
   const [savingRailwayProjectAlias, setSavingRailwayProjectAlias] = useState(false)
-  const [savingBinding, setSavingBinding] = useState(false)
   const [connectionForm] = Form.useForm<ServiceConnectionForm>()
   const [serviceForm] = Form.useForm<ProjectServiceForm>()
-  const [bindingForm] = Form.useForm<ProjectServiceBindingForm>()
   const [railwayProjectAliasForm] = Form.useForm<ServiceExternalProjectAliasForm>()
   const isProjectMode = Boolean(project)
 
   async function loadServiceSettings(): Promise<void> {
-    if (!window.forgeDesk) {
-      return
-    }
+    if (!window.forgeDesk || !project) return
 
     setLoading(true)
 
     try {
-      const [nextConnections, nextServices, nextAllServices] = await Promise.all([
-        window.forgeDesk.listServiceConnections(),
-        project ? window.forgeDesk.listProjectServices(project.id) : window.forgeDesk.listAllProjectServices(),
-        window.forgeDesk.listAllProjectServices()
+      const [nextConnections, nextServices] = await Promise.all([
+        window.forgeDesk.listServiceConnections(project?.id),
+        project ? window.forgeDesk.listProjectServices(project.id) : window.forgeDesk.listAllProjectServices()
       ])
       setConnections(nextConnections)
       setServices(nextServices)
-      setAllServices(nextAllServices)
+      setAllServices(nextServices)
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
@@ -6783,7 +6730,7 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
       teamId: connection?.teamId ?? '',
       workspaceId: connection?.workspaceId ?? '',
       railwayTokenType: connection?.railwayTokenType ?? 'workspace',
-      authMethod: connection?.authMethod ?? (provider === 'railway' ? 'oauth' : 'token'),
+      authMethod: connection?.authMethod ?? 'token',
       clientId: connection?.oauth?.clientId ?? ''
     })
     setConnectionModalOpen(true)
@@ -6800,9 +6747,10 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
 
     try {
       const savedConnection = values.provider === 'railway' && values.authMethod === 'oauth'
-        ? await window.forgeDesk.loginRailwayOAuth({ connectionId: editingConnection?.id, name: values.name, clientId: values.clientId ?? '' })
+        ? await window.forgeDesk.loginRailwayOAuth({ projectId: project?.id, connectionId: editingConnection?.id, name: values.name, clientId: values.clientId ?? '' })
         : await window.forgeDesk.saveServiceConnection({
             id: editingConnection?.id,
+            projectId: project?.id,
             provider: values.provider,
             name: values.name.trim() || getServiceProviderLabel(values.provider),
             token: token || undefined,
@@ -6815,6 +6763,7 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
       setEditingConnection(null)
       connectionForm.resetFields()
       await loadServiceSettings()
+      window.dispatchEvent(new CustomEvent('project-services-changed', { detail: project?.id }))
       message.success(savedConnection.oauth && !savedConnection.oauth.persistent ? '已登录；系统安全存储不可用，重启后需要重新登录' : '服务连接已保存')
     } catch (error) {
       message.error(getErrorMessage(error))
@@ -6832,16 +6781,17 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
     setSyncingConnectionId(loadingKey)
 
     try {
-      const nextServices = await window.forgeDesk.syncProjectServices(connection?.id)
+      const nextServices = await window.forgeDesk.syncProjectServices(connection?.id, project?.id)
       setAllServices(nextServices)
       setServices(project ? await window.forgeDesk.listProjectServices(project.id) : nextServices)
-      setConnections(await window.forgeDesk.listServiceConnections())
+      setConnections(await window.forgeDesk.listServiceConnections(project?.id))
+      window.dispatchEvent(new CustomEvent('project-services-changed', { detail: project?.id }))
       message.success(connection ? `${connection.name} 已同步` : '服务已同步')
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
       setSyncingConnectionId(null)
-      void window.forgeDesk.listServiceConnections().then(setConnections).catch(() => undefined)
+      void window.forgeDesk.listServiceConnections(project?.id).then(setConnections).catch(() => undefined)
     }
   }
 
@@ -6854,18 +6804,19 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
 
     try {
       const result = await window.forgeDesk.testServiceConnection(connection.id)
-      setAllServices(await window.forgeDesk.listAllProjectServices())
+      setAllServices(await (project ? window.forgeDesk.listProjectServices(project.id) : window.forgeDesk.listAllProjectServices()))
       if (project) {
         setServices(await window.forgeDesk.listProjectServices(project.id))
       } else {
         setServices(await window.forgeDesk.listAllProjectServices())
       }
+      window.dispatchEvent(new CustomEvent('project-services-changed', { detail: project?.id }))
       message.success(result.message)
     } catch (error) {
       message.error(getErrorMessage(error))
     } finally {
       setWorkingConnectionId(null)
-      void window.forgeDesk.listServiceConnections().then(setConnections).catch(() => undefined)
+      void window.forgeDesk.listServiceConnections(project?.id).then(setConnections).catch(() => undefined)
     }
   }
 
@@ -6887,6 +6838,7 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
           await window.forgeDesk.deleteServiceConnection(connection.id)
           setDetailServiceId(null)
           await loadServiceSettings()
+          window.dispatchEvent(new CustomEvent('project-services-changed', { detail: project?.id }))
           message.success('平台连接已删除')
         } catch (error) {
           message.error(getErrorMessage(error))
@@ -6895,39 +6847,6 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
         }
       }
     })
-  }
-
-  function openBindingModal(provider?: ServiceProviderType): void {
-    bindingForm.resetFields()
-    setBindingProvider(provider ?? null)
-    setBindingModalOpen(true)
-  }
-
-  async function saveServiceBinding(): Promise<void> {
-    if (!window.forgeDesk || !project) {
-      return
-    }
-
-    const values = await bindingForm.validateFields()
-    setSavingBinding(true)
-
-    try {
-      setServices(
-        await window.forgeDesk.bindProjectService({
-          projectId: project.id,
-          serviceId: values.serviceId,
-          repositoryId: values.repositoryId
-        })
-      )
-      setBindingModalOpen(false)
-      setBindingProvider(null)
-      bindingForm.resetFields()
-      message.success('服务已绑定到当前项目')
-    } catch (error) {
-      message.error(getErrorMessage(error))
-    } finally {
-      setSavingBinding(false)
-    }
   }
 
   function openServiceModal(service?: ProjectService, provider?: ServiceProviderType): void {
@@ -6998,13 +6917,14 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
     setSavingRailwayProjectAlias(true)
 
     try {
-      const nextAllServices = await window.forgeDesk.saveServiceExternalProjectAlias({
+      const nextServices = await window.forgeDesk.saveServiceExternalProjectAlias({
+        projectId: project?.id,
         provider: 'railway',
         externalProjectId: editingRailwayProjectGroup.externalProjectId,
         alias: values.alias
       })
-      setAllServices(nextAllServices)
-      setServices(project ? await window.forgeDesk.listProjectServices(project.id) : nextAllServices)
+      setAllServices(nextServices)
+      setServices(project ? await window.forgeDesk.listProjectServices(project.id) : nextServices)
       setEditingRailwayProjectGroup(null)
       railwayProjectAliasForm.resetFields()
       message.success('Railway 项目显示名已保存')
@@ -7058,10 +6978,11 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
         const existing = current.some((item) => item.id === service.id)
         return existing ? current.map((item) => (item.id === service.id ? service : item)) : [...current, service]
       })
-      setAllServices(await window.forgeDesk.listAllProjectServices())
+      setAllServices(await (project ? window.forgeDesk.listProjectServices(project.id) : window.forgeDesk.listAllProjectServices()))
       setServiceModalOpen(false)
       setEditingService(null)
       serviceForm.resetFields()
+      window.dispatchEvent(new CustomEvent('project-services-changed', { detail: project?.id }))
       message.success('服务配置已保存')
     } catch (error) {
       message.error(getErrorMessage(error))
@@ -7306,534 +7227,411 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
   const connectionGuide = getServiceProviderGuide(connectionProvider)
   const serviceProvider = Form.useWatch('provider', serviceForm) ?? editingService?.provider ?? 'vercel'
   const serviceGuide = getServiceProviderGuide(serviceProvider)
-  const boundServiceIds = new Set(services.map((service) => service.id))
   const connectionSections = createServiceProviderSections(connections)
   const serviceSections = createServiceProviderSections(services)
-  const providerOverview = createServiceProviderOverview(connections, services)
-  const visibleConnectionSections = selectedServiceProvider
-    ? connectionSections.filter((section) => section.provider === selectedServiceProvider)
-    : connectionSections
-  const visibleServiceSections = selectedServiceProvider
-    ? serviceSections.filter((section) => section.provider === selectedServiceProvider)
-    : serviceSections
-  const selectedServiceProviderLabel = selectedServiceProvider ? getServiceProviderLabel(selectedServiceProvider) : ''
   const detailService = detailServiceId
     ? services.find((service) => service.id === detailServiceId) ?? allServices.find((service) => service.id === detailServiceId) ?? null
     : null
-  const bindableServices = allServices.filter((service) => !boundServiceIds.has(service.id))
-  const bindableServiceOptions = bindableServices
-    .filter((service) => !bindingProvider || service.provider === bindingProvider)
-    .map((service) => ({
-      label: `${getServiceProviderLabel(service.provider)} · ${service.name}`,
-      value: service.id
-    }))
+  if (!project) return <Alert type="info" showIcon message="平台连接由各项目自行管理" description="进入项目 → 项目设置 → 运行配置，配置 Vercel / Railway Token、同步并管理服务。" />
 
   return (
-    <Space direction="vertical" size={16} className="project-service-settings">
-      {!isProjectMode && !selectedServiceProvider ? (
-        <div className="service-provider-entry-grid">
-          {providerOverview.map((entry) => (
-            <button key={entry.provider} type="button" className="service-provider-entry-card" onClick={() => setSelectedServiceProvider(entry.provider)}>
-              <div className="service-provider-entry-heading">
-                <Tag>{entry.label}</Tag>
-                <Typography.Title level={4}>{entry.label}</Typography.Title>
-              </div>
-              <div className="service-provider-entry-stats">
-                <Statistic title="平台连接" value={entry.connectionCount} />
-                <Statistic title="服务" value={entry.serviceCount} />
-              </div>
-              <span className="service-provider-entry-action">
-                进入 <ArrowRightOutlined />
-              </span>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <>
-          {isProjectMode ? (
-            <Alert
-              type="info"
-              showIcon
-              message="先配置连接，再绑定平台项目"
-              description="Vercel / Railway Token 在服务中心维护；同步后可以把多个 Vercel 或 Railway 项目逐个绑定到当前项目，项目设置这里只管理实际归属关系。"
-            />
-          ) : (
-            <>
-              <div className="module-back-row">
-                <ModuleBackButton label="平台入口" onClick={() => setSelectedServiceProvider(null)} />
-              </div>
-              <div className="service-provider-detail-heading">
-                <Space direction="vertical" size={2}>
-                  <Space size={8} wrap>
-                    <Tag>{selectedServiceProviderLabel}</Tag>
-                    <Typography.Title level={4}>{selectedServiceProviderLabel} 服务详情</Typography.Title>
-                  </Space>
-                  <Typography.Text type="secondary">配置说明、平台连接和同步服务都在这里维护。</Typography.Text>
+    <Space id="project-service-settings" direction="vertical" size={16} className="project-service-settings">
+      <Alert type="info" showIcon message="当前项目的平台连接" description="在这里配置当前项目的 Vercel / Railway Token。保存后点击同步，服务会自动加入当前项目。" />
+      <div className="remote-manager-toolbar service-settings-toolbar">
+        <Typography.Title level={4}>平台连接与凭据</Typography.Title>
+        <Button icon={<ReloadOutlined />} loading={syncingConnectionId === 'all'} disabled={connections.length === 0} onClick={() => syncConnection()}>同步当前项目</Button>
+      </div>
+      <div className="service-provider-section-list">
+        {connectionSections.map((section) => (
+          <div key={section.provider} className="service-provider-section">
+            <div className="service-provider-section-heading">
+              <Space size={8} wrap><Tag>{section.label}</Tag><Typography.Text strong>{section.label} 平台连接</Typography.Text><Typography.Text type="secondary">{section.items.length} 个连接</Typography.Text></Space>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => openConnectionModal(undefined, section.provider)}>配置 {section.label} Token / 连接</Button>
+            </div>
+            <Table rowKey="id" size="small" loading={loading} columns={connectionColumns} dataSource={section.items} pagination={false} scroll={{ x: 920 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`当前项目尚未配置 ${section.label} Token / 连接`} /> }} />
+          </div>
+        ))}
+      </div>
+      <div className="remote-manager-toolbar service-settings-toolbar"><Typography.Title level={4}>项目服务</Typography.Title></div>
+      <div className="service-provider-section-list">
+        {serviceSections.map((section) => {
+          const railwayGroups = section.provider === 'railway' ? createRailwayProjectEnvironmentGroups(section.items) : []
+
+          return (
+            <div key={section.provider} className="service-provider-section">
+              <div className="service-provider-section-heading">
+                <Space size={8} wrap>
+                  <Tag>{section.label}</Tag>
+                  <Typography.Text strong>{section.label} 服务</Typography.Text>
+                  <Typography.Text type="secondary">{section.items.length} 个服务</Typography.Text>
                 </Space>
-              </div>
-
-              <div className="service-guide-grid service-guide-grid-single">
-                {selectedServiceProvider ? <ServiceProviderGuidePanel provider={selectedServiceProvider} /> : null}
-              </div>
-
-              <div className="remote-manager-toolbar service-settings-toolbar">
-                <Typography.Title level={4}>平台连接</Typography.Title>
                 <Space wrap>
-                  <Button icon={<ReloadOutlined />} loading={syncingConnectionId === 'all'} disabled={connections.length === 0} onClick={() => syncConnection()}>
-                    同步全部
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => openServiceModal(undefined, section.provider)}>
+                    手动添加服务
                   </Button>
                 </Space>
               </div>
-              <div className="service-provider-section-list">
-                {visibleConnectionSections.map((section) => (
-                  <div key={section.provider} className="service-provider-section">
-                    <div className="service-provider-section-heading">
-                      <Space size={8} wrap>
-                        <Tag>{section.label}</Tag>
-                        <Typography.Text strong>{section.label} 平台连接</Typography.Text>
-                        <Typography.Text type="secondary">{section.items.length} 个连接</Typography.Text>
-                      </Space>
-                      <Button type="primary" icon={<PlusOutlined />} onClick={() => openConnectionModal(undefined, section.provider)}>
-                        新增 {section.label} 连接
-                      </Button>
-                    </div>
-                    <Table
-                      rowKey="id"
-                      size="small"
-                      loading={loading}
-                      columns={connectionColumns}
-                      dataSource={section.items}
-                      pagination={false}
-                      scroll={{ x: 920 }}
-                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无 ${section.label} 连接`} /> }}
-                    />
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-
-          <div className="remote-manager-toolbar service-settings-toolbar">
-            <Typography.Title level={4}>{isProjectMode ? '已绑定服务' : `${selectedServiceProviderLabel} 服务`}</Typography.Title>
-          </div>
-          <div className="service-provider-section-list">
-            {visibleServiceSections.map((section) => {
-              const bindableCount = bindableServices.filter((service) => service.provider === section.provider).length
-              const railwayGroups = section.provider === 'railway' ? createRailwayProjectEnvironmentGroups(section.items) : []
-
-              return (
-                <div key={section.provider} className="service-provider-section">
-                  <div className="service-provider-section-heading">
-                    <Space size={8} wrap>
-                      <Tag>{section.label}</Tag>
-                      <Typography.Text strong>{section.label} 服务</Typography.Text>
-                      <Typography.Text type="secondary">{section.items.length} 个服务</Typography.Text>
-                    </Space>
-                    <Space wrap>
-                      {isProjectMode ? (
-                        <Button icon={<LinkOutlined />} disabled={bindableCount === 0} onClick={() => openBindingModal(section.provider)}>
-                          绑定已有服务
-                        </Button>
-                      ) : null}
-                      <Button type="primary" icon={<PlusOutlined />} onClick={() => openServiceModal(undefined, section.provider)}>
-                        {isProjectMode ? '新增并绑定' : `新增 ${section.label} 服务`}
-                      </Button>
-                    </Space>
-                  </div>
-                  {section.provider === 'railway' ? (
-                    railwayGroups.length > 0 ? (
-                      <Collapse
-                        className="railway-project-service-tree"
-                        items={railwayGroups.map((projectGroup) => ({
-                          key: projectGroup.id,
-                          label: (
-                            <Space size={8} wrap>
-                              <Typography.Text strong>{projectGroup.name}</Typography.Text>
-                              {projectGroup.alias ? <Tag color="purple">自定义</Tag> : null}
-                              <Tag>{projectGroup.environments.length} 环境</Tag>
-                              <Typography.Text type="secondary">{projectGroup.serviceCount} 个服务</Typography.Text>
-                              <Button
+              {section.provider === 'railway' ? (
+                railwayGroups.length > 0 ? (
+                  <Collapse
+                    className="railway-project-service-tree"
+                    items={railwayGroups.map((projectGroup) => ({
+                      key: projectGroup.id,
+                      label: (
+                        <Space size={8} wrap>
+                          <Typography.Text strong>{projectGroup.name}</Typography.Text>
+                          {projectGroup.alias ? <Tag color="purple">自定义</Tag> : null}
+                          <Tag>{projectGroup.environments.length} 环境</Tag>
+                          <Typography.Text type="secondary">{projectGroup.serviceCount} 个服务</Typography.Text>
+                          <Button
+                            size="small"
+                            icon={<EditOutlined />}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              openRailwayProjectAliasModal(projectGroup)
+                            }}
+                          >
+                            重命名
+                          </Button>
+                        </Space>
+                      ),
+                      children: (
+                        <Collapse
+                          ghost
+                          className="railway-environment-service-tree"
+                          items={projectGroup.environments.map((environmentGroup) => ({
+                            key: `${projectGroup.id}:${environmentGroup.id}`,
+                            label: (
+                              <Space size={8} wrap>
+                                <Tag color="blue">{environmentGroup.name}</Tag>
+                                <Typography.Text type="secondary">{environmentGroup.services.length} 个服务</Typography.Text>
+                              </Space>
+                            ),
+                            children: (
+                              <Table
+                                rowKey="id"
                                 size="small"
-                                icon={<EditOutlined />}
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  openRailwayProjectAliasModal(projectGroup)
-                                }}
-                              >
-                                重命名
-                              </Button>
-                            </Space>
-                          ),
-                          children: (
-                            <Collapse
-                              ghost
-                              className="railway-environment-service-tree"
-                              items={projectGroup.environments.map((environmentGroup) => ({
-                                key: `${projectGroup.id}:${environmentGroup.id}`,
-                                label: (
-                                  <Space size={8} wrap>
-                                    <Tag color="blue">{environmentGroup.name}</Tag>
-                                    <Typography.Text type="secondary">{environmentGroup.services.length} 个服务</Typography.Text>
-                                  </Space>
-                                ),
-                                children: (
-                                  <Table
-                                    rowKey="id"
-                                    size="small"
-                                    loading={loading}
-                                    columns={railwayEnvironmentServiceColumns(environmentGroup.name)}
-                                    dataSource={environmentGroup.services}
-                                    pagination={false}
-                                    onRow={(service) => ({
-                                      className: 'clickable-table-row',
-                                      onClick: () => openServiceDetail(service)
-                                    })}
-                                    scroll={{ x: getRailwayEnvironmentServiceTableScrollX() }}
-                                  />
-                                )
-                              }))}
-                            />
-                          )
-                        }))}
+                                loading={loading}
+                                columns={railwayEnvironmentServiceColumns(environmentGroup.name)}
+                                dataSource={environmentGroup.services}
+                                pagination={false}
+                                onRow={(service) => ({
+                                  className: 'clickable-table-row',
+                                  onClick: () => openServiceDetail(service)
+                                })}
+                                scroll={{ x: getRailwayEnvironmentServiceTableScrollX() }}
+                              />
+                            )
+                          }))}
+                        />
+                      )
+                    }))}
+                  />
+                ) : (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={isProjectMode ? '配置 Railway 连接后点击同步，服务会自动加入当前项目' : '暂无 Railway 服务配置'} />
+                )
+              ) : (
+                <Table
+                  rowKey="id"
+                  size="small"
+                  loading={loading}
+                  columns={serviceColumns}
+                  dataSource={section.items}
+                  pagination={false}
+                  onRow={(service) => ({
+                    className: 'clickable-table-row',
+                    onClick: () => openServiceDetail(service)
+                  })}
+                  scroll={{ x: 980 }}
+                  locale={{
+                    emptyText: (
+                      <Empty
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        description={isProjectMode ? `配置 ${section.label} 连接后点击同步，服务会自动加入当前项目` : `暂无 ${section.label} 服务配置`}
                       />
-                    ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={isProjectMode ? '当前项目还没有绑定 Railway 服务' : '暂无 Railway 服务配置'} />
                     )
-                  ) : (
-                    <Table
-                      rowKey="id"
-                      size="small"
-                      loading={loading}
-                      columns={serviceColumns}
-                      dataSource={section.items}
-                      pagination={false}
-                      onRow={(service) => ({
-                        className: 'clickable-table-row',
-                        onClick: () => openServiceDetail(service)
-                      })}
-                      scroll={{ x: 980 }}
-                      locale={{
-                        emptyText: (
-                          <Empty
-                            image={Empty.PRESENTED_IMAGE_SIMPLE}
-                            description={isProjectMode ? `当前项目还没有绑定 ${section.label} 服务` : `暂无 ${section.label} 服务配置`}
-                          />
-                        )
-                      }}
-                    />
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </>
-      )}
+                  }}
+                />
+              )}
+            </div>
+          )
+        })}
+      </div>
 
-      {!isProjectMode && !selectedServiceProvider ? null : (
-        <>
-          <ServiceDetailDrawer
-            service={detailService}
-            open={Boolean(detailService)}
-            onClose={() => setDetailServiceId(null)}
-            onServiceChange={updateServiceState}
-            onEdit={(service) => {
-              setDetailServiceId(null)
-              openServiceModal(service)
-            }}
-          />
+      <ServiceDetailDrawer
+        service={detailService}
+        open={Boolean(detailService)}
+        onClose={() => setDetailServiceId(null)}
+        onServiceChange={updateServiceState}
+        onEdit={(service) => {
+          setDetailServiceId(null)
+          openServiceModal(service)
+        }}
+      />
 
-          <Drawer
-            title={
-              serviceLogDrawer
-                ? `${serviceLogDrawer.service.name} / ${serviceLogDrawer.environment.name} ${serviceLogDrawer.mode === 'runtime' ? '运行日志' : '构建日志'}`
-                : '服务日志'
-            }
-            open={Boolean(serviceLogDrawer)}
-            width={760}
-            onClose={() => {
-              setServiceLogDrawer(null)
-              setServiceLogLines([])
-              setServiceLogError('')
-            }}
-          >
-            <Spin spinning={serviceLogLoading}>
-              {serviceLogError ? <Alert type="warning" showIcon message="日志暂不可用" description={serviceLogError} /> : null}
-              {!serviceLogError && serviceLogLines.length === 0 && !serviceLogLoading ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日志" /> : null}
-              <Space direction="vertical" size={8} className="service-log-lines">
-                {serviceLogLines.map((line, index) => (
-                  <div key={`${line.timestamp}-${index}`} className="service-log-line">
-                    <Typography.Text type="secondary">{formatDateTime(line.timestamp)}</Typography.Text>
-                    <Tag>{line.level || 'log'}</Tag>
-                    <Typography.Text>{line.message || '-'}</Typography.Text>
-                  </div>
-                ))}
-              </Space>
-            </Spin>
-          </Drawer>
+      <Drawer
+        title={
+          serviceLogDrawer
+            ? `${serviceLogDrawer.service.name} / ${serviceLogDrawer.environment.name} ${serviceLogDrawer.mode === 'runtime' ? '运行日志' : '构建日志'}`
+            : '服务日志'
+        }
+        open={Boolean(serviceLogDrawer)}
+        width={760}
+        onClose={() => {
+          setServiceLogDrawer(null)
+          setServiceLogLines([])
+          setServiceLogError('')
+        }}
+      >
+        <Spin spinning={serviceLogLoading}>
+          {serviceLogError ? <Alert type="warning" showIcon message="日志暂不可用" description={serviceLogError} /> : null}
+          {!serviceLogError && serviceLogLines.length === 0 && !serviceLogLoading ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日志" /> : null}
+          <Space direction="vertical" size={8} className="service-log-lines">
+            {serviceLogLines.map((line, index) => (
+              <div key={`${line.timestamp}-${index}`} className="service-log-line">
+                <Typography.Text type="secondary">{formatDateTime(line.timestamp)}</Typography.Text>
+                <Tag>{line.level || 'log'}</Tag>
+                <Typography.Text>{line.message || '-'}</Typography.Text>
+              </div>
+            ))}
+          </Space>
+        </Spin>
+      </Drawer>
 
-          <Modal
-            title={editingRailwayProjectGroup ? `重命名 Railway 项目：${editingRailwayProjectGroup.externalProjectName || editingRailwayProjectGroup.externalProjectId}` : '重命名 Railway 项目'}
-            open={Boolean(editingRailwayProjectGroup)}
-            okText="保存"
-            cancelText="取消"
-            confirmLoading={savingRailwayProjectAlias}
-            onOk={saveRailwayProjectAlias}
-            onCancel={() => {
-              setEditingRailwayProjectGroup(null)
-              railwayProjectAliasForm.resetFields()
-            }}
-          >
-            <Form form={railwayProjectAliasForm} layout="vertical">
-              <Form.Item name="alias" label="本地显示名" extra="只影响 ForgeDesk 里的显示，不会修改 Railway 项目名称；留空会恢复同步名称或 Project ID。">
-                <Input placeholder={editingRailwayProjectGroup?.externalProjectName || editingRailwayProjectGroup?.externalProjectId || '例如 数据中心'} />
-              </Form.Item>
-            </Form>
-          </Modal>
+      <Modal
+        title={editingRailwayProjectGroup ? `重命名 Railway 项目：${editingRailwayProjectGroup.externalProjectName || editingRailwayProjectGroup.externalProjectId}` : '重命名 Railway 项目'}
+        open={Boolean(editingRailwayProjectGroup)}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={savingRailwayProjectAlias}
+        onOk={saveRailwayProjectAlias}
+        onCancel={() => {
+          setEditingRailwayProjectGroup(null)
+          railwayProjectAliasForm.resetFields()
+        }}
+      >
+        <Form form={railwayProjectAliasForm} layout="vertical">
+          <Form.Item name="alias" label="本地显示名" extra="只影响 ForgeDesk 里的显示，不会修改 Railway 项目名称；留空会恢复同步名称或 Project ID。">
+            <Input placeholder={editingRailwayProjectGroup?.externalProjectName || editingRailwayProjectGroup?.externalProjectId || '例如 数据中心'} />
+          </Form.Item>
+        </Form>
+      </Modal>
 
-          <Modal
-            title={bindingProvider ? `绑定 ${getServiceProviderLabel(bindingProvider)} 服务` : '绑定已有服务'}
-            open={bindingModalOpen}
-            okText="绑定"
-            cancelText="取消"
-            confirmLoading={savingBinding}
-            onOk={saveServiceBinding}
-            onCancel={() => {
-              setBindingModalOpen(false)
-              setBindingProvider(null)
-              bindingForm.resetFields()
-            }}
-          >
-            <Form form={bindingForm} layout="vertical">
-              <Form.Item name="serviceId" label="服务" rules={[{ required: true, message: '请选择服务' }]}>
+      <Modal
+        title={editingConnection ? `编辑连接：${editingConnection.name}` : '新增服务连接'}
+        open={connectionModalOpen}
+        okText={connectionProvider === 'railway' && connectionAuthMethod === 'oauth' ? '登录并保存' : '保存'}
+        cancelText="取消"
+        confirmLoading={savingConnection}
+        onOk={saveConnection}
+        onCancel={() => {
+          if (savingConnection) void window.forgeDesk?.cancelRailwayOAuth().catch((error) => message.error(getErrorMessage(error)))
+          setConnectionModalOpen(false)
+          setEditingConnection(null)
+          connectionForm.resetFields()
+        }}
+      >
+        <Form form={connectionForm} layout="vertical">
+          <Row gutter={[12, 0]}>
+            <Col span={12}>
+              <Form.Item name="provider" label="平台" rules={[{ required: true, message: '请选择平台' }]}>
                 <Select
-                  showSearch
-                  placeholder="选择服务中心里的服务"
-                  options={bindableServiceOptions}
-                  optionFilterProp="label"
-                  notFoundContent={bindingProvider ? `没有可绑定的 ${getServiceProviderLabel(bindingProvider)} 服务` : '没有可绑定的服务'}
+                  disabled={savingConnection}
+                  options={[
+                    { label: 'Vercel', value: 'vercel' },
+                    { label: 'Railway', value: 'railway' }
+                  ]}
                 />
               </Form.Item>
-              <Form.Item name="repositoryId" label="关联仓库">
-                <Select allowClear options={createRepositorySelectOptions(repositories)} />
+            </Col>
+            <Col span={12}>
+              <Form.Item name="name" label="连接名称" rules={[{ required: true, message: '请输入连接名称' }]}>
+                <Input disabled={savingConnection} placeholder="Production" />
               </Form.Item>
-            </Form>
-          </Modal>
-
-          <Modal
-            title={editingConnection ? `编辑连接：${editingConnection.name}` : '新增服务连接'}
-            open={connectionModalOpen}
-            okText={connectionProvider === 'railway' && connectionAuthMethod === 'oauth' ? '登录并保存' : '保存'}
-            cancelText="取消"
-            confirmLoading={savingConnection}
-            onOk={saveConnection}
-            onCancel={() => {
-              if (savingConnection) void window.forgeDesk?.cancelRailwayOAuth().catch((error) => message.error(getErrorMessage(error)))
-              setConnectionModalOpen(false)
-              setEditingConnection(null)
-              connectionForm.resetFields()
-            }}
-          >
-            <Form form={connectionForm} layout="vertical">
+            </Col>
+          </Row>
+          {connectionProvider === 'railway' && (
+            <Form.Item name="authMethod" label="认证方式">
+              <Select options={[{ label: 'Railway OAuth 登录', value: 'oauth' }, { label: 'API Token', value: 'token' }]} disabled={savingConnection} />
+            </Form.Item>
+          )}
+          {connectionProvider === 'railway' && connectionAuthMethod === 'oauth' ? (
+            <>
+              <Form.Item name="clientId" label="Native Client ID" rules={[{ required: true, whitespace: true, message: '请输入 Railway Native Client ID' }]}>
+                <Input disabled={savingConnection} placeholder="Workspace → Developer → Native OAuth App" />
+              </Form.Item>
+              <Alert type="info" showIcon message="使用系统浏览器登录 Railway" description={
+                <Space direction="vertical">
+                  <Typography.Text>由 Workspace 管理员注册 Native 应用，将以下地址完整登记为 Redirect URI。登录时选择允许 ForgeDesk 管理的项目。</Typography.Text>
+                  <Typography.Text code copyable>{railwayOAuthRedirectUri}</Typography.Text>
+                  <Typography.Link href={connectionGuide.oauthRegistrationUrl} target="_blank" rel="noreferrer">Native 应用注册指引</Typography.Link>
+                  {savingConnection && <Typography.Text>正在等待浏览器授权，可点击“取消”终止登录。</Typography.Text>}
+                  {editingConnection?.oauth && <Typography.Text>{editingConnection.oauth.status === 'connected' ? `已登录：${editingConnection.oauth.accountName}` : '需要重新登录'}{editingConnection.oauth.status === 'connected' && !editingConnection.oauth.persistent ? '（当前会话有效，重启后需登录）' : ''}</Typography.Text>}
+                  {editingConnection?.authMethod === 'oauth' && (
+                    <Button disabled={savingConnection} onClick={async () => {
+                      try {
+                        const updated = await window.forgeDesk.disconnectRailwayOAuth(editingConnection.id)
+                        setEditingConnection(updated)
+                        await loadServiceSettings()
+                        message.success('OAuth 已断开，服务绑定已保留')
+                      } catch (error) { message.error(getErrorMessage(error)) }
+                    }}>断开 OAuth</Button>
+                  )}
+                </Space>
+              } />
+            </>
+          ) : <>
+            <Form.Item name="token" label="Token">
+              <Input.Password placeholder={editingConnection?.tokenConfigured ? '已保存，留空不变' : '平台 API Token'} />
+            </Form.Item>
+            <Alert
+              className="service-guide-alert"
+              type="info"
+              showIcon
+              message={`${connectionGuide.title} 配置提示`}
+              description={
+                <Space direction="vertical" size={8}>
+                  {connectionGuide.steps.slice(0, connectionProvider === 'railway' ? 2 : 1).map((step) => (
+                    <Typography.Text key={step}>{step}</Typography.Text>
+                  ))}
+                  <Space wrap>
+                    <Button size="small" icon={<LinkOutlined />} href={connectionGuide.primaryTokenUrl} target="_blank" rel="noreferrer">
+                      打开 Token 页面
+                    </Button>
+                    <Button size="small" href={connectionGuide.docsUrl} target="_blank" rel="noreferrer">
+                      打开 API 文档
+                    </Button>
+                  </Space>
+                </Space>
+              }
+            />
+            {connectionProvider === 'vercel' ? (
+              <Form.Item name="teamId" label="Vercel Team ID">
+                <Input placeholder="团队项目填写 team_xxx，个人项目可留空" />
+              </Form.Item>
+            ) : (
               <Row gutter={[12, 0]}>
                 <Col span={12}>
-                  <Form.Item name="provider" label="平台" rules={[{ required: true, message: '请选择平台' }]}>
+                  <Form.Item name="railwayTokenType" label="Railway Token 类型">
                     <Select
-                      disabled={savingConnection}
                       options={[
-                        { label: 'Vercel', value: 'vercel' },
-                        { label: 'Railway', value: 'railway' }
+                        { label: 'Workspace', value: 'workspace' },
+                        { label: 'Account', value: 'account' },
+                        { label: 'Project', value: 'project' }
                       ]}
                     />
                   </Form.Item>
                 </Col>
                 <Col span={12}>
-                  <Form.Item name="name" label="连接名称" rules={[{ required: true, message: '请输入连接名称' }]}>
-                    <Input disabled={savingConnection} placeholder="Production" />
+                  <Form.Item
+                    name="workspaceId"
+                    label="Workspace ID"
+                    rules={
+                      connectionProvider === 'railway' && connectionRailwayTokenType === 'workspace'
+                        ? [{ required: true, message: 'Workspace Token 需要填写 Workspace ID' }]
+                        : []
+                    }
+                    extra={
+                      connectionRailwayTokenType === 'account'
+                        ? '不填时会同步个人项目并尝试发现 Workspace；如果同步不到服务，请填写目标 Workspace ID。'
+                        : undefined
+                    }
+                  >
+                    <Input
+                      placeholder={
+                        connectionRailwayTokenType === 'workspace'
+                          ? 'Workspace Token 必填'
+                          : connectionRailwayTokenType === 'account'
+                            ? '个人项目可留空，Workspace 项目建议填写'
+                            : 'Project Token 可留空'
+                      }
+                    />
                   </Form.Item>
                 </Col>
               </Row>
-              {connectionProvider === 'railway' && (
-                <Form.Item name="authMethod" label="认证方式">
-                  <Select options={[{ label: 'Railway OAuth 登录', value: 'oauth' }, { label: 'API Token', value: 'token' }]} disabled={savingConnection} />
-                </Form.Item>
-              )}
-              {connectionProvider === 'railway' && connectionAuthMethod === 'oauth' ? (
-                <>
-                  <Form.Item name="clientId" label="Native Client ID" rules={[{ required: true, whitespace: true, message: '请输入 Railway Native Client ID' }]}>
-                    <Input disabled={savingConnection} placeholder="Workspace → Developer → Native OAuth App" />
-                  </Form.Item>
-                  <Alert type="info" showIcon message="使用系统浏览器登录 Railway" description={
-                    <Space direction="vertical">
-                      <Typography.Text>由 Workspace 管理员注册 Native 应用，将以下地址完整登记为 Redirect URI。登录时选择允许 ForgeDesk 管理的项目。</Typography.Text>
-                      <Typography.Text code copyable>{railwayOAuthRedirectUri}</Typography.Text>
-                      <Typography.Link href={connectionGuide.oauthRegistrationUrl} target="_blank" rel="noreferrer">Native 应用注册指引</Typography.Link>
-                      {savingConnection && <Typography.Text>正在等待浏览器授权，可点击“取消”终止登录。</Typography.Text>}
-                      {editingConnection?.oauth && <Typography.Text>{editingConnection.oauth.status === 'connected' ? `已登录：${editingConnection.oauth.accountName}` : '需要重新登录'}{editingConnection.oauth.status === 'connected' && !editingConnection.oauth.persistent ? '（当前会话有效，重启后需登录）' : ''}</Typography.Text>}
-                      {editingConnection?.authMethod === 'oauth' && (
-                        <Button disabled={savingConnection} onClick={async () => {
-                          try {
-                            const updated = await window.forgeDesk.disconnectRailwayOAuth(editingConnection.id)
-                            setEditingConnection(updated)
-                            await loadServiceSettings()
-                            message.success('OAuth 已断开，服务绑定已保留')
-                          } catch (error) { message.error(getErrorMessage(error)) }
-                        }}>断开 OAuth</Button>
-                      )}
-                    </Space>
-                  } />
-                </>
-              ) : <>
-              <Form.Item name="token" label="Token">
-                <Input.Password placeholder={editingConnection?.tokenConfigured ? '已保存，留空不变' : '平台 API Token'} />
-              </Form.Item>
-              <Alert
-                className="service-guide-alert"
-                type="info"
-                showIcon
-                message={`${connectionGuide.title} 配置提示`}
-                description={
-                  <Space direction="vertical" size={8}>
-                    {connectionGuide.steps.slice(0, connectionProvider === 'railway' ? 2 : 1).map((step) => (
-                      <Typography.Text key={step}>{step}</Typography.Text>
-                    ))}
-                    <Space wrap>
-                      <Button size="small" icon={<LinkOutlined />} href={connectionGuide.primaryTokenUrl} target="_blank" rel="noreferrer">
-                        打开 Token 页面
-                      </Button>
-                      <Button size="small" href={connectionGuide.docsUrl} target="_blank" rel="noreferrer">
-                        打开 API 文档
-                      </Button>
-                    </Space>
-                  </Space>
-                }
-              />
-              {connectionProvider === 'vercel' ? (
-                <Form.Item name="teamId" label="Vercel Team ID">
-                  <Input placeholder="团队项目填写 team_xxx，个人项目可留空" />
-                </Form.Item>
-              ) : (
-                <Row gutter={[12, 0]}>
-                  <Col span={12}>
-                    <Form.Item name="railwayTokenType" label="Railway Token 类型">
-                      <Select
-                        options={[
-                          { label: 'Workspace', value: 'workspace' },
-                          { label: 'Account', value: 'account' },
-                          { label: 'Project', value: 'project' }
-                        ]}
-                      />
-                    </Form.Item>
-                  </Col>
-                  <Col span={12}>
-                    <Form.Item
-                      name="workspaceId"
-                      label="Workspace ID"
-                      rules={
-                        connectionProvider === 'railway' && connectionRailwayTokenType === 'workspace'
-                          ? [{ required: true, message: 'Workspace Token 需要填写 Workspace ID' }]
-                          : []
-                      }
-                      extra={
-                        connectionRailwayTokenType === 'account'
-                          ? '不填时会同步个人项目并尝试发现 Workspace；如果同步不到服务，请填写目标 Workspace ID。'
-                          : undefined
-                      }
-                    >
-                      <Input
-                        placeholder={
-                          connectionRailwayTokenType === 'workspace'
-                            ? 'Workspace Token 必填'
-                            : connectionRailwayTokenType === 'account'
-                              ? '个人项目可留空，Workspace 项目建议填写'
-                              : 'Project Token 可留空'
-                        }
-                      />
-                    </Form.Item>
-                  </Col>
-                </Row>
-              )}
-              </>}
-            </Form>
-          </Modal>
+            )}
+          </>}
+        </Form>
+      </Modal>
 
-          <Modal
-            title={editingService ? `编辑服务：${editingService.name}` : '新增服务'}
-            open={serviceModalOpen}
-            okText="保存"
-            cancelText="取消"
-            confirmLoading={savingService}
-            onOk={saveService}
-            onCancel={() => {
-              setServiceModalOpen(false)
-              setEditingService(null)
-              serviceForm.resetFields()
-            }}
-          >
-            <Form form={serviceForm} layout="vertical">
-              <Row gutter={[12, 0]}>
-                <Col span={12}>
-                  <Form.Item name="provider" label="平台" rules={[{ required: true, message: '请选择平台' }]}>
-                    <Select
-                      options={[
-                        { label: 'Vercel', value: 'vercel' },
-                        { label: 'Railway', value: 'railway' }
-                      ]}
-                    />
-                  </Form.Item>
-                </Col>
-                <Col span={12}>
-                  <Form.Item name="name" label="服务名称" rules={[{ required: true, message: '请输入服务名称' }]}>
-                    <Input placeholder="web" />
-                  </Form.Item>
-                </Col>
-              </Row>
-              <Alert
-                className="service-guide-alert"
-                type="info"
-                showIcon
-                message={`${serviceGuide.title} 服务配置提示`}
-                description={
-                  <Space direction="vertical" size={8}>
-                    <Typography.Text>
-                      {serviceProvider === 'railway'
-                        ? 'Railway 项目里可用 Cmd/Ctrl+K 复制 Project、Service 或 Environment ID；Project Token 也在项目设置的 Tokens 页面创建。'
-                        : 'Vercel 通常同步后会自动带出项目和域名；团队项目请先在连接里填写 Team ID。'}
-                    </Typography.Text>
-                    <Space wrap>
-                      <Button size="small" href={serviceGuide.dashboardUrl} target="_blank" rel="noreferrer">
-                        打开控制台
-                      </Button>
-                      {serviceGuide.projectTokenDocsUrl ? (
-                        <Button size="small" href={serviceGuide.projectTokenDocsUrl} target="_blank" rel="noreferrer">
-                          Project Token
-                        </Button>
-                      ) : null}
-                      <Button size="small" href={serviceGuide.docsUrl} target="_blank" rel="noreferrer">
-                        API 文档
-                      </Button>
-                    </Space>
-                  </Space>
-                }
-              />
-              <Row gutter={[12, 0]}>
-                <Col span={isProjectMode ? 12 : 24}>
-                  <Form.Item name="connectionId" label="平台连接">
-                    <Select
-                      allowClear
-                      options={connections
-                        .filter((connection) => connection.provider === serviceProvider)
-                        .map((connection) => ({ label: connection.name, value: connection.id }))}
-                    />
-                  </Form.Item>
-                </Col>
-                {isProjectMode ? (
-                  <Col span={12}>
-                    <Form.Item name="repositoryId" label="关联仓库">
-                      <Select allowClear options={createRepositorySelectOptions(repositories)} />
-                    </Form.Item>
-                  </Col>
-                ) : null}
-              </Row>
+      <Modal
+        title={editingService ? `编辑服务：${editingService.name}` : '新增服务'}
+        open={serviceModalOpen}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={savingService}
+        onOk={saveService}
+        onCancel={() => {
+          setServiceModalOpen(false)
+          setEditingService(null)
+          serviceForm.resetFields()
+        }}
+      >
+        <Form form={serviceForm} layout="vertical">
+          <Row gutter={[12, 0]}>
+            <Col span={12}>
+              <Form.Item name="provider" label="平台" rules={[{ required: true, message: '请选择平台' }]}>
+                <Select
+                  options={[
+                    { label: 'Vercel', value: 'vercel' },
+                    { label: 'Railway', value: 'railway' }
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="name" label="服务名称" rules={[{ required: true, message: '请输入服务名称' }]}>
+                <Input placeholder="web" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Alert
+            className="service-guide-alert"
+            type="info"
+            showIcon
+            message={`${serviceGuide.title} 服务配置提示`}
+            description={
+              <Space direction="vertical" size={8}>
+                <Typography.Text>
+                  {serviceProvider === 'railway'
+                    ? 'Railway 项目里可用 Cmd/Ctrl+K 复制 Project、Service 或 Environment ID；Project Token 也在项目设置的 Tokens 页面创建。'
+                    : 'Vercel 通常同步后会自动带出项目和域名；团队项目请先在连接里填写 Team ID。'}
+                </Typography.Text>
+                <Space wrap>
+                  <Button size="small" href={serviceGuide.dashboardUrl} target="_blank" rel="noreferrer">
+                    打开控制台
+                  </Button>
+                  {serviceGuide.projectTokenDocsUrl ? (
+                    <Button size="small" href={serviceGuide.projectTokenDocsUrl} target="_blank" rel="noreferrer">
+                      Project Token
+                    </Button>
+                  ) : null}
+                  <Button size="small" href={serviceGuide.docsUrl} target="_blank" rel="noreferrer">
+                    API 文档
+                  </Button>
+                </Space>
+              </Space>
+            }
+          />
+          <Row gutter={[12, 0]}>
+            <Col span={isProjectMode ? 12 : 24}>
+              <Form.Item name="connectionId" label="平台连接">
+                <Select
+                  allowClear
+                  options={connections
+                    .filter((connection) => connection.provider === serviceProvider)
+                    .map((connection) => ({ label: connection.name, value: connection.id }))}
+                />
+              </Form.Item>
+            </Col>
+            {isProjectMode ? (
+              <Col span={12}>
+                <Form.Item name="repositoryId" label="关联仓库">
+                  <Select allowClear options={createRepositorySelectOptions(repositories)} />
+                </Form.Item>
+              </Col>
+            ) : null}
+          </Row>
           <Row gutter={[12, 0]}>
             <Col span={12}>
               <Form.Item name="externalProjectId" label="平台项目 ID">
@@ -7866,8 +7664,6 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
           </Form.Item>
         </Form>
       </Modal>
-        </>
-      )}
     </Space>
   )
 }
@@ -9625,7 +9421,7 @@ function GlobalServiceCenterPanel({
       <div className="settings-module-header">
         <Space direction="vertical" size={2}>
           <Typography.Title level={3}>服务中心</Typography.Title>
-          <Typography.Text type="secondary">实时查看部署状态，维护 Vercel / Railway Token、同步服务和自定义域名。</Typography.Text>
+          <Typography.Text type="secondary">汇总查看各项目的部署状态；平台连接和服务配置由各项目自行管理。</Typography.Text>
         </Space>
         <Space wrap>
           <Segmented
@@ -9633,7 +9429,7 @@ function GlobalServiceCenterPanel({
             onChange={(value) => setCenterView(value as ServiceCenterView)}
             options={[
               { label: 'Deployments', value: 'deployments' },
-              { label: '服务配置', value: 'services' }
+              { label: '配置入口说明', value: 'services' }
             ]}
           />
         </Space>
@@ -13356,6 +13152,14 @@ function ProjectSettingsPanel({
     setGitSettingsTab(initialGitTab ?? 'repositories')
   }, [initialGitTab, initialModule])
 
+  useEffect(() => {
+    const configure = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === project.id) setSettingsView(openProjectSettingsModule('services'))
+    }
+    window.addEventListener('project-platform-configure', configure)
+    return () => window.removeEventListener('project-platform-configure', configure)
+  }, [project.id])
+
   async function saveProjectSettings(): Promise<void> {
     const values = await form.validateFields()
     setSavingProject(true)
@@ -13470,7 +13274,7 @@ function ProjectSettingsPanel({
           />
         )
       case 'services':
-        return <ProjectServiceSettings project={project} repositories={repositories} />
+        return <ProjectServiceSettings key={project.id} project={project} repositories={repositories} />
       case 'release':
         return <ProjectReleaseSettings project={project} />
       case 'cloudflare':
@@ -17481,6 +17285,11 @@ function ProjectOverview({
                 project={selectedProject}
                 repositories={projectRepositories}
                 open={projectDeploymentDrawerOpen}
+                onConfigureConnection={() => {
+                  setProjectDeploymentDrawerOpen(false)
+                  setProjectSettingsInitialModule('services')
+                  setProjectSettingsDrawerOpen(true)
+                }}
               />
             </Drawer>
 
@@ -17554,11 +17363,11 @@ function ProjectOverview({
                   </div> : <GitWorkspacePanel compact key={workspaceRoute.repositoryId} repositories={projectRepositories.filter(item=>item.id===workspaceRoute.repositoryId)} /> : null}
                   {workspaceRoute.page === 'environments' ? <><ProjectServiceMonitorPanel projectId={selectedProject.id} view="environments" onConfigure={()=>onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-runtime'))} /><ProjectRuntimePanel projectId={selectedProject.id} visible={workspaceVisible} onConfigure={()=>onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-runtime'))} /></> : null}
                   {workspaceRoute.page === 'monitoring' ? <><ProjectRuntimePanel projectId={selectedProject.id} visible={workspaceVisible} onConfigure={()=>onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-runtime'))} /><ProjectServiceMonitorPanel projectId={selectedProject.id} view="monitoring" onConfigure={()=>onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-runtime'))} /></> : null}
-                  {workspaceRoute.page === 'deployments' ? <><Space wrap style={{marginBottom:20}}><Button onClick={()=>setReleaseModalOpen(true)} disabled={!projectRepositories.length}>版本发布 / 移动端构建与分发</Button><Button onClick={()=>setApprovalModalOpen(true)} disabled={!projectRepositories.length}>发布审批</Button><Button onClick={()=>onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-runtime'))}>运行配置</Button></Space><ProjectDeploymentPanel project={selectedProject} repositories={projectRepositories} open={workspaceVisible} /></> : null}
+                  {workspaceRoute.page === 'deployments' ? <><Space wrap style={{marginBottom:20}}><Button onClick={()=>setReleaseModalOpen(true)} disabled={!projectRepositories.length}>版本发布 / 移动端构建与分发</Button><Button onClick={()=>setApprovalModalOpen(true)} disabled={!projectRepositories.length}>发布审批</Button><Button onClick={()=>onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-runtime'))}>运行配置</Button></Space><ProjectDeploymentPanel key={selectedProject.id} project={selectedProject} repositories={projectRepositories} open={workspaceVisible} onConfigureConnection={() => onWorkspaceNavigate?.(projectPage(selectedProject.id, 'settings-runtime'))} /></> : null}
                   {workspaceRoute.page === 'domains' ? <ProjectCloudflareSettings project={selectedProject} view="operations" onConfigure={()=>onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-runtime'))} /> : null}
                   {workspaceRoute.page.startsWith('settings-') ? <>
                     <Typography.Title level={3}>{routeLabel(workspaceRoute)}</Typography.Title>
-                    {workspaceRoute.page === 'settings-runtime' ? <ProjectDeploymentPanel project={selectedProject} repositories={projectRepositories} open={workspaceVisible} configurationOnly /> : null}
+                    {workspaceRoute.page === 'settings-runtime' ? <ProjectDeploymentPanel key={selectedProject.id} project={selectedProject} repositories={projectRepositories} open={workspaceVisible} configurationOnly /> : null}
                     <ProjectSettingsPanel project={selectedProject} repositories={projectRepositories} contributors={summary?.contributors??[]} onSummaryChanged={()=>refreshProjectAfterGitTask(selectedProject.id)} onBranchTagsChanged={()=>setBranchTagRefreshToken(value=>value+1)} initialModule={workspaceRoute.page==='settings-general'?'basic':workspaceRoute.page==='settings-repositories'?'git':workspaceRoute.page==='settings-runtime'?'services':'plane'} allowedModules={workspaceRoute.page==='settings-general'?['basic','people']:workspaceRoute.page==='settings-repositories'?['git','branches']:workspaceRoute.page==='settings-runtime'?['services','release','cloudflare']:['plane','codex']} />
                     {workspaceRoute.page === 'settings-integrations' ? <ProjectPlanePanel project={selectedProject} onOpenGlobalSettings={onOpenSettings} onOpenProjectSettings={()=>setProjectSettingsDrawerOpen(true)} /> : null}
                   </> : null}

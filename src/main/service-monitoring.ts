@@ -239,6 +239,7 @@ export type ServiceDeploymentActionInput = {
 export type VercelDeploymentActionInput = ServiceDeploymentActionInput
 
 export type ServiceExternalProjectAliasInput = {
+  projectId?: string
   provider: ServiceProviderType
   externalProjectId: string
   alias?: string
@@ -328,6 +329,8 @@ export function classifyServiceMonitorStatus(statusCode: number, errorMessage = 
 
 export function migrateServiceMonitoringTables(db: DatabaseLike): void {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS service_monitoring_migrations (version INTEGER PRIMARY KEY);
+
     CREATE TABLE IF NOT EXISTS service_connections (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
@@ -525,7 +528,7 @@ export function migrateServiceMonitoringTables(db: DatabaseLike): void {
 
     INSERT OR IGNORE INTO global_service_connections (id, provider, name, token, team_id, workspace_id, railway_token_type, created_at, updated_at)
     SELECT id, provider, name, token, team_id, workspace_id, railway_token_type, created_at, updated_at
-    FROM service_connections;
+    FROM service_connections WHERE NOT EXISTS (SELECT 1 FROM service_monitoring_migrations WHERE version = 1);
 
     INSERT OR IGNORE INTO global_services (
       id, provider, connection_id, repository_id, name, external_project_id, external_service_id,
@@ -533,12 +536,12 @@ export function migrateServiceMonitoringTables(db: DatabaseLike): void {
     )
     SELECT id, provider, connection_id, repository_id, name, external_project_id, external_service_id,
       default_environment, health_path, enabled, last_synced_at, created_at, updated_at
-    FROM project_services;
+    FROM project_services WHERE NOT EXISTS (SELECT 1 FROM service_monitoring_migrations WHERE version = 1);
 
     INSERT OR IGNORE INTO project_service_bindings (project_id, service_id, repository_id, created_at, updated_at)
     SELECT project_id, id, repository_id, created_at, updated_at
     FROM project_services
-    WHERE project_id != '';
+    WHERE project_id != '' AND NOT EXISTS (SELECT 1 FROM service_monitoring_migrations WHERE version = 1);
 
     INSERT OR IGNORE INTO global_service_environments (
       id, service_id, provider, name, external_environment_id, status, deployment_status,
@@ -546,7 +549,7 @@ export function migrateServiceMonitoringTables(db: DatabaseLike): void {
     )
     SELECT id, service_id, provider, name, external_environment_id, status, deployment_status,
       latest_deployment_id, latest_deployment_url, latest_commit, updated_at
-    FROM service_environments;
+    FROM service_environments WHERE NOT EXISTS (SELECT 1 FROM service_monitoring_migrations WHERE version = 1);
 
     INSERT OR IGNORE INTO global_service_domains (
       id, service_id, environment_id, environment_name, domain, url, kind, enabled,
@@ -554,7 +557,7 @@ export function migrateServiceMonitoringTables(db: DatabaseLike): void {
     )
     SELECT id, service_id, environment_id, environment_name, domain, url, kind, enabled,
       last_status, last_status_code, last_response_ms, last_checked_at, last_error, created_at, updated_at
-    FROM service_domains;
+    FROM service_domains WHERE NOT EXISTS (SELECT 1 FROM service_monitoring_migrations WHERE version = 1);
 
     INSERT OR IGNORE INTO global_service_monitor_checks (id, service_id, domain_id, status, status_code, response_ms, checked_at, error_message)
     SELECT checks.id, checks.service_id, global_domains.id, checks.status, checks.status_code, checks.response_ms, checks.checked_at, checks.error_message
@@ -564,7 +567,10 @@ export function migrateServiceMonitoringTables(db: DatabaseLike): void {
     INNER JOIN global_service_domains global_domains
       ON global_domains.service_id = checks.service_id
       AND global_domains.domain = legacy_domains.domain
-      AND global_domains.environment_name = legacy_domains.environment_name;
+      AND global_domains.environment_name = legacy_domains.environment_name
+    WHERE NOT EXISTS (SELECT 1 FROM service_monitoring_migrations WHERE version = 1);
+
+    INSERT OR IGNORE INTO service_monitoring_migrations (version) VALUES (1);
 
     CREATE INDEX IF NOT EXISTS idx_project_services_project ON project_services(project_id);
     CREATE INDEX IF NOT EXISTS idx_service_domains_project ON service_domains(project_id);
@@ -576,6 +582,8 @@ export function migrateServiceMonitoringTables(db: DatabaseLike): void {
     CREATE INDEX IF NOT EXISTS idx_project_service_bindings_project ON project_service_bindings(project_id);
   `)
 
+  addColumnIfMissing(db, 'global_service_connections', 'project_id', "TEXT NOT NULL DEFAULT ''")
+  addColumnIfMissing(db, 'global_services', 'project_id', "TEXT NOT NULL DEFAULT ''")
   addColumnIfMissing(db, 'global_service_connections', 'auth_method', "TEXT NOT NULL DEFAULT 'token'")
   migrateRailwayOAuthTable(db)
 
@@ -630,10 +638,11 @@ function mapConnectionSecretRow(row: Record<string, unknown>, db: DatabaseLike):
   }
 }
 
-export function listServiceConnections(db: DatabaseLike): ServiceConnectionRecord[] {
+export function listServiceConnections(db: DatabaseLike, projectId?: string): ServiceConnectionRecord[] {
   return db
     .prepare('SELECT * FROM global_service_connections ORDER BY created_at ASC')
     .all()
+    .filter((row) => projectId === undefined || String((row as Record<string, unknown>).project_id ?? '') === projectId)
     .map((row) => mapConnectionRow(row as Record<string, unknown>, db))
 }
 
@@ -647,6 +656,9 @@ export function saveServiceConnection(db: DatabaseLike, input: ServiceConnection
   const provider = normalizeProvider(input.provider)
   const name = trimText(input.name) || (provider === 'vercel' ? 'Vercel' : 'Railway')
   const editing = input.id ? getServiceConnectionSecret(db, input.id) : null
+  const projectId = trimText(input.projectId) || editing?.projectId || ''
+  if (projectId) assertProjectExists(db, projectId)
+  if (editing?.projectId && editing.projectId !== projectId) throw new Error('不能修改其他项目的平台连接')
   const id = editing?.id ?? input.id ?? createId('service-connection')
   const authMethod = provider === 'railway' ? input.authMethod ?? editing?.authMethod ?? 'token' : 'token'
   const token = authMethod === 'oauth' ? '' : input.token === undefined ? editing?.token ?? '' : trimText(input.token)
@@ -670,6 +682,7 @@ export function saveServiceConnection(db: DatabaseLike, input: ServiceConnection
   }
 
   db.prepare('UPDATE global_service_connections SET auth_method = ? WHERE id = ?').run(authMethod, id)
+  if (projectId) db.prepare('UPDATE global_service_connections SET project_id = ? WHERE id = ?').run(projectId, id)
   if (editing?.authMethod === 'oauth' && authMethod !== 'oauth') getRailwayOAuthManager(db).disconnect(id, true)
 
   const row = db.prepare('SELECT * FROM global_service_connections WHERE id = ?').get(id)
@@ -706,7 +719,7 @@ export function deleteServiceConnection(db: DatabaseLike, connectionId: string):
 
   db.prepare('DELETE FROM global_service_connections WHERE id = ?').run(connectionId)
 
-  return listServiceConnections(db)
+  return listServiceConnections(db, connection.projectId || undefined)
 }
 
 function mapEnvironmentRow(row: Record<string, unknown>): ProjectServiceEnvironmentRecord {
@@ -1001,7 +1014,7 @@ export function listProjectServices(db: DatabaseLike, projectId: string): Projec
 
 export function listAllProjectServices(db: DatabaseLike): ProjectServiceRecord[] {
   return db
-    .prepare("SELECT services.*, '' AS bound_project_id, services.repository_id AS bound_repository_id FROM global_services services ORDER BY services.created_at ASC")
+    .prepare("SELECT services.*, services.project_id AS bound_project_id, services.repository_id AS bound_repository_id FROM global_services services ORDER BY services.created_at ASC")
     .all()
     .map((row) => mapServiceRow(db, row as Record<string, unknown>))
 }
@@ -1095,6 +1108,11 @@ export function saveProjectService(db: DatabaseLike, input: ProjectServiceInput)
   }
 
   const editing = input.id ? getProjectService(db, input.id) : null
+  const connection = input.connectionId ? getServiceConnectionSecret(db, input.connectionId) : null
+  const projectId = trimText(input.projectId) || editing?.projectId || connection?.projectId || ''
+  if (editing?.projectId && editing.projectId !== projectId) throw new Error('不能修改其他项目的服务')
+  if (connection?.projectId && connection.projectId !== projectId) throw new Error('请选择当前项目的平台连接')
+  if (connection && connection.provider !== provider) throw new Error('平台连接与服务类型不一致')
   const id = editing?.id ?? input.id ?? createId('project-service')
   const now = nowIso()
   const healthPath = normalizeHealthPath(input.healthPath)
@@ -1152,6 +1170,7 @@ export function saveProjectService(db: DatabaseLike, input: ProjectServiceInput)
     )
   }
 
+  if (projectId) db.prepare('UPDATE global_services SET project_id = ? WHERE id = ?').run(projectId, id)
   const service = getProjectService(db, id)
 
   if (!service) {
@@ -1161,9 +1180,9 @@ export function saveProjectService(db: DatabaseLike, input: ProjectServiceInput)
   const environmentIds = replaceServiceEnvironments(db, service, input.environments ?? [])
   replaceServiceDomains(db, { ...service, healthPath }, input.domains ?? [], environmentIds)
 
-  if (input.projectId) {
-    bindProjectService(db, { projectId: input.projectId, serviceId: id, repositoryId: input.repositoryId })
-    return listProjectServices(db, input.projectId).find((item) => item.id === id) as ProjectServiceRecord
+  if (projectId) {
+    bindProjectService(db, { projectId, serviceId: id, repositoryId: input.repositoryId ?? editing?.repositoryId })
+    return listProjectServices(db, projectId).find((item) => item.id === id) as ProjectServiceRecord
   }
 
   return getProjectService(db, id) as ProjectServiceRecord
@@ -1184,6 +1203,7 @@ export async function createVercelProjectDeploymentService(
 ): Promise<ProjectServiceRecord> {
   const connection = getServiceConnectionSecret(db, input.connectionId)
   if (!connection?.token && connection?.authMethod !== 'oauth') throw new Error('请先配置 Vercel Token')
+  if (connection.projectId && connection.projectId !== input.projectId) throw new Error('请选择当前项目的平台连接')
 
   const created = await createVercelProject(connection, {
     name: input.name,
@@ -1222,9 +1242,9 @@ export async function deployVercelStaticProjectForService(
 export function bindProjectService(db: DatabaseLike, input: ProjectServiceBindingInput): ProjectServiceRecord[] {
   assertProjectExists(db, input.projectId)
 
-  if (!getProjectService(db, input.serviceId)) {
-    throw new Error('服务不存在')
-  }
+  const service = getProjectService(db, input.serviceId)
+  if (!service) throw new Error('服务不存在')
+  if (service.projectId && service.projectId !== input.projectId) throw new Error('不能绑定其他项目的服务')
 
   const now = nowIso()
 
@@ -1251,11 +1271,11 @@ export function saveServiceExternalProjectAlias(db: DatabaseLike, input: Service
     `
     UPDATE global_services
     SET external_project_alias = ?, updated_at = ?
-    WHERE provider = ? AND external_project_id = ?
+    WHERE provider = ? AND external_project_id = ?${input.projectId ? ' AND project_id = ?' : ''}
   `
-  ).run(trimText(input.alias), nowIso(), provider, externalProjectId)
+  ).run(trimText(input.alias), nowIso(), provider, externalProjectId, ...(input.projectId ? [input.projectId] : []))
 
-  return listAllProjectServices(db)
+  return input.projectId ? listProjectServices(db, input.projectId) : listAllProjectServices(db)
 }
 
 export function recordServiceMonitorCheck(db: DatabaseLike, input: ServiceMonitorCheckInput): ServiceMonitorCheckRecord {
@@ -1402,7 +1422,8 @@ export function upsertProviderServiceSnapshot(
       service.externalServiceId === (snapshot.externalServiceId ?? '')
   )
 
-  return saveProjectService(db, providerSnapshotToProjectServiceInput(connectionId, snapshot, existing))
+  const connection = getServiceConnectionSecret(db, connectionId)
+  return saveProjectService(db, { ...providerSnapshotToProjectServiceInput(connectionId, snapshot, existing), projectId: connection?.projectId || undefined })
 }
 
 export async function syncServiceConnection(db: DatabaseLike, connectionId: string, fetcher: ServiceProviderFetch = fetch): Promise<ProjectServiceRecord[]> {

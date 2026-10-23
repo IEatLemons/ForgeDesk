@@ -28,7 +28,7 @@ export const TOOL_DIRECTORY: DirectoryItem[] = [
 export const SETTINGS_DIRECTORY: DirectoryItem[] = [
   { key: 'display', label: '界面与系统', children: [{ key: 'appearance', label: '外观' }, { key: 'menu-bar', label: '菜单栏整理' }, { key: 'log-refresh', label: 'Git 刷新设置' }] },
   { key: 'credentials', label: '身份凭据', children: [{ key: 'ai-accounts', label: 'AI 账号与额度' }, { key: 'git', label: 'Git 身份与环境' }, { key: 'github', label: 'GitHub Token' }, { key: 'private', label: 'SSH 私钥' }, { key: 'public', label: 'SSH 公钥' }, { key: 'config', label: 'SSH config' }, { key: 'gpg', label: 'GPG 签名' }, { key: 'codemagic', label: 'Codemagic 凭据' }] },
-  { key: 'integrations', label: '外部集成', children: [{ key: 'services', label: '服务平台连接' }, { key: 'plane', label: 'Plane' }, { key: 'oa', label: 'Lark / 飞书' }, { key: 'ai', label: 'AI 模型配置' }] },
+  { key: 'integrations', label: '外部集成', children: [{ key: 'plane', label: 'Plane' }, { key: 'oa', label: 'Lark / 飞书' }, { key: 'ai', label: 'AI 模型配置' }] },
   { key: 'maintenance', label: '数据与维护', children: [{ key: 'migration', label: '任务迁移与核对' }, { key: 'legacy-todos', label: '旧待办恢复' }, { key: 'legacy-ai', label: '历史 AI 工作流' }, { key: 'repair', label: '原始记录修复' }, { key: 'updates', label: '应用更新' }, { key: 'layout', label: '布局恢复' }] }
 ]
 export const GLOBAL_DIRECTORY: { key: WorkspaceArea; label: string; footer: boolean; children?: DirectoryItem[] }[] = [
