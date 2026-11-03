@@ -6,7 +6,7 @@ export type ProjectPage = 'overview' | 'goals' | 'tasks' | 'milestones' | 'versi
 type DetailLocation = { detailView?: 'preview'|'overview'|'children'|'ai'|'history'; progressObject?: ProgressObject; progressFilter?: string }
 export type AppRoute = DetailLocation & (
   | { scope: 'global'; area: WorkspaceArea; page: string; entityId?: string; projectFilter?: string; view?: string }
-  | { scope: 'project'; projectId: string; page: ProjectPage; repositoryId?: string; entityId?: string; view?: string })
+  | { scope: 'project'; projectId: string; page: ProjectPage; repositoryId?: string; entityId?: string; view?: string; serviceId?: string; environmentName?: string })
 export type ProjectRoute = Extract<AppRoute, { scope: 'project' }>
 export type GlobalRoute = Extract<AppRoute, { scope: 'global' }>
 export type DirectoryItem = { key: string; label: string; children?: DirectoryItem[] }
@@ -83,6 +83,8 @@ export function validRoute(value: unknown): value is AppRoute {
   if (route.detailView!==undefined&&!['preview','overview','children','ai','history'].includes(route.detailView))return false
   if (route.view !== undefined && typeof route.view !== 'string') return false
   if (route.scope === 'project' && route.repositoryId !== undefined && typeof route.repositoryId !== 'string') return false
+  if (route.scope === 'project' && route.serviceId !== undefined && typeof route.serviceId !== 'string') return false
+  if (route.scope === 'project' && route.environmentName !== undefined && typeof route.environmentName !== 'string') return false
   if (route.scope === 'global' && route.projectFilter !== undefined && typeof route.projectFilter !== 'string') return false
   if (route.scope === 'project') return typeof route.projectId === 'string' && !!route.projectId && !!findDirectory(PROJECT_DIRECTORY, route.page) && !PROJECT_DIRECTORY.some(item => item.children && item.key === route.page)
   if (route.scope !== 'global') return false

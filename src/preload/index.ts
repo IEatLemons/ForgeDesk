@@ -8,6 +8,13 @@ function invokeGitIpc<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 contextBridge.exposeInMainWorld('forgeDesk', {
+  readProjectOperations: (projectId: string) => ipcRenderer.invoke('project:operations:read', projectId),
+  refreshProjectOperations: (input: { projectId: string; force?: boolean }) => ipcRenderer.invoke('project:operations:refresh', input),
+  onProjectOperationsUpdated: (listener: (projectId: string) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, projectId: string): void => listener(projectId)
+    ipcRenderer.on('project:operations:updated', wrapped)
+    return () => ipcRenderer.removeListener('project:operations:updated', wrapped)
+  },
   onWorkspaceUpdated: (listener: (snapshot: WorkspaceSnapshot) => void) => {
     const wrapped=(_event:Electron.IpcRendererEvent,payload:unknown):void=>listener(parseGitIpcPayload<WorkspaceSnapshot>('workspace:updated',payload))
     ipcRenderer.on('workspace:updated',wrapped)
@@ -189,7 +196,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   removeServiceDomain: (serviceId: string, domain: string, removeRedirects?: boolean) => ipcRenderer.invoke('service:domain:remove', serviceId, domain, removeRedirects),
   verifyServiceDomain: (serviceId: string, domain: string) => ipcRenderer.invoke('service:domain:verify', serviceId, domain),
   inspectServiceDomainConfig: (serviceId: string, domain: string) => ipcRenderer.invoke('service:domain:config', serviceId, domain),
-  listServiceRuntimeLogs: (serviceId: string, environmentName: string) => ipcRenderer.invoke('service:runtime:logs', serviceId, environmentName),
+  listServiceRuntimeLogs: (serviceId: string, environmentName: string, deploymentId?: string) => ipcRenderer.invoke('service:runtime:logs', serviceId, environmentName, deploymentId),
   inspectProjectDeploymentContext: (repositoryId: string) => ipcRenderer.invoke('project:deployment:context:inspect', repositoryId),
   suggestProjectDeploymentConfig: (repositoryId: string, input: { provider: DeploymentProviderType; sourceMode: DeploymentSourceMode }) =>
     ipcRenderer.invoke('project:deployment:suggest', repositoryId, input),

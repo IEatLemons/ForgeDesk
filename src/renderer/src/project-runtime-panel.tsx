@@ -3,7 +3,7 @@ import { Alert, Button, Card, Drawer, Empty, Space, Tag, Typography, message } f
 import type { ProjectDeploymentTarget } from './data'
 import type { ProjectRuntimeLog, ProjectRuntimeSnapshot } from '../../shared/project-runtime'
 
-export function ProjectRuntimePanel({ projectId, visible, onConfigure }: { projectId: string; visible: boolean; onConfigure: () => void }): JSX.Element {
+export function ProjectRuntimePanel({ projectId, visible, onConfigure, compactEmpty = false }: { projectId: string; visible: boolean; onConfigure: () => void; compactEmpty?: boolean }): JSX.Element {
   const [targets, setTargets] = useState<ProjectDeploymentTarget[]>([])
   const [snapshots, setSnapshots] = useState<ProjectRuntimeSnapshot[]>([])
   const [error, setError] = useState(''), [busy, setBusy] = useState(false)
@@ -41,6 +41,7 @@ export function ProjectRuntimePanel({ projectId, visible, onConfigure }: { proje
     try { await Promise.all(targets.filter(target => target.config.extra.runtimeMonitoring === 'true').map(target => window.forgeDesk.refreshProjectRuntime({ projectId, targetId: target.id }))); const next=await window.forgeDesk.readProjectRuntime(projectId);if(current===revision.current){setSnapshots(next);setError('')} }
     catch (error) { if(current===revision.current)setError(String(error)) } finally { if(current===revision.current)setBusy(false) }
   }
+  if (compactEmpty && !targets.length && !error) return <div className="operations-other-platforms"><Typography.Text type="secondary">自有服务器</Typography.Text><Button size="small" onClick={onConfigure}>配置 SSH / PM2 或 Compose</Button></div>
   return <Card title="自有服务器 · 只读运行状态" extra={<Space><Button onClick={onConfigure}>目标与监控配置</Button><Button loading={busy} onClick={() => void refresh()}>刷新</Button></Space>}>
     <Typography.Paragraph type="secondary">PM2 进程与 Compose 容器的当前状态，不是上一次部署结果。仅在本页可见时检查。</Typography.Paragraph>
     {error ? <Alert type="error" showIcon message="运行检查读取失败" description={error} /> : null}

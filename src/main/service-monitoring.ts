@@ -1,5 +1,6 @@
 import { getRailwayOAuthManager, migrateRailwayOAuthTable } from './railway-oauth.js'
 import type { RailwayOAuthSummary } from '../shared/railway-oauth.js'
+import { emptyServiceOperations, operationsRefreshMs, type ProjectOperations, type ServiceOperationsState, type OperationsSource } from '../shared/project-operations.js'
 import {
   addVercelProjectDomain,
   cancelRailwayDeployment,
@@ -10,6 +11,7 @@ import {
   deployRailwayServiceInstance,
   inspectVercelDomainConfig,
   listRailwayDeployments,
+  listRailwayServiceDomains,
   listRailwayProjectEnvVars,
   listVercelDeployments,
   listVercelProjectEnvVars,
@@ -20,6 +22,10 @@ import {
   readVercelDeploymentLogs,
   readVercelEnvVar,
   readVercelRuntimeLogs,
+  readVercelProductionDeployment,
+  readVercelServiceEnvironments,
+  readVercelServiceDomains,
+  readRailwayServiceEnvironments,
   redeployRailwayDeployment,
   redeployVercelDeployment,
   removeVercelProjectDomain,
@@ -330,6 +336,11 @@ export function classifyServiceMonitorStatus(statusCode: number, errorMessage = 
 export function migrateServiceMonitoringTables(db: DatabaseLike): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS service_monitoring_migrations (version INTEGER PRIMARY KEY);
+
+    CREATE TABLE IF NOT EXISTS project_service_operations (
+      service_id TEXT PRIMARY KEY REFERENCES global_services(id) ON DELETE CASCADE,
+      state_json TEXT NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS service_connections (
       id TEXT PRIMARY KEY,
@@ -1652,6 +1663,160 @@ export async function listServiceDeployments(
   return deployments
 }
 
+const operationsInFlight = new WeakMap<DatabaseLike, Map<string, Promise<void>>>()
+const operationsConnectionBackoff = new WeakMap<DatabaseLike, Map<string, number>>()
+
+// Unlike configuration replacement, polling must preserve domain IDs and check history.
+function updateOperationsEnvironments(db: DatabaseLike, service: ProjectServiceRecord, environments: ProviderServiceEnvironmentSnapshot[]): void {
+  const statement = db.prepare(`INSERT INTO global_service_environments
+    (id, service_id, provider, name, external_environment_id, status, deployment_status, latest_deployment_id, latest_deployment_url, latest_commit, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(service_id, name) DO UPDATE SET
+    external_environment_id=excluded.external_environment_id, deployment_status=excluded.deployment_status,
+    latest_deployment_id=excluded.latest_deployment_id, latest_deployment_url=excluded.latest_deployment_url, latest_commit=excluded.latest_commit, updated_at=excluded.updated_at`)
+  for (const environment of environments) {
+    const existing = service.environments.find(value => value.name === environment.name)
+    statement.run(existing?.id || createId('service-env'), service.id, service.provider, environment.name, environment.externalEnvironmentId || '', existing?.status || '', environment.deploymentStatus || '', environment.latestDeploymentId || '', environment.latestDeploymentUrl || '', environment.latestCommit || '', nowIso())
+  }
+  for (const environment of service.environments) if (!environments.some(value => value.name === environment.name)) db.prepare('DELETE FROM global_service_environments WHERE id = ?').run(environment.id)
+  db.prepare('UPDATE global_services SET last_synced_at = ? WHERE id = ?').run(nowIso(), service.id)
+}
+
+function updateOperationsDomains(db: DatabaseLike, service: ProjectServiceRecord, domains: ProviderServiceDomainSnapshot[]): void {
+  const manual = service.domains.filter(domain => domain.kind === 'manual' && !domains.some(item => normalizeDomainValue(item.domain) === domain.domain))
+  const kept = new Set<string>()
+  const statement = db.prepare(`INSERT INTO global_service_domains
+    (id, service_id, environment_id, environment_name, domain, url, kind, enabled, last_status, last_status_code, last_response_ms, last_checked_at, last_error, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET
+    environment_id=excluded.environment_id, environment_name=excluded.environment_name, domain=excluded.domain,
+    url=excluded.url, kind=excluded.kind, last_status=excluded.last_status, last_status_code=excluded.last_status_code,
+    last_response_ms=excluded.last_response_ms, last_checked_at=excluded.last_checked_at, last_error=excluded.last_error, updated_at=excluded.updated_at`)
+  for (const input of [...domains, ...manual]) {
+    const domain = normalizeDomainValue(input.domain)
+    const name = input.environmentName || ''
+    const existing = service.domains.find(value => value.domain === domain && value.environmentName === name)
+      ?? service.domains.find(value => value.domain === domain && !kept.has(value.id))
+    const id = existing?.id || createId('service-domain')
+    if (kept.has(id)) continue
+    kept.add(id)
+    const url = 'url' in input && typeof input.url === 'string' ? input.url : buildServiceHealthUrl(domain, service.healthPath)
+    const health = existing?.url === url ? existing : undefined
+    statement.run(id, service.id, service.environments.find(environment => environment.name === name)?.id || '', name, domain, url, input.kind || 'custom', existing?.enabled === false || input.enabled === false ? 0 : 1,
+      health?.lastStatus || 'unknown', health?.lastStatusCode || 0, health?.lastResponseMs || 0, health?.lastCheckedAt || '', health?.lastError || '', existing?.createdAt || nowIso(), nowIso())
+  }
+  for (const domain of service.domains) if (!kept.has(domain.id)) db.prepare('DELETE FROM global_service_domains WHERE id = ?').run(domain.id)
+}
+
+function operationsIdentity(db: DatabaseLike, serviceId: string): string {
+  const service = getProjectService(db, serviceId)
+  const connection = service ? getServiceConnectionSecret(db, service.connectionId) : null
+  return JSON.stringify([service?.provider, service?.connectionId, service?.externalProjectId, service?.externalServiceId, connection?.updatedAt])
+}
+
+function readServiceOperations(db: DatabaseLike, serviceId: string): ServiceOperationsState {
+  const row = db.prepare('SELECT state_json FROM project_service_operations WHERE service_id = ?').get(serviceId) as { state_json: string } | undefined
+  if (!row) return emptyServiceOperations()
+  try {
+    const state = JSON.parse(row.state_json) as ServiceOperationsState
+    return state.identity === operationsIdentity(db, serviceId) ? state : emptyServiceOperations()
+  } catch { return emptyServiceOperations() }
+}
+
+export function readProjectOperations(db: DatabaseLike, projectId: string): ProjectOperations {
+  assertProjectExists(db, projectId)
+  const services = listProjectServices(db, projectId)
+  return {
+    projectId, services,
+    deployments: Object.fromEntries(services.map(service => [service.id, listCachedServiceDeployments(db, service.id, { limit: 20 })])),
+    states: Object.fromEntries(services.map(service => [service.id, readServiceOperations(db, service.id)]))
+  }
+}
+
+async function refreshBoundServiceOperations(db: DatabaseLike, service: ProjectServiceRecord, force: boolean, fetcher: ServiceProviderFetch): Promise<void> {
+  let flights = operationsInFlight.get(db)
+  if (!flights) operationsInFlight.set(db, flights = new Map())
+  const pending = flights.get(service.id)
+  if (pending) return pending
+  let backoff = operationsConnectionBackoff.get(db)
+  if (!backoff) operationsConnectionBackoff.set(db, backoff = new Map())
+  const connectionBackoff = backoff
+  const run = async () => {
+    const state = readServiceOperations(db, service.id)
+    const identity = operationsIdentity(db, service.id)
+    state.identity = identity
+    const connectionKey = `${service.connectionId}:${getServiceConnectionSecret(db, service.connectionId)?.updatedAt}`
+    const context = () => service.provider === 'vercel' ? getVercelServiceContext(db, service.id) : getRailwayServiceContext(db, service.id)
+    const current = () => {
+      const value = getProjectService(db, service.id)
+      if (!value || operationsIdentity(db, service.id) !== identity) throw new Error('服务绑定已变更，请重新刷新')
+      return value
+    }
+    const source = async (key: OperationsSource, action: () => Promise<void>) => {
+      const value = state.sources[key]
+      const now = Date.now()
+      const retry = Math.max(Date.parse(value.retryAt) || 0, connectionBackoff.get(connectionKey) || 0)
+      if (retry > now) { value.retryAt = new Date(retry).toISOString(); return }
+      if (!force && value.updatedAt && now - Date.parse(value.updatedAt) < operationsRefreshMs) return
+      try {
+        current()
+        await action()
+        value.updatedAt = nowIso(); value.error = ''; value.retryAt = ''
+      } catch (error) {
+        const failure = error as Error & { status?: number; retryAfterMs?: number }
+        value.error = failure instanceof Error ? failure.message : String(error)
+        const limited = failure.status === 429 || /rate.limit|too many|429/i.test(value.error)
+        const seconds = value.error.match(/(?:retry|again|wait).*?(\d+)\s*(?:seconds?|s\b)/i)?.[1]
+        const retryMs = limited ? failure.retryAfterMs || (seconds ? Number(seconds) * 1000 : operationsRefreshMs) : /401|403|unauthoriz|forbidden|token|授权|权限/i.test(value.error) ? 5 * operationsRefreshMs : operationsRefreshMs
+        value.retryAt = new Date(Date.now() + Math.max(1000, retryMs)).toISOString()
+        if (limited) connectionBackoff.set(connectionKey, Date.parse(value.retryAt))
+      }
+    }
+    let refreshedEnvironments: ProviderServiceEnvironmentSnapshot[] | undefined
+    await source('environments', async () => {
+      const { connection, projectId } = context()
+      refreshedEnvironments = service.provider === 'vercel'
+        ? await readVercelServiceEnvironments(connection, projectId, fetcher)
+        : await readRailwayServiceEnvironments(connection, projectId, service.externalServiceId, fetcher)
+      const existing = current()
+      updateOperationsEnvironments(db, existing, refreshedEnvironments)
+    })
+    await source('deployments', async () => {
+      const { connection, projectId } = context()
+      const environments = current().environments
+      const deployments = service.provider === 'vercel' ? await listVercelDeployments(connection, projectId, { limit: 20 }, fetcher)
+        : (await Promise.all((environments.length ? environments : [{ externalEnvironmentId: '', name: '' }]).map(environment => listRailwayDeployments(connection, projectId, service.externalServiceId, environment.externalEnvironmentId, { limit: 20 }, fetcher, environment.name)))).flat()
+      current()
+      cacheServiceDeployments(db, service.id, deployments)
+    })
+    await source('production', async () => {
+      const { connection, projectId } = context()
+      const production = service.provider === 'vercel' ? await readVercelProductionDeployment(connection, projectId, fetcher) : null
+      current()
+      state.production = production
+    })
+    await source('domains', async () => {
+      const { connection, projectId } = context()
+      const domains = service.provider === 'vercel'
+        ? await readVercelServiceDomains(connection, projectId, fetcher)
+        : await listRailwayServiceDomains(connection, projectId, service.externalServiceId, refreshedEnvironments ?? current().environments, fetcher)
+      const existing = current()
+      updateOperationsDomains(db, existing, domains)
+    })
+    if (getProjectService(db, service.id) && operationsIdentity(db, service.id) === identity) db.prepare('INSERT INTO project_service_operations(service_id, state_json) VALUES (?, ?) ON CONFLICT(service_id) DO UPDATE SET state_json = excluded.state_json').run(service.id, JSON.stringify(state))
+  }
+  const promise = run().finally(() => flights!.delete(service.id))
+  flights.set(service.id, promise)
+  return promise
+}
+
+export async function refreshProjectOperations(db: DatabaseLike, input: { projectId: string; force?: boolean }, fetcher: ServiceProviderFetch = (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(20_000) })): Promise<ProjectOperations> {
+  assertProjectExists(db, input.projectId)
+  const services = listProjectServices(db, input.projectId).filter(service => service.enabled)
+  for (let index = 0; index < services.length; index += 3) {
+    await Promise.all(services.slice(index, index + 3).map(service => refreshBoundServiceOperations(db, service, Boolean(input.force), fetcher)))
+  }
+  return readProjectOperations(db, input.projectId)
+}
+
 export async function runServiceDeploymentAction(
   db: DatabaseLike,
   serviceId: string,
@@ -1868,7 +2033,8 @@ export async function listServiceRuntimeLogs(
   db: DatabaseLike,
   serviceId: string,
   environmentName: string,
-  fetcher: ServiceProviderFetch = fetch
+  fetcher: ServiceProviderFetch = fetch,
+  deploymentId?: string
 ): Promise<ServiceEnvironmentLogRecord[]> {
   const service = getProjectService(db, serviceId)
 
@@ -1877,9 +2043,17 @@ export async function listServiceRuntimeLogs(
   }
 
   const environment = service.environments.find((item) => item.name === environmentName)
+  if (deploymentId) {
+    const production = readServiceOperations(db, serviceId).production
+    const allowed = production?.id === deploymentId && environmentName === 'production'
+      || environment?.latestDeploymentId === deploymentId
+      || listCachedServiceDeployments(db, serviceId, { target: environmentName, limit: 100 }).some(deployment => deployment.id === deploymentId)
+    if (!allowed) throw new Error('部署不属于当前服务与环境')
+  }
+  const selectedDeploymentId = deploymentId || environment?.latestDeploymentId
 
   if (service.provider === 'railway') {
-    if (!environment?.latestDeploymentId) {
+    if (!selectedDeploymentId) {
       return []
     }
 
@@ -1889,16 +2063,16 @@ export async function listServiceRuntimeLogs(
       throw new Error('请先配置 Railway Token')
     }
 
-    return readRailwayRuntimeLogs(connection, environment.latestDeploymentId, fetcher)
+    return readRailwayRuntimeLogs(connection, selectedDeploymentId, fetcher)
   }
 
   const { connection, projectId } = getVercelServiceContext(db, serviceId)
 
-  if (!environment?.latestDeploymentId) {
+  if (!selectedDeploymentId) {
     return []
   }
 
-  return readVercelRuntimeLogs(connection, projectId, environment.latestDeploymentId, fetcher)
+  return readVercelRuntimeLogs(connection, projectId, selectedDeploymentId, fetcher)
 }
 
 export async function checkServiceDomain(

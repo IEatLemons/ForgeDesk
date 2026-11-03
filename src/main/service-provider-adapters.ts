@@ -248,7 +248,13 @@ function timestampField(record: Record<string, unknown>, ...keys: string[]): str
 async function readJsonResponse(response: Response, context: string): Promise<unknown> {
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
-    throw new Error(`${context}失败：${response.status} ${response.statusText}${detail ? ` ${detail}` : ''}`.trim())
+    const error = new Error(`${context}失败：${response.status} ${response.statusText}${detail ? ` ${detail}` : ''}`.trim()) as Error & { status?: number; retryAfterMs?: number }
+    error.status = response.status
+    const retryAfter = response.headers?.get('retry-after')
+    const reset = response.headers?.get('x-ratelimit-reset')
+    if (retryAfter) error.retryAfterMs = /^\d+(\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now())
+    else if (reset) error.retryAfterMs = Math.max(0, Number(reset) * 1000 - Date.now())
+    throw error
   }
 
   return response.json()
@@ -405,7 +411,9 @@ function parseVercelLogText(text: string): unknown[] {
       return parsed
     }
 
-    return asArray(asRecord(parsed).events || asRecord(parsed).logs)
+    const record = asRecord(parsed)
+    if (Array.isArray(record.events) || Array.isArray(record.logs)) return asArray(record.events || record.logs)
+    return getLogMessage(record, asRecord(record.payload)) ? [record] : []
   } catch {
     return trimmed.split(/\r?\n/).filter(Boolean).map((line) => {
       try {
@@ -437,7 +445,7 @@ function getVercelDeploymentEnvironment(deployment: Record<string, unknown>): st
     return customEnvironmentName
   }
 
-  return stringField(deployment, 'target', 'environment') || 'production'
+  return stringField(deployment, 'target', 'environment') || 'preview'
 }
 
 function createVercelEnvironment(deployment: Record<string, unknown>): ProviderServiceEnvironmentSnapshot {
@@ -608,6 +616,52 @@ export async function listVercelDeployments(
   const deploymentsJson = await readVercelJson(connection, deploymentsUrl, '读取 Vercel 部署历史', fetcher)
 
   return asArray(asRecord(deploymentsJson).deployments).map(normalizeVercelDeployment)
+}
+
+// Operations refreshes are scoped to an already-bound project. Discovery remains explicit.
+export async function readVercelProductionDeployment(connection: ServiceProviderConnection, projectId: string, fetcher: ServiceProviderFetch = fetch): Promise<ServiceDeploymentSummary | null> {
+  const project = asRecord(await readVercelJson(connection, createVercelApiUrl(`/v9/projects/${encodePathSegment(projectId)}`, connection.teamId), '读取 Vercel 生产指向', fetcher))
+  const production = asRecord(asRecord(project.targets).production)
+  return stringField(production, 'id', 'uid') ? { ...normalizeVercelDeployment(production), target: 'production' } : null
+}
+
+export async function readVercelServiceEnvironments(connection: ServiceProviderConnection, projectId: string, fetcher: ServiceProviderFetch = fetch): Promise<ProviderServiceEnvironmentSnapshot[]> {
+  const custom = await readVercelJson(connection, createVercelApiUrl(`/v9/projects/${encodePathSegment(projectId)}/custom-environments`, connection.teamId), '读取 Vercel 自定义环境', fetcher).catch((error: Error & { status?: number }) => {
+    // Projects without custom-environment support can still refresh the built-in environments.
+    if (error.status === 402 || error.status === 404) return { environments: [] }
+    throw error
+  })
+  const environments = new Map(getVercelCustomEnvironments(custom).map(environment => [environment.name, environment]))
+  const names = [...new Set(['production', 'preview', ...environments.keys()])]
+  await Promise.all(names.map(async name => {
+    const [latest] = await listVercelDeployments(connection, projectId, { target: name, limit: 1 }, fetcher)
+    environments.set(name, latest ? {
+      name, externalEnvironmentId: environments.get(name)?.externalEnvironmentId,
+      deploymentStatus: latest.state, latestDeploymentId: latest.id, latestDeploymentUrl: latest.url, latestCommit: latest.commitSha
+    } : environments.get(name) ?? createEmptyVercelEnvironment(name))
+  }))
+  return getOrderedVercelEnvironments(environments)
+}
+
+export async function readVercelServiceDomains(connection: ServiceProviderConnection, projectId: string, fetcher: ServiceProviderFetch = fetch): Promise<ProviderServiceDomainSnapshot[]> {
+  const json = asRecord(await readVercelJson(connection, createVercelApiUrl(`/v9/projects/${encodePathSegment(projectId)}/domains`, connection.teamId), '读取 Vercel 域名', fetcher))
+  return asArray(json.domains).map(item => {
+    const domain = asRecord(item)
+    const custom = asRecord(domain.customEnvironment)
+    return { domain: stringField(domain, 'name', 'domain'), environmentName: stringField(custom, 'slug', 'name') || (stringField(domain, 'gitBranch') ? 'preview' : 'production'), kind: 'custom' as const, enabled: true }
+  }).filter(domain => Boolean(domain.domain))
+}
+
+export async function readRailwayServiceEnvironments(connection: ServiceProviderConnection, projectId: string, serviceId: string, fetcher: ServiceProviderFetch = fetch): Promise<ProviderServiceEnvironmentSnapshot[]> {
+  const data = await readRailwayGraphql(connection, '读取 Railway 服务环境', `query ForgeDeskBoundEnvironments($id: String!) { project(id: $id) { id environments { edges { node { id name } } } } }`, { id: projectId }, fetcher)
+  const project = asRecord(data.project)
+  if (!stringField(project, 'id')) throw new Error('Railway 项目不存在或无访问权限')
+  return Promise.all(getRailwayProjectEnvironments(project).map(async environment => {
+    const name = stringField(environment, 'name')
+    const externalEnvironmentId = stringField(environment, 'id')
+    const [latest] = await listRailwayDeployments(connection, projectId, serviceId, externalEnvironmentId, { limit: 1 }, fetcher, name)
+    return { name, externalEnvironmentId, deploymentStatus: latest?.state ?? '', latestDeploymentId: latest?.id ?? '', latestDeploymentUrl: latest?.url ?? '', latestCommit: latest?.commitSha ?? '' }
+  }))
 }
 
 export async function createVercelProject(
@@ -1431,7 +1485,7 @@ export async function cancelRailwayDeployment(
   )
 }
 
-async function listRailwayServiceDomains(
+export async function listRailwayServiceDomains(
   connection: ServiceProviderConnection,
   projectId: string,
   serviceId: string,

@@ -510,6 +510,8 @@ import {
   listServiceMonitorHistory as listServiceMonitorHistoryRecords,
   listServiceRuntimeLogs as listServiceRuntimeLogRecords,
   migrateServiceMonitoringTables,
+  readProjectOperations,
+  refreshProjectOperations,
   recordServiceMonitorCheck,
   removeServiceDomain as removeServiceDomainRecord,
   revealServiceEnvVar as revealServiceEnvVarRecord,
@@ -7802,6 +7804,13 @@ ipcMain.handle('project:service:bind', async (_event, input: { projectId: string
   bindProjectServiceRecord(getDatabase(), input)
 )
 
+ipcMain.handle('project:operations:read', (_event, projectId: string) => readProjectOperations(getDatabase(), projectId))
+ipcMain.handle('project:operations:refresh', async (_event, input: { projectId: string; force?: boolean }) => {
+  const result = await refreshProjectOperations(getDatabase(), input)
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('project:operations:updated', input.projectId)
+  return result
+})
+
 ipcMain.handle('project:services:sync', async (_event, connectionId?: string, projectId?: string): Promise<ProjectServiceRecord[]> => {
   if (!projectId) throw new Error('请在项目内同步服务')
   const connections = connectionId
@@ -7881,8 +7890,8 @@ ipcMain.handle('service:domain:config', async (_event, serviceId: string, domain
   inspectServiceDomainConfigRecord(getDatabase(), serviceId, domain)
 )
 
-ipcMain.handle('service:runtime:logs', async (_event, serviceId: string, environmentName: string): Promise<ServiceEnvironmentLogRecord[]> =>
-  listServiceRuntimeLogRecords(getDatabase(), serviceId, environmentName)
+ipcMain.handle('service:runtime:logs', async (_event, serviceId: string, environmentName: string, deploymentId?: string): Promise<ServiceEnvironmentLogRecord[]> =>
+  listServiceRuntimeLogRecords(getDatabase(), serviceId, environmentName, undefined, deploymentId)
 )
 
 ipcMain.handle(

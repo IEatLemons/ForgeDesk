@@ -2879,7 +2879,7 @@ type MarketDataSnapshot = {
 }
 
 interface Window {
-  forgeDesk: import('../../shared/project-progress').ProjectProgressApi & {
+  forgeDesk: import('../../shared/project-progress').ProjectProgressApi & import('../../shared/project-operations').ProjectOperationsApi & {
     listProjects: () => Promise<WorkspaceSnapshot>
     setProjectArchived: (input: { id: string; archived: boolean }) => Promise<WorkspaceSnapshot>
     onWorkspaceUpdated: (listener:(snapshot:WorkspaceSnapshot)=>void)=>()=>void
@@ -3026,7 +3026,7 @@ interface Window {
     removeServiceDomain: (serviceId: string, domain: string, removeRedirects?: boolean) => Promise<ProjectServiceRecord>
     verifyServiceDomain: (serviceId: string, domain: string) => Promise<ProjectServiceRecord>
     inspectServiceDomainConfig: (serviceId: string, domain: string) => Promise<VercelDomainConfig>
-    listServiceRuntimeLogs: (serviceId: string, environmentName: string) => Promise<ServiceEnvironmentLogRecord[]>
+    listServiceRuntimeLogs: (serviceId: string, environmentName: string, deploymentId?: string) => Promise<ServiceEnvironmentLogRecord[]>
     inspectProjectDeploymentContext: (repositoryId: string) => Promise<DeploymentInspection>
     suggestProjectDeploymentConfig: (repositoryId: string, input: { provider: DeploymentProviderType; sourceMode: DeploymentSourceMode }) => Promise<ProjectDeploymentSuggestion>
     readProjectRuntime: (projectId: string) => Promise<import('../../shared/project-runtime').ProjectRuntimeSnapshot[]>

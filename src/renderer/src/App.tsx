@@ -107,6 +107,7 @@ import { DirectoryLanding, ProgressOverview, RepositoryDirectory } from './works
 import { RepositoryHistoryFilters, RepositoryWorkspaceHeader } from './repository-workspace-header'
 import { getRepositoryView } from './repository-workspace-view'
 import { ProjectRuntimePanel } from './project-runtime-panel'
+import { ProjectOperationsPanel, type OperationsView } from './project-operations-panel'
 import { GLOBAL_DIRECTORY, TOOL_DIRECTORY, SETTINGS_DIRECTORY, findDirectory, globalPage, legacyRoute, projectPage, routeLabel, workspaceLayoutKey, type AppRoute, type ProjectRoute } from './workspace-navigation'
 import type {
   AppRuntimeInfo,
@@ -7992,12 +7993,14 @@ function DeploymentApprovalModal({
 function ServiceDetailDrawer({
   service,
   open,
+  initialTab = 'environments',
   onClose,
   onServiceChange,
   onEdit
 }: {
   service: ProjectService | null
   open: boolean
+  initialTab?: string
   onClose: () => void
   onServiceChange: (service: ProjectService) => void
   onEdit: (service: ProjectService) => void
@@ -8038,7 +8041,7 @@ function ServiceDetailDrawer({
 
   useEffect(() => {
     setLiveService(service)
-    setActiveTab('environments')
+    setActiveTab(initialTab)
     setLogEnvironment(null)
     setLogMode('build')
     setLogLines([])
@@ -8055,7 +8058,7 @@ function ServiceDetailDrawer({
     setEnvVarVisibleCount(serviceEnvVarInitialVisibleCount)
     setDomainModalOpen(false)
     setDomainConfig(null)
-  }, [service?.id, open])
+  }, [service?.id, open, initialTab])
 
   async function loadDeployments(): Promise<void> {
     if (!activeService || !window.forgeDesk || !getServiceProviderCapabilities(activeService.provider).canListDeployments) {
@@ -14515,6 +14518,24 @@ function ProjectLogTreePanel({
   )
 }
 
+function ProjectOperationsWorkspace({ project, repositories, view, route, visible, onNavigate, onRelease, onApproval }: {
+  project: Project; repositories: Repository[]; view: OperationsView; route: AppRoute; visible: boolean
+  onNavigate: (route: AppRoute) => void; onRelease: () => void; onApproval: () => void
+}): JSX.Element {
+  const [detail, setDetail] = useState<{ service: ProjectService; tab: string } | null>(null)
+  const [wizardOpen, setWizardOpen] = useState(false)
+  useEffect(() => { setDetail(null); setWizardOpen(false) }, [project.id, view])
+  const configure = () => onNavigate(projectPage(project.id, 'settings-runtime'))
+  return <>
+    <ProjectOperationsPanel projectId={project.id} view={view} serviceId={route.scope === 'project' ? route.serviceId : undefined} environmentName={route.scope === 'project' ? route.environmentName : undefined} onNavigate={onNavigate} onInspect={(service, tab) => setDetail({ service, tab: tab === 'deployments' ? 'environments' : tab })} onNewDeployment={view === 'deployments' ? () => setWizardOpen(true) : undefined} />
+    {view === 'deployments' ? <Space wrap className="operations-release-actions"><Button onClick={onRelease} disabled={!repositories.length}>版本发布 / 移动端构建与分发</Button><Button onClick={onApproval} disabled={!repositories.length}>发布审批</Button><Button onClick={() => setWizardOpen(true)}>发布目标与任务日志</Button></Space> : null}
+    {view === 'environments' || view === 'monitoring' ? <ProjectRuntimePanel projectId={project.id} visible={visible} onConfigure={configure} compactEmpty /> : null}
+    {view === 'domains' ? <Collapse items={[{ key: 'cloudflare', label: 'Cloudflare DNS 管理', children: <ProjectCloudflareSettings project={project} view="operations" onConfigure={configure} /> }]} /> : null}
+    <Drawer title="新建部署 · 发布目标与任务" width="min(1100px, 100vw)" open={wizardOpen} onClose={() => setWizardOpen(false)}>{wizardOpen ? <ProjectDeploymentPanel project={project} repositories={repositories} open={visible && wizardOpen} onConfigureConnection={configure} /> : null}</Drawer>
+    <ServiceDetailDrawer service={detail?.service ?? null} open={Boolean(detail)} initialTab={detail?.tab} onClose={() => setDetail(null)} onEdit={configure} onServiceChange={service => { setDetail(current => current ? { ...current, service } : null); window.dispatchEvent(new CustomEvent('project-services-changed', { detail: project.id })) }} />
+  </>
+}
+
 function ProjectServiceMonitorPanel({ projectId, view, onConfigure }: { projectId: string; view?:'environments'|'monitoring';onConfigure?:()=>void }): JSX.Element {
   const [services, setServices] = useState<ProjectService[]>([])
   const [history, setHistory] = useState<ServiceMonitorCheck[]>([])
@@ -17361,10 +17382,7 @@ function ProjectOverview({
                   </> : !selectedProjectGitRepository?.available ? <Alert type="warning" showIcon message="仓库当前不可用" description={selectedProjectGitRepository?.scanError||'当前扫描未发现仓库；原记录仍保留。请检查目录或重新扫描。'} action={<Button onClick={()=>void rescanSelectedProject(selectedProject)}>重新扫描</Button>} /> : workspaceRepositoryView === 'branches' ? <div className="repository-branches-panel">
                     {['本地','远端'].map(kind=><section key={kind}><h2>{kind}分支 <span>{(kind==='本地'?selectedProjectGitRepository.branches:selectedProjectGitRepository.remoteBranches).length}</span></h2><List locale={{emptyText:`暂无${kind}分支`}} dataSource={kind==='本地'?selectedProjectGitRepository.branches:selectedProjectGitRepository.remoteBranches} renderItem={name=><List.Item><Space><BranchesOutlined/><Typography.Text>{name}</Typography.Text>{kind==='本地'&&name===selectedProjectGitRepository.currentBranch?<span className="repository-current-branch">当前</span>:null}</Space></List.Item>}/></section>)}
                   </div> : <GitWorkspacePanel compact key={workspaceRoute.repositoryId} repositories={projectRepositories.filter(item=>item.id===workspaceRoute.repositoryId)} /> : null}
-                  {workspaceRoute.page === 'environments' ? <><ProjectServiceMonitorPanel projectId={selectedProject.id} view="environments" onConfigure={()=>onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-runtime'))} /><ProjectRuntimePanel projectId={selectedProject.id} visible={workspaceVisible} onConfigure={()=>onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-runtime'))} /></> : null}
-                  {workspaceRoute.page === 'monitoring' ? <><ProjectRuntimePanel projectId={selectedProject.id} visible={workspaceVisible} onConfigure={()=>onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-runtime'))} /><ProjectServiceMonitorPanel projectId={selectedProject.id} view="monitoring" onConfigure={()=>onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-runtime'))} /></> : null}
-                  {workspaceRoute.page === 'deployments' ? <><Space wrap style={{marginBottom:20}}><Button onClick={()=>setReleaseModalOpen(true)} disabled={!projectRepositories.length}>版本发布 / 移动端构建与分发</Button><Button onClick={()=>setApprovalModalOpen(true)} disabled={!projectRepositories.length}>发布审批</Button><Button onClick={()=>onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-runtime'))}>运行配置</Button></Space><ProjectDeploymentPanel key={selectedProject.id} project={selectedProject} repositories={projectRepositories} open={workspaceVisible} onConfigureConnection={() => onWorkspaceNavigate?.(projectPage(selectedProject.id, 'settings-runtime'))} /></> : null}
-                  {workspaceRoute.page === 'domains' ? <ProjectCloudflareSettings project={selectedProject} view="operations" onConfigure={()=>onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-runtime'))} /> : null}
+                  {['environments', 'deployments', 'monitoring', 'domains'].includes(workspaceRoute.page) ? <ProjectOperationsWorkspace key={selectedProject.id} project={selectedProject} repositories={projectRepositories} view={workspaceRoute.page as OperationsView} route={workspaceRoute} visible={workspaceVisible} onNavigate={onWorkspaceNavigate!} onRelease={() => setReleaseModalOpen(true)} onApproval={() => setApprovalModalOpen(true)} /> : null}
                   {workspaceRoute.page.startsWith('settings-') ? <>
                     <Typography.Title level={3}>{routeLabel(workspaceRoute)}</Typography.Title>
                     {workspaceRoute.page === 'settings-runtime' ? <ProjectDeploymentPanel key={selectedProject.id} project={selectedProject} repositories={projectRepositories} open={workspaceVisible} configurationOnly /> : null}

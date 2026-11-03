@@ -11,8 +11,10 @@ app.disableHardwareAcceleration()
 // Only this disposable QA launcher bypasses close prompts on termination.
 process.once('SIGTERM',()=>app.exit(0))
 const errors = []
+const operationsFixtures = process.argv.includes('--operations') ? await import('./operations-smoke.mjs') : null
+const operationsRequests = operationsFixtures?.installOperationsFixtures()
 const performanceCalls = []
-if (process.argv.includes('--projects-perf')) {
+if (process.argv.includes('--projects-perf') || process.argv.includes('--operations')) {
   const handle = ipcMain.handle.bind(ipcMain)
   ipcMain.handle = (channel, listener) => handle(channel, async (...args) => {
     const call = { channel, started: performance.now() }; performanceCalls.push(call)
@@ -35,6 +37,11 @@ const timer = setInterval(async () => {
   clearInterval(timer)
   window.setTitle('ForgeDesk · 正式界面隔离验收')
   console.log(`WORKSPACE_QA_READY ${directory}`)
+  if (operationsFixtures) {
+    try { await operationsFixtures.verifyOperations(window, directory, operationsRequests, performanceCalls); app.exit(0) }
+    catch (error) { console.error('OPERATIONS_QA_FAILED ' + error.stack); console.error('OPERATIONS_QA_RENDER_ERRORS ' + JSON.stringify(errors)); app.exit(1) }
+    return
+  }
   if (process.argv.includes('--projects-perf')) {
     try { await (await import('./project-list-performance.mjs')).measureProjectList(window, directory, performanceCalls) }
     catch (error) { console.error('PROJECT_LIST_PERFORMANCE_FAILED '+error.stack); app.exit(1); return }
