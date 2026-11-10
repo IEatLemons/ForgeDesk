@@ -3,7 +3,7 @@ import { DownOutlined, SwapOutlined } from '@ant-design/icons'
 import type { MenuProps } from 'antd'
 import { getAppModeLabel, type AppMode } from './app-mode'
 
-export function AppModeSwitcher({ mode, onChange }: { mode: AppMode; onChange: (mode: AppMode) => void }): JSX.Element {
+export function AppModeSwitcher({ mode, onChange, compact = false }: { mode: AppMode; onChange: (mode: AppMode) => void; compact?: boolean }): JSX.Element {
   const items: MenuProps['items'] = [
     { key: 'simple', label: '简洁版', disabled: mode === 'simple' },
     { key: 'full', label: '完整版', disabled: mode === 'full' }
@@ -18,13 +18,14 @@ export function AppModeSwitcher({ mode, onChange }: { mode: AppMode; onChange: (
       }}
     >
       <Button
-        className="app-mode-switcher"
+        className={`app-mode-switcher${compact ? ' is-responsive' : ''}`}
         size="small"
         icon={<SwapOutlined />}
-        aria-label="切换版本"
+        aria-label={compact ? `切换版本：${getAppModeLabel(mode)}` : '切换版本'}
+        title={compact ? `切换版本：${getAppModeLabel(mode)}` : undefined}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        {getAppModeLabel(mode)} <DownOutlined />
+        <span className="app-mode-switcher-label">{getAppModeLabel(mode)}</span> <DownOutlined className="app-mode-switcher-arrow" />
       </Button>
     </Dropdown>
   )

@@ -31,8 +31,8 @@ export function WorkspaceTerminalPanel({ visible, children, onHide, onOpenRemote
   useEffect(() => {
     const parent = hostRef.current?.parentElement
     if (!parent) return
-    // Keep the 46px toolbar and at least 120px of the page visible while docked.
-    const updateBounds = () => setMaximumHeight(Math.max(minimumHeight, parent.clientHeight - 46 - 120))
+    // The toolbar is outside this container; keep at least 120px of the page visible.
+    const updateBounds = () => setMaximumHeight(Math.max(minimumHeight, parent.clientHeight - 120))
     updateBounds()
     const observer = new ResizeObserver(updateBounds)
     observer.observe(parent)
