@@ -2902,6 +2902,7 @@ interface Window {
     deleteAiProjectResourceLink: (input: { providerId: string; resourcePath: string }) => Promise<void>
     deleteProject: (projectId: string) => Promise<WorkspaceSnapshot>
     rescanProjectRepositories: (projectId: string) => Promise<WorkspaceSnapshot>
+    removeUnavailableRepositoryRecord: (repositoryId: string) => Promise<WorkspaceSnapshot>
     initializeProjectRepository: (projectId: string) => Promise<WorkspaceSnapshot>
     listRepositories: (projectId?: string) => Promise<RepositoryRecord[]>
     getRepositoryDetail: (repositoryId: string, refresh?: boolean) => Promise<RepositoryRecord>

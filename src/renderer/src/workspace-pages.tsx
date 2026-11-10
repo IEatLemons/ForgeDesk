@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Alert, Button, Card, Empty, Input, List, Space, Spin, Tag, Typography } from 'antd'
-import { BranchesOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons'
+import { BranchesOutlined, DeleteOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons'
 import type { Project, Repository } from './data'
 import { useProjectProgress } from './use-project-progress'
 import { useForgeDeskStore } from './store'
@@ -44,13 +44,15 @@ export function ProgressOverview({ project, onNavigate, onCreateProject }: { pro
   </section>
 }
 
-export function RepositoryDirectory({ repositories, onSelect, onConfigure, onRescan, rescanning, onInitialize }: {
+export function RepositoryDirectory({ repositories, onSelect, onConfigure, onRescan, rescanning, onInitialize, onRemove, removingRepositoryId }: {
   repositories: Repository[]
   onSelect: (id: string, view: RepositoryView) => void
   onConfigure: () => void
   onRescan: () => void
   rescanning: boolean
   onInitialize: () => void
+  onRemove: (repository: Repository) => void
+  removingRepositoryId: string | null
 }): JSX.Element {
   const [query, setQuery] = useState('')
   const rows = getRepositoryDirectoryRows(repositories, query)
@@ -82,6 +84,7 @@ export function RepositoryDirectory({ repositories, onSelect, onConfigure, onRes
           <Button onClick={() => onSelect(repo.id, 'history')}>提交树</Button>
           <Button type="text" disabled={!repo.available} onClick={() => onSelect(repo.id, 'branches')}>分支</Button>
           <Button type="text" disabled={!repo.available} onClick={() => onSelect(repo.id, 'changes')}>变更</Button>
+          {!repo.available && !repo.active ? <Button danger type="text" icon={<DeleteOutlined />} aria-label={`移除仓库 ${repo.name} 的记录`} disabled={rescanning || Boolean(removingRepositoryId && removingRepositoryId !== repo.id)} loading={removingRepositoryId === repo.id} onClick={() => onRemove(repo)}>移除记录</Button> : null}
         </div>
       </article>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={repositories.length ? '没有匹配的仓库' : '还没有本地 Git 仓库'}>
         {!repositories.length ? <Space wrap><Button type="primary" onClick={onInitialize}>初始化仓库</Button><Button onClick={onConfigure}>配置已有仓库</Button></Space> : null}

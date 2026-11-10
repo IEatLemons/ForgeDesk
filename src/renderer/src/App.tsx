@@ -15411,6 +15411,7 @@ function ProjectOverview({
     deleteProject,
     initializeProjectRepository,
     rescanProjectRepositories,
+    removeUnavailableRepositoryRecord,
     setProjectFavorite,
     setProjectArchived,
     setProjectSummary,
@@ -15420,6 +15421,7 @@ function ProjectOverview({
   } = useForgeDeskStore(useShallow(state => ({
     projects: state.projects, repositories: state.repositories, selectedProjectId: state.selectedProjectId, summaries: state.summaries,
     deleteProject: state.deleteProject, initializeProjectRepository: state.initializeProjectRepository, rescanProjectRepositories: state.rescanProjectRepositories,
+    removeUnavailableRepositoryRecord: state.removeUnavailableRepositoryRecord,
     setProjectFavorite: state.setProjectFavorite, setProjectArchived: state.setProjectArchived, setProjectSummary: state.setProjectSummary,
     setSelectedProjectId: state.setSelectedProjectId, loadWorkspace: state.loadWorkspace, updateRepository: state.updateRepository
   })))
@@ -15438,6 +15440,7 @@ function ProjectOverview({
   const [projectDeploymentDrawerOpen, setProjectDeploymentDrawerOpen] = useState(false)
   const [projectSettingsDrawerOpen, setProjectSettingsDrawerOpen] = useState(false)
   const [rescanningProjectId, setRescanningProjectId] = useState<string | null>(null)
+  const [removingRepositoryId, setRemovingRepositoryId] = useState<string | null>(null)
   const [initializingProjectId, setInitializingProjectId] = useState<string | null>(null)
   const [projectSettingsInitialModule, setProjectSettingsInitialModule] = useState<ProjectSettingsModuleKey | undefined>(undefined)
   const [projectSettingsInitialGitTab, setProjectSettingsInitialGitTab] = useState<'repositories' | 'remotes' | 'commands' | undefined>(undefined)
@@ -16410,6 +16413,39 @@ function ProjectOverview({
     }
   }
 
+  function confirmRemoveUnavailableRepository(repository: Repository): void {
+    Modal.confirm({
+      title: `移除 ${repository.name} 的仓库记录？`,
+      content: <>
+        <p>{repository.localPath}</p>
+        <p>将移除 ForgeDesk 中该仓库的记录及关联配置，不会删除本地目录或远端仓库。嵌套仓库记录会保留，需单独移除；以后重新扫描发现该仓库时会再次添加。</p>
+      </>,
+      okText: '移除记录',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        setRemovingRepositoryId(repository.id)
+        try {
+          await removeUnavailableRepositoryRecord(repository.id)
+          setProjectGitRepositoryId('')
+          setProjectGitRefreshToken(current => current + 1)
+          if (workspaceRoute?.repositoryId === repository.id) {
+            onWorkspaceNavigate?.(projectPage(repository.projectId, 'repositories'))
+          }
+          message.success('已移除仓库记录，本地文件未删除')
+          void refreshSummary(repository.projectId).catch(error => {
+            message.warning(getErrorMessage(error, '仓库记录已移除，但刷新提交统计失败'))
+          })
+        } catch (error) {
+          message.error(getErrorMessage(error, '移除仓库记录失败'))
+          throw error
+        } finally {
+          setRemovingRepositoryId(null)
+        }
+      }
+    })
+  }
+
   function openProjectRemoteSettings(): void {
     setProjectSettingsInitialModule('git')
     setProjectSettingsInitialGitTab('remotes')
@@ -17378,8 +17414,26 @@ function ProjectOverview({
                 ...(workspaceNavigation && workspaceRoute ? [{ key: 'workspace', label: routeLabel(workspaceRoute), children: <>
                   {workspaceRoute.page === 'overview' ? <><ProgressOverview project={selectedProject} onNavigate={onWorkspaceNavigate!} /><Space wrap><Button onClick={() => onOpenProjectWindow(selectedProject.id)}>独立窗口</Button><Button onClick={() => void toggleProjectFavorite(selectedProject)}>{selectedProject.isFavorite ? '取消收藏' : '收藏项目'}</Button><Button onClick={() => void setProjectArchived({id:selectedProject.id, archived:!selectedProject.archivedAt}).catch(error=>message.error(getErrorMessage(error)))}>{selectedProject.archivedAt ? '恢复项目' : '归档项目'}</Button></Space></> : null}
                   {workspaceRoute.page === 'repositories' ? !workspaceRoute.repositoryId ? <>
-                    <RepositoryDirectory repositories={projectRepositories} onSelect={(repositoryId,view) => onWorkspaceNavigate?.({...workspaceRoute, repositoryId, view})} onConfigure={() => onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-repositories'))} onRescan={()=>void rescanSelectedProject(selectedProject)} rescanning={!!rescanningProjectId} onInitialize={()=>void initializeSelectedProjectRepository(selectedProject)} />
-                  </> : !selectedProjectGitRepository?.available ? <Alert type="warning" showIcon message="仓库当前不可用" description={selectedProjectGitRepository?.scanError||'当前扫描未发现仓库；原记录仍保留。请检查目录或重新扫描。'} action={<Button onClick={()=>void rescanSelectedProject(selectedProject)}>重新扫描</Button>} /> : workspaceRepositoryView === 'branches' ? <div className="repository-branches-panel">
+                    <RepositoryDirectory
+                      repositories={projectRepositories}
+                      onSelect={(repositoryId, view) => onWorkspaceNavigate?.({...workspaceRoute, repositoryId, view})}
+                      onConfigure={() => onWorkspaceNavigate?.(projectPage(selectedProject.id, 'settings-repositories'))}
+                      onRescan={() => void rescanSelectedProject(selectedProject)}
+                      rescanning={!!rescanningProjectId}
+                      onInitialize={() => void initializeSelectedProjectRepository(selectedProject)}
+                      onRemove={confirmRemoveUnavailableRepository}
+                      removingRepositoryId={removingRepositoryId}
+                    />
+                  </> : !selectedProjectGitRepository?.available ? <Alert
+                    type="warning"
+                    showIcon
+                    message="仓库当前不可用"
+                    description={selectedProjectGitRepository?.scanError || '当前扫描未发现仓库；原记录仍保留。请检查目录或重新扫描。'}
+                    action={<Space wrap>
+                      <Button loading={!!rescanningProjectId} onClick={() => void rescanSelectedProject(selectedProject)}>重新扫描</Button>
+                      {selectedProjectGitRepository && !selectedProjectGitRepository.active ? <Button danger disabled={!!rescanningProjectId} loading={removingRepositoryId === selectedProjectGitRepository.id} onClick={() => confirmRemoveUnavailableRepository(selectedProjectGitRepository)}>移除记录</Button> : null}
+                    </Space>}
+                  /> : workspaceRepositoryView === 'branches' ? <div className="repository-branches-panel">
                     {['本地','远端'].map(kind=><section key={kind}><h2>{kind}分支 <span>{(kind==='本地'?selectedProjectGitRepository.branches:selectedProjectGitRepository.remoteBranches).length}</span></h2><List locale={{emptyText:`暂无${kind}分支`}} dataSource={kind==='本地'?selectedProjectGitRepository.branches:selectedProjectGitRepository.remoteBranches} renderItem={name=><List.Item><Space><BranchesOutlined/><Typography.Text>{name}</Typography.Text>{kind==='本地'&&name===selectedProjectGitRepository.currentBranch?<span className="repository-current-branch">当前</span>:null}</Space></List.Item>}/></section>)}
                   </div> : <GitWorkspacePanel compact key={workspaceRoute.repositoryId} repositories={projectRepositories.filter(item=>item.id===workspaceRoute.repositoryId)} /> : null}
                   {['environments', 'deployments', 'monitoring', 'domains'].includes(workspaceRoute.page) ? <ProjectOperationsWorkspace key={selectedProject.id} project={selectedProject} repositories={projectRepositories} view={workspaceRoute.page as OperationsView} route={workspaceRoute} visible={workspaceVisible} onNavigate={onWorkspaceNavigate!} onRelease={() => setReleaseModalOpen(true)} onApproval={() => setApprovalModalOpen(true)} /> : null}

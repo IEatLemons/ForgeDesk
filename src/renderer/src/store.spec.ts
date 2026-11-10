@@ -60,4 +60,26 @@ describe('workspace store read isolation', () => {
     store.getState().applyWorkspace(snapshot())
     assert.equal(store.getState().repositories[0].hasChanges, false)
   })
+  it('applies record removal immediately and ignores an earlier workspace read', async () => {
+    const read = deferred<ReturnType<typeof snapshot>>()
+    Object.assign(globalThis, { window: { forgeDesk: {
+      listProjects: () => read.promise,
+      removeUnavailableRepositoryRecord: async (id: string) => {
+        assert.equal(id, repo.id)
+        return { projects: [project], repositories: [] }
+      }
+    } } })
+    const pending = store.getState().loadWorkspace()
+    await store.getState().removeUnavailableRepositoryRecord(repo.id)
+    read.resolve(snapshot()); await pending
+    assert.equal(store.getState().repositories.length, 0)
+    assert.equal(store.getState().selectedProjectId, project.id)
+  })
+  it('keeps the record when removal is rejected', async () => {
+    Object.assign(globalThis, { window: { forgeDesk: {
+      removeUnavailableRepositoryRecord: async () => { throw new Error('请先重新扫描') }
+    } } })
+    await assert.rejects(store.getState().removeUnavailableRepositoryRecord(repo.id), /重新扫描/)
+    assert.equal(store.getState().repositories[0].id, repo.id)
+  })
 })

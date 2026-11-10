@@ -13,6 +13,7 @@ import simpleGit from 'simple-git'
 import { QuickBuildOutputReader, validateQuickBuildArtifact } from './quick-build'
 import type { QuickBuildStartInput, QuickBuildRestartInput, QuickBuildTask as QuickBuildTaskSnapshot } from '../shared/quick-build'
 import { setProjectArchived } from './project-archive'
+import { removeUnavailableRepositoryRecord } from './repository-records'
 import { ProjectRuntimeService } from './project-runtime'
 import { AsyncReadCache } from './async-read-cache'
 import { getRepositoryIndexLockIssue } from './git-index-lock'
@@ -7373,6 +7374,16 @@ registerGitIpc('projects:archive', async (_event, input: { id: string; archived:
 registerGitIpc('projects:delete', async (_event, projectId: string): Promise<WorkspaceSnapshot> => deleteProject(projectId))
 
 registerGitIpc('project:repositories:rescan', async (_event, projectId: string): Promise<WorkspaceSnapshot> => rescanProjectRepositories(projectId))
+
+registerGitIpc('repository:record:remove', async (_event, repositoryId: string): Promise<WorkspaceSnapshot> => {
+  removeUnavailableRepositoryRecord(getDatabase(), repositoryId)
+  repositoryWorkspaceStatusCache.invalidate(repositoryId)
+  const snapshot = getWorkspaceSnapshot()
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('workspace:updated', serializeGitIpcPayload('workspace:updated', snapshot))
+  }
+  return snapshot
+})
 
 registerGitIpc('project:repository:init', async (_event, projectId: string): Promise<WorkspaceSnapshot> => initializeProjectRepository(projectId))
 

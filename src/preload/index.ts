@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   deleteAiProjectResourceLink: (input: { providerId: string; resourcePath: string }) => ipcRenderer.invoke('ai-project-resource-link:delete', input),
   deleteProject: (projectId: string) => invokeGitIpc<WorkspaceSnapshot>('projects:delete', projectId),
   rescanProjectRepositories: (projectId: string) => invokeGitIpc<WorkspaceSnapshot>('project:repositories:rescan', projectId),
+  removeUnavailableRepositoryRecord: (repositoryId: string) => invokeGitIpc<WorkspaceSnapshot>('repository:record:remove', repositoryId),
   initializeProjectRepository: (projectId: string) => invokeGitIpc<WorkspaceSnapshot>('project:repository:init', projectId),
   listRepositories: (projectId?: string) => invokeGitIpc<RepositoryRecord[]>('repositories:list', projectId),
   getRepositoryDetail: (repositoryId: string, refresh = true) => invokeGitIpc<RepositoryRecord>('repository:detail', repositoryId, refresh),

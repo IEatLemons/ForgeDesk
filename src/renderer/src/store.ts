@@ -27,6 +27,7 @@ type ForgeDeskState = {
   setSelectedProjectId: (projectId: string) => void
   loadWorkspace: () => Promise<void>
   rescanProjectRepositories: (projectId: string) => Promise<void>
+  removeUnavailableRepositoryRecord: (repositoryId: string) => Promise<void>
   initializeProjectRepository: (projectId: string) => Promise<void>
   createProject: (projectName: string, workspacePath: string, scanned: ScannedRepository[]) => Promise<void>
   createEmptyProject: (projectName: string, parentPath: string) => Promise<void>
@@ -94,6 +95,11 @@ export const useForgeDeskStore = create<ForgeDeskState>((set, get) => ({
     }
 
     const snapshot = await window.forgeDesk.rescanProjectRepositories(projectId)
+    get().applyWorkspace(snapshot)
+  },
+  removeUnavailableRepositoryRecord: async (repositoryId) => {
+    if (!window.forgeDesk) throw new Error('请在 ForgeDesk 桌面应用中移除仓库记录')
+    const snapshot = await window.forgeDesk.removeUnavailableRepositoryRecord(repositoryId)
     get().applyWorkspace(snapshot)
   },
   initializeProjectRepository: async (projectId) => {
