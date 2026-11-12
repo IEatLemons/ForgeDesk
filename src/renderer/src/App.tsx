@@ -100,6 +100,7 @@ import { WorkspaceTerminalPanel } from './workspace-terminal-panel'
 import { ProjectDirectory } from './project-directory'
 import { QuickBuildPanel } from './quick-build-panel'
 import { WorkspaceVisibilityProvider, useWorkspaceVisible } from './workspace-visibility'
+import { sameWorkspaceValue } from './workspace-snapshot'
 import type { DirectoryController } from './project-directory-model'
 import { useShallow } from 'zustand/react/shallow'
 import { useWorkspaceNavigation } from './use-workspace-navigation'
@@ -6470,16 +6471,23 @@ function SettingsPanel({
   )
 }
 
-function RepositoryRemoteManager({ repositories }: { repositories: Repository[] }): JSX.Element {
-  const { updateRepository } = useForgeDeskStore()
+function RepositoryRemoteManager({ repositories, active }: { repositories: Repository[]; active: boolean }): JSX.Element {
+  const updateRepository = useForgeDeskStore((state) => state.updateRepository)
+  const workspaceVisible = useWorkspaceVisible()
   const [repositoryId, setRepositoryId] = useState(repositories[0]?.id ?? '')
   const [editingRemote, setEditingRemote] = useState<GitRemote | null>(null)
   const [remoteModalOpen, setRemoteModalOpen] = useState(false)
   const [savingRemote, setSavingRemote] = useState(false)
+  const [deletingRemote, setDeletingRemote] = useState(false)
   const [fetchingRemoteKey, setFetchingRemoteKey] = useState<string | null>(null)
   const [gitError, setGitError] = useState<GitErrorGuidance | null>(null)
+  const [checkingRemotes, setCheckingRemotes] = useState(false)
+  const [remoteReadError, setRemoteReadError] = useState('')
+  const checkRemotesRef = useRef<(() => void) | null>(null)
   const [remoteForm] = Form.useForm<RepositoryRemoteForm>()
   const selectedRepository = repositories.find((repository) => repository.id === repositoryId) ?? repositories[0] ?? null
+  const selectedRepositoryId = selectedRepository?.id
+  const remoteOperationRunning = savingRemote || deletingRemote || fetchingRemoteKey !== null
 
   useEffect(() => {
     if (repositories.length === 0) {
@@ -6491,6 +6499,54 @@ function RepositoryRemoteManager({ repositories }: { repositories: Repository[] 
       setRepositoryId(repositories[0].id)
     }
   }, [repositories, repositoryId])
+
+  useEffect(() => {
+    setCheckingRemotes(false)
+    setRemoteReadError('')
+    if (!active || !workspaceVisible || !selectedRepositoryId || !window.forgeDesk || remoteOperationRunning) {
+      return
+    }
+
+    const id = selectedRepositoryId
+    let cancelled = false
+    let checking = false
+
+    async function checkRemotes(showLoading = false): Promise<void> {
+      if (checking || document.hidden) return
+
+      checking = true
+      if (showLoading) setCheckingRemotes(true)
+      try {
+        const refreshed = await window.forgeDesk.refreshRepositoryRemotes(id)
+        if (cancelled) return
+
+        const current = useForgeDeskStore.getState().repositories.find((repository) => repository.id === id)
+        if (current && (current.remoteCount !== refreshed.remoteCount || !sameWorkspaceValue(current.remotes, refreshed.remotes))) {
+          updateRepository(refreshed)
+        }
+        setRemoteReadError('')
+      } catch (error) {
+        if (!cancelled) setRemoteReadError(getErrorMessage(error))
+      } finally {
+        checking = false
+        if (!cancelled && showLoading) setCheckingRemotes(false)
+      }
+    }
+
+    checkRemotesRef.current = () => void checkRemotes(true)
+    const checkWhenVisible = () => void checkRemotes()
+    void checkRemotes(true)
+    window.addEventListener('focus', checkWhenVisible)
+    document.addEventListener('visibilitychange', checkWhenVisible)
+    const interval = window.setInterval(checkWhenVisible, 5000)
+    return () => {
+      cancelled = true
+      checkRemotesRef.current = null
+      window.removeEventListener('focus', checkWhenVisible)
+      document.removeEventListener('visibilitychange', checkWhenVisible)
+      window.clearInterval(interval)
+    }
+  }, [active, workspaceVisible, selectedRepositoryId, remoteOperationRunning, updateRepository])
 
   function openRemoteModal(remote?: GitRemote): void {
     setEditingRemote(remote ?? null)
@@ -6563,6 +6619,7 @@ function RepositoryRemoteManager({ repositories }: { repositories: Repository[] 
       okButtonProps: { danger: true },
       cancelText: '取消',
       onOk: async () => {
+        setDeletingRemote(true)
         try {
           const repository = await window.forgeDesk.deleteRepositoryRemote(selectedRepository.id, remote.name)
           updateRepository(repository)
@@ -6570,6 +6627,8 @@ function RepositoryRemoteManager({ repositories }: { repositories: Repository[] 
           message.success('远端已删除')
         } catch (error) {
           setGitError(createGitErrorGuidance(error, `删除远端 ${remote.name}`))
+        } finally {
+          setDeletingRemote(false)
         }
       }
     })
@@ -6615,6 +6674,9 @@ function RepositoryRemoteManager({ repositories }: { repositories: Repository[] 
           onChange={setRepositoryId}
         />
         <Space wrap>
+          <Button icon={<ReloadOutlined />} loading={checkingRemotes} disabled={remoteOperationRunning} onClick={() => checkRemotesRef.current?.()}>
+            刷新远端配置
+          </Button>
           <Button icon={<DownloadOutlined />} loading={fetchingRemoteKey === `${selectedRepository?.id}:all`} onClick={() => fetchRemote()}>
             Fetch 全部
           </Button>
@@ -6624,14 +6686,16 @@ function RepositoryRemoteManager({ repositories }: { repositories: Repository[] 
         </Space>
       </div>
       <GitErrorNotice guidance={gitError} onClose={() => setGitError(null)} />
+      {remoteReadError && <Alert type="error" showIcon message="读取本地远端配置失败" description={remoteReadError} />}
       <Table
         rowKey="name"
         size="small"
         columns={remoteColumns}
         dataSource={selectedRepository?.remotes ?? []}
+        loading={checkingRemotes}
         pagination={false}
         scroll={{ x: 900 }}
-        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前仓库还没有远端" /> }}
+        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={remoteReadError ? '远端配置不可用' : '当前仓库还没有远端'} /> }}
       />
       <Modal
         title={editingRemote ? `编辑远端：${editingRemote.name}` : '新增远端'}
@@ -13119,7 +13183,8 @@ function ProjectSettingsPanel({
   onBranchTagsChanged,
   initialModule,
   initialGitTab,
-  allowedModules
+  allowedModules,
+  visible = true
 }: {
   project: Project
   repositories: Repository[]
@@ -13129,6 +13194,7 @@ function ProjectSettingsPanel({
   initialModule?: ProjectSettingsModuleKey
   initialGitTab?: 'repositories' | 'remotes' | 'commands'
   allowedModules?: ProjectSettingsModuleKey[]
+  visible?: boolean
 }): JSX.Element {
   const { updateProject } = useForgeDeskStore()
   const [form] = Form.useForm<ProjectSettingsForm>()
@@ -13267,7 +13333,7 @@ function ProjectSettingsPanel({
               {
                 key: 'remotes',
                 label: '远端与主推送目标',
-                children: <RepositoryRemoteManager repositories={repositories} />
+                children: <RepositoryRemoteManager repositories={repositories} active={visible && activeModule.key === 'git' && gitSettingsTab === 'remotes'} />
               },
               {
                 key: 'commands',
@@ -17328,6 +17394,7 @@ function ProjectOverview({
                 contributors={summary?.contributors ?? []}
                 initialModule={projectSettingsInitialModule}
                 initialGitTab={projectSettingsInitialGitTab}
+                visible={projectSettingsDrawerOpen}
                 onSummaryChanged={() => refreshSummary(selectedProject.id)}
                 onBranchTagsChanged={() => setBranchTagRefreshToken((current) => current + 1)}
               />

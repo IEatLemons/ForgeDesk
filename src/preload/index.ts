@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   getRepositoryTagSyncStatus: (repositoryId: string) => invokeGitIpc<RepositoryTagSyncSnapshot>('repository:tag-sync-status', repositoryId),
   pushRepositoryTag: (repositoryId: string, input: GitTagPushInput) => invokeGitIpc<RepositoryTagSyncSnapshot>('repository:tag:push', repositoryId, input),
   pushRepositoryMissingTags: (repositoryId: string, input?: { tagName?: string }) => invokeGitIpc<RepositoryTagPushBatchResult>('repository:tags:push-missing', repositoryId, input),
+  refreshRepositoryRemotes: (repositoryId: string) => invokeGitIpc<RepositoryRecord>('repository:remotes:refresh', repositoryId),
   saveRepositoryRemote: (input: RepositoryRemoteInput) => invokeGitIpc<RepositoryRecord>('repository:remote:save', input),
   deleteRepositoryRemote: (repositoryId: string, remoteName: string) => invokeGitIpc<RepositoryRecord>('repository:remote:delete', repositoryId, remoteName),
   fetchRepositoryRemote: (repositoryId: string, remoteName?: string, operationId?: string) => invokeGitIpc<RepositoryRecord>('repository:remote:fetch', repositoryId, remoteName, operationId),

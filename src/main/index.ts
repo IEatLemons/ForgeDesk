@@ -3257,6 +3257,15 @@ function createUnavailableRepositoryScan(localPath: string, context: RepositoryS
   }
 }
 
+async function readRepositoryRemotes(git: ReturnType<typeof simpleGit>): Promise<GitRemote[]> {
+  const remotes = await git.getRemotes(true)
+  return remotes.map(({ name, refs }) => ({
+    name,
+    fetchUrl: refs.fetch ?? '',
+    pushUrl: refs.push ?? ''
+  }))
+}
+
 async function scanRepository(localPath: string, context: RepositoryScanContext = {}): Promise<RepositoryScanResult | null> {
   const normalizedPath = resolve(expandHomePath(localPath))
 
@@ -3265,10 +3274,10 @@ async function scanRepository(localPath: string, context: RepositoryScanContext 
   }
 
   const git = simpleGit(normalizedPath).env('GIT_OPTIONAL_LOCKS', '0')
-  const [status, log, gitRemotes, branchInfo, localUserName, localUserEmail, effectiveUserName, effectiveUserEmail, branchName, checkedOutCommit] = await Promise.all([
+  const [status, log, remotes, branchInfo, localUserName, localUserEmail, effectiveUserName, effectiveUserEmail, branchName, checkedOutCommit] = await Promise.all([
     git.status(),
     git.log({ maxCount: 1 }).catch(() => ({ latest: undefined })),
-    git.getRemotes(true),
+    readRepositoryRemotes(git),
     listRepositoryBranches(normalizedPath),
     runGitInPath(normalizedPath, ['config', '--local', 'user.name']),
     runGitInPath(normalizedPath, ['config', '--local', 'user.email']),
@@ -3278,11 +3287,6 @@ async function scanRepository(localPath: string, context: RepositoryScanContext 
     runGitInPath(normalizedPath, ['rev-parse', 'HEAD'])
   ])
   const latest = log.latest
-  const remotes = gitRemotes.map((remote) => ({
-    name: remote.name,
-    fetchUrl: remote.refs.fetch ?? '',
-    pushUrl: remote.refs.push ?? ''
-  }))
   const origin = remotes.find((remote) => remote.name === 'origin') ?? remotes[0]
   const currentBranch = branchName || status.current || 'detached'
   const defaultBranch = status.tracking ? status.tracking.replace(/^[^/]+\//, '') : currentBranch
@@ -3919,11 +3923,13 @@ async function getRepositoryCommitDiff(repositoryId: string, commitHash: string,
 }
 
 function getRepositoryOrThrow(repositoryId: string): RepositoryRecord {
-  const repository = listRepositories().find((item) => item.id === repositoryId)
+  const row = getDatabase().prepare('SELECT * FROM repositories WHERE id = ? AND active = 1').get(repositoryId) as Record<string, unknown> | undefined
 
-  if (!repository) {
+  if (!row) {
     throw new Error('仓库不存在')
   }
+
+  const repository = mapRepositoryRow(row)
 
   if (!existsSync(join(repository.localPath, '.git'))) {
     throw new Error('仓库已不存在或不是 Git 仓库')
@@ -3948,6 +3954,20 @@ async function rescanRepositoryRecord(repository: RepositoryRecord): Promise<Rep
   }
 
   return upsertRepository(repository.projectId, scanned)
+}
+
+async function refreshRepositoryRemotes(repositoryId: string): Promise<RepositoryRecord> {
+  const repository = getRepositoryOrThrow(repositoryId)
+  const remotes = await readRepositoryRemotes(simpleGit(repository.localPath))
+
+  // Re-read the record in case a Git operation updated it during this check.
+  const current = getRepositoryOrThrow(repositoryId)
+  const unchanged = current.remoteCount === remotes.length && current.remotes.length === remotes.length &&
+    remotes.every((remote, index) => {
+      const cached = current.remotes[index]
+      return remote.name === cached.name && remote.fetchUrl === cached.fetchUrl && remote.pushUrl === cached.pushUrl
+    })
+  return unchanged ? current : rescanRepositoryRecord(current)
 }
 
 async function listGitRemoteNames(localPath: string): Promise<string[]> {
@@ -7432,6 +7452,8 @@ registerGitIpc(
   async (_event, repositoryId: string, input?: { tagName?: string }): Promise<RepositoryTagPushBatchResult> =>
     pushRepositoryMissingTags(repositoryId, input)
 )
+
+registerGitIpc('repository:remotes:refresh', async (_event, repositoryId: string): Promise<RepositoryRecord> => refreshRepositoryRemotes(repositoryId))
 
 registerGitIpc('repository:remote:save', async (_event, input: RepositoryRemoteInput): Promise<RepositoryRecord> => saveRepositoryRemote(input))
 
