@@ -1,7 +1,7 @@
 import type { RailwayOAuthLoginInput } from '../shared/railway-oauth'
 import { contextBridge, ipcRenderer } from 'electron'
 import { parseGitIpcPayload } from './git-ipc'
-import type { ProgressAiInput, ProgressCommand, ProgressSnapshotQuery, ProgressHistoryQuery } from '../shared/project-progress'
+import type { TaskCommand, TaskHistoryQuery } from '../shared/task-workspace'
 
 function invokeGitIpc<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args).then((payload: unknown) => parseGitIpcPayload<T>(channel, payload))
@@ -23,16 +23,22 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   readProjectRuntime: (projectId: string) => ipcRenderer.invoke('project:runtime:read', projectId),
   refreshProjectRuntime: (input: { projectId: string; targetId: string }) => ipcRenderer.invoke('project:runtime:refresh', input),
   readProjectRuntimeLogs: (input: { projectId: string; targetId: string }) => ipcRenderer.invoke('project:runtime:logs', input),
-  getProjectProgress: (query?: ProgressSnapshotQuery) => ipcRenderer.invoke('project-progress:snapshot', query),
-  getProjectProgressHistory: (query: ProgressHistoryQuery) => ipcRenderer.invoke('project-progress:history', query),
-  runProjectProgressCommand: (command: ProgressCommand) => ipcRenderer.invoke('project-progress:command', command),
-  previewProjectProgressMigration: (input: { legacyRaw: string | null }) => ipcRenderer.invoke('project-progress:migration:preview', input),
-  activateProjectProgressMigration: (input: { batchId: string; inputHash: string; legacyRaw: string | null }) => ipcRenderer.invoke('project-progress:migration:activate', input),
-  runProjectProgressAi: (input: ProgressAiInput) => ipcRenderer.invoke('project-progress:ai', input),
-  onProjectProgressUpdated: (listener: () => void) => {
-    const wrapped = (): void => listener()
-    ipcRenderer.on('project-progress:updated', wrapped)
-    return () => ipcRenderer.removeListener('project-progress:updated', wrapped)
+  initializeTaskWorkspace: (legacy: Record<string, string>) => ipcRenderer.invoke('tasks:initialize', legacy),
+  getTaskWorkspace: () => ipcRenderer.invoke('tasks:snapshot'),
+  runTaskCommand: (command: TaskCommand) => ipcRenderer.invoke('tasks:command', command),
+  getTaskHistory: (query?: TaskHistoryQuery) => ipcRenderer.invoke('tasks:history', query),
+  addTaskAttachments: (taskId: string) => ipcRenderer.invoke('tasks:attachments:add', taskId),
+  openTaskAttachment: (id: string) => ipcRenderer.invoke('tasks:attachments:open', id),
+  readTaskAttachment: (id: string) => ipcRenderer.invoke('tasks:attachments:read', id),
+  onTaskWorkspaceUpdated: (listener: () => void) => {
+    const wrapped = () => listener()
+    ipcRenderer.on('tasks:updated', wrapped)
+    return () => ipcRenderer.removeListener('tasks:updated', wrapped)
+  },
+  onTaskFocus: (listener: (id: string) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, id: string) => listener(id)
+    ipcRenderer.on('tasks:focus', wrapped)
+    return () => ipcRenderer.removeListener('tasks:focus', wrapped)
   },
   listProjects: () => invokeGitIpc<WorkspaceSnapshot>('projects:list'),
   setProjectArchived: (input: { id: string; archived: boolean }) => invokeGitIpc<WorkspaceSnapshot>('projects:archive', input),
@@ -342,21 +348,6 @@ contextBridge.exposeInMainWorld('forgeDesk', {
     const wrapped = (_event: Electron.IpcRendererEvent, event: CodexTaskEvent): void => listener(event)
     ipcRenderer.on('codex:tasks:event', wrapped)
     return () => ipcRenderer.removeListener('codex:tasks:event', wrapped)
-  },
-  listManagedTasks: (projectId?: string) => ipcRenderer.invoke('managed-tasks:list', projectId),
-  syncManagedTasks: () => ipcRenderer.invoke('managed-tasks:sync'),
-  importLegacyManagedTasks: (tasks: LegacyManagedTaskImport[]) => ipcRenderer.invoke('managed-tasks:import-legacy', tasks),
-  createManagedTask: (input: ManagedTaskCreateInput) => ipcRenderer.invoke('managed-tasks:create', input),
-  saveManagedTaskPlan: (input: { taskId: string; subtasks: ManagedTaskPlanItem[] }) => ipcRenderer.invoke('managed-tasks:plan', input),
-  executeManagedTask: (input: { taskId: string; baseBranch?: string }) => ipcRenderer.invoke('managed-tasks:execute', input),
-  cancelManagedTask: (taskId: string) => ipcRenderer.invoke('managed-tasks:cancel', taskId),
-  approveManagedTaskReview: (taskId: string) => ipcRenderer.invoke('managed-tasks:review:approve', taskId),
-  commitManagedTask: (input: { taskId: string; message?: string }) => ipcRenderer.invoke('managed-tasks:commit', input),
-  publishManagedTask: (input: { taskId: string; targetBranch: 'develop' | 'preview' }) => ipcRenderer.invoke('managed-tasks:publish', input),
-  onManagedTaskEvent: (listener: (task: ManagedTask) => void) => {
-    const wrapped = (_event: Electron.IpcRendererEvent, task: ManagedTask): void => listener(task)
-    ipcRenderer.on('managed-tasks:event', wrapped)
-    return () => ipcRenderer.removeListener('managed-tasks:event', wrapped)
   },
   listOpenRouterModels: () => ipcRenderer.invoke('settings:ai:models:openrouter'),
   saveAiSettings: (input: AiSettingsInput) => ipcRenderer.invoke('settings:ai:save', input),

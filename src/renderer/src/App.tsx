@@ -426,7 +426,8 @@ import {
 import { TerminalWorkspace } from './terminal-panel'
 import type { TerminalOpenRequest } from './terminal-panel-events'
 import { TerminalRemoteShortcuts } from './terminal-remote-shortcuts'
-import { ProjectProgressPanel as TaskListPanel } from './project-progress-panel'
+import { TaskWorkspacePanel as TaskListPanel } from './task-workspace-panel'
+import { ProjectTasksPanel } from './project-tasks-panel'
 import { OverviewDashboard } from './overview-dashboard'
 import { MarketNewsDashboard } from './market-news-dashboard'
 import { SystemMonitorPanel } from './system-monitor-panel'
@@ -15521,10 +15522,10 @@ function ProjectOverview({
     hasPlane: hasConfiguredProjectPlane
   }
   const projectDetailTabs = createProjectDetailTabs(projectDetailTabAvailability)
-  const simpleProjectDetailTabKeys: ProjectDetailTabKey[] = ['log-tree', 'progress', 'codex-work', 'service-monitor', 'terminal']
+  const simpleProjectDetailTabKeys: ProjectDetailTabKey[] = ['log-tree', 'codex-work', 'service-monitor', 'terminal']
   const visibleProjectDetailTabs = isSimpleMode ? projectDetailTabs.filter((tab) => simpleProjectDetailTabKeys.includes(tab.key)) : projectDetailTabs
   const workspaceRepositoryView = getRepositoryView(workspaceRoute?.view)
-  const workspaceTab = workspaceRoute?.page === 'contributions' ? 'data' : ['goals', 'tasks', 'milestones', 'versions'].includes(workspaceRoute?.page ?? '') ? 'progress' : workspaceRoute?.page === 'repositories' && projectRepositories.some(repository=>repository.id===workspaceRoute.repositoryId&&repository.available) && ['history', 'alignment'].includes(workspaceRepositoryView) ? workspaceRepositoryView === 'alignment' ? 'remote-alignment' : 'log-tree' : 'workspace'
+  const workspaceTab = workspaceRoute?.page === 'contributions' ? 'data' : workspaceRoute?.page === 'repositories' && projectRepositories.some(repository=>repository.id===workspaceRoute.repositoryId&&repository.available) && ['history', 'alignment'].includes(workspaceRepositoryView) ? workspaceRepositoryView === 'alignment' ? 'remote-alignment' : 'log-tree' : 'workspace'
   const activeProjectDetailTab = workspaceNavigation ? workspaceTab : visibleProjectDetailTabs.some((tab) => tab.key === projectDetailTab)
     ? projectDetailTab
     : visibleProjectDetailTabs[0]?.key ?? DEFAULT_PROJECT_DETAIL_TAB
@@ -17377,6 +17378,10 @@ function ProjectOverview({
               items={[
                 ...(workspaceNavigation && workspaceRoute ? [{ key: 'workspace', label: routeLabel(workspaceRoute), children: <>
                   {workspaceRoute.page === 'overview' ? <><ProgressOverview project={selectedProject} onNavigate={onWorkspaceNavigate!} /><Space wrap><Button onClick={() => onOpenProjectWindow(selectedProject.id)}>独立窗口</Button><Button onClick={() => void toggleProjectFavorite(selectedProject)}>{selectedProject.isFavorite ? '取消收藏' : '收藏项目'}</Button><Button onClick={() => void setProjectArchived({id:selectedProject.id, archived:!selectedProject.archivedAt}).catch(error=>message.error(getErrorMessage(error)))}>{selectedProject.archivedAt ? '恢复项目' : '归档项目'}</Button></Space></> : null}
+                  {workspaceRoute.page === 'tasks' && workspaceVisible ? <ProjectTasksPanel key={selectedProject.id}
+                    projectId={selectedProject.id} entityId={workspaceRoute.entityId}
+                    onSelect={entityId => onWorkspaceNavigate?.({ ...workspaceRoute, entityId })}
+                    onOpenProject={id => onWorkspaceNavigate?.(projectPage(id, 'tasks'))} /> : null}
                   {workspaceRoute.page === 'repositories' ? !workspaceRoute.repositoryId ? <>
                     <RepositoryDirectory repositories={projectRepositories} onSelect={(repositoryId,view) => onWorkspaceNavigate?.({...workspaceRoute, repositoryId, view})} onConfigure={() => onWorkspaceNavigate?.(projectPage(selectedProject.id,'settings-repositories'))} onRescan={()=>void rescanSelectedProject(selectedProject)} rescanning={!!rescanningProjectId} onInitialize={()=>void initializeSelectedProjectRepository(selectedProject)} />
                   </> : !selectedProjectGitRepository?.available ? <Alert type="warning" showIcon message="仓库当前不可用" description={selectedProjectGitRepository?.scanError||'当前扫描未发现仓库；原记录仍保留。请检查目录或重新扫描。'} action={<Button onClick={()=>void rescanSelectedProject(selectedProject)}>重新扫描</Button>} /> : workspaceRepositoryView === 'branches' ? <div className="repository-branches-panel">
@@ -17527,24 +17532,6 @@ function ProjectOverview({
                       onOpenProjectSettings={() => setProjectSettingsDrawerOpen(true)}
                     />
                   )
-                },
-                {
-                  key: 'progress',
-                  label: '项目进度',
-                  children: <TaskListPanel
-                    projectId={selectedProject.id}
-                    section={workspaceNavigation ? ({goals:'goal',tasks:'tasks',milestones:'milestone',versions:'version'} as const)[workspaceRoute?.page as 'goals'|'tasks'|'milestones'|'versions'] : undefined}
-                    entityId={workspaceRoute?.progressObject?.kind==='task'?workspaceRoute.progressObject.id:workspaceRoute?.entityId}
-                    progressObject={workspaceRoute?.progressObject}
-                    onProgressObjectChange={workspaceRoute ? object=>onWorkspaceNavigate?.({...workspaceRoute,page:object?({goal:'goals',key_result:'goals',task:'tasks',milestone:'milestones',version:'versions'} as const)[object.kind]:workspaceRoute.page,progressObject:object,entityId:undefined,detailView:undefined}) : undefined}
-                    progressFilter={workspaceRoute?.progressFilter}
-                    onProgressFilterChange={progressFilter=>workspaceRoute&&onWorkspaceNavigate?.({...workspaceRoute,progressFilter})}
-                    detailView={workspaceRoute?.detailView}
-                    onDetailViewChange={detailView=>workspaceRoute&&onWorkspaceNavigate?.({...workspaceRoute,detailView})}
-                    onSelectTask={id=>workspaceRoute&&onWorkspaceNavigate?.({...workspaceRoute,entityId:id,progressObject:workspaceRoute.progressObject?.kind==='task'?undefined:workspaceRoute.progressObject,detailView:undefined})}
-                    onOpenMaintenance={()=>onWorkspaceNavigate?.(globalPage('settings','migration'))}
-                    onOpenCodexSession={onOpenCodexSession}
-                  />
                 },
                 {
                   key: 'codex-work',
@@ -22902,6 +22889,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const [activeKey, setLegacyActiveKey] = useState<AppActiveKey>(() => projectWindowId ? 'projects' : readStoredAppMode() === 'simple' ? 'projects' : 'overview')
   const [modernLayout, setModernLayout] = useState(() => {try{return localStorage.getItem(workspaceLayoutKey) !== 'legacy'}catch{return true}})
   const navigation = useWorkspaceNavigation(projectWindowId)
+  useEffect(() => window.forgeDesk?.onTaskFocus?.(entityId => { setModernLayout(true); navigation.go({ ...globalPage('tasks'), taskScope: 'all', entityId }) }), [navigation.go])
   const route = navigation.route
   const [terminalVisible, setTerminalVisible] = useState(false)
   const [aiToolFilter, setAiToolFilter] = useState('')
@@ -23681,7 +23669,11 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
     const backToTools = () => navigation.go(globalPage('toolbox'))
     function renderGlobalPage(): JSX.Element | null {
       if (route.scope !== 'global' || route.area === 'projects' || route.area === 'ai' && route.page !== 'assistant') return null
-      if (route.area === 'workbench') return route.page === 'tasks' ? <TaskListPanel section="tasks" entityId={route.entityId} progressFilter={route.progressFilter} onProgressFilterChange={progressFilter=>navigation.go({...route,progressFilter})} onProgressObjectChange={(object,ownerProjectId)=>{if(!object||!ownerProjectId)return;navigation.go({...projectPage(ownerProjectId,object.kind==='milestone'?'milestones':object.kind==='version'?'versions':'goals'),progressObject:object})}} detailView={route.detailView} onDetailViewChange={detailView=>navigation.go({...route,detailView})} onSelectTask={id=>navigation.go({...route,entityId:id,detailView:undefined})} onOpenMaintenance={()=>navigation.go(globalPage('settings','migration'))} onOpenCodexSession={openManagedTaskCodexConversation} /> : <ProgressOverview onNavigate={navigation.go} onCreateProject={()=>setCreatingProject(true)} />
+      if (route.area === 'workbench') return <ProgressOverview onNavigate={navigation.go} onCreateProject={() => setCreatingProject(true)} />
+      if (route.area === 'tasks') return <TaskListPanel embedded scope={route.taskScope}
+        onScopeChange={taskScope => navigation.go({ ...route, taskScope, entityId: undefined })}
+        entityId={route.entityId} onSelectTask={entityId => navigation.go({ ...route, entityId })}
+        onOpenProject={id => navigation.go(projectPage(id, 'tasks'))} />
       if (route.area === 'ai') return <AiChatPanel usesCustomTitleBar={false} onBack={navigation.back} onOpenAiSettings={()=>openSettingsModule('ai')} />
       if (route.area === 'resources') {
         if (route.page === 'services') return <GlobalServiceCenterPanel onSystemLog={appendSystemLog} onDeploymentRefreshActiveChange={setDeploymentRefreshActive} onOpenSystemLog={()=>setSystemLogDrawerOpen(true)} />
@@ -23702,7 +23694,6 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
         return <DirectoryLanding title={category?.label ?? '工具箱'} items={category?.children ?? TOOL_DIRECTORY} onSelect={page=>page==='terminal'?setActiveKey('terminal'):navigation.go(globalPage('toolbox',page))} />
       }
       if (route.area === 'settings') {
-        if (['migration','legacy-todos','legacy-ai','repair'].includes(route.page)) return <TaskListPanel key={route.page} section="maintenance" maintenancePage={route.page} onOpenCodexSession={openManagedTaskCodexConversation} />
         if (route.page === 'layout') return <Card title="布局与恢复"><Typography.Paragraph>当前使用分层项目目录。恢复旧布局仅改变界面入口，不迁移、删除业务数据，也不会停止后台任务。</Typography.Paragraph><Button onClick={()=>changeLayout(false)}>恢复旧布局</Button></Card>
         if (route.page === 'ai-accounts') return <AiToolsPanel view="accounts" projectId={null} projectPath="" onOpenTerminal={()=>setActiveKey('terminal')} />
         const category = findDirectory(SETTINGS_DIRECTORY,route.page)
@@ -23947,7 +23938,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
             {!loadingWorkspace && activeKey === 'data-sources' && <DataSourcePanel />}
             {!loadingWorkspace && activeKey === 'docker' && <DockerPanel onOpenTerminalRequest={openGlobalTerminalRequest} />}
             {!loadingWorkspace && activeKey === 'docs' && <OaDocsPanel onOpenSettings={() => openSettingsModule('oa')} />}
-            {!loadingWorkspace && activeKey === 'tasks' && <TaskListPanel onOpenCodexSession={openManagedTaskCodexConversation} />}
+            {!loadingWorkspace && activeKey === 'tasks' && <TaskListPanel />}
             {!loadingWorkspace && activeKey === 'tools' && <ToolsPanel />}
             {!loadingWorkspace && activeKey === 'system-monitor' && <SystemMonitorPanel onBack={() => setActiveKey('overview')} />}
             {!loadingWorkspace && activeKey === 'system-info' && <SystemInfoPanel onBack={() => setActiveKey('overview')} />}
