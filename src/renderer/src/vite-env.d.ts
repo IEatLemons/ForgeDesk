@@ -2915,6 +2915,7 @@ interface Window {
     getRepositoryTagSyncStatus: (repositoryId: string) => Promise<RepositoryTagSyncSnapshot>
     pushRepositoryTag: (repositoryId: string, input: GitTagPushInput) => Promise<RepositoryTagSyncSnapshot>
     pushRepositoryMissingTags: (repositoryId: string, input?: { tagName?: string }) => Promise<RepositoryTagPushBatchResult>
+    refreshRepositoryRemotes: (repositoryId: string) => Promise<RepositoryRecord>
     saveRepositoryRemote: (input: RepositoryRemoteInput) => Promise<RepositoryRecord>
     deleteRepositoryRemote: (repositoryId: string, remoteName: string) => Promise<RepositoryRecord>
     fetchRepositoryRemote: (repositoryId: string, remoteName?: string, operationId?: string) => Promise<RepositoryRecord>
