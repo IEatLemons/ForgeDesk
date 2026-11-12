@@ -75,17 +75,7 @@ import {
   type AiProjectResourceLinkInput
 } from './ai-project-resource-links'
 import { CodexActivityService, type CodexActivitySnapshot } from './codex-activity'
-import { CodexAppServerThreadService, readCodexAppServerModels, type CodexAppServerNotification } from './codex-app-server'
-import {
-  ManagedTaskService,
-  migrateManagedTaskTables,
-  managedTaskStageLabels,
-  type ManagedTask,
-  type ManagedTaskCreateInput,
-  type ManagedTaskImportedThread,
-  type ManagedTaskLegacyImport,
-  type ManagedTaskPlanItem
-} from './managed-tasks'
+import { readCodexAppServerModels } from './codex-app-server'
 import {
   CodexSessionService,
   type CodexSessionEvent,
@@ -127,8 +117,7 @@ import {
   type CodexUncommittedAlert
 } from './codex-project-monitor'
 import { CursorMonitorService } from './cursor-monitor'
-import { ProjectProgressService, migrateProjectProgressTables } from './project-progress'
-import type { ProgressAiInput, ProgressCommand, ProgressSnapshotQuery, ProgressHistoryQuery } from '../shared/project-progress'
+import { registerTaskWorkspace } from './task-workspace-ipc'
 import {
   deleteProjectGroup,
   listProjectGroups,
@@ -1012,11 +1001,6 @@ const codexTaskService = new CodexTaskService({
   },
   resolveCodexHome: (accountId) => resolveCodexHome(app.getPath('userData'), accountId)
 })
-const managedTaskService = new ManagedTaskService(() => getDatabase())
-const projectProgressService = new ProjectProgressService(() => getDatabase(), () => new Date(), () => {
-  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('project-progress:updated')
-})
-let managedCodexThreadService: CodexAppServerThreadService | null = null
 const codexActivityService = new CodexActivityService()
 const codexSiteService = new CodexSiteService({ db: () => getDatabase() })
 const codexSessionService = new CodexSessionService({
@@ -2460,8 +2444,6 @@ function migrateDatabase(db: Database.Database): void {
   migrateMonthlyPerformanceTables(db)
   migrateResourceGovernanceTables(db)
   migrateCodexTaskTables(db)
-  migrateManagedTaskTables(db)
-  migrateProjectProgressTables(db)
   migrateProjectGroupTables(db)
   migrateCodexProjectMonitorTables(db)
   migrateCodexSiteTables(db)
@@ -2796,11 +2778,12 @@ function deleteProject(projectId: string): WorkspaceSnapshot {
     throw new Error('项目不存在')
   }
 
+  const tasks = taskWorkspace.get()
   db.transaction(() => {
-    projectProgressService.detachProject(projectId)
+    tasks.detachProject(projectId)
     db.prepare('DELETE FROM projects WHERE id = ?').run(projectId)
   })()
-  return getWorkspaceSnapshot()
+  return publishProjectCatalog()
 }
 
 function getWorkspaceSnapshot(): WorkspaceSnapshot {
@@ -2808,6 +2791,14 @@ function getWorkspaceSnapshot(): WorkspaceSnapshot {
     projects: listProjects(),
     repositories: listRepositories(undefined,true)
   }
+}
+
+function publishProjectCatalog(): WorkspaceSnapshot {
+  const snapshot = getWorkspaceSnapshot()
+  const payload = serializeGitIpcPayload('workspace:updated', snapshot)
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('workspace:updated', payload)
+  taskWorkspace.changed()
+  return snapshot
 }
 
 function upsertRepository(projectId: string, repository: RepositoryScanResult): RepositoryRecord {
@@ -7173,7 +7164,7 @@ registerGitIpc(
     })
 
     transaction()
-    return getWorkspaceSnapshot()
+    return publishProjectCatalog()
   }
 )
 
@@ -7220,7 +7211,7 @@ registerGitIpc(
       `
       ).run(projectId, name, workspacePath, now, now)
 
-      return getWorkspaceSnapshot()
+      return publishProjectCatalog()
     } catch (error) {
       if (createdDirectory) {
         const contents = await readdir(workspacePath).catch(() => [])
@@ -7305,7 +7296,7 @@ registerGitIpc(
       })
 
       transaction()
-      return getWorkspaceSnapshot()
+      return publishProjectCatalog()
     } catch (error) {
       if (targetDirectoryCreated) {
         await rm(workspacePath, { recursive: true, force: true })
@@ -7341,7 +7332,7 @@ registerGitIpc(
         input.id
       )
 
-    return getWorkspaceSnapshot()
+    return publishProjectCatalog()
   }
 )
 
@@ -7366,9 +7357,7 @@ registerGitIpc(
 
 registerGitIpc('projects:archive', async (_event, input: { id: string; archived: boolean }): Promise<WorkspaceSnapshot> => {
   setProjectArchived(getDatabase(), input)
-  const snapshot=getWorkspaceSnapshot()
-  for (const window of BrowserWindow.getAllWindows()) { window.webContents.send('project-progress:updated');window.webContents.send('workspace:updated',serializeGitIpcPayload('workspace:updated',snapshot)) }
-  return snapshot
+  return publishProjectCatalog()
 })
 
 registerGitIpc('projects:delete', async (_event, projectId: string): Promise<WorkspaceSnapshot> => deleteProject(projectId))
@@ -8355,360 +8344,8 @@ ipcMain.handle('codex:accounts:login-terminal', async (_event, accountId: string
 ipcMain.handle('codex:runtime:status', async (_event, verify = false): Promise<AiRuntimeStatus> =>
   inspectCodexRuntime(Boolean(verify), await resolveCodexHome(app.getPath('userData'))))
 
-function sendManagedTaskEvent(task: ManagedTask): void {
-  try { projectProgressService.recordManagedUpdate(task) } catch (error) { console.error('Project progress execution sync failed', error) }
-  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('managed-tasks:event', task)
-}
-
-function managedTaskTitle(task: ManagedTask): string {
-  return `[${managedTaskStageLabels[task.stage]}] ${task.title.replace(/^\[[^\]]+\]\s*/, '')}`
-}
-
-async function getManagedCodexThreadService(): Promise<CodexAppServerThreadService> {
-  if (managedCodexThreadService) return managedCodexThreadService
-  const codexHome = await resolveCodexHome(app.getPath('userData'))
-  const command = await findLocalAiCommand('codex-cli', { env: { ...process.env, CODEX_HOME: codexHome } })
-  if (!command) throw new Error('未检测到可用的 Codex App Server')
-  managedCodexThreadService = new CodexAppServerThreadService({
-    command,
-    codexHome,
-    onNotification: (notification: CodexAppServerNotification) => {
-      if (!notification.method.startsWith('turn/') && !notification.method.startsWith('thread/')) return
-      void syncManagedCodexThreads().catch(() => undefined)
-    }
-  })
-  return managedCodexThreadService
-}
-
-async function mirrorManagedTaskTitle(task: ManagedTask): Promise<void> {
-  if (!task.codexThreadId) return
-  const codex = await getManagedCodexThreadService()
-  await codex.renameThread(task.codexThreadId, managedTaskTitle(task))
-}
-
-async function advanceManagedTaskExecution(taskId: string): Promise<ManagedTask> {
-  const task = managedTaskService.get(taskId)
-  if (!task) throw new Error('任务不存在')
-  if (task.stage !== 'executing') return task
-  const repository = getRepositoryOrThrow(task.repositoryId)
-  if (task.subtasks.some((item) => item.runStatus === 'running')) return task
-  const nextSubtask = task.subtasks.find((item) => item.runStatus === 'idle' && item.dependencyIds.every((dependencyId) => task.subtasks.find((candidate) => candidate.id === dependencyId)?.runStatus === 'completed'))
-  if (!nextSubtask) {
-    if (task.subtasks.length > 0 && task.subtasks.every((item) => item.runStatus === 'completed')) {
-      const workspace = await getRepositoryWorkspaceStatus(repository.id)
-      const completed = managedTaskService.completeExecution(task.id, workspace.files.length > 0)
-      await mirrorManagedTaskTitle(completed)
-      return completed
-    }
-    return task
-  }
-  const codex = await getManagedCodexThreadService()
-  const thread = await codex.startThread({ cwd: repository.localPath, title: `${task.title} · ${nextSubtask.title}`, sandbox: 'workspace-write' })
-  const started = managedTaskService.startSubtask(task.id, nextSubtask.id, { id: thread.id, title: thread.name, cwd: repository.localPath, status: 'running', updatedAt: thread.updatedAt })
-  await codex.startTurn({
-    threadId: thread.id,
-    cwd: repository.localPath,
-    approvalPolicy: 'never',
-    text: `在分支 ${started.branch} 上执行以下 ForgeDesk 子任务。只处理当前子任务；完成后说明改动、测试和未完成项。\n\n父任务：${started.title}\n子任务：${nextSubtask.title}\n说明：${nextSubtask.description}\n验收标准：${nextSubtask.acceptance}`
-  })
-  await mirrorManagedTaskTitle(started)
-  return started
-}
-
-function managedThreadStatusFromSession(status: CodexSessionSummary['status']): string {
-  if (status === 'aborted') return 'failed'
-  return status
-}
-
-async function syncManagedCodexThreads(): Promise<ManagedTask[]> {
-  const sessionSnapshot = await codexSessionService.list()
-  let appThreads: Awaited<ReturnType<CodexAppServerThreadService['listThreads']>> = []
-  try {
-    appThreads = await (await getManagedCodexThreadService()).listThreads()
-  } catch (error) {
-    // The on-disk Codex session snapshot remains useful even when App Server is
-    // temporarily unavailable. Only fail if neither source can provide data.
-    if (!sessionSnapshot.available) throw error
-  }
-
-  // App Server fills gaps for ForgeDesk-created threads. The local snapshot is
-  // authoritative for native desktop/CLI sessions and overwrites stale status,
-  // title, cwd, and timestamp for the same thread id.
-  const threads = new Map<string, ManagedTaskImportedThread>()
-  for (const thread of appThreads) {
-    threads.set(thread.id, { id: thread.id, title: thread.name, cwd: thread.cwd, status: thread.status, updatedAt: thread.updatedAt })
-  }
-  for (const session of sessionSnapshot.sessions) {
-    threads.set(session.id, {
-      id: session.id,
-      title: session.title,
-      cwd: session.cwd,
-      status: managedThreadStatusFromSession(session.status),
-      updatedAt: session.updatedAt
-    })
-  }
-
-  const repositories = listRepositories()
-  const result = new Map<string, ManagedTask>()
-  for (const imported of threads.values()) {
-    const repository = imported.cwd ? repositories.find((item) => resolve(item.localPath) === resolve(imported.cwd)) : undefined
-    const binding = getDatabase().prepare('SELECT task_id, role FROM managed_task_thread_bindings WHERE codex_thread_id = ?').get(imported.id) as { task_id?: string; role?: string } | undefined
-    const previous = managedTaskService.get(binding?.task_id || '')
-    const task = previous ? managedTaskService.updateBinding(imported) : managedTaskService.importThread(imported, repository?.projectId || '', repository?.id || '')
-    if (!task) continue
-    if (previous?.stage === 'executing' && binding?.role === 'subtask' && ['completed', 'idle'].includes(imported.status) && repository) {
-      result.set(task.id, await advanceManagedTaskExecution(task.id))
-    } else {
-      result.set(task.id, task)
-    }
-  }
-  const tasks = [...result.values()]
-  for (const task of tasks) sendManagedTaskEvent(task)
-  return tasks
-}
-
-ipcMain.handle('managed-tasks:list', async (_event, projectId?: string): Promise<ManagedTask[]> => managedTaskService.list(projectId))
-
-ipcMain.handle('managed-tasks:sync', async (): Promise<ManagedTask[]> => syncManagedCodexThreads())
-
-async function cancelManagedProgressTask(taskId: string): Promise<ManagedTask> {
-  const task = managedTaskService.get(taskId)
-  if (!task) throw new Error('任务不存在')
-  if (['completed', 'completed-no-changes', 'failed', 'cancelled'].includes(task.stage)) return task
-
-  const threadIds = [...new Set([
-    task.codexThreadId,
-    ...task.bindings.map((binding) => binding.codexThreadId),
-    ...task.subtasks.filter((subtask) => subtask.runStatus === 'running').map((subtask) => subtask.codexThreadId)
-  ].filter(Boolean))]
-
-  if (threadIds.length > 0) {
-    try {
-      const codex = await getManagedCodexThreadService()
-      for (const threadId of threadIds) await codex.interruptRunningTurns(threadId)
-    } catch (error) {
-      // Running tasks must not be marked cancelled until Codex confirms the
-      // interrupt request. Idle tasks can still be closed when App Server is
-      // unavailable because they have no live execution to terminate.
-      if (task.runStatus === 'running') throw error
-    }
-  }
-
-  const cancelled = managedTaskService.cancel(task.id)
-  try { await mirrorManagedTaskTitle(cancelled) } catch (error) { console.warn('Failed to mirror cancelled task title', error) }
-  sendManagedTaskEvent(cancelled)
-  return cancelled
-}
-
-ipcMain.handle('managed-tasks:cancel', async (_event, taskId: string) => cancelManagedProgressTask(taskId))
-
-ipcMain.handle('managed-tasks:import-legacy', async (_event, legacyTasks: ManagedTaskLegacyImport[]): Promise<ManagedTask[]> => {
-  const repositories = listRepositories()
-  const imported = legacyTasks.map((legacy) => {
-    const repository = legacy.projectId ? repositories.find((item) => item.projectId === legacy.projectId) : undefined
-    return managedTaskService.importLegacy(legacy, repository?.id, repository?.localPath)
-  })
-  for (const task of imported) sendManagedTaskEvent(task)
-  return imported
-})
-
-async function createManagedProgressTask(input: Omit<ManagedTaskCreateInput, 'codexThreadId' | 'cwd'>, onCreated?: (task: ManagedTask) => void, onTurnStarted?: (turnId: string) => void): Promise<ManagedTask> {
-  const repository = getRepositoryOrThrow(input.repositoryId)
-  if (repository.projectId !== input.projectId) throw new Error('所选仓库不属于该项目')
-  const codex = await getManagedCodexThreadService()
-  const thread = await codex.startThread({ cwd: repository.localPath, title: input.title.trim(), sandbox: 'workspace-write' })
-  const task = managedTaskService.create({ ...input, cwd: repository.localPath, codexThreadId: thread.id })
-  onCreated?.(task)
-  const planning = managedTaskService.beginPlanning(task.id)
-  try {
-    const turnId = await codex.startTurn({
-      threadId: thread.id,
-      cwd: repository.localPath,
-      text: `请分析并拆分以下 ForgeDesk 任务。只输出可执行的子任务计划、依赖和验收标准，不要修改文件或运行命令。\n\n任务：${task.title}\n${task.description}`,
-      outputSchema: { type: 'object', properties: { subtasks: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, description: { type: 'string' }, acceptance: { type: 'string' }, dependencyIndexes: { type: 'array', items: { type: 'integer' } } }, required: ['title'] } } }, required: ['subtasks'] }
-    })
-    onTurnStarted?.(turnId)
-    await mirrorManagedTaskTitle(planning)
-    sendManagedTaskEvent(planning)
-    return planning
-  } catch (error) {
-    const failed = managedTaskService.fail(task.id, error instanceof Error ? error.message : String(error))
-    sendManagedTaskEvent(failed)
-    return failed
-  }
-}
-
-ipcMain.handle('managed-tasks:create', async (_event, input: Omit<ManagedTaskCreateInput, 'codexThreadId' | 'cwd'>) => createManagedProgressTask(input))
-
-ipcMain.handle('managed-tasks:plan', async (_event, input: { taskId: string; subtasks: ManagedTaskPlanItem[] }): Promise<ManagedTask> => {
-  const task = managedTaskService.setPlan(input.taskId, input.subtasks)
-  await mirrorManagedTaskTitle(task)
-  sendManagedTaskEvent(task)
-  return task
-})
-
-async function executeManagedProgressTask(input: { taskId: string; baseBranch?: string }): Promise<ManagedTask> {
-  const task = managedTaskService.get(input.taskId)
-  if (!task) throw new Error('任务不存在')
-  const repository = getRepositoryOrThrow(task.repositoryId)
-  const baseBranch = input.baseBranch?.trim() || repository.defaultBranch || repository.currentBranch
-  if (!baseBranch) throw new Error('请先选择任务基线分支')
-  const slug = task.title.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'task'
-  const branch = `codex/${task.id.replace('managed-task-', '').slice(0, 8)}-${slug}`
-  const baselineSha = await runGitInPathStrict(repository.localPath, ['rev-parse', baseBranch])
-  let next = managedTaskService.beginBranch(task.id, { branch, baseBranch, baselineSha })
-  sendManagedTaskEvent(next)
-  try {
-    await switchRepositoryBranch(repository.id, { branchName: branch, create: true, startPoint: baseBranch })
-    next = managedTaskService.startExecution(task.id)
-    next = await advanceManagedTaskExecution(task.id)
-    sendManagedTaskEvent(next)
-    return next
-  } catch (error) {
-    next = managedTaskService.fail(task.id, error instanceof Error ? error.message : String(error))
-    sendManagedTaskEvent(next)
-    return next
-  }
-}
-
-ipcMain.handle('managed-tasks:execute', async (_event, input: { taskId: string; baseBranch?: string }) => executeManagedProgressTask(input))
-
-ipcMain.handle('project-progress:snapshot', (_event, query?: ProgressSnapshotQuery) => projectProgressService.getSnapshot(query))
-ipcMain.handle('project-progress:history', (_event, query: ProgressHistoryQuery) => projectProgressService.getHistory(query))
-ipcMain.handle('project-progress:command', (_event, command: ProgressCommand) => projectProgressService.command(command))
-ipcMain.handle('project-progress:migration:preview', (_event, input: { legacyRaw: string | null }) => {
-  if (input.legacyRaw !== null && typeof input.legacyRaw !== 'string') throw new Error('无效的旧待办存储')
-  return projectProgressService.previewMigration(input.legacyRaw, managedTaskService.list())
-})
-ipcMain.handle('project-progress:migration:activate', async (_event, input: { batchId: string; inputHash: string; legacyRaw: string | null }) => {
-  const batch = projectProgressService.latestMigration()
-  if (!batch || batch.id !== input.batchId || batch.inputHash !== input.inputHash) throw new Error('迁移预览已变化，请重新核对')
-  if (batch.status === 'activated') return batch
-  const backupDirectory = join(app.getPath('userData'), 'progress-backups')
-  await mkdir(backupDirectory, { recursive: true })
-  const backupPath = join(backupDirectory, `forgedesk-${randomUUID()}.db`)
-  await getDatabase().backup(backupPath)
-  return projectProgressService.activateMigration(input.batchId, input.inputHash, input.legacyRaw, managedTaskService.list(), backupPath)
-})
-
-const pendingProgressAiCommands = new Map<string, {key:string;operation:Promise<unknown>}>()
-ipcMain.handle('project-progress:ai', async (_event, input: ProgressAiInput) => {
-  if (typeof input?.commandId !== 'string' || !input.commandId.trim()) throw new Error('缺少执行命令 ID')
-  const key = JSON.stringify([input.action,input.workItemId,input.repositoryId || null,input.executionId || null])
-  const pending = pendingProgressAiCommands.get(input.commandId)
-  if (pending) {if (pending.key !== key) throw new Error('相同执行命令 ID 的请求内容发生变化'); return pending.operation}
-  const operation = runProjectProgressAi(input)
-  pendingProgressAiCommands.set(input.commandId, {key,operation})
-  try { return await operation } finally { pendingProgressAiCommands.delete(input.commandId) }
-})
-
-async function runProjectProgressAi(input: ProgressAiInput) {
-  const work = projectProgressService.getItem(input.workItemId)
-  if (!projectProgressService.isActive()) throw new Error('请先核对迁移并启用原生任务')
-  if (input.action === 'sync') {
-    await syncManagedCodexThreads()
-    const run = input.executionId ? projectProgressService.getExecution(input.executionId) : null
-    if (run && run.workItemId !== work.id) throw new Error('执行记录不属于此任务')
-    return run
-  }
-  if (input.action === 'cancel' || input.action === 'read-plan') {
-    if (!input.executionId) throw new Error('请选择执行记录')
-    const run = projectProgressService.getExecution(input.executionId)
-    if (run.workItemId !== work.id) throw new Error('执行记录不属于此任务')
-    if (input.action === 'cancel') {
-      if (['succeeded', 'failed', 'cancelled'].includes(run.status)) return run
-      if (!run.managedTaskId) throw new Error('执行尚未完成启动，请先同步并核对')
-      projectProgressService.setExecutionResult(run.id, 'cancelling', '已请求停止，等待 Codex 确认')
-      try {
-        const stopped = await cancelManagedProgressTask(run.managedTaskId)
-        projectProgressService.recordManagedUpdate(stopped)
-        return projectProgressService.getExecution(run.id)
-      } catch (error) {
-        projectProgressService.setExecutionResult(run.id, 'unknown', '停止结果未确认，请同步核对')
-        throw error
-      }
-    }
-    if (!run.threadId || run.purpose !== 'planning') throw new Error('此记录不是 AI 规划会话')
-    const session = await codexSessionService.get(run.threadId)
-    if (session.status === 'running') throw new Error('AI 仍在分析，请等待完成后读取计划')
-    const message = [...session.items].reverse().find((item) => item.kind === 'assistant' && item.text.includes('subtasks'))
-    if (!message) throw new Error('尚未读取到结构化计划，可稍后重试或手动编辑草稿')
-    const draft = projectProgressService.createDraftFromAi(work.id, run.id, message.text)
-    const managed = run.managedTaskId ? managedTaskService.get(run.managedTaskId) : null
-    if (managed && ['planning', 'created', 'ready'].includes(managed.stage)) {
-      const planned = managedTaskService.setPlan(managed.id, draft.items.map(item => ({title:item.title,description:item.description,acceptance:item.acceptanceText,dependencyIndexes:item.dependencyIds.map(id => draft.items.findIndex(node => node.id === id))})))
-      sendManagedTaskEvent(planned)
-    }
-    projectProgressService.setExecutionResult(run.id, 'succeeded', 'AI 计划已读取，等待确认差异')
-    return draft
-  }
-  if (input.action !== 'plan' && input.action !== 'execute') throw new Error('无效的 AI 操作')
-  const repository = getRepositoryOrThrow(input.repositoryId || '')
-  if (repository.projectId !== work.projectId) throw new Error('所选仓库不属于任务项目')
-  const run = projectProgressService.beginExecution(work.id, input.action === 'plan' ? 'planning' : 'implementation', repository.id, repository.localPath, input.commandId)
-  if (run.status !== 'queued' || run.managedTaskId) return run
-  try {
-    if (input.action === 'plan') {
-      const task = await createManagedProgressTask({ title: work.title, description: `${work.description}\n验收条件：${work.acceptanceText}`, projectId: repository.projectId, repositoryId: repository.id, autoExecute: false },
-        (task) => projectProgressService.attachManagedExecution(run.id, task),
-        (turnId) => projectProgressService.setExecutionResult(run.id, 'running', 'AI 正在分析计划', turnId))
-      projectProgressService.recordManagedUpdate(task)
-    } else {
-      if (managedTaskService.list().some(task => task.repositoryId === repository.id && task.runStatus === 'running')) throw new Error('此仓库仍有历史 AI 执行，请先在历史工作流核对或停止')
-      const codex = await getManagedCodexThreadService()
-      const thread = await codex.startThread({ cwd: repository.localPath, title: work.title, sandbox: 'workspace-write' })
-      let task = managedTaskService.create({ title: work.title, description: work.description, projectId: repository.projectId, repositoryId: repository.id, cwd: repository.localPath, codexThreadId: thread.id, autoExecute: false })
-      projectProgressService.attachManagedExecution(run.id, task)
-      const children = projectProgressService.getSnapshot({ projectId: repository.projectId }).items.filter((item) => item.parentId === work.id && !['done', 'cancelled'].includes(item.status))
-      const nodes = children.length ? children : [work]
-      task = managedTaskService.setPlan(task.id, nodes.map((item) => ({ title: item.title, description: item.description, acceptance: item.acceptanceText, dependencyIndexes: item.dependencyIds.map((id) => nodes.findIndex((node) => node.id === id)).filter((index) => index >= 0) })))
-      projectProgressService.attachManagedNodes(task, nodes.map((item) => item.id))
-      await executeManagedProgressTask({ taskId: task.id })
-    }
-    return projectProgressService.getExecution(run.id)
-  } catch (error) {
-    const latest = projectProgressService.getExecution(run.id)
-    projectProgressService.setExecutionResult(run.id, latest.managedTaskId ? 'unknown' : 'failed', error instanceof Error ? error.message : String(error))
-    throw error
-  }
-}
-
-ipcMain.handle('managed-tasks:review:approve', async (_event, taskId: string): Promise<ManagedTask> => {
-  const task = managedTaskService.approveReview(taskId); await mirrorManagedTaskTitle(task); sendManagedTaskEvent(task); return task
-})
-
-ipcMain.handle('managed-tasks:commit', async (_event, input: { taskId: string; message?: string }): Promise<ManagedTask> => {
-  const task = managedTaskService.get(input.taskId); if (!task) throw new Error('任务不存在')
-  const repository = getRepositoryOrThrow(task.repositoryId)
-  const workspace = await getRepositoryWorkspaceStatus(repository.id)
-  if (workspace.files.length > 0) {
-    const message = input.message?.trim(); if (!message) throw new Error('检测到未提交变更，请填写提交信息')
-    const committed = await commitRepositoryChanges(repository.id, { message })
-    if (!committed.ok) throw new Error(committed.stderr || '提交失败')
-  }
-  const sha = await runGitInPathStrict(repository.localPath, ['rev-parse', 'HEAD'])
-  const next = managedTaskService.recordCommit(task.id, sha); await mirrorManagedTaskTitle(next); sendManagedTaskEvent(next); return next
-})
-
-ipcMain.handle('managed-tasks:publish', async (_event, input: { taskId: string; targetBranch: 'develop' | 'preview' }): Promise<ManagedTask> => {
-  const task = managedTaskService.get(input.taskId); if (!task) throw new Error('任务不存在')
-  const repository = getRepositoryOrThrow(task.repositoryId)
-  let next = managedTaskService.beginMerge(task.id, input.targetBranch); sendManagedTaskEvent(next)
-  try {
-    await switchRepositoryBranch(repository.id, { branchName: input.targetBranch })
-    const analysis = await analyzeRepositoryMerge(repository.id, { source: task.branch, target: input.targetBranch })
-    if (!analysis.ok) throw new Error(analysis.issues.join('；') || '合并预检失败')
-    const merged = await runRepositoryWriteOperation(repository.id, buildGitMergeArgs({ source: task.branch }))
-    if (!merged.ok) throw new Error(merged.stderr || '合并失败')
-    next = managedTaskService.merged(task.id, merged.stdout)
-    next = managedTaskService.beginPush(task.id); sendManagedTaskEvent(next)
-    const pushed = await pushRepositoryChanges(repository.id, { branch: input.targetBranch })
-    if (!pushed.ok) throw new Error(pushed.stderr || '推送失败')
-    next = managedTaskService.completePublish(task.id, pushed.stdout); await mirrorManagedTaskTitle(next); sendManagedTaskEvent(next); return next
-  } catch (error) {
-    next = managedTaskService.fail(task.id, error instanceof Error ? error.message : String(error)); sendManagedTaskEvent(next); return next
-  }
-})
+const taskWorkspace = registerTaskWorkspace(getDatabase, () =>
+  listProjects().map(({ id, name, archivedAt }) => ({ id, name, archivedAt })))
 
 ipcMain.handle('codex:activity:snapshot', async (): Promise<CodexActivitySnapshot> => codexActivityService.snapshot())
 
@@ -9356,7 +8993,6 @@ function startStorageGovernanceScheduler(): void {
 }
 
 app.whenReady().then(async () => {
-  projectProgressService.recoverExecutions()
   await syncActiveCodexHome(app.getPath('userData')).catch((error) => console.warn('Failed to sync active Codex account', error))
 
   if (process.platform === 'darwin' && existsSync(appIconPath)) {

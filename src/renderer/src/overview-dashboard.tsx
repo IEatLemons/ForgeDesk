@@ -2,10 +2,9 @@ import { Alert, Button, Empty, Progress, Space, Spin, Statistic, Tag, Typography
 import { ArrowRightOutlined, CheckCircleOutlined, ClockCircleOutlined, DesktopOutlined, FolderOpenOutlined, GlobalOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SystemMonitorSnapshot } from './data'
-import { getTaskStats, readStoredTaskItems, type TaskItem } from './task-list-view'
+import { taskOverdue } from '../../shared/task-workspace'
 import { getErrorMessage } from './error-messages'
-import { useProjectProgress } from './use-project-progress'
-import { workStatusLabels } from './project-progress-view'
+import { useTaskWorkspace } from './use-task-workspace'
 import {
   createSystemMonitorHardwareMetrics,
   getSystemMonitorStatusMeta,
@@ -44,8 +43,8 @@ export function OverviewDashboard({
   onOpenAiSettings: () => void
 }): JSX.Element {
   const [snapshot, setSnapshot] = useState<OverviewSnapshot>({ newsHistory: [], projectReport: null })
-  const [tasks, setTasks] = useState<TaskItem[]>(() => readStoredTaskItems())
-  const { snapshot: progress, error: progressError } = useProjectProgress()
+  const { snapshot: taskWorkspace, error: progressError } = useTaskWorkspace()
+  const tasks = taskWorkspace?.tasks ?? []
   const [loadingSnapshot, setLoadingSnapshot] = useState(true)
   const [refreshingNews, setRefreshingNews] = useState(false)
   const [refreshingProjects, setRefreshingProjects] = useState(false)
@@ -57,15 +56,8 @@ export function OverviewDashboard({
   const [overviewHardwareKeys, setOverviewHardwareKeys] = useState<SystemMonitorHardwareKey[]>(() => readStoredSystemMonitorOverviewHardwareKeys())
   const autoRefreshStarted = useRef(false)
   const news = snapshot.newsHistory[0] ?? null
-  const taskStats = useMemo(() => progress?.active ? { ...progress.stats, active: progress.stats.total - progress.stats.done } : getTaskStats(tasks), [tasks, progress])
-  const activeTasks = useMemo(() => {
-    if (progress?.active) {
-      const rootIds = new Set(progress.items.filter(item => !item.parentId && item.trackingState === 'tracked' && item.status !== 'cancelled').map(item => item.id))
-      return progress.items.filter(item => !item.archivedAt && !['done', 'cancelled'].includes(item.status) && (item.parentId ? rootIds.has(item.parentId) : rootIds.has(item.id) && !progress.items.some(child => child.parentId === item.id && child.status !== 'cancelled')))
-        .sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999')).slice(0, 5)
-    }
-    return tasks.filter(task => task.status !== 'done').sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999')).slice(0, 5)
-  }, [tasks, progress])
+  const taskStats = { total: tasks.length, done: tasks.filter(task => task.done).length, active: tasks.filter(task => !task.done).length, todo: tasks.filter(task => !task.done).length, doing: 0, overdue: tasks.filter(task => taskOverdue(task)).length }
+  const activeTasks = tasks.filter(task => !task.done).sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999')).slice(0, 5)
   const taskCompletion = taskStats.total > 0 ? Math.round((taskStats.done / taskStats.total) * 100) : 0
   const systemHardwareMetrics = useMemo(() => (systemSnapshot ? createSystemMonitorHardwareMetrics(systemSnapshot) : []), [systemSnapshot])
   const selectedSystemHardwareMetrics = useMemo(() => systemHardwareMetrics.filter((metric) => overviewHardwareKeys.includes(metric.key)), [overviewHardwareKeys, systemHardwareMetrics])
@@ -120,14 +112,7 @@ export function OverviewDashboard({
         message.error(getErrorMessage(error))
       }
     })
-    const syncTasks = (): void => setTasks(readStoredTaskItems())
-    window.addEventListener('storage', syncTasks)
-    window.addEventListener('focus', syncTasks)
-    return () => {
-      mounted = false
-      window.removeEventListener('storage', syncTasks)
-      window.removeEventListener('focus', syncTasks)
-    }
+
   }, [])
 
   useEffect(() => {
@@ -195,7 +180,7 @@ export function OverviewDashboard({
       </div>
 
       <div className="overview-metrics">
-        <div className="overview-metric"><Statistic title={progress?.active ? '项目节点待完成' : '历史待办（尚未迁移）'} value={taskStats.active} suffix={`/ ${taskStats.total}`} /><Progress percent={taskCompletion} size="small" />{progress?.active ? <Typography.Text type="secondary">待验收 {progress.stats.review} · 阻塞 {progress.stats.blocked} · 收件箱 {progress.stats.inbox}</Typography.Text> : <Button type="link" onClick={onOpenTasks}>核对并启用项目进度</Button>}{progressError ? <Typography.Text type="danger">{progressError}</Typography.Text> : null}</div>
+        <div className="overview-metric"><Statistic title="未完成任务" value={taskStats.active} suffix={`/ ${taskStats.total}`} /><Progress percent={taskCompletion} size="small" />{progressError ? <Typography.Text type="danger">{progressError}</Typography.Text> : null}</div>
         <div className="overview-metric"><Statistic title="学习情报" value={news?.items.length ?? 0} /><Typography.Text type="secondary">{news ? `更新于 ${formatTime(news.generatedAt)}` : '等待首次生成'}</Typography.Text></div>
         <div className="overview-metric"><Statistic title="工作项目" value={snapshot.projectReport?.projects.length ?? 0} /><Typography.Text type="secondary">{refreshingProjects ? '正在自动更新…' : '已完成远端状态检查'}</Typography.Text></div>
         <div className="overview-metric">
@@ -265,10 +250,10 @@ export function OverviewDashboard({
           </article>
 
           <article className="overview-card">
-            <div className="overview-card-heading"><div><Typography.Title level={4}><CheckCircleOutlined /> 任务总结</Typography.Title><Typography.Text type="secondary">{taskStats.doing} 项进行中，{taskStats.todo} 项待办</Typography.Text></div><Button type="link" onClick={onOpenTasks}>全部任务</Button></div>
+            <div className="overview-card-heading"><div><Typography.Title level={4}><CheckCircleOutlined /> 任务总结</Typography.Title><Typography.Text type="secondary">{taskStats.active} 项未完成，{taskStats.done} 项已完成</Typography.Text></div><Button type="link" onClick={onOpenTasks}>全部任务</Button></div>
             {taskStats.overdue > 0 ? <Alert type="error" showIcon message={`${taskStats.overdue} 项任务已逾期`} /> : null}
-            {progress?.active && progress.stats.awaitingParentAcceptance > 0 ? <Alert type="info" message={`${progress.stats.awaitingParentAcceptance} 项父任务的节点已完成，等待整体验收`} /> : null}
-            <div className="overview-task-list">{activeTasks.map((task) => <div className="overview-task-item" key={task.id}><span className={`overview-task-priority priority-${task.priority}`} /><span><Typography.Text>{task.title}</Typography.Text><span><ClockCircleOutlined /> {taskDueLabel(task)} · {workStatusLabels[task.status]}</span></span></div>)}</div>
+
+            <div className="overview-task-list">{activeTasks.map((task) => <div className="overview-task-item" key={task.id}><span className={`overview-task-priority priority-${task.priority}`} /><span><Typography.Text>{task.title}</Typography.Text><span><ClockCircleOutlined /> {taskDueLabel(task)} · {task.done ? '已完成' : '未完成'}</span></span></div>)}</div>
             {activeTasks.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有未完成任务" /> : null}
           </article>
         </aside>

@@ -1,20 +1,22 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Breadcrumb, Button, Drawer, Dropdown, Menu, Select, Tag, Tooltip, type MenuProps } from 'antd'
 import {
-  AppstoreOutlined, ArrowLeftOutlined, ArrowRightOutlined, BarChartOutlined, BookOutlined,
-  BranchesOutlined, CodeOutlined, DashboardOutlined, DatabaseOutlined, FolderOpenOutlined,
+  AppstoreOutlined, ArrowLeftOutlined, ArrowRightOutlined, BookOutlined,
+  BranchesOutlined, CheckSquareOutlined, CodeOutlined, DashboardOutlined, DatabaseOutlined, FolderOpenOutlined,
   HistoryOutlined, MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined, MessageOutlined,
   RocketOutlined, SafetyOutlined, SettingOutlined, SwapOutlined, ToolOutlined, RobotOutlined
 } from '@ant-design/icons'
 import type { Project } from './data'
 import { directoryParents, findDirectory, GLOBAL_DIRECTORY, globalPage, PROJECT_DIRECTORY, projectPage, routeLabel, type AppRoute, type DirectoryItem, type ProjectPage, type WorkspaceArea } from './workspace-navigation'
 import { readWorkspaceSidebarCollapsed, saveWorkspaceSidebarCollapsed } from './workspace-sidebar-preference'
+import { TaskWorkspaceNavigation } from './task-workspace-navigation'
 import './workspace-shell.css'
+import './task-workspace.css'
 
 const icons: Record<string, ReactNode> = {
   workbench: <DashboardOutlined />, projects: <FolderOpenOutlined />, ai: <RobotOutlined />,
   resources: <DatabaseOutlined />, toolbox: <ToolOutlined />, settings: <SettingOutlined />,
-  overview: <DashboardOutlined />, progress: <BarChartOutlined />, code: <BranchesOutlined />,
+  overview: <DashboardOutlined />, tasks: <CheckSquareOutlined />, code: <BranchesOutlined />,
   runtime: <RocketOutlined />, 'project-settings': <SettingOutlined />,
   activity: <HistoryOutlined />, sessions: <MessageOutlined />, directories: <FolderOpenOutlined />,
   services: <RocketOutlined />, 'data-sources': <DatabaseOutlined />, docker: <AppstoreOutlined />,
@@ -89,53 +91,53 @@ export function WorkspaceShell(props: Props): JSX.Element {
       key: item.key, label: item.label, icon: icons[item.key],
       ...(collapsed && item.children ? { children: directoryItems(item.children, `${item.key}/`) } : {})
     }))
-    const globalSelected = route.scope === 'global' ? [route.area, ...(collapsed && area?.children ? [`${route.area}/${route.page}`] : [])] : []
-    const footerButton = (label: string, icon: ReactNode, onClick: () => void) => (
-      <Tooltip title={collapsed ? label : undefined} placement="right">
-        <Button type="text" icon={icon} aria-label={label} onClick={onClick}>{collapsed ? null : label}</Button>
-      </Tooltip>
-    )
+    const projectOnly = props.projectWindow && route.scope === 'project'
+    const globalSelected = route.scope === 'project'
+      ? ['projects']
+      : [route.area, ...(collapsed && area?.children ? [`${route.area}/${route.page}`] : [])]
+    const popupState = collapsed ? { openKeys: popupKeys, onOpenChange: setPopupKeys } : {}
 
     return <div className={`workspace-sidebar-inner${collapsed ? ' is-collapsed' : ''}`}>
-      {route.scope === 'project' ? <>
+      <div className="workspace-brand"><FolderOpenOutlined />{collapsed ? null : <strong>ForgeDesk</strong>}</div>
+      {!projectOnly ? <nav aria-label="主导航" className="workspace-primary-nav">
+        <Menu {...menuState} {...popupState} selectedKeys={globalSelected}
+          items={globalItems(false)} onClick={({ key }) => selectGlobalPage(key)} />
+      </nav> : null}
+      {route.scope === 'project' ? <nav aria-label="项目目录" className="workspace-secondary-directory">
         <div className="workspace-project-switch">
-          {!props.projectWindow ? <Tooltip title="项目列表" placement={collapsed ? 'right' : 'bottom'}><Button type="text" icon={<ArrowLeftOutlined />} aria-label="项目列表" onClick={() => go(globalPage('projects'))} /></Tooltip> : null}
           {collapsed ? <Dropdown trigger={['click']} menu={{
-              selectable: true, selectedKeys: project ? [project.id] : [],
-              items: projectOptions.length ? projectOptions.map(item => ({ key: item.value, label: item.label })) : [{ key: 'empty', label: '暂无项目', disabled: true }],
-              onClick: ({ key }) => props.onOpenProject(key)
-            }}><Button type="text" icon={<SwapOutlined />} aria-label="切换项目" title={`切换项目 · ${project?.name ?? '未找到项目'}`} /></Dropdown>
+            selectable: true, selectedKeys: project ? [project.id] : [],
+            items: projectOptions.length ? projectOptions.map(item => ({ key: item.value, label: item.label })) : [{ key: 'empty', label: '暂无项目', disabled: true }],
+            onClick: ({ key }) => props.onOpenProject(key)
+          }}><Button type="text" icon={<SwapOutlined />} aria-label="切换项目" title={`切换项目 · ${project?.name ?? '未找到项目'}`} /></Dropdown>
             : <Select aria-label="切换项目" value={project?.id} onChange={props.onOpenProject} options={projectOptions} />}
         </div>
-        <nav aria-label="项目目录" className="workspace-directory">
-          <Menu {...groupState} selectedKeys={[route.page]} items={directoryItems(PROJECT_DIRECTORY)} onClick={({ key }) => go(projectPage(route.projectId, key as ProjectPage))} />
-        </nav>
-        <div className="workspace-sidebar-footer">
-          {footerButton('项目 AI 工作 ↗', <RobotOutlined />, () => go({ ...globalPage('ai'), projectFilter: route.projectId }))}
-          {!props.projectWindow ? footerButton('返回工作台', <DashboardOutlined />, () => go(globalPage('workbench'))) : null}
-        </div>
-      </> : <>
-        <div className="workspace-brand"><FolderOpenOutlined />{collapsed ? null : <strong>ForgeDesk</strong>}</div>
-        <nav aria-label="主导航" className="workspace-directory">
-          <Menu {...menuState} {...(collapsed ? { openKeys: popupKeys, onOpenChange: setPopupKeys } : {})} selectedKeys={globalSelected} items={globalItems(false)} onClick={({ key }) => selectGlobalPage(key)} />
-          {!collapsed && area?.children && !area.footer ? <Menu mode="inline" selectedKeys={[route.page]} items={directoryItems(area.children)} onClick={({ key }) => go({ ...route, page: key, entityId: undefined })} /> : null}
-        </nav>
-        {!collapsed && area?.footer && area.children ? <nav aria-label={`${area.label}目录`} className="workspace-secondary-directory">
-          <div className="workspace-directory-label">{area.label}</div>
-          <Menu mode="inline" selectedKeys={[route.page]} openKeys={expanded} onOpenChange={setExpanded} items={directoryItems(area.children)} onClick={({ key }) => key === 'terminal' ? props.onOpenTerminal() : go({ ...route, page: key, entityId: undefined })} />
-        </nav> : null}
-        <nav aria-label="辅助导航" className="workspace-sidebar-footer">
-          <Menu {...menuState} {...(collapsed ? { openKeys: popupKeys, onOpenChange: setPopupKeys } : {})} selectedKeys={globalSelected} items={globalItems(true)} onClick={({ key }) => selectGlobalPage(key)} />
-        </nav>
-      </>}
+        <Menu {...groupState} selectedKeys={[route.page]} items={directoryItems(PROJECT_DIRECTORY)}
+          onClick={({ key }) => go(projectPage(route.projectId, key as ProjectPage))} />
+        <Tooltip title={collapsed ? '项目 AI 工作' : undefined} placement="right">
+          <Button type="text" className="workspace-project-ai" icon={<RobotOutlined />} aria-label="项目 AI 工作"
+            onClick={() => go({ ...globalPage('ai'), projectFilter: route.projectId })}>
+            {collapsed ? null : '项目 AI 工作 ↗'}
+          </Button>
+        </Tooltip>
+      </nav> : !collapsed && route.area === 'tasks' ? <nav aria-label="任务目录" className="workspace-secondary-directory">
+        <TaskWorkspaceNavigation embedded scope={route.taskScope} onChange={taskScope => go({ ...route, taskScope, entityId: undefined })} />
+      </nav> : !collapsed && area?.children ? <nav aria-label={`${area.label}目录`} className="workspace-secondary-directory">
+        {area.footer ? <div className="workspace-directory-label">{area.label}</div> : null}
+        <Menu mode="inline" selectedKeys={[route.page]} openKeys={expanded} onOpenChange={setExpanded}
+          items={directoryItems(area.children)} onClick={({ key }) => selectGlobalPage(`${route.area}/${key}`)} />
+      </nav> : <div className="workspace-sidebar-spacer" />}
+      {!projectOnly ? <nav aria-label="辅助导航" className="workspace-sidebar-footer">
+        <Menu {...menuState} {...popupState} selectedKeys={globalSelected}
+          items={globalItems(true)} onClick={({ key }) => selectGlobalPage(key)} />
+      </nav> : null}
     </div>
   }
 
   const ancestors = parents.map(key => route.scope === 'project' ? findDirectory(PROJECT_DIRECTORY, key)?.label : findDirectory(area?.children ?? [], key)?.label).filter(Boolean)
   const breadcrumbs = route.scope === 'project'
-    ? [{ title: <button onClick={() => go(globalPage('projects'))}>项目</button> }, { title: <button onClick={() => go(projectPage(route.projectId))}>{project?.name ?? '未找到项目'}</button> }, ...ancestors.map(title => ({ title })), { title: routeLabel(route) }]
+    ? [{ title: <button onClick={() => go(globalPage('projects'))}>项目</button> }, { title: <button onClick={() => go(projectPage(route.projectId))}>{project?.name ?? '未找到项目'}</button> }, ...ancestors.map(title => ({ title })), ...(route.page === 'overview' ? [] : [{ title: routeLabel(route) }])]
     : [{ title: area?.label }, ...ancestors.map(title => ({ title })), ...(routeLabel(route) !== area?.label ? [{ title: routeLabel(route) }] : [])]
-  if (route.progressObject) breadcrumbs.push({ title: ({ goal: '目标详情', key_result: '关键结果详情', milestone: '里程碑详情', version: '版本详情', task: '任务详情' } as const)[route.progressObject.kind] })
   const toggleLabel = compactWindow ? '打开导航目录' : sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'
 
   return <div className={`workspace-shell${sidebarCollapsed ? ' is-sidebar-collapsed' : ''}`}>

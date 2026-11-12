@@ -2,9 +2,9 @@ import { useState } from 'react'
 import { Alert, Button, Card, Empty, Input, List, Space, Spin, Tag, Typography } from 'antd'
 import { BranchesOutlined, DeleteOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons'
 import type { Project, Repository } from './data'
-import { useProjectProgress } from './use-project-progress'
+import { useTaskWorkspace } from './use-task-workspace'
+import { taskOverdue } from '../../shared/task-workspace'
 import { useForgeDeskStore } from './store'
-import { workStatusLabels } from './project-progress-view'
 import { WorkspaceRuntimeSummary } from './workspace-runtime-summary'
 import { ProjectOperationsPanel } from './project-operations-panel'
 import { globalPage, projectPage, type AppRoute, type DirectoryItem } from './workspace-navigation'
@@ -16,31 +16,22 @@ export function DirectoryLanding({ title, items, onSelect }: { title: string; it
 
 export function ProgressOverview({ project, onNavigate, onCreateProject }: { project?: Project; onNavigate: (route: AppRoute) => void; onCreateProject?: () => void }): JSX.Element {
   const { projects, repositories } = useForgeDeskStore()
-  const { snapshot, error, loading, refresh } = useProjectProgress(project?.id)
+  const { snapshot, error, loading, refresh } = useTaskWorkspace()
   const visibleProjects = project ? [project] : projects.filter(item => !item.archivedAt)
   const visibleIds = new Set(visibleProjects.map(item => item.id))
   const repos = repositories.filter(repo => visibleIds.has(repo.projectId))
-  const work = (snapshot?.items ?? []).filter(item => !item.archivedAt && item.trackingState==='tracked' && !['done', 'cancelled'].includes(item.status))
-  const today = snapshot ? new Intl.DateTimeFormat('en-CA',{timeZone:snapshot.timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(snapshot.asOf)) : ''
-  const stats = snapshot?.stats
-  const goals = snapshot?.entities.filter(entity => entity.kind === 'goal' && entity.status !== 'cancelled') ?? []
-  const milestones = snapshot?.entities.filter(entity => entity.kind === 'milestone' && entity.status !== 'cancelled') ?? []
-  const versions = snapshot?.entities.filter(entity => entity.kind === 'version' && !['cancelled','archived'].includes(entity.status)) ?? []
-  const openTask = (id: string, projectId: string | null) => onNavigate(projectId ? { ...projectPage(projectId, 'tasks'), entityId: id } : { ...globalPage('workbench', 'tasks'), entityId: id })
-  return <section className="workspace-overview"><div className="workspace-page-heading"><div><Typography.Title level={2}>{project?.name ?? '工作台'}</Typography.Title><Typography.Text type="secondary">{project?.description || (project ? project.workspacePath : '跨项目的待办、验收和异常；具体管理进入对应项目。')}</Typography.Text></div><Space><Button onClick={() => void refresh()}>刷新</Button>{!project ? <Button type="primary" onClick={onCreateProject}>创建项目</Button> : null}</Space></div>
-    {project ? <><ProjectOperationsPanel projectId={project.id} view="summary" onNavigate={onNavigate} /><WorkspaceRuntimeSummary projects={visibleProjects} refreshKey={snapshot?.asOf??''} onNavigate={onNavigate} serversOnly /></> : null}
-    {error ? <Alert type="error" showIcon message="项目进度读取失败" description={error} /> : null}
-    {loading && !snapshot ? <Spin /> : null}
-    {snapshot && !snapshot.active ? <Alert type="info" showIcon message="原生进度尚未启用" description="历史数据未自动迁移。请在设置 → 数据与维护中核对并启用；此处不将未知进度显示为完成。" action={<Button onClick={() => onNavigate(globalPage('settings', 'migration'))}>前往核对</Button>} /> : null}
-    <div className="workspace-stat-grid">{[['待办', stats?.todo], ['待验收', stats?.review], ['延期', stats?.overdue], ['阻塞', stats?.blocked]].map(([label, value]) => <Card size="small" key={String(label)}><Typography.Text type="secondary">{label}</Typography.Text><Typography.Title level={3}>{snapshot?.active && !error ? value ?? 0 : '—'}</Typography.Title></Card>)}</div>
-    <Card title="需要关注的工作" extra={<Button type="link" onClick={() => onNavigate(project ? projectPage(project.id, 'tasks') : globalPage('workbench', 'tasks'))}>全部任务</Button>}><List dataSource={work.filter(item => item.status === 'review' || item.blockers.some(blocker => !blocker.resolvedAt) || item.dependencyIds.some(id=>snapshot?.items.find(work=>work.id===id)?.status!=='done') || item.dueDate && item.dueDate < today).slice(0, 8)} locale={{ emptyText: snapshot?.active && !error ? '当前没有待验收或显式延期、阻塞的工作' : '尚无可用进度数据' }} renderItem={item => <List.Item actions={[<Button key="open" onClick={() => openTask(item.id, item.projectId)}>查看</Button>]}><List.Item.Meta title={item.title} description={project ? item.ownerRef || '未指定负责人' : projects.find(project => project.id === item.projectId)?.name ?? '收件箱'} /><Tag>{workStatusLabels[item.status]}</Tag></List.Item>} /></Card>
-    {snapshot?.active && !error ? <Card title="目标与交付" extra={project ? <Button type="link" onClick={() => onNavigate(projectPage(project.id,'goals'))}>管理目标</Button> : null}>
-      <Space wrap><Typography.Text>目标已达成 {goals.filter(goal=>goal.status==='achieved').length}/{goals.length}</Typography.Text><Typography.Text>里程碑已通过 {milestones.filter(item=>item.status==='achieved').length}/{milestones.length}</Typography.Text><Typography.Text>版本已收口 {versions.filter(item=>item.status==='closed').length}/{versions.length}</Typography.Text></Space>
-      <List size="small" dataSource={goals.slice(0,5)} locale={{emptyText:'尚未定义目标；任务仍可独立管理'}} renderItem={goal=><List.Item actions={[<Button key="open" onClick={()=>onNavigate({...projectPage(goal.projectId,'goals'),progressObject:{kind:'goal',id:goal.id}})}>查看目标</Button>]}><List.Item.Meta title={goal.title} description={`${snapshot.goalStats[goal.id]?.percent==null?'尚未定义结果':`${snapshot.goalStats[goal.id].percent}%`}${goal.progressMode==='legacy_tasks'?' · 旧任务口径':` · 关键结果已验收 ${snapshot.goalStats[goal.id]?.achieved||0}/${snapshot.goalStats[goal.id]?.total||0}`}`}/></List.Item>}/>
-    </Card> : null}
-    {!project ? <WorkspaceRuntimeSummary projects={visibleProjects} refreshKey={snapshot?.asOf??''} onNavigate={onNavigate}/> : null}
-    <Card title="代码状态" extra={project ? <Button type="link" onClick={() => onNavigate(projectPage(project.id, 'repositories'))}>代码管理</Button> : null}><List dataSource={repos.filter(repo => !repo.available || repo.hasChanges || repo.ahead > 0).slice(0, 6)} locale={{ emptyText: repos.length ? '当前扫描未发现待处理的本地代码；远端状态以最近 Fetch 为准' : '尚未添加仓库，不影响独立管理项目进度' }} renderItem={repo => <List.Item actions={[<Button key="open" onClick={() => onNavigate({ ...projectPage(repo.projectId, 'repositories'), repositoryId: repo.id })}>打开仓库</Button>]}><List.Item.Meta title={repo.name} description={repo.localPath} /><Tag color={!repo.available ? 'error' : 'warning'}>{!repo.available ? '不可用' : `变更 ${repo.hasChanges ? '有' : '无'} · 待推送 ${repo.ahead}`}</Tag></List.Item>} /></Card>
-    {!project ? <Card title="最近项目"><List dataSource={visibleProjects.slice(0, 6)} locale={{ emptyText: <Empty description="创建第一个项目后开始管理" /> }} renderItem={item => <List.Item actions={[<Button key="open" onClick={() => onNavigate(projectPage(item.id))}>进入项目</Button>]}><List.Item.Meta title={item.name} description={item.workspacePath} /></List.Item>} /></Card> : null}
+  const tasks = snapshot?.tasks ?? []
+  const openTasks = () => onNavigate({ ...globalPage('tasks'), taskScope: 'all' })
+  return <section className="workspace-overview"><div className="workspace-page-heading"><div><Typography.Title level={2}>{project?.name ?? '概览'}</Typography.Title><Typography.Text type="secondary">{project?.description || (project ? project.workspacePath : '任务、项目与本机运行概览')}</Typography.Text></div><Space><Button onClick={() => void refresh()}>刷新</Button>{project
+    ? <Button onClick={() => onNavigate(projectPage(project.id, 'tasks'))}>关联任务{snapshot ? `（${tasks.filter(task => task.projectIds.includes(project.id)).length}）` : ''}</Button>
+    : <Button type="primary" onClick={onCreateProject}>创建项目</Button>}</Space></div>
+    {project ? <><ProjectOperationsPanel projectId={project.id} view="summary" onNavigate={onNavigate} /><WorkspaceRuntimeSummary projects={visibleProjects} refreshKey="" onNavigate={onNavigate} serversOnly /></> : <>
+      {error ? <Alert type="error" message={error} /> : null}{loading && !snapshot ? <Spin /> : null}
+      <div className="workspace-stat-grid">{[['全部任务', tasks.length], ['未完成', tasks.filter(task => !task.done).length], ['已完成', tasks.filter(task => task.done).length], ['已逾期', tasks.filter(task => taskOverdue(task)).length]].map(([label, value]) => <Card size="small" key={String(label)} onClick={openTasks}><Typography.Text type="secondary">{label}</Typography.Text><Typography.Title level={3}>{snapshot ? value : '—'}</Typography.Title></Card>)}</div>
+      <Card title="需要关注的任务" extra={<Button type="link" onClick={openTasks}>全部任务</Button>}><List dataSource={tasks.filter(task => !task.done && (task.starred || taskOverdue(task))).slice(0, 8)} locale={{ emptyText: '当前没有关注或逾期任务' }} renderItem={task => <List.Item actions={[<Button key="open" onClick={() => onNavigate({ ...globalPage('tasks'), taskScope: 'all', entityId: task.id })}>查看</Button>]}><List.Item.Meta title={task.title} description={task.dueDate || '未安排日期'} />{taskOverdue(task) ? <Tag color="red">已逾期</Tag> : null}</List.Item>} /></Card><WorkspaceRuntimeSummary projects={visibleProjects} refreshKey="" onNavigate={onNavigate} />
+    </>}
+    <Card title="代码状态"><List dataSource={repos.filter(repo => !repo.available || repo.hasChanges || repo.ahead > 0).slice(0, 6)} locale={{ emptyText: '当前没有待处理的本地代码' }} renderItem={repo => <List.Item actions={[<Button key="open" onClick={() => onNavigate({ ...projectPage(repo.projectId, 'repositories'), repositoryId: repo.id })}>打开仓库</Button>]}><List.Item.Meta title={repo.name} description={repo.localPath} /><Tag>{!repo.available ? '不可用' : `变更 ${repo.hasChanges ? '有' : '无'} · 待推送 ${repo.ahead}`}</Tag></List.Item>} /></Card>
+    {!project ? <Card title="最近项目"><List dataSource={visibleProjects.slice(0, 6)} renderItem={item => <List.Item actions={[<Button key="open" onClick={() => onNavigate(projectPage(item.id))}>进入项目</Button>]}><List.Item.Meta title={item.name} description={item.workspacePath} /></List.Item>} /></Card> : null}
   </section>
 }
 

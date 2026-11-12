@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { createWorkspaceHistory, globalPage, projectPage, restoreHistory, validRoute, visitRoute, workspaceLocationKey, type AppRoute, type ProjectRoute } from './workspace-navigation'
+import { createWorkspaceHistory, normalizeWorkspaceRoute, globalPage, projectPage, restoreHistory, validRoute, visitRoute, workspaceLocationKey, type AppRoute, type ProjectRoute } from './workspace-navigation'
 
 export function useWorkspaceNavigation(projectWindowId: string | null) {
   const [history, setHistory] = useState(() => {
@@ -13,7 +13,7 @@ export function useWorkspaceNavigation(projectWindowId: string | null) {
   })
   useEffect(() => { try { localStorage.setItem(workspaceLocationKey, JSON.stringify(history.locations)) } catch { /* best effort */ } }, [history.locations])
   const route = history.entries[history.index]
-  const go = useCallback((next: AppRoute) => { if (validRoute(next)) setHistory(current => visitRoute(current, next)) }, [])
+  const go = useCallback((next: AppRoute) => { const normalized = normalizeWorkspaceRoute(next); if (validRoute(normalized)) setHistory(current => visitRoute(current, normalized)) }, [])
   const back = useCallback(() => setHistory(current => restoreHistory(current, current.index - 1)), [])
   const forward = useCallback(() => setHistory(current => restoreHistory(current, current.index + 1)), [])
   const openProject = useCallback((id: string) => setHistory(current => visitRoute(current, current.locations[id] ?? projectPage(id))), [])
