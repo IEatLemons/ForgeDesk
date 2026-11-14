@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Button, Card, Collapse, Drawer, Empty, Input, Select, Space, Spin, Table, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Collapse, Drawer, Empty, Input, Select, Space, Spin, Tag, Typography } from 'antd'
 import { ExportOutlined, FileTextOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { ProjectService, ProjectServiceDomain, ServiceDeploymentSummary, ServiceEnvironmentLogLine } from './data'
 import type { ColumnsType } from 'antd/es/table'
+import { DataTable as Table, TableText } from './data-table'
 import { emptyServiceOperations, isOperationsStale, type OperationsSourceState } from '../../shared/project-operations'
 import { deploymentLabel, domainHealth, latestDeployment, operationsEnvironmentOrder, operationsServiceOrder, operationsUrl } from './project-operations-view'
 import { useProjectOperations } from './use-project-operations'
@@ -105,19 +106,19 @@ export function ProjectOperationsPanel({ projectId, view, serviceId, environment
     </Card>
   }
   const domainColumns: ColumnsType<ProjectServiceDomain & { service: ProjectService }> = [
-    { title: '域名 / 访问地址', key: 'domain', render: (_, domain) => <div><SiteLink url={domain.url || domain.domain} /><div><Typography.Text type="secondary">{domain.service.name} · {domain.service.provider}</Typography.Text></div></div> },
-    { title: '环境', key: 'environment', render: (_, domain) => domain.environmentName || '未关联' },
-    { title: '健康状态', key: 'health', render: (_, domain) => <Tag color={domainHealth(domain).color}>{domainHealth(domain).label}</Tag> },
-    { title: 'HTTP / 耗时', key: 'response', render: (_, domain) => `${domain.lastStatusCode || '—'} / ${domain.lastCheckedAt ? `${domain.lastResponseMs} ms` : '—'}` },
+    { title: '域名 / 访问地址', key: 'domain', width: 250, render: (_, domain) => <div><SiteLink url={domain.url || domain.domain} /><TableText value={`${domain.service.name} · ${domain.service.provider}`} type="secondary" /></div> },
+    { title: '环境', key: 'environment', width: 120, render: (_, domain) => <TableText value={domain.environmentName || '未关联'} /> },
+    { title: '健康状态', key: 'health', width: 110, render: (_, domain) => <Tag color={domainHealth(domain).color}>{domainHealth(domain).label}</Tag> },
+    { title: 'HTTP / 耗时', key: 'response', width: 120, render: (_, domain) => `${domain.lastStatusCode || '—'} / ${domain.lastCheckedAt ? `${domain.lastResponseMs} ms` : '—'}` },
     { title: '最近检查', key: 'checked', render: (_, domain) => <div>{domain.lastCheckedAt ? time(domain.lastCheckedAt) : '尚未检查'}{domain.lastError ? <div><Typography.Text type="danger">{domain.lastError}</Typography.Text></div> : null}</div> },
-    ...(view === 'domains' ? [{ title: '操作', key: 'actions', render: (_: unknown, domain: ProjectServiceDomain & { service: ProjectService }) => <Button size="small" onClick={() => onInspect?.(domain.service, 'domains')}>验证与配置</Button> }] : [])
+    ...(view === 'domains' ? [{ title: '操作', key: 'actions', width: 120, render: (_: unknown, domain: ProjectServiceDomain & { service: ProjectService }) => <Button size="small" onClick={() => onInspect?.(domain.service, 'domains')}>验证与配置</Button> }] : [])
   ]
   const deploymentColumns: ColumnsType<ServiceDeploymentSummary & { service: ProjectService }> = [
-    { title: '部署', key: 'deployment', render: (_, deployment) => <Space direction="vertical" size={2}><Typography.Text strong>{deployment.service.name}</Typography.Text><Typography.Text type="secondary">{deployment.id}</Typography.Text><SiteLink url={deployment.url} /></Space> },
-    { title: '环境 / 状态', key: 'state', render: (_, deployment) => <Space wrap><Tag>{deployment.target}</Tag><DeploymentState state={deployment.state} />{stateFor(deployment.service).production?.id === deployment.id ? <Tag color="cyan">当前生产指向</Tag> : null}</Space> },
-    { title: '提交 / 分支', key: 'commit', render: (_, deployment) => <Space direction="vertical" size={2}><Typography.Text code copyable={Boolean(deployment.commitSha)}>{deployment.commitSha.slice(0, 7) || '—'}</Typography.Text><Typography.Text>{String(deployment.meta.githubCommitRef || deployment.meta.gitlabCommitRef || deployment.meta.bitbucketCommitRef || '')}</Typography.Text></Space> },
-    { title: '创建时间', key: 'created', render: (_, deployment) => time(deployment.createdAt) },
-    { title: '操作', key: 'actions', render: (_, deployment) => <Button onClick={() => onInspect?.(deployment.service, 'deployments')}>详情与操作</Button> }
+    { title: '部署', key: 'deployment', render: (_, deployment) => <div><TableText value={deployment.service.name} strong /><TableText value={deployment.id} type="secondary" /><SiteLink url={deployment.url} /></div> },
+    { title: '环境 / 状态', key: 'state', width: 180, render: (_, deployment) => <Space wrap><Tag>{deployment.target}</Tag><DeploymentState state={deployment.state} />{stateFor(deployment.service).production?.id === deployment.id ? <Tag color="cyan">当前生产指向</Tag> : null}</Space> },
+    { title: '提交 / 分支', key: 'commit', width: 205, render: (_, deployment) => <div><Typography.Text code copyable={Boolean(deployment.commitSha)}>{deployment.commitSha.slice(0, 7) || '—'}</Typography.Text><TableText value={String(deployment.meta.githubCommitRef || deployment.meta.gitlabCommitRef || deployment.meta.bitbucketCommitRef || '')} /></div> },
+    { title: '创建时间', key: 'created', width: 170, render: (_, deployment) => time(deployment.createdAt) },
+    { title: '操作', key: 'actions', width: 130, render: (_, deployment) => <Button onClick={() => onInspect?.(deployment.service, 'deployments')}>详情与操作</Button> }
   ]
   const filters = view !== 'summary' ? <div className="operations-filters">
     <Select aria-label="筛选服务" value={serviceFilter} onChange={setServiceFilter} options={[{ value: '', label: '全部服务' }, ...services.map(service => ({ value: service.id, label: `${service.provider} · ${service.name}` }))]} />

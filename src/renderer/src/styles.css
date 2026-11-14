@@ -5506,7 +5506,24 @@ button.app-status-bar-item:hover {
 }
 
 .project-list-name-cell {
+  display: grid;
+  gap: 2px;
   max-width: 100%;
+}
+
+.project-list-branches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.project-list-branches > .ant-tag {
+  max-width: 100%;
+  margin-inline-end: 0;
+}
+
+.project-list-branches .table-text {
+  color: inherit;
 }
 
 .project-favorite-button {
@@ -5534,8 +5551,6 @@ button.app-status-bar-item:hover {
   max-width: 100%;
   font-size: 12px;
   line-height: 1.35;
-  overflow-wrap: anywhere;
-  word-break: break-word;
 }
 
 .project-list-actions {
@@ -11708,9 +11723,36 @@ button.app-status-bar-item:hover {
   margin: 30px 0;
 }
 
+.data-table-scroll {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.data-table-scroll .ant-table-thead > tr > th {
+  white-space: nowrap;
+}
+
 .table-text {
   display: block;
+  min-width: 0;
   max-width: 100%;
+}
+
+.table-label-with-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.table-label-with-tags > .ant-tag {
+  flex: none;
+  margin-inline-end: 0;
+}
+
+.repository-identity-cell {
+  display: grid;
+  gap: 2px;
 }
 
 .directory-input {

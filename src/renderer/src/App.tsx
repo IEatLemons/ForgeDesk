@@ -30,7 +30,6 @@ import {
   Spin,
   Statistic,
   Switch,
-  Table,
   Tabs,
   Tag,
   Tooltip,
@@ -38,6 +37,7 @@ import {
   message
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import { DataTable as Table, TableText } from './data-table'
 import {
   BranchesOutlined,
   ArrowRightOutlined,
@@ -1172,21 +1172,13 @@ function RepositoryIdentityCell({ repository }: { repository: Pick<Repository, '
   const email = repository.effectiveUserEmail || '未配置'
 
   return (
-    <Space direction="vertical" size={2}>
-      <Space size={6}>
+    <div className="repository-identity-cell">
+      <div className="table-label-with-tags">
         <Tag color={mode.color}>{mode.label}</Tag>
-        <Typography.Text strong>{name}</Typography.Text>
-      </Space>
-      <Typography.Text type="secondary">{email}</Typography.Text>
-    </Space>
-  )
-}
-
-function TableText({ value }: { value: string }): JSX.Element {
-  return (
-    <Typography.Text className="table-text" ellipsis={{ tooltip: value }}>
-      {value}
-    </Typography.Text>
+        <TableText value={name} strong />
+      </div>
+      <TableText value={email} type="secondary" />
+    </div>
   )
 }
 
@@ -6642,13 +6634,14 @@ function RepositoryRemoteManager({ repositories, active }: { repositories: Repos
   }
 
   const remoteColumns: ColumnsType<GitRemote> = [
-    { title: '远端', dataIndex: 'name', key: 'name', width: 140, render: (name) => <Typography.Text strong>{name}</Typography.Text> },
+    { title: '远端', dataIndex: 'name', key: 'name', width: 140, render: (name) => <TableText value={name} strong /> },
     { title: 'Fetch URL', dataIndex: 'fetchUrl', key: 'fetchUrl', render: (value) => <TableText value={value || '未配置'} /> },
     { title: 'Push URL', dataIndex: 'pushUrl', key: 'pushUrl', render: (value) => <TableText value={value || '未配置'} /> },
     {
       title: '操作',
       key: 'actions',
       width: 230,
+      fixed: 'right',
       render: (_, remote) => (
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => openRemoteModal(remote)}>
@@ -6693,7 +6686,7 @@ function RepositoryRemoteManager({ repositories, active }: { repositories: Repos
         dataSource={selectedRepository?.remotes ?? []}
         loading={checkingRemotes}
         pagination={false}
-        scroll={{ x: 900 }}
+        scroll={{ x: 720 }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={remoteReadError ? '远端配置不可用' : '当前仓库还没有远端'} /> }}
       />
       <Modal
@@ -7058,7 +7051,7 @@ function ProjectServiceSettings({ project, repositories = [] }: { project?: Proj
 
   const connectionColumns: ColumnsType<ServiceConnection> = [
     { title: '平台', dataIndex: 'provider', key: 'provider', width: 110, render: (provider) => <Tag>{getServiceProviderLabel(provider)}</Tag> },
-    { title: '连接', dataIndex: 'name', key: 'name', render: (name) => <Typography.Text strong>{name}</Typography.Text> },
+    { title: '连接', dataIndex: 'name', key: 'name', render: (name) => <TableText value={name} strong /> },
     {
       title: '认证',
       key: 'token',
@@ -13843,10 +13836,10 @@ function ProjectCloudflareSettings({ project, view, onConfigure }: { project: Pr
       title: '名称',
       key: 'name',
       render: (_, record) => (
-        <Space direction="vertical" size={2}>
+        <div>
           <TableText value={record.name} />
-          {settings?.domain ? <Typography.Text type="secondary">{formatCloudflareRecordNameForForm(record.name, settings.domain)}</Typography.Text> : null}
-        </Space>
+          {settings?.domain ? <TableText type="secondary" value={formatCloudflareRecordNameForForm(record.name, settings.domain)} /> : null}
+        </div>
       )
     },
     { title: '内容', key: 'content', render: (_, record) => <TableText value={record.content} /> },
@@ -15218,19 +15211,19 @@ function CreateProjectModal({
       title: '仓库',
       dataIndex: 'name',
       key: 'name',
-      width: 220,
+      width: 300,
       render: (name, repository) => {
         const depth = scannedDepthById.get(repository.id) ?? 0
         const state = getRepositoryStateMeta(repository)
 
         return (
-          <Space size={6} style={{ paddingLeft: depth * 20 }}>
-            <Typography.Text strong>{name}</Typography.Text>
+          <div className="table-label-with-tags" style={{ paddingInlineStart: Math.min(depth * 20, 60) }}>
+            <TableText value={name} strong />
             <Tag color={repository.repositoryKind === 'submodule' ? 'purple' : repository.parentRepositoryId ? 'cyan' : undefined}>
               {getRepositoryKindLabel(repository)}
             </Tag>
             <Tag color={state.color}>{state.label}</Tag>
-          </Space>
+          </div>
         )
       }
     },
@@ -15247,10 +15240,10 @@ function CreateProjectModal({
       key: 'currentBranch',
       width: 170,
       render: (value, repository) => (
-        <Space size={6} wrap>
-          <Typography.Text>{repository.available ? (repository.isDetached ? 'Detached HEAD' : value) : '不可用'}</Typography.Text>
+        <div className="table-label-with-tags">
+          <TableText value={repository.available ? (repository.isDetached ? 'Detached HEAD' : value) : '不可用'} />
           {repository.isDetached && repository.checkedOutCommit ? <Tag>{repository.checkedOutCommit.slice(0, 7)}</Tag> : null}
-        </Space>
+        </div>
       )
     },
     {
@@ -15402,7 +15395,7 @@ function CreateProjectModal({
               columns={repositoryColumns}
               dataSource={scannedHierarchy.map((item) => item.repository)}
               size="middle"
-              scroll={{ x: 'max-content', y: 280 }}
+              scroll={{ x: 1600, y: 280 }}
               pagination={false}
               locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="扫描项目目录后，会在这里显示归属到该项目的仓库和子项目" /> }}
             />
@@ -20817,16 +20810,16 @@ function RepositoryTable({ repositories, branchTagRefreshToken = 0 }: { reposito
         title: '仓库',
         dataIndex: 'name',
         key: 'name',
-        width: 220,
+        width: 260,
         render: (name, repository) => {
           const depth = repositoryHierarchy.find((item) => item.repository.id === repository.id)?.depth ?? 0
           return (
-            <Space size={6} style={{ paddingLeft: depth * 20 }}>
-              <Typography.Text strong>{name}</Typography.Text>
+            <div className="table-label-with-tags" style={{ paddingInlineStart: Math.min(depth * 20, 60) }}>
+              <TableText value={name} strong />
               <Tag color={repository.repositoryKind === 'submodule' ? 'purple' : repository.parentRepositoryId ? 'cyan' : undefined}>
                 {getRepositoryKindLabel(repository)}
               </Tag>
-            </Space>
+            </div>
           )
         }
       },
@@ -20834,7 +20827,7 @@ function RepositoryTable({ repositories, branchTagRefreshToken = 0 }: { reposito
       { title: '远端数', dataIndex: 'remoteCount', key: 'remoteCount', width: 90 },
       { title: '本地分支', dataIndex: 'localBranchCount', key: 'localBranchCount', width: 100 },
       { title: '远端分支', dataIndex: 'remoteBranchCount', key: 'remoteBranchCount', width: 100 },
-      { title: '当前分支', dataIndex: 'currentBranch', key: 'currentBranch', width: 120 },
+      { title: '当前分支', dataIndex: 'currentBranch', key: 'currentBranch', width: 140, render: (value) => <TableText value={value} /> },
       { title: '最近提交', dataIndex: 'latestCommit', key: 'latestCommit', width: 260, render: (value) => <TableText value={value} /> },
       { title: 'Git 身份', key: 'identity', width: 220, render: (_, repository) => <RepositoryIdentityCell repository={repository} /> },
       { title: '默认远端', dataIndex: 'remoteUrl', key: 'remoteUrl', width: 260, render: (value) => (value ? <TableText value={value} /> : <Typography.Text type="secondary">未配置</Typography.Text>) },
@@ -20850,6 +20843,7 @@ function RepositoryTable({ repositories, branchTagRefreshToken = 0 }: { reposito
         title: '操作',
         key: 'actions',
         width: 190,
+        fixed: 'right',
         render: (_, repository) => (
           <Space>
             <Button size="small" onClick={() => openRepositoryDetail(repository)}>详情</Button>
