@@ -1,6 +1,7 @@
 import { CodeOutlined, DeleteOutlined, EditOutlined, FolderOpenOutlined, InfoCircleOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
-import { Alert, Badge, Button, Col, Descriptions, Drawer, Empty, Form, Input, Modal, Progress, Row, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Alert, Badge, Button, Col, Descriptions, Drawer, Empty, Form, Input, Modal, Progress, Row, Select, Space, Spin, Statistic, Switch, Tabs, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import { DataTable as Table } from './data-table'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   DockerContainerDetail,

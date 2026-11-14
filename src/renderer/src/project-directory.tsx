@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { Button, Dropdown, Empty, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Button, Dropdown, Empty, Input, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import { DataTable as Table, TableText } from './data-table'
 import { BranchesOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, ExportOutlined, FileTextOutlined, FolderOpenOutlined, MoreOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, StarFilled, StarOutlined, UploadOutlined } from '@ant-design/icons'
 import type { Project, ProjectGroup, Repository } from './data'
 import type { AppMode } from './app-mode'
@@ -179,14 +180,14 @@ export const ProjectDirectory = memo(function ProjectDirectory(props: Props): JS
   }, [loadGroups])
   const columns = useMemo<ColumnsType<ProjectDirectoryRow>>(() => [
     { title: '项目', key: 'project', width: simple ? undefined : 320,
-      render: (_, { project }) => <Space direction="vertical" size={2} className="project-list-name-cell"><Space size={8} wrap>
+      render: (_, { project }) => <div className="project-list-name-cell"><div className="table-label-with-tags">
         <Button type="text" size="small" className={`project-favorite-button${project.isFavorite ? ' is-active' : ''}`} icon={project.isFavorite ? <StarFilled /> : <StarOutlined />} loading={favoriteBusy === project.id} aria-label={`${project.isFavorite ? '取消收藏' : '收藏'}项目 ${project.name}`} aria-pressed={project.isFavorite} onClick={event => { event.stopPropagation(); void toggleFavorite(project) }} />
-        <Typography.Text strong>{project.name}</Typography.Text>{project.isFavorite ? <Tag color="gold">已收藏</Tag> : null}{selectedProjectId === project.id ? <Tag color="blue">当前项目</Tag> : null}
-      </Space><Typography.Text className="project-list-path" type="secondary" title={project.workspacePath}>{project.workspacePath}</Typography.Text></Space> },
+        <TableText value={project.name} strong />{project.isFavorite ? <Tag color="gold">已收藏</Tag> : null}{selectedProjectId === project.id ? <Tag color="blue">当前项目</Tag> : null}
+      </div><TableText className="project-list-path" type="secondary" value={project.workspacePath} /></div> },
     { title: '分组', key: 'group', width: simple ? 150 : 170, render: (_, row) => <Select size="small" value={row.project.groupId ?? '__ungrouped__'} options={groupOptions} onClick={event => event.stopPropagation()} onChange={value => void changeGroup(row.id, value)} /> },
     { title: 'Git 状态', key: 'gitStatus', width: simple ? 340 : 250, shouldCellUpdate: (row, old) => row !== old, render: (_, row) => <DirectoryGitStatus row={row} queue={queue} simple={simple} /> },
     ...(!simple ? [{ title: '分支', key: 'branches', width: 200, shouldCellUpdate: (row: ProjectDirectoryRow, old: ProjectDirectoryRow) => row !== old,
-      render: (_: unknown, row: ProjectDirectoryRow) => row.branches.length ? <Space size={6} wrap>{row.branches.slice(0, 3).map(repository => <Tag key={repository.id} color={repository.repositoryKind === 'submodule' ? 'purple' : 'geekblue'}>{repository.name}: {repository.isDetached ? 'Detached HEAD' : repository.currentBranch}</Tag>)}{row.branches.length > 3 ? <Tag>+{row.branches.length - 3}</Tag> : null}</Space> : <Typography.Text type="secondary">未识别</Typography.Text> }] : []),
+      render: (_: unknown, row: ProjectDirectoryRow) => row.branches.length ? <div className="project-list-branches">{row.branches.slice(0, 3).map(repository => <Tag key={repository.id} color={repository.repositoryKind === 'submodule' ? 'purple' : 'geekblue'}><TableText value={`${repository.name}: ${repository.isDetached ? 'Detached HEAD' : repository.currentBranch}`} /></Tag>)}{row.branches.length > 3 ? <Tag>+{row.branches.length - 3}</Tag> : null}</div> : <Typography.Text type="secondary">未识别</Typography.Text> }] : []),
     { title: '操作', key: 'actions', width: simple ? 76 : 320, render: (_, row) => {
       const menu = [
         { key: 'fetch', label: 'Fetch', disabled: !row.repositories.length }, { key: 'window', label: '独立窗口' },

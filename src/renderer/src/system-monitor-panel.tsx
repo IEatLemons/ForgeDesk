@@ -1,5 +1,6 @@
-import { Alert, Badge, Button, Descriptions, Empty, Progress, Space, Spin, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Alert, Badge, Button, Descriptions, Empty, Progress, Space, Spin, Switch, Tabs, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import { DataTable as Table } from './data-table'
 import { ApiOutlined, DashboardOutlined, DesktopOutlined, GlobalOutlined, HddOutlined, ReloadOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import { useEffect, useMemo, useRef, useState } from 'react'

@@ -15,13 +15,13 @@ import {
   Select,
   Space,
   Spin,
-  Table,
   Tabs,
   Tag,
   Typography,
   message
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import { DataTable as Table } from './data-table'
 import {
   CloudOutlined,
   DatabaseOutlined,
