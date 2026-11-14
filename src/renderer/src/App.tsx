@@ -20846,7 +20846,7 @@ function RepositoryTable({ repositories, branchTagRefreshToken = 0 }: { reposito
         fixed: 'right',
         render: (_, repository) => (
           <Space>
-            <Button size="small" onClick={() => openRepositoryDetail(repository)}>详情</Button>
+            <Button size="small" icon={<BranchesOutlined />} onClick={() => openRepositoryDetail(repository)}>提交树</Button>
             <Button size="small" icon={<EditOutlined />} onClick={() => setSelectedRepository(repository)}>
               身份
             </Button>
@@ -20870,7 +20870,7 @@ function RepositoryTable({ repositories, branchTagRefreshToken = 0 }: { reposito
         locale={{ emptyText: <Empty description="这个项目下还没有仓库" /> }}
       />
       <Drawer
-        title={detailRepository ? `仓库详情：${detailRepository.name}` : '仓库详情'}
+        title={detailRepository ? `提交树：${detailRepository.name}` : '提交树'}
         open={Boolean(detailRepository)}
         width={1280}
         onClose={() => setDetailRepository(null)}
