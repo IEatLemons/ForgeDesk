@@ -1,3 +1,4 @@
+import { message } from './app-message'
 import {
   CloseOutlined,
   CodeOutlined,
@@ -7,7 +8,7 @@ import {
   PlusOutlined,
   ReloadOutlined
 } from '@ant-design/icons'
-import { Button, Empty, Form, Input, Modal, Popconfirm, Space, Spin, Tooltip, Typography, message } from 'antd'
+import { Button, Empty, Form, Input, Modal, Popconfirm, Space, Spin, Tooltip, Typography } from 'antd'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'

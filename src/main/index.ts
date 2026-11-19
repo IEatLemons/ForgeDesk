@@ -1,3 +1,4 @@
+import { readProjectDirectorySummaries } from './project-directory-summaries'
 import { migrateProjectServiceOwnership } from './project-service-ownership.js'
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, Notification, powerMonitor, safeStorage, shell, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron'
 import { RailwayOAuthManager, getRailwayOAuthManager } from './railway-oauth'
@@ -50,6 +51,7 @@ import {
 } from './codex-accounts'
 import {
   getCodexApiService,
+  saveCodexApiServiceSettings,
   rotateCodexApiKey,
   startCodexApiService,
   stopCodexApiService,
@@ -57,6 +59,10 @@ import {
   type CodexApiServiceSettings,
   type CodexApiServiceView
 } from './codex-api-service'
+import { previewCockpitImport, importCockpitData } from './cockpit-import'
+import { ServiceHealthChecker } from './service-health-checks'
+import { serviceHealthIntervalMs, serviceHealthStartupDelayMs, type ServiceHealthCheckScope } from '../shared/service-health'
+import type { CockpitImportInput } from '../shared/cockpit-import'
 import {
   getProjectAiBinding,
   migrateProjectAiBindingTable,
@@ -491,13 +497,11 @@ import {
 import {
   bindProjectService as bindProjectServiceRecord,
   addServiceDomain as addServiceDomainRecord,
-  checkServiceDomain,
   deployVercelStaticProjectForService,
   deleteServiceEnvVar as deleteServiceEnvVarRecord,
   deleteOldServiceMonitorHistory,
   deleteServiceConnection as deleteServiceConnectionRecord,
   inspectServiceDomainConfig as inspectServiceDomainConfigRecord,
-  isMonitorableServiceDomain,
   listAllProjectServices as listAllProjectServiceRecords,
   listAllServiceMonitorHistory as listAllServiceMonitorHistoryRecords,
   listCachedServiceDeployments as listCachedServiceDeploymentRecords,
@@ -512,7 +516,6 @@ import {
   migrateServiceMonitoringTables,
   readProjectOperations,
   refreshProjectOperations,
-  recordServiceMonitorCheck,
   removeServiceDomain as removeServiceDomainRecord,
   revealServiceEnvVar as revealServiceEnvVarRecord,
   runServiceDeploymentAction as runServiceDeploymentActionRecord,
@@ -2148,8 +2151,9 @@ function runGitInPath(localPath: string, args: string[]): Promise<string> {
   })
 }
 
-function runGitLog(localPath: string, options: { sinceDate?: string; untilDate?: string; branchName?: string; allRefs?: boolean; offset?: number; limit?: number } = {}): Promise<string> {
+function runGitLog(localPath: string, options: { sinceDate?: string; untilDate?: string; branchName?: string; allRefs?: boolean; offset?: number; limit?: number; topological?: boolean } = {}): Promise<string> {
   const args = ['-C', localPath, 'log']
+  if (options.topological) args.push('--topo-order')
 
   if (options.sinceDate) {
     args.push(`--since=${options.sinceDate}`)
@@ -4272,10 +4276,14 @@ async function switchRepositoryBranch(repositoryId: string, input: GitBranchSwit
   return rescanRepositoryRecord(repository)
 }
 
-const serviceMonitorIntervalMs = 5 * 60 * 1000
 const serviceMonitorRetentionDays = 30
 let serviceMonitorTimer: NodeJS.Timeout | null = null
 let serviceMonitorRunning = false
+const serviceHealthChecker = new ServiceHealthChecker(projectIds => {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) for (const projectId of projectIds) window.webContents.send('project:operations:updated', projectId)
+  }
+})
 
 function getServiceMonitorCutoffIso(): string {
   return new Date(Date.now() - serviceMonitorRetentionDays * 24 * 60 * 60 * 1000).toISOString()
@@ -4283,30 +4291,10 @@ function getServiceMonitorCutoffIso(): string {
 
 async function checkProjectServicesNow(projectId?: string): Promise<ProjectServiceRecord[]> {
   const db = getDatabase()
-  const services = projectId ? listProjectServiceRecords(db, projectId) : listAllProjectServiceRecords(db)
-
-  for (const service of services) {
-    if (!service.enabled) {
-      continue
-    }
-
-    for (const domain of service.domains) {
-      if (!isMonitorableServiceDomain(domain, service.provider)) {
-        continue
-      }
-
-      const result = await checkServiceDomain(domain)
-      recordServiceMonitorCheck(db, {
-        projectId: projectId ?? '',
-        serviceId: service.id,
-        domainId: domain.id,
-        ...result
-      })
-    }
-  }
+  const services = await serviceHealthChecker.check(db, { projectId })
 
   deleteOldServiceMonitorHistory(db, getServiceMonitorCutoffIso())
-  return projectId ? listProjectServiceRecords(db, projectId) : listAllProjectServiceRecords(db)
+  return services
 }
 
 async function runServiceMonitorSweep(projectId?: string): Promise<void> {
@@ -4332,9 +4320,9 @@ function startServiceMonitorScheduler(): void {
 
   serviceMonitorTimer = setInterval(() => {
     runServiceMonitorSweep().catch((error) => console.error('Service monitor sweep failed', error))
-  }, serviceMonitorIntervalMs)
+  }, serviceHealthIntervalMs)
   serviceMonitorTimer.unref?.()
-  setTimeout(() => runServiceMonitorSweep().catch((error) => console.error('Service monitor sweep failed', error)), 10000).unref?.()
+  setTimeout(() => runServiceMonitorSweep().catch((error) => console.error('Service monitor sweep failed', error)), serviceHealthStartupDelayMs).unref?.()
 }
 
 async function runRepositoryGitCommand(input: GitCommandRequest): Promise<GitCommandResult> {
@@ -6697,7 +6685,8 @@ async function applyRepositoryConflictResolution(repositoryId: string, filePath:
 
 async function listRepositoryCommits(
   repositoryId: string,
-  options: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number } = {}
+  options: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number } = {},
+  topological = false
 ): Promise<GitCommitRecord[]> {
   const repository = listRepositories().find((item) => item.id === repositoryId)
 
@@ -6726,6 +6715,7 @@ async function listRepositoryCommits(
     untilDate: until,
     branchName: options.branchName,
     allRefs: !options.branchName,
+    topological,
     offset,
     limit
   })
@@ -7400,7 +7390,7 @@ registerGitIpc(
 registerGitIpc(
   'repository:commit-graph',
   async (_event, repositoryId: string, options?: { startDate?: string; endDate?: string; branchName?: string; offset?: number; limit?: number }): Promise<GitCommitRecord[]> =>
-    listRepositoryCommits(repositoryId, options)
+    listRepositoryCommits(repositoryId, options, true)
 )
 
 registerGitIpc('project:commit-status:config:get', async (_event, projectId: string): Promise<ProjectCommitStatusConfig> =>
@@ -7770,12 +7760,17 @@ ipcMain.handle('service:railway:oauth:disconnect', (_event, connectionId: string
 
 ipcMain.handle('service:connection:save', async (_event, input: ServiceConnectionInput): Promise<ServiceConnectionRecord> => {
   if (!input.projectId) throw new Error('请在项目运行配置中添加连接')
-  return saveServiceConnectionRecord(getDatabase(), input)
+  const connection = saveServiceConnectionRecord(getDatabase(), input)
+  for (const service of getDatabase().prepare('SELECT id FROM global_services WHERE connection_id = ?').all(connection.id) as { id: string }[]) broadcastServiceBindings(service.id)
+  return connection
 })
 
-ipcMain.handle('service:connection:delete', async (_event, connectionId: string): Promise<ServiceConnectionRecord[]> =>
-  deleteServiceConnectionRecord(getDatabase(), connectionId)
-)
+ipcMain.handle('service:connection:delete', async (_event, connectionId: string): Promise<ServiceConnectionRecord[]> => {
+  const bindings = getDatabase().prepare('SELECT DISTINCT b.project_id FROM project_service_bindings b JOIN global_services s ON s.id = b.service_id WHERE s.connection_id = ?').all(connectionId) as { project_id: string }[]
+  const connections = deleteServiceConnectionRecord(getDatabase(), connectionId)
+  for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) for (const { project_id } of bindings) window.webContents.send('project:operations:updated', project_id)
+  return connections
+})
 
 ipcMain.handle(
   'service:connection:test',
@@ -7794,16 +7789,32 @@ ipcMain.handle('service:services:list', async (): Promise<ProjectServiceRecord[]
 
 ipcMain.handle('project:services:list', async (_event, projectId: string): Promise<ProjectServiceRecord[]> => listProjectServiceRecords(getDatabase(), projectId))
 
-ipcMain.handle('project:service:save', async (_event, input: ProjectServiceInput): Promise<ProjectServiceRecord> => saveProjectServiceRecord(getDatabase(), input))
+function broadcastServiceBindings(serviceId: string): void {
+  const projectIds = getDatabase().prepare('SELECT project_id FROM project_service_bindings WHERE service_id = ?').all(serviceId) as { project_id: string }[]
+  for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) for (const { project_id } of projectIds) window.webContents.send('project:operations:updated', project_id)
+}
+ipcMain.handle('project:service:save', async (_event, input: ProjectServiceInput): Promise<ProjectServiceRecord> => {
+  const service = saveProjectServiceRecord(getDatabase(), input)
+  broadcastServiceBindings(service.id)
+  return service
+})
 
 ipcMain.handle('service:external-project:alias:save', async (_event, input: ServiceExternalProjectAliasInput): Promise<ProjectServiceRecord[]> =>
   saveServiceExternalProjectAliasRecord(getDatabase(), input)
 )
 
-ipcMain.handle('project:service:bind', async (_event, input: { projectId: string; serviceId: string; repositoryId?: string }): Promise<ProjectServiceRecord[]> =>
-  bindProjectServiceRecord(getDatabase(), input)
-)
+ipcMain.handle('project:service:bind', async (_event, input: { projectId: string; serviceId: string; repositoryId?: string }): Promise<ProjectServiceRecord[]> => {
+  const services = bindProjectServiceRecord(getDatabase(), input)
+  broadcastServiceBindings(input.serviceId)
+  return services
+})
 
+ipcMain.handle('project:directory:summaries', (_event, input: { projectIds: string[] }) => readProjectDirectorySummaries(input, {
+  projectExists: id => !!getDatabase().prepare('SELECT id FROM projects WHERE id = ?').get(id),
+  tasks: ids => projectProgressService.readDirectorySummaries(ids),
+  operations: id => readProjectOperations(getDatabase(), id),
+  servers: id => listProjectDeploymentTargets(getDatabase(), id).filter(target => ['ssh-pm2', 'docker-compose'].includes(target.provider)).map(target => ({ ...projectRuntime.read(target), name: target.displayName }))
+}))
 ipcMain.handle('project:operations:read', (_event, projectId: string) => readProjectOperations(getDatabase(), projectId))
 ipcMain.handle('project:operations:refresh', async (_event, input: { projectId: string; force?: boolean }) => {
   const result = await refreshProjectOperations(getDatabase(), input)
@@ -7826,6 +7837,12 @@ ipcMain.handle('project:services:sync', async (_event, connectionId?: string, pr
 })
 
 ipcMain.handle('service:monitor:check', async (_event, projectId?: string): Promise<ProjectServiceRecord[]> => checkProjectServicesNow(projectId))
+ipcMain.handle('service:monitor:check-scoped', async (_event, scope: ServiceHealthCheckScope): Promise<ProjectServiceRecord[]> => {
+  if (!scope || !scope.projectId && !scope.serviceId) throw new Error('请指定要检查的项目或服务')
+  const services = await serviceHealthChecker.check(getDatabase(), scope)
+  deleteOldServiceMonitorHistory(getDatabase(), getServiceMonitorCutoffIso())
+  return services
+})
 
 ipcMain.handle('service:monitor:latest', async (_event, projectId: string): Promise<ServiceMonitorCheckRecord[]> => listLatestServiceMonitorCheckRecords(getDatabase(), projectId))
 
@@ -7923,7 +7940,10 @@ ipcMain.handle('project:runtime:read', (_event, projectId: string) => {
 })
 ipcMain.handle('project:runtime:refresh', (_event, input: { projectId: string; targetId: string }) => {
   const target = runtimeTarget(input.projectId, input.targetId)
-  return withSavedSshPassphrases(env => projectRuntime.refresh(target, env))
+  return withSavedSshPassphrases(env => projectRuntime.refresh(target, env)).then(snapshot => {
+    for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send('project:operations:updated', input.projectId)
+    return snapshot
+  })
 })
 ipcMain.handle('project:runtime:logs', (_event, input: { projectId: string; targetId: string }) => {
   const target = runtimeTarget(input.projectId, input.targetId)
@@ -8276,31 +8296,53 @@ ipcMain.handle(
 
 ipcMain.handle('codex:account:get', async (): Promise<CodexAccountInfo> => getActiveCodexAccountInfo(app.getPath('userData')))
 
+let codexConfigurationQueue: Promise<unknown> = Promise.resolve()
+function publishCodexConfiguration<T>(operation: () => Promise<T>): Promise<T> {
+  const task = codexConfigurationQueue.catch(() => undefined).then(async () => {
+    try { return await operation() } finally {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.webContents.send('codex:configuration:updated')
+      }
+    }
+  })
+  codexConfigurationQueue = task
+  return task
+}
+
 ipcMain.handle('codex:accounts:list', async (): Promise<CodexAccountRegistryView> => listCodexAccounts(app.getPath('userData')))
 
 ipcMain.handle('codex:accounts:import', async (_event, input: CodexAccountImportInput): Promise<CodexAccountRegistryView> =>
-  importCodexAccount(app.getPath('userData'), input))
+  publishCodexConfiguration(() => importCodexAccount(app.getPath('userData'), input)))
 
 ipcMain.handle('codex:accounts:create', async (_event, input?: CodexAccountCreateInput): Promise<CodexAccountRegistryView> =>
-  createCodexAccount(app.getPath('userData'), input))
+  publishCodexConfiguration(() => createCodexAccount(app.getPath('userData'), input)))
 
 ipcMain.handle('codex:accounts:renewal-date:update', async (_event, accountId: string, input: CodexAccountRenewalDateInput): Promise<CodexAccountRegistryView> =>
-  updateCodexAccountRenewalDate(app.getPath('userData'), accountId, input))
+  publishCodexConfiguration(() => updateCodexAccountRenewalDate(app.getPath('userData'), accountId, input)))
 
 ipcMain.handle('codex:accounts:activate', async (_event, accountId: string): Promise<CodexAccountRegistryView> =>
-  activateCodexAccount(app.getPath('userData'), accountId))
+  publishCodexConfiguration(() => activateCodexAccount(app.getPath('userData'), accountId)))
 
 ipcMain.handle('codex:accounts:remove', async (_event, accountId: string): Promise<CodexAccountRegistryView> =>
-  removeCodexAccount(app.getPath('userData'), accountId))
+  publishCodexConfiguration(() => removeCodexAccount(app.getPath('userData'), accountId)))
 
 ipcMain.handle('codex:api-service:get', async (): Promise<CodexApiServiceView> => getCodexApiService(app.getPath('userData')))
 
+ipcMain.handle('codex:cockpit:preview', async (_event, sourcePath?: string) => previewCockpitImport(app.getPath('userData'), sourcePath))
+ipcMain.handle('codex:cockpit:import', async (_event, input: CockpitImportInput) => publishCodexConfiguration(() => importCockpitData(app.getPath('userData'), input)))
+ipcMain.handle('codex:api-service:save', async (_event, input: { port: number; model: string }) =>
+  publishCodexConfiguration(() => saveCodexApiServiceSettings(app.getPath('userData'), { port: input.port, model: input.model })))
+ipcMain.handle('codex:api-service:copy-key', async () => {
+  const integration = await getCodexApiServiceIntegrationSettings(app.getPath('userData'))
+  clipboard.writeText(integration.apiKey)
+})
+
 ipcMain.handle('codex:api-service:start', async (_event, input?: Partial<CodexApiServiceSettings>): Promise<CodexApiServiceView> =>
-  startCodexApiService(app.getPath('userData'), input))
+  publishCodexConfiguration(() => startCodexApiService(app.getPath('userData'), input)))
 
-ipcMain.handle('codex:api-service:stop', async (): Promise<CodexApiServiceView> => stopCodexApiService(app.getPath('userData')))
+ipcMain.handle('codex:api-service:stop', async (): Promise<CodexApiServiceView> => publishCodexConfiguration(() => stopCodexApiService(app.getPath('userData'))))
 
-ipcMain.handle('codex:api-service:rotate-key', async (): Promise<CodexApiServiceView> => rotateCodexApiKey(app.getPath('userData')))
+ipcMain.handle('codex:api-service:rotate-key', async (): Promise<CodexApiServiceView> => publishCodexConfiguration(() => rotateCodexApiKey(app.getPath('userData'))))
 
 ipcMain.handle('codex:api-service:health', async (): Promise<{ ok: boolean; message: string }> => {
   const service = await getCodexApiService(app.getPath('userData'))

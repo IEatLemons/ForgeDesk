@@ -1,3 +1,4 @@
+import { message } from './app-message'
 import {
   Button,
   Empty,
@@ -10,8 +11,7 @@ import {
   Space,
   Spin,
   Tooltip,
-  Typography,
-  message
+  Typography
 } from 'antd'
 import { CodeOutlined, DeleteOutlined, EditOutlined, FolderOpenOutlined, KeyOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import { useEffect, useMemo, useState } from 'react'

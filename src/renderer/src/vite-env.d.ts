@@ -1796,6 +1796,7 @@ type CodexManagedAccount = CodexAccountInfo & {
   createdAt: string
   lastUsedAt: string
   subscriptionRenewsAt: string
+  cockpit?: import('../../shared/cockpit-import').CockpitAccountMetadata
 }
 
 type CodexAccountRegistryView = {
@@ -2879,7 +2880,7 @@ type MarketDataSnapshot = {
 }
 
 interface Window {
-  forgeDesk: import('../../shared/project-progress').ProjectProgressApi & import('../../shared/project-operations').ProjectOperationsApi & {
+  forgeDesk: import('../../shared/project-directory').ProjectDirectoryApi & import('../../shared/project-progress').ProjectProgressApi & import('../../shared/project-operations').ProjectOperationsApi & {
     listProjects: () => Promise<WorkspaceSnapshot>
     setProjectArchived: (input: { id: string; archived: boolean }) => Promise<WorkspaceSnapshot>
     onWorkspaceUpdated: (listener:(snapshot:WorkspaceSnapshot)=>void)=>()=>void
@@ -3011,6 +3012,7 @@ interface Window {
     bindProjectService: (input: { projectId: string; serviceId: string; repositoryId?: string }) => Promise<ProjectServiceRecord[]>
     syncProjectServices: (connectionId?: string, projectId?: string) => Promise<ProjectServiceRecord[]>
     checkProjectServices: (projectId?: string) => Promise<ProjectServiceRecord[]>
+    checkServiceHealth: (scope: import('../../shared/service-health').ServiceHealthCheckScope) => Promise<ProjectServiceRecord[]>
     listLatestServiceMonitorChecks: (projectId: string) => Promise<ServiceMonitorCheckRecord[]>
     listServiceMonitorHistory: (projectId: string) => Promise<ServiceMonitorCheckRecord[]>
     listAllServiceMonitorHistory: () => Promise<ServiceMonitorCheckRecord[]>
@@ -3088,6 +3090,11 @@ interface Window {
     verifyCodexAccount: (accountId: string) => Promise<AiRuntimeStatus>
     openCodexAccountLogin: (accountId: string) => Promise<TerminalSession>
     getCodexApiService: () => Promise<CodexApiServiceView>
+    onCodexConfigurationChanged: (listener: () => void) => () => void
+    previewCockpitImport: (sourcePath?: string) => Promise<import('../../shared/cockpit-import').CockpitImportPreview>
+    importCockpitData: (input: import('../../shared/cockpit-import').CockpitImportInput) => Promise<import('../../shared/cockpit-import').CockpitImportResult>
+    saveCodexApiServiceSettings: (input: { port: number; model: string }) => Promise<CodexApiServiceView>
+    copyCodexApiKey: () => Promise<void>
     startCodexApiService: (input?: { port?: number; model?: string }) => Promise<CodexApiServiceView>
     stopCodexApiService: () => Promise<CodexApiServiceView>
     rotateCodexApiKey: () => Promise<CodexApiServiceView>

@@ -1,5 +1,11 @@
+import { assessProject, portfolioMatches, type PortfolioFilter } from './project-portfolio-view'
+import { ProjectDirectoryLayout } from './project-directory-layout'
+import { ProjectDirectoryCard } from './project-directory-card'
+import { useProjectDirectorySummaries } from './use-project-directory-summaries'
+import type { AppRoute } from './workspace-navigation'
+import { message } from './app-message'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { Button, Dropdown, Empty, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Dropdown, Empty, Input, Modal, Popconfirm, Segmented, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { BranchesOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, ExportOutlined, FileTextOutlined, FolderOpenOutlined, MoreOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, StarFilled, StarOutlined, UploadOutlined } from '@ant-design/icons'
 import type { Project, ProjectGroup, Repository } from './data'
@@ -13,7 +19,7 @@ type CheckedRepository = { started: Repository; next: Repository }
 type Queue = DirectoryRefreshQueue<CheckedRepository>
 type Props = {
   visible: boolean; archived: boolean; mode: AppMode
-  onCreate: () => void; onOpen: (id: string) => void; onArchiveList: () => void; onLogs: () => void
+  onNavigate: (route: AppRoute) => void; onCreate: () => void; onOpen: (id: string) => void; onArchiveList: () => void; onLogs: () => void
   onAction: (action: DirectoryAction, ids: string[]) => void
 }
 
@@ -53,6 +59,10 @@ export const ProjectDirectory = memo(function ProjectDirectory(props: Props): JS
   const projects = useForgeDeskStore(state => state.projects)
   const repositories = useForgeDeskStore(state => state.repositories)
   const selectedProjectId = useForgeDeskStore(state => state.selectedProjectId)
+  const [view, setView] = useState<'cards' | 'list'>(() => { try { return localStorage.getItem('forgedesk:project-directory-view:v1') === 'list' ? 'list' : 'cards' } catch { return 'cards' } })
+  const changeView = (value: 'cards' | 'list') => { setView(value); try { localStorage.setItem('forgedesk:project-directory-view:v1', value) } catch { /* best effort */ } }
+  const [portfolioFilter, setPortfolioFilter] = useState<PortfolioFilter>('all')
+  const [portfolioSort, setPortfolioSort] = useState<'attention' | 'group'>('attention')
   const [groups, setGroups] = useState<ProjectGroup[]>([])
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<ProjectListGroupFilter>('all')
@@ -96,7 +106,6 @@ export const ProjectDirectory = memo(function ProjectDirectory(props: Props): JS
   const classified = useMemo(() => projects.filter(project => !!project.archivedAt === props.archived), [projects, props.archived])
   const options = useMemo(() => createProjectListGroupFilterOptions(classified, groups), [classified, groups])
   const activeFilter = options.some(option => option.key === filter) ? filter : 'all'
-  const activeOption = options.find(option => option.key === activeFilter)!
   const rows = useMemo(() => {
     const next = buildProjectDirectoryRows(projects, repositories, previousRows.current)
     previousRows.current = next
@@ -109,8 +118,14 @@ export const ProjectDirectory = memo(function ProjectDirectory(props: Props): JS
       .filter(project => !query || [project.name, project.workspacePath, project.description].some(value => value.toLocaleLowerCase().includes(query)))
       .map(project => byId.get(project.id)!)
   }, [rows, classified, groups, activeFilter, search])
+  const directorySummaries = useProjectDirectorySummaries(filteredRows.map(row => row.id), props.visible)
+  const assessments = useMemo(() => new Map(filteredRows.map(row => [row.id, assessProject(row, directorySummaries.summaries.get(row.id), directorySummaries.error)])), [filteredRows, directorySummaries.summaries, directorySummaries.error])
+  const displayRows = useMemo(() => {
+    const result = filteredRows.filter(row => portfolioMatches(assessments.get(row.id)!, portfolioFilter))
+    return portfolioSort === 'attention' ? result.sort((a, b) => assessments.get(b.id)!.rank - assessments.get(a.id)!.rank || assessments.get(a.id)!.priority - assessments.get(b.id)!.priority || Number(b.project.isFavorite) - Number(a.project.isFavorite)) : result
+  }, [filteredRows, assessments, portfolioFilter, portfolioSort])
   const groupOptions = useMemo(() => [{ label: '未分组', value: '__ungrouped__' }, ...groups.map(group => ({ label: group.name, value: group.id }))], [groups])
-  const selectedRows = rows.filter(row => !!row.project.archivedAt === props.archived && selected.includes(row.id))
+  const selectedRows = displayRows.filter(row => selected.includes(row.id))
   const latest = useRef(props)
   latest.current = props
   const action = useCallback((kind: DirectoryAction, ids: string[]) => latest.current.onAction(kind, ids), [])
@@ -133,13 +148,13 @@ export const ProjectDirectory = memo(function ProjectDirectory(props: Props): JS
     return () => { queue.dispose(); if (patchTimer.current) clearTimeout(patchTimer.current); patchTimer.current = undefined; for (const patch of patchBuffer.current.values()) patch.resolve(false); patchBuffer.current.clear() }
   }, [queue])
   useEffect(() => {
-    if (!props.visible) { queue.setVisible([]); return }
+    if (!props.visible || view !== 'list') { queue.setVisible([]); return }
     let alive = true, observer: IntersectionObserver | undefined, frame = 0
     // Two frames let cached rows paint before the first read is dispatched.
     frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => {
       if (!alive) return
       const visibleRows = new Set<string>()
-      const byId = new Map(filteredRows.map(row => [row.id, row]))
+      const byId = new Map(displayRows.map(row => [row.id, row]))
       const update = () => {
         queue.setVisible([...visibleRows].flatMap(id => byId.get(id)?.repositories.filter(repository => repository.available).map(repository => repository.id) ?? []))
         queue.refresh()
@@ -155,7 +170,7 @@ export const ProjectDirectory = memo(function ProjectDirectory(props: Props): JS
     }) })
     const timer = setInterval(() => queue.refresh(), 30_000)
     return () => { alive = false; cancelAnimationFrame(frame); observer?.disconnect(); clearInterval(timer); queue.setVisible([]) }
-  }, [props.visible, filteredRows, queue])
+  }, [props.visible, displayRows, queue, view])
   useEffect(() => window.forgeDesk?.onProjectGitTaskUpdated(task => {
     setFetching(current => {
       const next = new Set(current)
@@ -222,15 +237,41 @@ export const ProjectDirectory = memo(function ProjectDirectory(props: Props): JS
     ;[ids[index], ids[index + offset]] = [ids[index + offset], ids[index]]
     try { setGroups(await window.forgeDesk.reorderProjectGroups(ids)) } catch { message.error('调整分组顺序失败') }
   }
-  const table = useMemo(() => <Table<ProjectDirectoryRow> key={simple ? 'simple' : 'full'} className={`project-list-table${simple ? ' simple-project-list-table' : ''}`} rowKey="id" size="middle" tableLayout="fixed" columns={columns} dataSource={filteredRows} pagination={false} rowSelection={rowSelection} onRow={onRow} scroll={{ x: simple ? 900 : 1380 }} locale={{ emptyText: <Empty description={projects.length ? '没有匹配的项目' : '还没有项目'}><Button onClick={props.onCreate}>创建项目</Button></Empty> }} />, [simple, columns, filteredRows, rowSelection, onRow, projects.length, props.onCreate])
-  return <section ref={root} className="workspace-section project-workspace workspace-production-project" aria-label="项目列表页面">
-    <div className="section-heading"><div><Typography.Title level={2}>{props.archived ? '已归档项目' : '项目'}</Typography.Title><Typography.Text type="secondary">{simple ? '项目、仓库和发布状态集中管理。' : '一行一个项目，直接管理 Fetch、提交、合并和推送任务。'}</Typography.Text></div><Space wrap>{!simple ? <Button icon={<FileTextOutlined />} onClick={props.onLogs}>任务日志</Button> : null}<Button onClick={props.onArchiveList}>{props.archived ? '当前项目' : '归档项目'}</Button><Button type="primary" icon={<PlusOutlined />} onClick={props.onCreate}>创建项目</Button></Space></div>
-    <div className="project-list-page"><div className="project-list-panel"><div className="project-list-heading"><div><Typography.Title level={4}>项目列表 · {activeOption.label}</Typography.Title><Typography.Text type="secondary">{activeOption.projectCount} 个项目 · 缓存先显示，Git 状态后台检查</Typography.Text></div><Space wrap>
-      {!simple ? <><Button icon={<DownloadOutlined />} loading={selectedRows.some(row => fetching.has(row.id))} disabled={!selectedRows.some(row => row.repositories.length)} onClick={() => action('fetch', selectedRows.map(row => row.id))}>Fetch 所选</Button><Button icon={<UploadOutlined />} disabled={!selectedRows.some(row => row.canPush)} onClick={() => action('push-selected', selectedRows.map(row => row.id))}>推送所选</Button></> : null}
-      <Button icon={<ReloadOutlined />} onClick={() => queue.refresh(true)}>检查状态</Button><Button size="small" icon={<PlusOutlined />} onClick={props.onCreate} aria-label="创建项目" />
-    </Space></div><div className="project-group-filter" aria-label="项目分组筛选"><Input.Search aria-label="查找项目" placeholder="搜索项目名称或目录" allowClear value={search} onChange={event => setSearch(event.target.value)} style={{ width: 240 }} />{options.map(option => <Button key={option.key} size="small" type={option.key === activeFilter ? 'primary' : 'default'} className="project-group-filter-option" onClick={() => setFilter(option.key)}>{option.label} <span>{option.projectCount}</span></Button>)}<Button size="small" icon={<FolderOpenOutlined />} onClick={() => { setEditingGroup(undefined); setGroupName(''); setGroupOpen(true) }}>管理分组</Button></div>
+  const emptyState = useMemo(() => <Empty description={portfolioFilter !== 'all' ? '当前范围内没有此类项目' : projects.length ? '没有匹配的项目' : '还没有项目'}>{portfolioFilter !== 'all' ? <Button onClick={() => setPortfolioFilter('all')}>查看全部项目</Button> : <Button onClick={props.onCreate}>创建项目</Button>}</Empty>, [portfolioFilter, projects.length, props.onCreate])
+  const table = useMemo(() => <Table<ProjectDirectoryRow> key={simple ? 'simple' : 'full'} className={`project-list-table${simple ? ' simple-project-list-table' : ''}`} rowKey="id" size="middle" tableLayout="fixed" columns={columns} dataSource={displayRows} pagination={false} rowSelection={rowSelection} onRow={onRow} scroll={{ x: simple ? 900 : 1380 }} locale={{ emptyText: emptyState }} />, [simple, columns, displayRows, rowSelection, onRow, emptyState])
+  return <ProjectDirectoryLayout
+    ref={root}
+    title={props.archived ? '已归档项目' : '项目'}
+    actions={<Space wrap>
+      <Segmented aria-label="项目展示方式" value={view} onChange={value => changeView(value as 'cards' | 'list')} options={[{ value: 'cards', label: '卡片' }, { value: 'list', label: '列表' }]} />
+      <Button icon={<ReloadOutlined />} loading={directorySummaries.loading} onClick={directorySummaries.refresh}>刷新摘要</Button>
+      {!simple ? <Button icon={<FileTextOutlined />} onClick={props.onLogs}>任务日志</Button> : null}
+      <Button onClick={props.onArchiveList}>{props.archived ? '当前项目' : '归档项目'}</Button>
+      <Button type="primary" icon={<PlusOutlined />} onClick={props.onCreate}>创建项目</Button>
+    </Space>}
+    filters={<div className="project-group-filter" aria-label="项目分组筛选">
+      <Input.Search aria-label="查找项目" placeholder="搜索项目名称或目录" allowClear value={search} onChange={event => setSearch(event.target.value)} style={{ width: 240 }} />
+      {options.map(option => <Button key={option.key} size="small" type={option.key === activeFilter ? 'primary' : 'default'} className="project-group-filter-option" onClick={() => setFilter(option.key)}>{option.label} <span>{option.projectCount}</span></Button>)}
+      <Button size="small" icon={<FolderOpenOutlined />} onClick={() => { setEditingGroup(undefined); setGroupName(''); setGroupOpen(true) }}>管理分组</Button>
+    </div>}
+    summary={<div className="portfolio-overview" aria-label="项目跟进筛选">{([['all', '全部项目', '当前筛选范围'], ['attention', '需要处理', '紧急、逾期、阻塞或运行异常'], ['review', '待验收', '等待验收的项目'], ['incomplete', '信息待完善', '未启用、读取失败或数据过期']] as const).map(([key, label, hint]) => <button key={key} className={`portfolio-stat stat-${key}${portfolioFilter === key ? ' is-selected' : ''}`} aria-pressed={portfolioFilter === key} onClick={() => setPortfolioFilter(key)}><span>{label}<strong>{key === 'all' ? filteredRows.length : filteredRows.filter(row => assessments.get(row.id)![key]).length}</strong></span><small>{hint}</small></button>)}</div>}
+    toolbar={<div className="portfolio-view-bar">
+      <Typography.Text type="secondary">{displayRows.length} 个项目 · 各类别按项目计数，可交叉</Typography.Text>
+      <Select aria-label="项目排序" value={portfolioSort} onChange={setPortfolioSort} options={[{ value: 'attention', label: '需要关注的优先' }, { value: 'group', label: '按原分组顺序' }]} />
+      <Tooltip title="任务及运行摘要每 60 秒重读本地缓存；不会触发云端同步或域名检查。开发信息来自最近一次仓库扫描。"><span className="portfolio-cache-note">本地摘要 · 每 60 秒更新</span></Tooltip>
+    </div>}
+    notice={directorySummaries.error ? <Alert type="warning" showIcon message="项目摘要读取失败，已有数据保留" description={directorySummaries.error} /> : null}
+    dialogs={<Modal title="项目分组" open={groupOpen} onCancel={() => setGroupOpen(false)} onOk={() => void saveGroup()} okText="保存" cancelText="取消"><Space direction="vertical" style={{ width: '100%' }}><Input placeholder="分组名称" value={groupName} onChange={event => setGroupName(event.target.value)} onPressEnter={() => void saveGroup()} />{groups.map((group, index) => <Space key={group.id}><Typography.Text>{group.name}</Typography.Text><Button size="small" disabled={!index} onClick={() => void moveGroup(index, -1)}>上移</Button><Button size="small" disabled={index === groups.length - 1} onClick={() => void moveGroup(index, 1)}>下移</Button><Button size="small" icon={<EditOutlined />} onClick={() => { setEditingGroup(group); setGroupName(group.name) }}>编辑</Button><Popconfirm title={`删除分组“${group.name}”？`} description="项目移到未分组，不删除项目。" onConfirm={() => deleteGroup(group.id)}><Button size="small" danger icon={<DeleteOutlined />} /></Popconfirm></Space>)}</Space></Modal>}
+  >
+    {view === 'list' ? <div className="project-list-panel">
+      <div className="project-list-heading" role="toolbar" aria-label="列表 Git 操作">
+        <Typography.Text type="secondary">Git 状态{!simple ? ` · 已选 ${selectedRows.length} 个项目` : ''}</Typography.Text>
+        <Space wrap>
+          <Button icon={<ReloadOutlined />} onClick={() => queue.refresh(true)}>检查 Git 状态</Button>
+          {!simple ? <><Button icon={<DownloadOutlined />} loading={selectedRows.some(row => fetching.has(row.id))} disabled={!selectedRows.some(row => row.repositories.length)} onClick={() => action('fetch', selectedRows.map(row => row.id))}>Fetch 所选</Button><Button icon={<UploadOutlined />} disabled={!selectedRows.some(row => row.canPush)} onClick={() => action('push-selected', selectedRows.map(row => row.id))}>推送所选</Button></> : null}
+        </Space>
+      </div>
       {table}
-    </div></div>
-    <Modal title="项目分组" open={groupOpen} onCancel={() => setGroupOpen(false)} onOk={() => void saveGroup()} okText="保存" cancelText="取消"><Space direction="vertical" style={{ width: '100%' }}><Input placeholder="分组名称" value={groupName} onChange={event => setGroupName(event.target.value)} onPressEnter={() => void saveGroup()} />{groups.map((group, index) => <Space key={group.id}><Typography.Text>{group.name}</Typography.Text><Button size="small" disabled={!index} onClick={() => void moveGroup(index, -1)}>上移</Button><Button size="small" disabled={index === groups.length - 1} onClick={() => void moveGroup(index, 1)}>下移</Button><Button size="small" icon={<EditOutlined />} onClick={() => { setEditingGroup(group); setGroupName(group.name) }}>编辑</Button><Popconfirm title={`删除分组“${group.name}”？`} description="项目移到未分组，不删除项目。" onConfirm={() => deleteGroup(group.id)}><Button size="small" danger icon={<DeleteOutlined />} /></Popconfirm></Space>)}</Space></Modal>
-  </section>
+    </div> : displayRows.length ? <div className="project-directory-grid">{displayRows.map(row => <ProjectDirectoryCard row={row} assessment={assessments.get(row.id)!} key={row.id} project={row.project} summary={directorySummaries.summaries.get(row.id)} readError={directorySummaries.error} groups={groupOptions} favoriteBusy={favoriteBusy === row.id} onOpen={props.onOpen} onNavigate={props.onNavigate} onFavorite={toggleFavorite} onGroup={changeGroup} onArchive={archive} onWindow={id => action('window', [id])} onDelete={id => action('delete', [id])} />)}</div> : emptyState}
+  </ProjectDirectoryLayout>
 })

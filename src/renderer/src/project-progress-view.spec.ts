@@ -46,3 +46,12 @@ describe('project progress views',()=>{
     assert.equal(changes.added.length,0);assert.equal(changes.removed.length,0);assert.equal(changes.changed[0]?.existingWorkItemId,'b')
   })
 })
+
+describe('directory summary task destinations',()=>{
+  it('shows matching child tasks with parent context, and uses the same overdue and urgent membership',()=>{
+    const items=[item('root',{priority:'high'}),item('urgent',{parentId:'root',priority:'high'}),item('normal',{parentId:'root'}),item('done',{status:'done',priority:'high'}),item('late',{dueDate:'2026-11-05'}),item('archived',{priority:'high',archivedAt:'2026-11-04'})]
+    const urgent=filterProgressItems(items,{...filters,taskSummaryFilter:'urgent',today:'2026-11-06'})
+    assert.deepEqual(urgent.map(row=>row.id),['root']);assert.deepEqual(urgent[0].children?.map(row=>row.id),['urgent'])
+    assert.deepEqual(filterProgressItems(items,{...filters,taskSummaryFilter:'overdue',today:'2026-11-06'}).map(row=>row.id),['late'])
+  })
+})

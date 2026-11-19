@@ -1,5 +1,6 @@
+import { message } from './app-message'
 import { CheckCircleOutlined, CloudSyncOutlined, CodeOutlined, FolderOpenOutlined, MessageOutlined, PlayCircleOutlined, PlusOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
-import { Button, Empty, Form, Input, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd'
+import { Button, Empty, Form, Input, Modal, Select, Space, Switch, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useMemo, useState } from 'react'
 import type { ManagedTask, ManagedTaskPlanItem, ManagedTaskStage } from './data'

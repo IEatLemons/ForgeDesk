@@ -1,3 +1,4 @@
+import { message } from './app-message'
 import {
   CodeOutlined,
   DeleteOutlined,
@@ -10,7 +11,7 @@ import {
   SendOutlined,
   StopOutlined
 } from '@ant-design/icons'
-import { Button, Card, Drawer, Empty, Input, Modal, Popconfirm, Space, Spin, Tag, Typography, message } from 'antd'
+import { Button, Card, Drawer, Empty, Input, Modal, Popconfirm, Space, Spin, Tag, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import type { CodexSite, CodexSessionSummary } from './data'
 import { getErrorMessage } from './error-messages'

@@ -11,14 +11,21 @@ app.disableHardwareAcceleration()
 // Only this disposable QA launcher bypasses close prompts on termination.
 process.once('SIGTERM',()=>app.exit(0))
 const errors = []
-const operationsFixtures = process.argv.includes('--operations') ? await import('./operations-smoke.mjs') : null
+const operationsFixtures = process.argv.includes('--operations') || process.argv.includes('--configuration') || process.argv.includes('--project-cards') ? await import('./operations-smoke.mjs') : null
 const operationsRequests = operationsFixtures?.installOperationsFixtures()
 const performanceCalls = []
-if (process.argv.includes('--projects-perf') || process.argv.includes('--operations')) {
+if (process.argv.includes('--git-graph') || process.argv.includes('--projects-perf') || process.argv.includes('--operations') || process.argv.includes('--configuration') || process.argv.includes('--project-cards')) {
   const handle = ipcMain.handle.bind(ipcMain)
   ipcMain.handle = (channel, listener) => handle(channel, async (...args) => {
+    // Configuration QA uses fictional imported credentials. Never send them
+    // to a real Codex app server to load quota.
     const call = { channel, started: performance.now() }; performanceCalls.push(call)
-    try { return await listener(...args) } finally { call.ms = performance.now() - call.started }
+    if (channel === 'service:monitor:check-scoped') call.scope = args[1]
+    try {
+      if (channel === 'project:directory:summaries' && performanceCalls.directoryControl?.delayOnce) { performanceCalls.directoryControl.delayOnce = false; const value = await listener(...args); await new Promise(resolve=>setTimeout(resolve,900)); return value }
+      if (process.argv.includes('--configuration') && channel === 'ai-providers:account-snapshots') return []
+      return await listener(...args)
+    } finally { call.ms = performance.now() - call.started }
   })
 }
 app.on('web-contents-created', (_event, contents) => {
@@ -37,6 +44,21 @@ const timer = setInterval(async () => {
   clearInterval(timer)
   window.setTitle('ForgeDesk · 正式界面隔离验收')
   console.log(`WORKSPACE_QA_READY ${directory}`)
+  if (process.argv.includes('--git-graph')) {
+    try { await (await import('./git-graph-smoke.mjs')).verifyGitGraph(window, directory, performanceCalls); app.exit(0) }
+    catch (error) { console.error('GIT_GRAPH_QA_FAILED '+error.stack); console.error('GIT_GRAPH_RENDER_ERRORS '+JSON.stringify(errors)); console.error('GIT_GRAPH_DOM '+JSON.stringify(await window.webContents.executeJavaScript(`({headers:[...document.querySelectorAll('.source-tree-table th')].map(node=>({text:node.textContent,visible:!!node.getClientRects().length,width:node.getBoundingClientRect().width})),tables:[...document.querySelectorAll('.source-tree-table')].map(node=>node.innerHTML.slice(0,600))})`))); await writeFile(join(directory,'git-graph-failed.png'),(await window.capturePage()).toPNG()); app.exit(1) }
+    return
+  }
+  if (process.argv.includes('--project-cards')) {
+    try { await (await import('./project-cards-smoke.mjs')).verifyProjectCards(window, directory, operationsRequests, performanceCalls); app.exit(0) }
+    catch (error) { console.error('PROJECT_CARDS_QA_FAILED ' + error.stack); console.error('PROJECT_CARDS_QA_RENDER_ERRORS ' + JSON.stringify(errors)); app.exit(1) }
+    return
+  }
+  if (process.argv.includes('--configuration')) {
+    try { await (await import('./configuration-smoke.mjs')).verifyConfiguration(window, directory, performanceCalls); app.exit(0) }
+    catch (error) { console.error('CONFIGURATION_QA_FAILED ' + error.stack); console.error('CONFIGURATION_QA_RENDER_ERRORS ' + JSON.stringify(errors)); app.exit(1) }
+    return
+  }
   if (operationsFixtures) {
     try { await operationsFixtures.verifyOperations(window, directory, operationsRequests, performanceCalls); app.exit(0) }
     catch (error) { console.error('OPERATIONS_QA_FAILED ' + error.stack); console.error('OPERATIONS_QA_RENDER_ERRORS ' + JSON.stringify(errors)); app.exit(1) }

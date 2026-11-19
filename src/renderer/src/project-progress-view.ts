@@ -1,3 +1,4 @@
+import { summaryTaskSelection, type TaskSummaryFilter } from '../../shared/project-directory.js'
 import type { ProjectWorkItem, ProgressPlanDraft, WorkStatus, ProgressEntity, ProgressKeyResult, ProgressRelation } from '../../shared/project-progress.js'
 
 export const workStatusLabels: Record<WorkStatus,string> = { todo:'待办',doing:'进行中',review:'待验收',done:'已完成',cancelled:'已取消' }
@@ -8,7 +9,7 @@ Object.assign(progressEventLabels, {
   'key-result-saved':'保存关键结果', 'key-result-measured':'记录结果测量', 'key-result-accept':'关键结果验收通过',
   'key-result-reopen':'重开关键结果', 'key-result-cancel':'取消关键结果', 'relations-changed':'调整交付关联', 'goal-upgraded':'升级目标衡量口径'
 })
-export type WorkFilters = { query: string; status: string; scopeId: string; inbox: boolean; archived: boolean }
+export type WorkFilters = { query: string; status: string; scopeId: string; inbox: boolean; archived: boolean; taskSummaryFilter?: TaskSummaryFilter; today?: string }
 
 // Relationships explain delivery provenance; they never expand a version's task scope.
 export function relatedDeliveryGoalIds(entity: Pick<ProgressEntity,'id'|'kind'>, items: ProjectWorkItem[], results: Pick<ProgressKeyResult,'id'|'goalId'>[], relations: ProgressRelation[]): string[] {
@@ -18,12 +19,13 @@ export function relatedDeliveryGoalIds(entity: Pick<ProgressEntity,'id'|'kind'>,
 }
 
 export function filterProgressItems(items: ProjectWorkItem[], filters: WorkFilters): WorkTreeRow[] {
-  const matches = (item: ProjectWorkItem): boolean => (!filters.status || item.status === filters.status) && (!filters.query || `${item.title} ${item.description} ${item.ownerRef} ${item.tags.join(' ')}`.toLowerCase().includes(filters.query.toLowerCase()))
+  const selectedSummary = filters.taskSummaryFilter ? new Set(summaryTaskSelection(items, filters.taskSummaryFilter, filters.today).map(item => item.id)) : null
+  const matches = (item: ProjectWorkItem): boolean => (!selectedSummary || selectedSummary.has(item.id)) && (!filters.status || item.status === filters.status) && (!filters.query || `${item.title} ${item.description} ${item.ownerRef} ${item.tags.join(' ')}`.toLowerCase().includes(filters.query.toLowerCase()))
   return items.filter(item=>!item.parentId && (filters.archived || !item.archivedAt) && (filters.inbox ? item.trackingState === 'inbox' : item.trackingState === 'tracked') && (!filters.scopeId || [item.goalId,item.keyResultId,item.milestoneId,item.versionId].includes(filters.scopeId)))
     .flatMap(root=>{
       const children = items.filter(item=>item.parentId===root.id && (filters.archived || !item.archivedAt))
       const selected = children.filter(matches)
-      const visible = matches(root) && !filters.status ? children : selected
+      const visible = matches(root) && !filters.status && !selectedSummary ? children : selected
       return matches(root) || selected.length ? [{...root,children:visible.length ? visible : undefined}] : []
     })
 }

@@ -1,3 +1,4 @@
+import { message } from './app-message'
 import {
   Badge,
   Button,
@@ -15,8 +16,7 @@ import {
   Table,
   Tag,
   Tooltip,
-  Typography,
-  message
+  Typography
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {

@@ -6464,6 +6464,8 @@ button.app-status-bar-item:hover {
   margin: 0;
 }
 
+.service-detail-tab > .ant-space-item > .service-detail-toolbar { margin-bottom: 0; }
+
 .service-env-key-cell,
 .service-env-value-cell {
   display: flex;
@@ -9648,13 +9650,11 @@ button.app-status-bar-item:hover {
 }
 
 .settings-layout {
-  height: calc(100vh - var(--app-status-bar-height) - 150px);
-  min-height: 480px;
-  overflow: hidden;
-}
-
-.app-shell-with-titlebar .settings-layout {
-  height: calc(100vh - var(--app-titlebar-height) - var(--app-status-bar-height) - 150px);
+  /* The workspace (or configuration drawer) owns scrolling and accounts for
+     its header and status bar. Settings must follow their content height. */
+  height: auto;
+  min-height: 0;
+  overflow: visible;
 }
 
 .settings-page-back {
@@ -9803,11 +9803,68 @@ button.app-status-bar-item:hover {
 .settings-main {
   min-width: 0;
   min-height: 0;
-  height: 100%;
+}
+
+.service-health-controls {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+}
+
+.project-runtime-card > .ant-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.project-runtime-card > .ant-card-body > * { margin-block: 0; }
+.project-runtime-card > .ant-card-head .ant-card-head-wrapper { flex-wrap: wrap; gap: 12px; padding-block: 12px; }
+.project-runtime-card > .ant-card-head .ant-card-head-title { white-space: normal; }
+.project-runtime-card > .ant-card-head .ant-card-extra { margin-inline-start: 0; }
+.project-runtime-target > .ant-card-body { display: grid; gap: 12px; }
+.project-runtime-target > .ant-card-body > ul { margin: 0; padding-inline-start: 20px; }
+.project-runtime-target > .ant-card-body > .ant-btn { justify-self: start; max-width: 100%; white-space: normal; height: auto; min-height: 32px; }
+
+/* A settings drawer owns its scroll area; viewport-sized nested settings
+   layouts otherwise hide their last actions behind the application chrome. */
+.configuration-drawer-root.ant-drawer,
+.service-detail-drawer-root.ant-drawer {
+  bottom: var(--app-status-bar-height, 24px);
+  height: auto;
+}
+
+.configuration-drawer .ant-drawer-body {
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
+
+.ai-account-card-unified .ai-account-card-layout {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+}
+
+.codex-api-config-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 12px;
+}
+
+.codex-api-config-form .ant-form-item { margin-bottom: 0; }
+.codex-api-endpoint { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.codex-api-endpoint .ant-typography { overflow-wrap: anywhere; }
+.codex-account-filters { margin-bottom: 16px; width: 100%; }
+.codex-account-filters .ant-select { min-width: 140px; }
+.cockpit-imported-quota { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border-color, #e5e7eb); }
+#codex-account-management .ant-card-head-wrapper { flex-wrap: wrap; gap: 8px; padding-block: 8px; }
+#codex-account-management .ant-card-head-title { overflow: visible; white-space: normal; }
+#codex-account-management .ant-card-extra { margin-inline-start: 0; }
+.configuration-drawer .workspace-section { padding: 0; min-width: 0; }
+.configuration-drawer .settings-module-header { flex-wrap: wrap; }
 
 .settings-sidebar .sidebar-inner {
   padding-bottom: var(--app-status-bar-height);
@@ -9945,7 +10002,7 @@ button.app-status-bar-item:hover {
 }
 
 .settings-module-alert {
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .settings-submodule-grid {
@@ -15269,3 +15326,24 @@ button.app-status-bar-item:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Git topology: a shared horizontal canvas with accessible width controls. */
+.git-graph-resize { position:absolute;right:-5px;top:0;bottom:0;width:10px;padding:0;border:0;background:transparent;cursor:col-resize;touch-action:none;z-index:3; }
+.git-graph-resize:hover,.git-graph-resize:focus-visible,.git-graph-resize.is-dragging { background:color-mix(in srgb,var(--app-primary,#2563eb) 25%,transparent);outline:0; }
+.git-graph-scroll-frame { min-width:0;max-width:100%; }
+.git-graph-top-scroll { overflow-x:auto;overflow-y:hidden;height:14px;min-width:0;max-width:100%;margin:0 0 6px;scrollbar-width:thin;border-radius:4px;background:var(--subtle-bg); }
+.git-graph-top-scroll[hidden] { display:none; }
+.git-graph-node { position:absolute;transform:translate(-50%,-50%);width:22px;height:22px;border:0;border-radius:50%;background:transparent;padding:0;cursor:pointer; }
+.git-graph-node:focus-visible { outline:2px solid var(--primary-color,#2563eb);outline-offset:2px; }
+.commit-graph-cell.is-related .commit-graph-dot { stroke:var(--app-primary,#2563eb);stroke-width:3;filter:drop-shadow(0 0 3px color-mix(in srgb,var(--app-primary,#2563eb) 45%,transparent)); }
+.commit-graph-cell.is-origin .commit-graph-parent-edge,.commit-graph-line.is-parent-connection { stroke-width:3;opacity:1; }
+.git-graph-related-row .source-tree-hash { border-color:var(--primary-border); }
+.commit-graph-boundary { fill:none;stroke-dasharray:3 3;stroke-width:1.5;opacity:.7; }
+.git-graph-boundary-label { position:absolute;right:5px;font:inherit;font-size:9px;line-height:16px;color:var(--app-muted);padding:0 3px;border:0;border-radius:3px;background:var(--graph-column-bg);cursor:pointer; }
+.git-parent-relations { display:flex;flex-direction:column;gap:10px;width:min(430px,72vw);max-height:60vh;overflow:auto; }
+.git-parent-relations > code,.git-parent-row code { font-size:11px;overflow-wrap:anywhere;white-space:normal; }.git-parent-relations > p { margin:0;font-size:12px;overflow-wrap:anywhere; }
+.git-parent-row { display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:8px;border-top:1px solid var(--app-border-soft); }.git-parent-row > div { display:flex;flex-direction:column;gap:3px;min-width:0; }.git-parent-row > span,.git-parent-row small { color:var(--app-muted);font-size:11px; }.git-parent-row > span,.git-parent-row > button { flex:none; }
+.git-parent-actions,.git-focus-commit-meta { display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px; }.git-focus-commit-meta { padding:12px 16px;border-bottom:1px solid var(--app-border-soft);font-size:12px; }.git-focus-commit-meta > .ant-typography { max-width:100%;overflow-wrap:anywhere; }
+.git-graph-filter-context { display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px 12px;margin:0 0 10px;color:var(--app-muted);font-size:11px; }.git-graph-filter-context .ant-btn { font-size:11px;height:auto;padding:0; }
+
+.git-graph-tip-anchor { position:absolute;width:1px;height:1px;pointer-events:none; }

@@ -1,3 +1,4 @@
+import { directoryTaskSummary, type DirectoryTaskSummary } from '../shared/project-directory.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type {
   ExecutionStatus, MigrationIssue, ProgressCommand, ProgressCommandResult, ProgressEntity,
@@ -158,6 +159,21 @@ export class ProjectProgressService {
     catch (error) { db.exec(`ROLLBACK TO SAVEPOINT ${name}`); db.exec(`RELEASE SAVEPOINT ${name}`); throw error }
   }
   isActive(): boolean { return (this.db().prepare("SELECT value FROM project_progress_settings WHERE key='active'").get() as Row | undefined)?.value === '1' }
+  readDirectorySummaries(projectIds: string[]): Record<string, DirectoryTaskSummary> {
+    const selected = new Set(projectIds), items = new Map<string, ProjectWorkItem[]>(), errors = new Map<string, string>()
+    const active = this.isActive(), asOf = this.timestamp(), timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    for (const row of this.db().prepare('SELECT project_id,data_json FROM project_work_items').all() as { project_id: string; data_json: string }[]) {
+      if (!selected.has(row.project_id)) continue
+      try { const item = JSON.parse(row.data_json) as ProjectWorkItem; const group = items.get(row.project_id) ?? []; group.push(item); items.set(row.project_id, group) }
+      catch { errors.set(row.project_id, '任务记录读取失败，请检查数据') }
+    }
+    return Object.fromEntries(projectIds.map(id => {
+      try {
+        if (errors.has(id)) throw new Error(errors.get(id))
+        return [id, directoryTaskSummary(items.get(id) ?? [], active, asOf, timezone)]
+      } catch (error) { return [id, { active, counts: null, updatedAt: '', error: error instanceof Error ? error.message : String(error) }] }
+    }))
+  }
   private allItems(): ProjectWorkItem[] {
     const items = this.db().prepare('SELECT data_json FROM project_work_items ORDER BY updated_at DESC,id').all().map(row => Object.assign({keyResultId:null},json<ProjectWorkItem>(row)))
     const children = new Map<string,ProjectWorkItem[]>()

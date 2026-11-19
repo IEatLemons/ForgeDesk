@@ -1,5 +1,7 @@
+import { taskSummaryLabels, type TaskSummaryFilter } from '../../shared/project-directory'
+import { message } from './app-message'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Button, Card, Checkbox, Drawer, Empty, Form, Input, List, Modal, Progress, Select, Space, Spin, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Drawer, Empty, Form, Input, List, Modal, Progress, Select, Space, Spin, Table, Tabs, Tag, Typography } from 'antd'
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { ProgressCommand, ProgressMigration, ProgressObject, ProgressPlanDraft, ProgressPlanItem, ProgressScopeKind, ProjectWorkItem, WorkItemFields, WorkScopeFields, WorkStatus } from '../../shared/project-progress'
 import { ProgressObjectPanel } from './progress-object-panel'
@@ -23,7 +25,7 @@ function savedTaskView(projectId?:string){try{const value=localStorage.getItem(`
 type WorkForm=WorkItemFields & WorkScopeFields
 
 export type ProgressSection='tasks'|ProgressScopeKind|'maintenance'
-export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entityId,onSelectTask,onOpenMaintenance,maintenancePage,detailView,onDetailViewChange,progressObject,onProgressObjectChange,progressFilter,onProgressFilterChange}:{projectId?:string;onOpenCodexSession?:(id:string)=>void;section?:ProgressSection;entityId?:string;onSelectTask?:(id:string|undefined)=>void;onOpenMaintenance?:()=>void;maintenancePage?:string;detailView?:'preview'|'overview'|'children'|'ai'|'history';onDetailViewChange?:(view:'overview'|'children'|'ai'|'history')=>void;progressObject?:ProgressObject;onProgressObjectChange?:(object?:ProgressObject,ownerProjectId?:string)=>void;progressFilter?:string;onProgressFilterChange?:(id?:string)=>void}):JSX.Element{
+export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entityId,onSelectTask,onOpenMaintenance,maintenancePage,detailView,onDetailViewChange,progressObject,onProgressObjectChange,progressFilter,onProgressFilterChange,taskSummaryFilter,onTaskSummaryFilterChange}:{taskSummaryFilter?:TaskSummaryFilter;onTaskSummaryFilterChange?:(filter?:TaskSummaryFilter)=>void;projectId?:string;onOpenCodexSession?:(id:string)=>void;section?:ProgressSection;entityId?:string;onSelectTask?:(id:string|undefined)=>void;onOpenMaintenance?:()=>void;maintenancePage?:string;detailView?:'preview'|'overview'|'children'|'ai'|'history';onDetailViewChange?:(view:'overview'|'children'|'ai'|'history')=>void;progressObject?:ProgressObject;onProgressObjectChange?:(object?:ProgressObject,ownerProjectId?:string)=>void;progressFilter?:string;onProgressFilterChange?:(id?:string)=>void}):JSX.Element{
   const {projects,repositories}=useForgeDeskStore()
   const [projectFilter,setProjectFilter]=useState(projectId||'all')
   const currentProject=projectId||(projectFilter==='all'?undefined:projectFilter)
@@ -48,13 +50,14 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entit
   const items=snapshot?.items??[],entities=snapshot?.entities??[]
   const stats=(scopeId?snapshot?.scopeStats[scopeId]:null)??snapshot?.stats
   const today=snapshot?new Intl.DateTimeFormat('en-CA',{timeZone:snapshot.timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(snapshot.asOf)):''
-  const rows=useMemo(()=>filterProgressItems(items,{query,status,scopeId,inbox,archived}),[snapshot,query,status,scopeId,inbox,archived])
+  const rows=useMemo(()=>filterProgressItems(items,{query,status,scopeId,inbox,archived,taskSummaryFilter,today}),[snapshot,query,status,scopeId,inbox,archived,taskSummaryFilter,today])
   const timeline=useMemo(()=>progressTimeline(rows),[rows])
   const projectOptions=projects.map(project=>({value:project.id,label:project.name}))
   const scopeOptions=(kind:ProgressScopeKind,id:string|null|undefined)=>entities.filter(entity=>entity.kind===kind&&entity.projectId===id).map(entity=>({value:entity.id,label:entity.title}))
   const nameOfProject=(id:string|null)=>id?projects.find(project=>project.id===id)?.name||'已删除项目':'收件箱'
 
   useEffect(()=>{setProjectFilter(projectId||'all');setScopeId(progressFilter||'');setLocalSelectedId(entityId??null)},[projectId])
+  useEffect(()=>{ if(taskSummaryFilter) {setQuery('');setStatus('');setScopeId('');setInbox(false);setArchived(false)} },[taskSummaryFilter,projectId])
   useEffect(()=>setScopeId(progressFilter||''),[progressFilter])
   useEffect(()=>{setLocalSelectedId(entityId??null);setFullDetail(!!detailView&&detailView!=='preview');setDetailTab(detailView&&detailView!=='preview'?detailView:'overview')},[entityId,detailView])
   useEffect(()=>{setLegacy(maintenancePage==='legacy-ai');setLegacyTodos(maintenancePage==='legacy-todos');if(maintenancePage==='repair')setRawRepair(legacyRaw()??'[]')},[maintenancePage])
@@ -165,7 +168,7 @@ export function ProjectProgressPanel({projectId,onOpenCodexSession,section,entit
       {!section||section==='tasks'?<div className="progress-summary" aria-label="任务执行摘要"><span><strong>{stats?.done}／{stats?.total}</strong> 节点完成</span><span>待验收 {stats?.review}</span><span>阻塞 {stats?.blocked}</span><span>逾期 {stats?.overdue}</span><span>父任务待验收 {stats?.awaitingParentAcceptance}</span><span>收件箱 {snapshot.stats.inbox}</span><Progress percent={stats?.percent??0} format={()=>stats?.percent==null?'暂无有效工作':`${stats.percent}%`}/></div>:null}
       <Tabs className={section?'progress-controlled-tabs':undefined} activeKey={section?(section==='tasks'?'tasks':section==='maintenance'?'activity':'plans'):undefined} items={[
         {key:'tasks',label:'任务与节点',children:<>
-          <div className="progress-toolbar"><Input.Search allowClear placeholder="搜索任务、说明、标签或负责人" value={query} onChange={event=>setQuery(event.target.value)} style={{width:280,maxWidth:'100%'}}/>
+          <div className="progress-toolbar">{taskSummaryFilter ? <Tag color="blue" closable onClose={()=>onTaskSummaryFilterChange?.(undefined)}>项目卡片筛选：{taskSummaryLabels[taskSummaryFilter]}</Tag> : null}<Input.Search allowClear placeholder="搜索任务、说明、标签或负责人" value={query} onChange={event=>setQuery(event.target.value)} style={{width:280,maxWidth:'100%'}}/>
             {!projectId?<Select aria-label="筛选项目" value={projectFilter} style={{minWidth:160}} options={[{value:'all',label:'全部项目'},...projectOptions]} onChange={value=>{setProjectFilter(value);setScopeId('');setSelectedId(null)}}/>:null}
             <Select aria-label="筛选状态" value={status} style={{minWidth:120}} onChange={setStatus} options={[{value:'',label:'全部状态'},...Object.entries(workStatusLabels).map(([value,label])=>({value,label}))]}/>
             <Select aria-label="筛选目标或计划" allowClear value={scopeId||undefined} placeholder="目标／关键结果／里程碑／版本" style={{minWidth:190}} onChange={value=>{setScopeId(value||'');onProgressFilterChange?.(value)}} options={[...entities.map(entity=>({value:entity.id,label:`${kindLabels[entity.kind]} · ${entity.title}`})),...snapshot.keyResults.map(result=>({value:result.id,label:`关键结果 · ${result.title}`}))]}/>

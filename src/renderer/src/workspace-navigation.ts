@@ -1,9 +1,10 @@
+import { taskSummaryFilters, type TaskSummaryFilter } from '../../shared/project-directory.js'
 import type { AppNavigationKey } from './app-navigation'
 import type { ProgressObject } from '../../shared/project-progress'
 
 export type WorkspaceArea = 'workbench' | 'projects' | 'ai' | 'resources' | 'toolbox' | 'settings'
 export type ProjectPage = 'overview' | 'goals' | 'tasks' | 'milestones' | 'versions' | 'repositories' | 'contributions' | 'environments' | 'deployments' | 'monitoring' | 'domains' | 'settings-general' | 'settings-repositories' | 'settings-runtime' | 'settings-integrations'
-type DetailLocation = { detailView?: 'preview'|'overview'|'children'|'ai'|'history'; progressObject?: ProgressObject; progressFilter?: string }
+type DetailLocation = { taskSummaryFilter?: TaskSummaryFilter; detailView?: 'preview'|'overview'|'children'|'ai'|'history'; progressObject?: ProgressObject; progressFilter?: string }
 export type AppRoute = DetailLocation & (
   | { scope: 'global'; area: WorkspaceArea; page: string; entityId?: string; projectFilter?: string; view?: string }
   | { scope: 'project'; projectId: string; page: ProjectPage; repositoryId?: string; entityId?: string; view?: string; serviceId?: string; environmentName?: string })
@@ -31,14 +32,14 @@ export const SETTINGS_DIRECTORY: DirectoryItem[] = [
   { key: 'integrations', label: '外部集成', children: [{ key: 'plane', label: 'Plane' }, { key: 'oa', label: 'Lark / 飞书' }, { key: 'ai', label: 'AI 模型配置' }] },
   { key: 'maintenance', label: '数据与维护', children: [{ key: 'migration', label: '任务迁移与核对' }, { key: 'legacy-todos', label: '旧待办恢复' }, { key: 'legacy-ai', label: '历史 AI 工作流' }, { key: 'repair', label: '原始记录修复' }, { key: 'updates', label: '应用更新' }, { key: 'layout', label: '布局恢复' }] }
 ]
-export const GLOBAL_DIRECTORY: { key: WorkspaceArea; label: string; footer: boolean; children?: DirectoryItem[] }[] = [
-  { key: 'workbench', label: '工作台', footer: false }, { key: 'projects', label: '项目', footer: false },
+export const GLOBAL_DIRECTORY: { key: WorkspaceArea; label: string; footer: boolean; hidden?: boolean; children?: DirectoryItem[] }[] = [
+  { key: 'workbench', label: '工作台', footer: false, hidden: true }, { key: 'projects', label: '项目', footer: false },
   { key: 'ai', label: 'AI 工作台', footer: false, children: [{ key: 'activity', label: '运行动态' }, { key: 'sessions', label: '会话' }, { key: 'directories', label: '工作目录' }] },
   { key: 'resources', label: '共享资源', footer: true, children: [{ key: 'services', label: '服务与部署总览' }, { key: 'data-sources', label: '数据库与存储' }, { key: 'docker', label: '本机容器' }] },
   { key: 'toolbox', label: '工具箱', footer: true, children: TOOL_DIRECTORY }, { key: 'settings', label: '设置', footer: true, children: SETTINGS_DIRECTORY }
 ]
 export const projectPage = (projectId: string, page: ProjectPage = 'overview'): ProjectRoute => ({ scope: 'project', projectId, page })
-export const globalPage = (area: WorkspaceArea, page?: string): GlobalRoute => ({ scope: 'global', area, page: page ?? ({ workbench: 'home', projects: 'list', ai: 'activity', resources: 'services', toolbox: 'security', settings: 'appearance' }[area]) })
+export const globalPage = (area: WorkspaceArea, page?: string): GlobalRoute => area === 'workbench' && (!page || page === 'home') ? { scope: 'global', area: 'projects', page: 'list' } : ({ scope: 'global', area, page: page ?? ({ workbench: 'home', projects: 'list', ai: 'activity', resources: 'services', toolbox: 'security', settings: 'appearance' }[area]) })
 export function findDirectory(items: DirectoryItem[], key: string): DirectoryItem | undefined {
   for (const item of items) { if (item.key === key) return item; const child = item.children && findDirectory(item.children, key); if (child) return child }
 }
@@ -64,8 +65,9 @@ export function legacyRoute(key: AppNavigationKey, projectId?: string | null): A
   return key === 'projects' && projectId ? projectPage(projectId) : routes[key]
 }
 export type WorkspaceHistory = { entries: AppRoute[]; index: number; locations: Record<string, ProjectRoute> }
-export function createWorkspaceHistory(initial: AppRoute = globalPage('workbench')): WorkspaceHistory { return { entries: [initial], index: 0, locations: initial.scope === 'project' ? { [initial.projectId]: initial } : {} } }
+export function createWorkspaceHistory(initial: AppRoute = globalPage('projects')): WorkspaceHistory { return { entries: [initial], index: 0, locations: initial.scope === 'project' ? { [initial.projectId]: initial } : {} } }
 export function visitRoute(state: WorkspaceHistory, route: AppRoute): WorkspaceHistory {
+  if (route.scope === 'global' && route.area === 'workbench' && route.page !== 'tasks') route = globalPage('projects')
   if (routeKey(state.entries[state.index]) === routeKey(route)) return state
   return { entries: [...state.entries.slice(0, state.index + 1), route], index: state.index + 1, locations: route.scope === 'project' ? { ...state.locations, [route.projectId]: route } : state.locations }
 }
@@ -77,6 +79,7 @@ export function restoreHistory(state: WorkspaceHistory, index: number): Workspac
 export function validRoute(value: unknown): value is AppRoute {
   if (!value || typeof value !== 'object') return false
   const route = value as AppRoute
+  if (route.taskSummaryFilter !== undefined && !taskSummaryFilters.includes(route.taskSummaryFilter)) return false
   if (route.entityId !== undefined && typeof route.entityId !== 'string') return false
   if (route.progressObject!==undefined && (!route.progressObject || typeof route.progressObject.id!=='string' || !route.progressObject.id || !['task','goal','key_result','milestone','version'].includes(route.progressObject.kind))) return false
   if (route.progressFilter!==undefined && typeof route.progressFilter!=='string') return false

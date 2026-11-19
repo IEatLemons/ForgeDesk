@@ -340,3 +340,19 @@ describe('AI execution isolation and plan revisions',()=>{
     assert.equal(service.getSnapshot().items.length,2)
   })
 })
+
+describe('directory task summary reads',()=>{
+  it('reads inactive and empty projects safely and isolates corrupt records to their project',()=>{
+    const {db,service,create}=fixture()
+    create()
+    const inactive=service.readDirectorySummaries(['p','other'])
+    assert.equal(inactive.p.active,false);assert.equal(inactive.p.counts,null)
+    db.prepare("INSERT OR REPLACE INTO project_progress_settings(key,value) VALUES('active','1')").run()
+    assert.equal(service.readDirectorySummaries(['p','other']).p.counts?.todo,1)
+    assert.equal(service.readDirectorySummaries(['p','other']).other.counts?.todo,0)
+    db.prepare('UPDATE project_work_items SET data_json=? WHERE project_id=?').run('{broken','p')
+    const result=service.readDirectorySummaries(['p','other'])
+    assert.match(result.p.error,/读取失败/);assert.equal(result.p.counts,null);assert.equal(result.other.counts?.todo,0)
+    db.close()
+  })
+})

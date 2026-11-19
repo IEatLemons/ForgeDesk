@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useForgeDeskStore } from './store'
+import { repositoryLandingId } from './repository-workspace-view'
 import { createWorkspaceHistory, globalPage, projectPage, restoreHistory, validRoute, visitRoute, workspaceLocationKey, type AppRoute, type ProjectRoute } from './workspace-navigation'
 
 export function useWorkspaceNavigation(projectWindowId: string | null) {
   const [history, setHistory] = useState(() => {
-    const initial = createWorkspaceHistory(projectWindowId ? projectPage(projectWindowId) : globalPage('workbench'))
+    const initial = createWorkspaceHistory(projectWindowId ? projectPage(projectWindowId) : globalPage('projects'))
     try {
       const stored: unknown = JSON.parse(localStorage.getItem(workspaceLocationKey) ?? '{}')
       if (stored && typeof stored === 'object') initial.locations = Object.fromEntries(Object.entries(stored).filter(([id, route]) => validRoute(route) && route.scope === 'project' && route.projectId === id)) as Record<string, ProjectRoute>
@@ -12,7 +14,11 @@ export function useWorkspaceNavigation(projectWindowId: string | null) {
     return initial
   })
   useEffect(() => { try { localStorage.setItem(workspaceLocationKey, JSON.stringify(history.locations)) } catch { /* best effort */ } }, [history.locations])
-  const route = history.entries[history.index]
+  const location = history.entries[history.index]
+  // Subscribe to the landing identity only: directory Git checks must not cause
+  // the application root to rerender for every workspace-status update.
+  const repositoryId = useForgeDeskStore(state => repositoryLandingId(location, state.repositories))
+  const route = useMemo(() => location.scope === 'project' && repositoryId ? { ...location, repositoryId, view: location.view ?? 'history' } : location, [location, repositoryId])
   const go = useCallback((next: AppRoute) => { if (validRoute(next)) setHistory(current => visitRoute(current, next)) }, [])
   const back = useCallback(() => setHistory(current => restoreHistory(current, current.index - 1)), [])
   const forward = useCallback(() => setHistory(current => restoreHistory(current, current.index + 1)), [])

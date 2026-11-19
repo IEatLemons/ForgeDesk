@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getActiveCodexAccountInfo, resolveCodexHome, type CodexAccountInfo } from './codex-accounts.js'
 import { requestAiText } from './ai-runtime.js'
@@ -108,6 +108,7 @@ async function readSettings(userDataPath: string): Promise<CodexApiServiceSettin
 async function writeSettings(userDataPath: string, settings: CodexApiServiceSettings): Promise<void> {
   await mkdir(userDataPath, { recursive: true })
   await writeFile(getSettingsPath(userDataPath), `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 })
+  await chmod(getSettingsPath(userDataPath), 0o600)
 }
 
 function buildView(settings: CodexApiServiceSettings, account: CodexAccountInfo): CodexApiServiceView {
@@ -140,6 +141,12 @@ async function makeServiceDefaultAi(userDataPath: string, settings: CodexApiServ
 
 export async function getCodexApiServiceIntegrationSettings(userDataPath: string): Promise<CodexApiServiceIntegrationSettings> {
   const settings = await readSettings(userDataPath)
+  // Materialize a new client key once when explicitly connecting a client.
+  // Merely reading the settings view must not create a key or return one.
+  await stat(getSettingsPath(userDataPath)).catch(async (error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error
+    await writeSettings(userDataPath, settings)
+  })
   const port = activeServer && activeUserDataPath === userDataPath && activePort ? activePort : settings.port
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
@@ -293,6 +300,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
 
 export async function getCodexApiService(userDataPath: string): Promise<CodexApiServiceView> {
   const settings = await readSettings(userDataPath)
+  const configured = await stat(getSettingsPath(userDataPath)).then(() => true, () => false)
+  return buildView(configured ? settings : { ...settings, apiKey: '' }, await getActiveCodexAccountInfo(userDataPath))
+}
+
+export async function saveCodexApiServiceSettings(userDataPath: string, input: Partial<CodexApiServiceSettings>): Promise<CodexApiServiceView> {
+  if (activeServer && activeUserDataPath === userDataPath) throw new Error('请先停止本地 API 服务，再修改配置')
+  if (input.port !== undefined && (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535)) throw new Error('端口应为 1–65535 的整数')
+  if (input.model !== undefined && !input.model.trim()) throw new Error('请输入默认模型')
+  const current = await readSettings(userDataPath)
+  const settings = normalizeCodexApiServiceSettings({ ...current, ...input, enabled: false, updatedAt: new Date().toISOString() })
+  await writeSettings(userDataPath, settings)
   return buildView(settings, await getActiveCodexAccountInfo(userDataPath))
 }
 

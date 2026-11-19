@@ -1,5 +1,6 @@
+import { message } from './app-message'
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Button, Card, Drawer, Empty, Space, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Drawer, Empty, Space, Tag, Typography } from 'antd'
 import type { ProjectDeploymentTarget } from './data'
 import type { ProjectRuntimeLog, ProjectRuntimeSnapshot } from '../../shared/project-runtime'
 
@@ -42,14 +43,14 @@ export function ProjectRuntimePanel({ projectId, visible, onConfigure, compactEm
     catch (error) { if(current===revision.current)setError(String(error)) } finally { if(current===revision.current)setBusy(false) }
   }
   if (compactEmpty && !targets.length && !error) return <div className="operations-other-platforms"><Typography.Text type="secondary">自有服务器</Typography.Text><Button size="small" onClick={onConfigure}>配置 SSH / PM2 或 Compose</Button></div>
-  return <Card title="自有服务器 · 只读运行状态" extra={<Space><Button onClick={onConfigure}>目标与监控配置</Button><Button loading={busy} onClick={() => void refresh()}>刷新</Button></Space>}>
+  return <Card className="project-runtime-card" title="自有服务器 · 只读运行状态" extra={<Space wrap><Button onClick={onConfigure}>目标与监控配置</Button><Button loading={busy} onClick={() => void refresh()}>刷新</Button></Space>}>
     <Typography.Paragraph type="secondary">PM2 进程与 Compose 容器的当前状态，不是上一次部署结果。仅在本页可见时检查。</Typography.Paragraph>
     {error ? <Alert type="error" showIcon message="运行检查读取失败" description={error} /> : null}
     {!targets.length ? <Empty description="未配置自有服务器部署目标"><Button onClick={onConfigure}>配置 SSH / PM2 或远程 Compose</Button></Empty> : targets.map(target => {
       const snapshot = snapshots.find(item => item.targetId === target.id)
       const stale = !snapshot?.checkedAt || Date.now() - Date.parse(snapshot.checkedAt) > 90_000
       const labels = { running: '进程／容器运行中', stopped: '已停止', degraded: '健康检查异常', unknown: '未知' }
-      return <Card size="small" key={target.id} title={target.displayName || target.config.appName || target.config.composeService} style={{ marginTop: 12 }}><Space wrap><Tag>{target.provider}</Tag><Tag color={!snapshot?.error && !stale && snapshot?.state === 'running' ? 'green' : 'default'}>{labels[snapshot?.state ?? 'unknown']}</Tag>{stale ? <Tag color="warning">未检查／已过期</Tag> : null}<Typography.Text type="secondary">检查时间：{snapshot?.checkedAt ? new Date(snapshot.checkedAt).toLocaleString() : '尚未检查'}</Typography.Text><Tag>健康：{({ healthy: '通过', unhealthy: '失败', unknown: '未知', 'not-configured': '未配置' })[snapshot?.health ?? 'unknown']}</Tag></Space>{snapshot?.error ? <Alert type={snapshot.enabled ? 'warning' : 'info'} message={snapshot.error} style={{ marginTop: 8 }} /> : null}<ul>{snapshot?.units.map(unit => <li key={unit.id}>{unit.name} · {unit.detail}</li>)}</ul><Button disabled={!snapshot?.enabled} onClick={() => void window.forgeDesk.readProjectRuntimeLogs({ projectId, targetId: target.id }).then(setLog).catch(error => message.error(String(error)))}>读取最近日志（最多 200 行）</Button></Card>
+      return <Card size="small" key={target.id} title={target.displayName || target.config.appName || target.config.composeService} className="project-runtime-target"><Space wrap><Tag>{target.provider}</Tag><Tag color={!snapshot?.error && !stale && snapshot?.state === 'running' ? 'green' : 'default'}>{labels[snapshot?.state ?? 'unknown']}</Tag>{stale ? <Tag color="warning">未检查／已过期</Tag> : null}<Typography.Text type="secondary">检查时间：{snapshot?.checkedAt ? new Date(snapshot.checkedAt).toLocaleString() : '尚未检查'}</Typography.Text><Tag>健康：{({ healthy: '通过', unhealthy: '失败', unknown: '未知', 'not-configured': '未配置' })[snapshot?.health ?? 'unknown']}</Tag></Space>{snapshot?.error ? <Alert type={snapshot.enabled ? 'warning' : 'info'} message={snapshot.error} action={!snapshot.enabled ? <Button onClick={onConfigure}>配置运行监控</Button> : undefined} /> : null}{snapshot?.units.length ? <ul>{snapshot.units.map(unit => <li key={unit.id}>{unit.name} · {unit.detail}</li>)}</ul> : null}<Button disabled={!snapshot?.enabled} onClick={() => void window.forgeDesk.readProjectRuntimeLogs({ projectId, targetId: target.id }).then(setLog).catch(error => message.error(String(error)))}>读取最近日志（最多 200 行）</Button></Card>
     })}
     <Drawer open={!!log} onClose={() => setLog(null)} title="目标最近日志" width="min(850px, 100vw)"><Alert showIcon type="info" message="日志已限制大小并过滤常见凭据字段；不会返回进程环境变量。" /><Typography.Text type="secondary">{log?.checkedAt}{log?.truncated ? ' · 仅最近片段' : ''}</Typography.Text><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{log?.text || '暂无日志'}</pre></Drawer>
   </Card>

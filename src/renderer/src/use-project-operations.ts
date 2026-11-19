@@ -30,5 +30,5 @@ export function useProjectOperations(projectId: string, autoRefresh = true) {
     window.addEventListener('project-services-changed', servicesChanged)
     return () => { disposed = true; window.clearInterval(timer); unsubscribe(); document.removeEventListener('visibilitychange', changed); window.removeEventListener('project-services-changed', servicesChanged) }
   }, [store, projectId, visible, autoRefresh])
-  return { ...snapshot, refresh: store.refresh }
+  return { ...snapshot, refresh: store.refresh, reload: store.reload }
 }

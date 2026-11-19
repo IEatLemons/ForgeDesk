@@ -1,5 +1,6 @@
+import { message } from './app-message'
 import { FolderOpenOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Button, Drawer, Empty, List, Space, Spin, Tag, Typography, message } from 'antd'
+import { Button, Drawer, Empty, List, Space, Spin, Tag, Typography } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { CodexProjectMonitorItem, CodexProjectMonitorSnapshot, CodexSessionDetail, CodexSessionSummary, CodexTaskMonitorSummary, CodexTaskRecord, CodexWorktree, Project } from './data'
 import { getErrorMessage } from './error-messages'

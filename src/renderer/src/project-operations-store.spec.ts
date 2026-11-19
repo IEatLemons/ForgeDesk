@@ -6,6 +6,18 @@ import { ProjectOperationsStore } from './project-operations-store.js'
 const snapshot = (projectId: string): ProjectOperations => ({ projectId, services: [], deployments: {}, states: {} })
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { promise, resolve } }
 describe('shared project operations cache', () => {
+  it('reloads after an earlier pending read so completed health checks are visible', async () => {
+    const old = deferred<ProjectOperations>()
+    const fresh = snapshot('a'); fresh.states.checked = { sources: {} as never, production: null }
+    let calls = 0
+    const store = new ProjectOperationsStore('a', { readProjectOperations: () => ++calls === 1 ? old.promise : Promise.resolve(fresh), refreshProjectOperations: async () => fresh })
+    const earlier = store.read()
+    const reload = store.reload()
+    old.resolve(snapshot('a'))
+    await Promise.all([earlier, reload])
+    assert.equal(calls, 2)
+    assert.equal(store.getSnapshot().data, fresh)
+  })
   it('coalesces reads and refreshes while notifying every subscriber', async () => {
     const read = deferred<ProjectOperations>(), refresh = deferred<ProjectOperations>()
     let reads = 0, refreshes = 0, notices = 0

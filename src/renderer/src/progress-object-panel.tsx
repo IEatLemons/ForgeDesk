@@ -1,5 +1,6 @@
+import { message } from './app-message'
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Button, Empty, Form, Input, List, Modal, Progress, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Alert, Button, Empty, Form, Input, List, Modal, Progress, Select, Space, Table, Tabs, Tag, Typography } from 'antd'
 import type { KeyResultInput, ProgressEntity, ProgressKeyResult, ProgressObject, ProgressScopeKind, ProjectProgressSnapshot, WorkScopeFields } from '../../shared/project-progress'
 import { KeyResultDetail, KeyResultEditor, resultStatusLabels, type ProgressSend } from './progress-key-result'
 import { ProgressDelivery } from './progress-delivery'

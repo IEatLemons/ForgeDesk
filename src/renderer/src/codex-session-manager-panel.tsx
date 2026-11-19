@@ -1,3 +1,4 @@
+import { message } from './app-message'
 import {
   AudioOutlined,
   BranchesOutlined,
@@ -28,7 +29,7 @@ import {
   ZoomInOutlined,
   ZoomOutOutlined
 } from '@ant-design/icons'
-import { Badge, Button, Checkbox, Empty, Input, Layout, List, Modal, Select, Space, Spin, Tag, Tooltip, Typography, message } from 'antd'
+import { Badge, Button, Checkbox, Empty, Input, Layout, List, Modal, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd'
 import type { ClipboardEvent as ReactClipboardEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CodexModel } from '../../shared/codex-models'

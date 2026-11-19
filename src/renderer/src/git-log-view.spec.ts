@@ -83,6 +83,7 @@ describe('git log view helpers', () => {
     assert.deepEqual(rows[0].graphParentEdges, [{ fromLaneIndex: 0, toLaneIndex: 0 }])
     assert.deepEqual(rows[1].graphTopLaneIndexes, [0])
     assert.equal(rows[1].graphTopLaneIndexes.includes(1), false)
+    assert.deepEqual(rows[0].graphHiddenParentHashes, ['filtered-out-parent'])
   })
 
   it('does not shift passing lanes left when an earlier lane closes', () => {
@@ -116,14 +117,14 @@ describe('git log view helpers', () => {
       { hash: 'root', parentHashes: [] }
     ])
 
-    assert.equal(getGitGraphColumnWidth(compactRows), 64)
-    assert.equal(getGitGraphColumnWidth([]), 64)
-    assert.deepEqual(getGitGraphLayout(compactRows), { columnWidth: 64, laneOffset: 32 })
+    assert.equal(getGitGraphColumnWidth(compactRows), 160)
+    assert.equal(getGitGraphColumnWidth([]), 160)
+    assert.equal(getGitGraphLayout(compactRows).laneOffset, 80)
     assert.ok(getGitGraphColumnWidth(wideRows) > getGitGraphColumnWidth(compactRows))
     const layout = getGitGraphLayout(wideRows)
-    assert.equal(layout.columnWidth, 160)
-    assert.equal(layout.laneOffset, 24)
-    assert.ok(layout.laneOffset + 7 * gitGraphLaneWidth + 5 < layout.columnWidth)
+    assert.equal(layout.columnWidth, 224)
+    assert.ok(layout.laneWidth >= 24 && layout.laneWidth <= 40)
+    assert.ok(layout.laneOffset + 7 * layout.laneWidth + 5 < layout.columnWidth)
   })
 
   it('centers all rows against the same lanes when a side branch closes', () => {
@@ -134,9 +135,9 @@ describe('git log view helpers', () => {
       { hash: 'root', parentHashes: [] }
     ])
     const layout = getGitGraphLayout(rows)
-    assert.deepEqual(layout, { columnWidth: 64, laneOffset: 24 })
-    assert.equal(layout.laneOffset + rows[2].graphLaneIndex * gitGraphLaneWidth, 40)
-    assert.equal(layout.laneOffset + rows[3].graphLaneIndex * gitGraphLaneWidth, 24)
+    assert.equal(layout.columnWidth, 160)
+    assert.equal(layout.laneOffset + rows[2].graphLaneIndex * layout.laneWidth, 100)
+    assert.equal(layout.laneOffset + rows[3].graphLaneIndex * layout.laneWidth, 60)
   })
 
   it('includes passing and parent-edge lanes in the column width without clipping', () => {
@@ -144,9 +145,26 @@ describe('git log view helpers', () => {
     const row = { ...rows[0], graphTopLaneIndexes: [11], graphParentEdges: [{ fromLaneIndex: 11, toLaneIndex: 12 }] }
     const layout = getGitGraphLayout([row])
     assert.equal(layout.columnWidth, 13 * gitGraphLaneWidth + 32)
-    assert.ok(layout.laneOffset + 12 * gitGraphLaneWidth + 5 < layout.columnWidth)
+    assert.ok(layout.laneOffset + 12 * layout.laneWidth + 5 < layout.columnWidth)
   })
 
+  it('keeps every lane visible at manual widths and expands above 640 for large graphs', () => {
+    const base = createGraphRows([{ hash: 'x', parentHashes: [] }])[0]
+    const rows = [{ ...base, graphTopLaneIndexes: [35] }]
+    const layout = getGitGraphLayout(rows, { preferredWidth: 160 })
+    assert.ok(layout.minimumWidth > 640)
+    assert.equal(layout.columnWidth, layout.minimumWidth)
+    assert.ok(layout.laneOffset + 35 * layout.laneWidth + 8 < layout.columnWidth)
+    const small = getGitGraphLayout([base], { minimumWidth: layout.columnWidth })
+    assert.equal(small.columnWidth, layout.columnWidth)
+    assert.equal(getGitGraphLayout([base], { preferredWidth: 9999 }).columnWidth, 640)
+  })
+  it('distinguishes real merges and range boundaries from commit subject text', () => {
+    const rows = createGraphRows([{ hash: 'linear', parentHashes: ['outside'], message: 'merge: a squash subject' }])
+    assert.equal(rows[0].parentHashes.length, 1)
+    assert.deepEqual(rows[0].graphHiddenParentHashes, ['outside'])
+    assert.equal(rows[0].graphParentEdges.length, 0)
+  })
   it('groups local and remote branches for the drawer and marks active/current branches', () => {
     const groups = buildBranchGroups({
       branches: ['main', 'feature/source-tree-log'],

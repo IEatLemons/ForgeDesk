@@ -27,6 +27,12 @@ export class ProjectOperationsStore {
     })
     return this.readFlight
   }
+  reload = async (): Promise<void> => {
+    // A health check can finish while an earlier cache read is still returning.
+    // Read once more after that response so the completed check is visible.
+    if (this.readFlight) await this.readFlight
+    await this.read()
+  }
   refresh = (force = false): Promise<void> => {
     if (this.refreshFlight) return this.refreshFlight
     this.revision++

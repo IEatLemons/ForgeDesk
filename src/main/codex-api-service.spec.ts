@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readAiSettingsFile, writeAiSettingsFile } from './ai-settings.js'
-import { createCodexApiKey, getCodexApiService, getCodexApiServiceIntegrationSettings, maskCodexApiKey, normalizeCodexApiServiceSettings, startCodexApiService, stopCodexApiService, toCodexMessages } from './codex-api-service.js'
+import { createCodexApiKey, getCodexApiService, getCodexApiServiceIntegrationSettings, maskCodexApiKey, normalizeCodexApiServiceSettings, saveCodexApiServiceSettings, startCodexApiService, stopCodexApiService, toCodexMessages } from './codex-api-service.js'
 
 describe('codex api service', () => {
   it('creates the local client key format used by the API service', () => {
@@ -31,6 +31,21 @@ describe('codex api service', () => {
       { role: 'system', content: 'Be concise.' },
       { role: 'user', content: 'Hello' }
     ])
+  })
+
+  it('keeps client keys stable after saving while read-only views create no configuration', async () => {
+    const data = await mkdtemp(join(tmpdir(), 'forgedesk-codex-api-config-'))
+    try {
+      await writeFile(join(data, 'codex-accounts.json'), JSON.stringify({ activeAccountId: 'local', accounts: [{ id: 'local', source: 'local', codexHome: join(data, 'isolated-profile') }] }))
+      assert.equal((await getCodexApiService(data)).apiKeyConfigured, false)
+      await assert.rejects(stat(join(data, 'codex-api-service.json')), { code: 'ENOENT' })
+      const saved = await saveCodexApiServiceSettings(data, { port: 50549, model: 'test-model' })
+      assert.equal(saved.running, false)
+      const first = await getCodexApiServiceIntegrationSettings(data)
+      const second = await getCodexApiServiceIntegrationSettings(data)
+      assert.equal(first.apiKey, second.apiKey)
+      assert.equal((await getCodexApiService(data)).apiKeyMasked, maskCodexApiKey(first.apiKey))
+    } finally { await rm(data, { recursive: true, force: true }) }
   })
 
   it('creates a loopback OpenAI-compatible endpoint with a client key', async () => {
@@ -72,6 +87,7 @@ describe('codex api service', () => {
       const models = await fetch(`${service.baseUrl}/models`, { headers: { authorization: `Bearer ${integration.apiKey}` } })
       assert.equal(models.status, 200)
       assert.equal((await models.json() as { data: Array<{ id: string }> }).data[0].id, service.model)
+      await assert.rejects(saveCodexApiServiceSettings(userDataPath, { port: 50549 }), /先停止/)
 
       const stopped = await stopCodexApiService(userDataPath)
       assert.equal(stopped.running, false)

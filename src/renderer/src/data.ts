@@ -1918,6 +1918,7 @@ export type CodexManagedAccount = CodexAccountInfo & {
   createdAt: string
   lastUsedAt: string
   subscriptionRenewsAt: string
+  cockpit?: import('../../shared/cockpit-import').CockpitAccountMetadata
 }
 
 export type CodexAccountRegistryView = {

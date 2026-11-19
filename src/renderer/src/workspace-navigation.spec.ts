@@ -4,11 +4,20 @@ import { createWorkspaceHistory, directoryParents, GLOBAL_DIRECTORY, globalPage,
 import { APP_NAVIGATION_ITEMS } from './app-navigation.js'
 
 describe('production workspace navigation', () => {
-  it('has three primary entries and a single project directory', () => {
-    assert.deepEqual(GLOBAL_DIRECTORY.filter(item=>!item.footer).map(item=>item.key), ['workbench','projects','ai'])
+  it('has two primary entries and a single project directory', () => {
+    assert.deepEqual(GLOBAL_DIRECTORY.filter(item=>!item.footer&&!item.hidden).map(item=>item.key), ['projects','ai'])
     assert.deepEqual(directoryParents(PROJECT_DIRECTORY,'repositories'), ['code'])
     assert.deepEqual(directoryParents(PROJECT_DIRECTORY,'tasks'), ['progress'])
     for (const page of ['password','rsa','excel','env-diff','cli-environment','docs','news','system-monitor','system-info']) assert.ok(validRoute(globalPage('toolbox',page)))
+  })
+  it('defaults to projects, redirects old overview routes and preserves global task links',()=>{
+    assert.deepEqual(createWorkspaceHistory().entries,[globalPage('projects')])
+    assert.deepEqual(globalPage('workbench'),globalPage('projects'))
+    assert.deepEqual(legacyRoute('overview'),globalPage('projects'))
+    const old={scope:'global' as const,area:'workbench' as const,page:'home'}
+    assert.deepEqual(visitRoute(createWorkspaceHistory(),old).entries,[globalPage('projects')])
+    assert.ok(validRoute({...projectPage('p','tasks'),taskSummaryFilter:'urgent'}))
+    assert.equal(validRoute({...projectPage('p','tasks'),taskSummaryFilter:'unknown'}),false)
   })
   it('preserves object positioning, per-project locations, back/forward and truncates forward history', () => {
     let history = createWorkspaceHistory()
