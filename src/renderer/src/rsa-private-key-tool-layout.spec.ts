@@ -33,6 +33,8 @@ describe('RSA private key tool layout', () => {
     assert.match(source, /open=\{generationModalOpen\}/)
     assert.match(source, /className="rsa-generate-action"/)
     assert.match(source, /className="rsa-generation-modal-form"/)
+    assert.match(source, /initialValues=\{\{ keySize: 3072 \}\}/)
+    assert.match(source, /\{ label: '3072 位', value: 3072 \}/)
     assert.doesNotMatch(source, /rsa-generation-panel/)
   })
 
@@ -41,5 +43,6 @@ describe('RSA private key tool layout', () => {
 
     assert.match(source, /<Tooltip title="复制公钥">[\s\S]*icon=\{<UnlockOutlined \/>\}/)
     assert.match(source, /<Tooltip title="复制私钥">[\s\S]*icon=\{<LockOutlined \/>\}/)
+    assert.match(source, /copyText\(record\.fingerprintHex,/)
   })
 })

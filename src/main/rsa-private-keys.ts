@@ -11,7 +11,7 @@ type RsaPrivateKeyDatabase = {
   prepare: (sql: string) => RsaPrivateKeyStatement
 }
 
-export type RsaPrivateKeySize = 2048 | 4096
+export type RsaPrivateKeySize = 2048 | 3072 | 4096
 
 export type RsaPrivateKeyRecord = {
   id: string
@@ -21,6 +21,7 @@ export type RsaPrivateKeyRecord = {
   privateKeyPem: string
   publicKeyPem: string
   fingerprint: string
+  fingerprintHex: string
   createdAt: string
   updatedAt: string
 }
@@ -62,8 +63,8 @@ function normalizeOptionalText(value: string | undefined): string {
 function normalizeKeySize(value: number | undefined): RsaPrivateKeySize {
   const keySize = value ?? 2048
 
-  if (keySize !== 2048 && keySize !== 4096) {
-    throw new Error('RSA 位数只能选择 2048 或 4096')
+  if (keySize !== 2048 && keySize !== 3072 && keySize !== 4096) {
+    throw new Error('RSA 位数只能选择 2048、3072 或 4096')
   }
 
   return keySize
@@ -71,6 +72,7 @@ function normalizeKeySize(value: number | undefined): RsaPrivateKeySize {
 
 function mapRsaPrivateKeyRow(row: Record<string, unknown>): RsaPrivateKeyRecord {
   const privateKeyPem = String(row.private_key_pem ?? '')
+  const publicKeyPem = createRsaPublicKeyPem(privateKeyPem)
 
   return {
     id: String(row.id),
@@ -78,8 +80,9 @@ function mapRsaPrivateKeyRow(row: Record<string, unknown>): RsaPrivateKeyRecord 
     notes: String(row.notes ?? ''),
     keySize: normalizeKeySize(Number(row.key_size ?? 2048)),
     privateKeyPem,
-    publicKeyPem: createRsaPublicKeyPem(privateKeyPem),
+    publicKeyPem,
     fingerprint: String(row.fingerprint ?? ''),
+    fingerprintHex: hashRsaPublicKey(publicKeyPem).digest('hex'),
     createdAt: String(row.created_at ?? ''),
     updatedAt: String(row.updated_at ?? '')
   }
@@ -100,10 +103,13 @@ function generatePrivateKeyPem(keySize: RsaPrivateKeySize): string {
   return typeof exported === 'string' ? exported : exported.toString('utf8')
 }
 
+function hashRsaPublicKey(keyPem: string) {
+  const publicKeyDer = createPublicKey(keyPem).export({ type: 'spki', format: 'der' })
+  return createHash('sha256').update(publicKeyDer)
+}
+
 export function createRsaPrivateKeyFingerprint(privateKeyPem: string): string {
-  const publicKeyDer = createPublicKey(privateKeyPem).export({ type: 'spki', format: 'der' })
-  const digest = createHash('sha256').update(publicKeyDer).digest('base64').replace(/=+$/g, '').replace(/\+/g, '-').replace(/\//g, '_')
-  return `SHA256:${digest}`
+  return `SHA256:${hashRsaPublicKey(privateKeyPem).digest('base64url')}`
 }
 
 export function createRsaPublicKeyPem(privateKeyPem: string): string {

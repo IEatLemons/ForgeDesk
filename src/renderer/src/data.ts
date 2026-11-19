@@ -54,7 +54,7 @@ export type AiProjectResourceLinkInput = {
   projectId: string
 }
 
-export type RsaPrivateKeySize = 2048 | 4096
+export type RsaPrivateKeySize = 2048 | 3072 | 4096
 
 export type RsaPrivateKeyRecord = {
   id: string
@@ -64,6 +64,7 @@ export type RsaPrivateKeyRecord = {
   privateKeyPem: string
   publicKeyPem: string
   fingerprint: string
+  fingerprintHex: string
   createdAt: string
   updatedAt: string
 }

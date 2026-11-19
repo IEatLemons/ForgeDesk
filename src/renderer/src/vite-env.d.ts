@@ -243,7 +243,7 @@ type TerminalRemoteHostInput = {
   notes?: string
 }
 
-type RsaPrivateKeySize = 2048 | 4096
+type RsaPrivateKeySize = 2048 | 3072 | 4096
 
 type RsaPrivateKeyRecord = {
   id: string
@@ -253,6 +253,7 @@ type RsaPrivateKeyRecord = {
   privateKeyPem: string
   publicKeyPem: string
   fingerprint: string
+  fingerprintHex: string
   createdAt: string
   updatedAt: string
 }

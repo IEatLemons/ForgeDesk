@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { createPrivateKey, createPublicKey } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey } from 'node:crypto'
 import { describe, it } from 'node:test'
 import {
   createRsaPrivateKeyRecord,
@@ -148,11 +148,27 @@ describe('RSA private key records', () => {
     assert.equal(updated.fingerprint, record.fingerprint)
   })
 
+  it('round-trips a 3072-bit key with an OmniVault-compatible fingerprint', () => {
+    const db = createDatabase()
+    const created = createRsaPrivateKeyRecord(db, { name: 'OmniVault Preview', keySize: 3072 })
+    const [record] = listRsaPrivateKeyRecords(db)
+    const publicKey = createPublicKey(record.privateKeyPem)
+    const publicKeyDer = publicKey.export({ type: 'spki', format: 'der' })
+    const digest = createHash('sha256').update(publicKeyDer).digest()
+
+    assert.deepEqual(record, created)
+    assert.equal(record.keySize, 3072)
+    assert.equal(publicKey.asymmetricKeyDetails?.modulusLength, 3072)
+    assert.equal(publicKey.asymmetricKeyDetails?.publicExponent, 65537n)
+    assert.equal(record.fingerprintHex, digest.toString('hex'))
+    assert.equal(record.fingerprint, `SHA256:${digest.toString('base64url')}`)
+  })
+
   it('rejects blank names and unsupported key sizes', () => {
     const db = createDatabase()
 
     assert.throws(() => createRsaPrivateKeyRecord(db, { name: ' ', keySize: 2048 }), /请输入记录名称/)
-    assert.throws(() => createRsaPrivateKeyRecord(db, { name: 'API', keySize: 1024 }), /RSA 位数只能选择 2048 或 4096/)
+    assert.throws(() => createRsaPrivateKeyRecord(db, { name: 'API', keySize: 1024 }), /RSA 位数只能选择 2048、3072 或 4096/)
   })
 
   it('deletes generated records', () => {

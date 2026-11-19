@@ -21929,7 +21929,6 @@ function RsaPrivateKeyTool({ onBack }: { onBack: () => void }): JSX.Element {
       const record = await window.forgeDesk.createRsaPrivateKey(values)
       setRecords((current) => [record, ...current])
       form.resetFields()
-      form.setFieldsValue({ keySize: 2048 })
       setGenerationModalOpen(false)
       message.success('RSA 私钥已生成')
     } catch (error) {
@@ -21946,7 +21945,6 @@ function RsaPrivateKeyTool({ onBack }: { onBack: () => void }): JSX.Element {
 
     setGenerationModalOpen(false)
     form.resetFields()
-    form.setFieldsValue({ keySize: 2048 })
   }
 
   function openEditRecord(record: RsaPrivateKeyRecord): void {
@@ -22037,10 +22035,13 @@ function RsaPrivateKeyTool({ onBack }: { onBack: () => void }): JSX.Element {
         render: (_, record) => (
           <Space wrap>
             <Tooltip title="复制公钥">
-              <Button size="small" icon={<UnlockOutlined />} onClick={() => copyText(record.publicKeyPem, 'RSA 公钥已复制')} />
+              <Button size="small" icon={<UnlockOutlined />} aria-label="复制公钥" onClick={() => copyText(record.publicKeyPem, 'RSA 公钥已复制')} />
             </Tooltip>
             <Tooltip title="复制私钥">
-              <Button size="small" icon={<LockOutlined />} onClick={() => copyText(record.privateKeyPem, 'RSA 私钥已复制')} />
+              <Button size="small" icon={<LockOutlined />} aria-label="复制私钥" onClick={() => copyText(record.privateKeyPem, 'RSA 私钥 PEM 已复制')} />
+            </Tooltip>
+            <Tooltip title="复制十六进制指纹">
+              <Button size="small" icon={<CopyOutlined />} aria-label="复制十六进制指纹" onClick={() => copyText(record.fingerprintHex, 'SHA-256 十六进制指纹已复制')} />
             </Tooltip>
             <Tooltip title="命名和备注">
               <Button size="small" icon={<EditOutlined />} onClick={() => openEditRecord(record)} />
@@ -22118,14 +22119,20 @@ function RsaPrivateKeyTool({ onBack }: { onBack: () => void }): JSX.Element {
         onCancel={closeGenerationModal}
       >
         <Alert type="info" showIcon message="私钥完整内容只保存在本机应用数据库中。" />
-        <Form form={form} layout="vertical" className="rsa-generation-modal-form" initialValues={{ keySize: 2048 }} onFinish={generateRsaPrivateKey}>
+        <Form form={form} layout="vertical" className="rsa-generation-modal-form" initialValues={{ keySize: 3072 }} onFinish={generateRsaPrivateKey}>
           <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入记录名称' }]}>
             <Input placeholder="例如：支付回调签名私钥" />
           </Form.Item>
-          <Form.Item name="keySize" label="位数" rules={[{ required: true, message: '请选择 RSA 位数' }]}>
+          <Form.Item
+            name="keySize"
+            label="位数"
+            rules={[{ required: true, message: '请选择 RSA 位数' }]}
+            extra="公钥指数为 65537。OmniVault 通信密钥可选 3072 或 4096 位。"
+          >
             <Select
               options={[
                 { label: '2048 位', value: 2048 },
+                { label: '3072 位', value: 3072 },
                 { label: '4096 位', value: 4096 }
               ]}
             />
