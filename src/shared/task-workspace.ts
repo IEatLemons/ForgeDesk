@@ -5,7 +5,8 @@ export type TaskBase = { id: string; rowVersion: number; createdAt: string; upda
 export type TaskPerson = TaskBase & { name: string; color: string; avatar: string }
 export type TaskProject = { id: string; name: string; archivedAt?: string | null }
 export type TaskFolder = TaskBase & { title: string; order: number }
-export type TaskList = TaskBase & { title: string; folderId: string | null; order: number; pinned: boolean; archived: boolean; fieldIds: string[]; ownerId: string }
+export const defaultTaskGroupTitle = '未分组'
+export type TaskList = TaskBase & { title: string; defaultGroupTitle?: string; folderId: string | null; order: number; pinned: boolean; archived: boolean; fieldIds: string[]; ownerId: string }
 export type TaskGroup = TaskBase & { title: string; scope: string; order: number }
 export type TaskField = TaskBase & { title: string; type: TaskFieldType; options: { id: string; label: string; color: string }[] }
 export type TaskLink = { listId: string; groupId: string | null; order: number }
@@ -36,7 +37,7 @@ export type TaskWidget = {
   children: TaskWidget[]; secondaryDimension?: string
 }
 export type TaskDashboard = TaskBase & { title: string; scope: string; theme: 'light' | 'dark' | 'blue'; filters: TaskFilter[]; widgets: TaskWidget[] }
-export type TaskTemplate = TaskBase & { title: string; groups: string[]; tasks: (Pick<WorkspaceTask, 'title' | 'description' | 'priority' | 'values'> & { groupTitle?: string; parentIndex?: number; dependencyIndexes?: number[] })[]; fieldIds: string[] }
+export type TaskTemplate = TaskBase & { title: string; defaultGroupTitle?: string; groups: string[]; tasks: (Pick<WorkspaceTask, 'title' | 'description' | 'priority' | 'values'> & { groupTitle?: string; parentIndex?: number; dependencyIndexes?: number[] })[]; fieldIds: string[] }
 export type TaskWorkspaceSnapshot = { tasks: WorkspaceTask[]; projects: TaskProject[]; lists: TaskList[]; folders: TaskFolder[]; groups: TaskGroup[]; fields: TaskField[]; people: TaskPerson[]; views: TaskView[]; dashboards: TaskDashboard[]; templates: TaskTemplate[]; attachments: TaskAttachment[]; selfId: string }
 type Save<K extends string, T> = { type: K; input: Partial<Omit<T, keyof TaskBase>> & { id?: string }; expectedVersion?: number }
 export type TaskCommand = { commandId: string } & (

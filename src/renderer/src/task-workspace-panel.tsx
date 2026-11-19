@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Checkbox, Dropdown, Empty, Input, Modal, Popover, Select, Space, Spin, Table, Tabs, Tag } from 'antd'
 import { AppstoreOutlined, BarChartOutlined, CheckSquareOutlined, ClockCircleOutlined, DownOutlined, EyeInvisibleOutlined, EyeOutlined, FilterOutlined, MoreOutlined, PlusOutlined, SearchOutlined, SettingOutlined, SortAscendingOutlined, TableOutlined } from '@ant-design/icons'
-import type { TaskField, TaskGroup, TaskValue, TaskView, TaskViewKind, TaskWorkspaceSnapshot, WorkspaceTask } from '../../shared/task-workspace'
-import { matchesTaskFilters, scopeTaskItems, sortWorkspaceTasks, taskBuiltinFields, taskFieldValue, taskOverdue } from '../../shared/task-workspace'
+import type { TaskField, TaskGroup, TaskList, TaskValue, TaskView, TaskViewKind, TaskWorkspaceSnapshot, WorkspaceTask } from '../../shared/task-workspace'
+import { defaultTaskGroupTitle, matchesTaskFilters, scopeTaskItems, sortWorkspaceTasks, taskBuiltinFields, taskFieldValue, taskOverdue } from '../../shared/task-workspace'
 import { useTaskWorkspace, sendTaskCommand, saveTaskViewPreferences } from './use-task-workspace'
 import { TaskWorkspaceNavigation, taskScopeLabels } from './task-workspace-navigation'
 import { TaskWorkspaceDetail, TaskWorkspaceHistory, toggleWorkspaceTask } from './task-workspace-detail'
@@ -14,10 +14,10 @@ import './task-workspace.css'
 
 function defaultView(scope: string): Omit<TaskView, 'id' | 'rowVersion' | 'createdAt' | 'updatedAt'> { return { scope, mode: 'list', groupBy: 'custom', filters: [], sorts: [], visibleFields: ['priority', 'ownerId', 'startDate', 'dueDate', 'projectIds'], collapsed: [], completion: scope === 'done' ? 'done' : 'all' } }
 function makeSections(tasks: WorkspaceTask[], snapshot: TaskWorkspaceSnapshot, scope: string, groupBy: string): TaskSection[] {
-  const list = snapshot.lists.some(list => list.id === scope), groupScope = list ? scope : 'personal'
+  const list = snapshot.lists.find(list => list.id === scope), groupScope = list ? scope : 'personal'
   const definitions = groupBy === 'custom' ? snapshot.groups.filter(group => group.scope === groupScope).sort((a, b) => a.order - b.order).map(group => ({ id: group.id, title: group.title, tasks: [] as WorkspaceTask[] })) : []
   const groups = new Map(definitions.map(group => [group.id, group]))
-  if (groupBy === 'custom') groups.set('', { id: '', title: '未分组', tasks: [] })
+  if (groupBy === 'custom') groups.set('', { id: '', title: list?.defaultGroupTitle ?? defaultTaskGroupTitle, tasks: [] })
   for (const task of tasks) {
     const value = groupBy === 'custom' ? list ? task.links.find(link => link.listId === scope)?.groupId : task.personalGroupId : taskFieldValue(task, groupBy)
     const id = Array.isArray(value) ? value.join(',') : String(value ?? '')
@@ -41,13 +41,15 @@ export function TaskWorkspacePanel({ scope: controlledScope, onScopeChange, enti
   const preferenceRevision = useRef(0)
   const [selection, setSelection] = useState<string[]>([]), [drag, setDrag] = useState<string | null>(null), [fieldModal, setFieldModal] = useState<{ field?: TaskField } | null>(null), [fieldDrag, setFieldDrag] = useState<string | null>(null)
   const [fieldConfigOpen, setFieldConfigOpen] = useState(false)
-  const [groupEdit, setGroupEdit] = useState<TaskGroup | 'new' | null>(null), [groupTitle, setGroupTitle] = useState('')
+  const [groupEdit, setGroupEdit] = useState<'new' | { group: TaskGroup } | { list: TaskList } | null>(null)
+  const [groupTitle, setGroupTitle] = useState('')
+  const [savingGroup, setSavingGroup] = useState(false)
   const list = snapshot?.lists.find(item => item.id === scope)
   const storedView = snapshot?.views.find(item => item.scope === scope)
   const view = { ...defaultView(scope), ...storedView, ...draftView }
   const select = (id: string | undefined) => { setLocalSelected(id); onSelectTask?.(id) }
   const changeScope = (scope: string) => { setLocalScope(scope); onScopeChange?.(scope); select(undefined) }
-  useEffect(() => { preferenceRevision.current++; setDraftView({}); setCreating(null); setNewTitle(''); setSelection([]); setQuery('') }, [scope])
+  useEffect(() => { preferenceRevision.current++; setDraftView({}); setCreating(null); setNewTitle(''); setSelection([]); setQuery(''); setGroupEdit(null) }, [scope])
   useEffect(() => { if (snapshot && !taskScopeLabels[scope] && !snapshot.lists.some(list => list.id === scope)) changeScope('lists'); if (snapshot && selectedId && !snapshot.tasks.some(task => task.id === selectedId)) select(undefined) }, [snapshot, scope, selectedId])
   useEffect(() => { const node = document.querySelector('.workspace-content'); node?.scrollTo({ top: 0 }) }, [scope, view.mode])
   const tasks = useMemo(() => {
@@ -58,8 +60,30 @@ export function TaskWorkspacePanel({ scope: controlledScope, onScopeChange, enti
   }, [snapshot, scope, query, view.completion, view.filters, view.sorts])
   const sections = useMemo(() => snapshot ? makeSections(tasks, snapshot, scope, view.groupBy) : [], [tasks, snapshot, scope, view.groupBy])
   async function saveView(patch: Partial<TaskView>) { const revision = ++preferenceRevision.current; setDraftView(old => ({ ...old, ...patch })); await saveTaskViewPreferences(scope, patch); if (revision === preferenceRevision.current) setDraftView({}) }
-  function newGroup(group?: TaskGroup) { setGroupEdit(group ?? 'new'); setGroupTitle(group?.title ?? '') }
-  async function saveGroup() { const current = groupEdit && groupEdit !== 'new' ? groupEdit : undefined; const id = await send({ type: 'save-group', input: { id: current?.id, title: groupTitle, scope: list?.id ?? 'personal' }, expectedVersion: current?.rowVersion }); if (id) setGroupEdit(null) }
+  function newGroup() {
+    setGroupEdit('new')
+    setGroupTitle('')
+  }
+  async function saveGroup() {
+    const title = groupTitle.trim()
+    if (!groupEdit || !title || savingGroup) return
+    setSavingGroup(true)
+    try {
+      let id: string | null
+      if (groupEdit === 'new') {
+        id = await send({ type: 'save-group', input: { title, scope: list?.id ?? 'personal' } })
+      } else if ('list' in groupEdit) {
+        const target = groupEdit.list
+        id = await send({ type: 'save-list', input: { id: target.id, defaultGroupTitle: title }, expectedVersion: target.rowVersion })
+      } else {
+        const target = groupEdit.group
+        id = await send({ type: 'save-group', input: { id: target.id, title }, expectedVersion: target.rowVersion })
+      }
+      if (id) setGroupEdit(current => current === groupEdit ? null : current)
+    } finally {
+      setSavingGroup(false)
+    }
+  }
   function groupPatch(task: WorkspaceTask | null, groupId: string): Partial<WorkspaceTask> {
     if (view.groupBy === 'custom') return list ? { links: [...(task?.links.filter(link => link.listId !== list.id) ?? []), { listId: list.id, groupId: groupId || null, order: snapshot?.tasks.length ?? 0 }] } : { personalGroupId: groupId || null }
     if (view.groupBy === 'done') return { done: groupId === 'true' }
@@ -124,7 +148,29 @@ export function TaskWorkspacePanel({ scope: controlledScope, onScopeChange, enti
     else await apply()
   }
   function inlineCreate(groupId: string, board = false) { return creating === groupId ? <Input autoFocus disabled={creatingBusy} className="tw-inline-create" aria-label="新任务标题" placeholder="输入标题，回车确认" value={newTitle} onChange={event => setNewTitle(event.target.value)} onPressEnter={event => { if (!event.nativeEvent.isComposing) void createTask(groupId) }} onKeyDown={event => { if (event.key === 'Escape') { setCreating(null); setNewTitle('') } }} /> : <button className="tw-add-task" onClick={() => { setCreating(groupId); setNewTitle('') }}>{board ? '＋ ' : ''}新建任务</button> }
-  const groupMenu = (section: TaskSection) => { const group = snapshot?.groups.find(group => group.id === section.id); return <Dropdown menu={{ items: [...(group ? [{ key: 'rename', label: '重命名分组' }, { key: 'delete', label: '删除分组', danger: true }] : []), { key: 'add', label: '新建任务' }], onClick: ({ key }) => { if (key === 'rename') newGroup(group); else if (key === 'delete' && group) void send({ type: 'delete', kind: 'group', id: group.id, expectedVersion: group.rowVersion }); else { setCreating(section.id); setNewTitle('') } } }}><Button type="text" size="small" aria-label={`${section.title}的分组操作`} icon={<MoreOutlined />} /></Dropdown> }
+  function groupMenu(section: TaskSection) {
+    const group = view.groupBy === 'custom' ? snapshot?.groups.find(group => group.id === section.id) : undefined
+    const defaultGroupList = view.groupBy === 'custom' && section.id === '' ? list : undefined
+    return <Dropdown trigger={['click']} menu={{
+      items: [
+        ...(group || defaultGroupList ? [{ key: 'rename', label: '重命名分组' }] : []),
+        ...(group ? [{ key: 'delete', label: '删除分组', danger: true }] : []),
+        { key: 'add', label: '新建任务' }
+      ],
+      onClick: ({ key }) => {
+        if (key === 'rename') {
+          if (group) setGroupEdit({ group })
+          else if (defaultGroupList) setGroupEdit({ list: defaultGroupList })
+          setGroupTitle(section.title)
+        } else if (key === 'delete' && group) {
+          void send({ type: 'delete', kind: 'group', id: group.id, expectedVersion: group.rowVersion })
+        } else {
+          setCreating(section.id)
+          setNewTitle('')
+        }
+      }
+    }}><Button type="text" size="small" aria-label={`${section.title}的分组操作`} icon={<MoreOutlined />} /></Dropdown>
+  }
   const content = !snapshot ? <div className="tw-loading">{loading ? <Spin /> : null}{error ? <Alert type="error" showIcon message="任务工作区加载失败" description={error} action={<Button onClick={() => void refresh()}>重试</Button>} /> : null}</div> : scope === 'people' ? <TaskPeopleManager snapshot={snapshot} /> : scope === 'lists' || scope === 'archived' ? <div className="tw-list-directory"><div className="tw-page-heading"><h2>{taskScopeLabels[scope]}</h2><Button type="primary" icon={<PlusOutlined />} onClick={() => { let title = ''; Modal.confirm({ zIndex: 1400, title: '新建任务清单', content: <Input autoFocus onChange={event => { title = event.target.value }} />, onOk: async () => { const id = await send({ type: 'save-list', input: { title } }); if (id) changeScope(id) } }) }}>新建</Button></div><Input.Search allowClear placeholder="搜索任务清单" value={query} onChange={event => setQuery(event.target.value)} /><Table rowKey="id" pagination={false} dataSource={snapshot.lists.filter(list => list.archived === (scope === 'archived') && list.title.includes(query))} columns={[{ title: '名称', render: (_, list) => <Button type="link" icon={<CheckSquareOutlined />} onClick={() => changeScope(list.id)}>{list.title}{list.pinned ? ' 📌' : ''}</Button> }, { title: '所有者', render: (_, list) => <TaskPersonBadge id={list.ownerId} snapshot={snapshot} /> }, { title: '创建时间', render: (_, list) => new Date(list.createdAt).toLocaleString('zh-CN') }, { title: '操作', render: (_, list) => <Space><Button type="text" onClick={() => { let title = list.title; Modal.confirm({ zIndex: 1400, title: '重命名清单', content: <Input defaultValue={title} onChange={event => { title = event.target.value }} />, onOk: () => send({ type: 'save-list', input: { id: list.id, title }, expectedVersion: list.rowVersion }).then(() => undefined) }) }}>重命名</Button><Button type="text" onClick={() => void send({ type: 'save-list', input: { id: list.id, archived: !list.archived }, expectedVersion: list.rowVersion })}>{list.archived ? '恢复' : '归档'}</Button></Space> }]} /></div> : <>
     <header className="tw-workspace-header"><div><CheckSquareOutlined /><h2>{list?.title ?? taskScopeLabels[scope] ?? '全部任务'}</h2>{list ? <Dropdown trigger={['click']} menu={{ items: [{ key: 'rename', label: '重命名' }, { key: 'pin', label: list.pinned ? '取消置顶' : '置顶' }, { key: 'archive', label: list.archived ? '恢复清单' : '归档' }, { key: 'template', label: '保存为模板' }, { key: 'delete', label: '删除清单', danger: true }], onClick: ({ key }) => { if (key === 'rename') { let title = list.title; Modal.confirm({ zIndex: 1400, title: '重命名清单', content: <Input defaultValue={title} onChange={event => { title = event.target.value }} />, onOk: () => send({ type: 'save-list', input: { id: list.id, title }, expectedVersion: list.rowVersion }).then(() => undefined) }) } else if (key === 'template') void send({ type: 'save-template', listId: list.id, title: list.title }); else if (key === 'delete') Modal.confirm({ zIndex: 1400, title: '删除清单？', content: '清单中的任务保留为独立任务。', onOk: async () => { if (await send({ type: 'delete', kind: 'list', id: list.id, expectedVersion: list.rowVersion })) changeScope('lists') } }); else void send({ type: 'save-list', input: { id: list.id, ...(key === 'pin' ? { pinned: !list.pinned } : { archived: !list.archived }) }, expectedVersion: list.rowVersion }) } }}><Button type="text" aria-label="清单更多操作" icon={<MoreOutlined />} /></Dropdown> : null}</div><Input prefix={<SearchOutlined />} aria-label="搜索任务" allowClear placeholder="搜索任务" value={query} onChange={event => setQuery(event.target.value)} /></header>
     {error ? <Alert type="error" showIcon message={error} action={<Button onClick={() => void refresh()}>重试</Button>} /> : null}
@@ -140,7 +186,12 @@ export function TaskWorkspacePanel({ scope: controlledScope, onScopeChange, enti
     </>}</>}
     <TaskWorkspaceDetail task={snapshot.tasks.find(task => task.id === selectedId) ?? null} snapshot={snapshot} onClose={() => select(undefined)} onSelect={select} onOpenProject={onOpenProject} />
     {fieldModal ? <TaskFieldModal key={fieldModal.field?.id ?? 'new'} open field={fieldModal.field} snapshot={snapshot} listId={list?.id} onClose={() => setFieldModal(null)} /> : null}
-    <Modal zIndex={1200} title={groupEdit === 'new' ? '新建任务分组' : '重命名分组'} open={!!groupEdit} onCancel={() => setGroupEdit(null)} onOk={() => void saveGroup()} okButtonProps={{ disabled: !groupTitle.trim() }}><Input autoFocus value={groupTitle} onChange={event => setGroupTitle(event.target.value)} onPressEnter={() => void saveGroup()} placeholder="分组名称" /></Modal>
+    <Modal zIndex={1200} title={groupEdit === 'new' ? '新建任务分组' : '重命名分组'} open={!!groupEdit}
+      onCancel={() => setGroupEdit(null)} onOk={() => void saveGroup()} confirmLoading={savingGroup}
+      okButtonProps={{ disabled: !groupTitle.trim() }}>
+      <Input autoFocus value={groupTitle} onChange={event => setGroupTitle(event.target.value)}
+        onPressEnter={event => { if (!event.nativeEvent.isComposing) void saveGroup() }} placeholder="分组名称" />
+    </Modal>
   </>
   return embedded ? <div className="tw-workspace">{content}</div> : <div className="tw-standalone"><aside><TaskWorkspaceNavigation scope={scope} onChange={changeScope} /></aside><div className="tw-workspace">{content}</div></div>
 }
