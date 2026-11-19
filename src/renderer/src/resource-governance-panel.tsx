@@ -1,4 +1,5 @@
-import { Alert, Button, Descriptions, Empty, Input, Modal, Progress, Segmented, Space, Spin, Switch, Tag, Typography, message } from 'antd'
+import { message } from './app-message'
+import { Alert, Button, Descriptions, Empty, Input, Modal, Progress, Segmented, Space, Spin, Switch, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { DataTable as Table } from './data-table'
 import { DeleteOutlined, DownloadOutlined, FolderOpenOutlined, PauseOutlined, PlayCircleOutlined, ReloadOutlined, SafetyCertificateOutlined, SearchOutlined } from '@ant-design/icons'

@@ -47,8 +47,9 @@ describe('app navigation', () => {
   it('keeps the complete navigation in full mode', () => {
     assert.deepEqual(
       getNavigationItemsForMode('full').map((item) => item.key),
-      APP_NAVIGATION_ITEMS.map((item) => item.key)
+      APP_NAVIGATION_ITEMS.filter(item=>item.key!=='overview').map((item) => item.key)
     )
+    assert.equal(isNavigationKeyVisible('full','overview'),false)
     assert.deepEqual(
       getNavigationSectionsForMode('full').map((section) => section.key),
       APP_NAVIGATION_SECTIONS.filter(section => APP_NAVIGATION_ITEMS.some(item => item.section === section.key)).map((section) => section.key)

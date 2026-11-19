@@ -1,3 +1,7 @@
+import { CommitGraphCell, GitGraphHeader, GitGraphScroll, GitParentRelations, useGitGraphLayout } from './git-graph-controls'
+import { message } from './app-message'
+import { configurationTargets, type ConfigurationRequest } from './configuration-guidance'
+import { openConfiguration, registerConfigurationNavigator } from './configuration-navigation'
 import { railwayOAuthRedirectUri } from '../../shared/railway-oauth'
 import {
   Alert,
@@ -33,8 +37,7 @@ import {
   Tabs,
   Tag,
   Tooltip,
-  Typography,
-  message
+  Typography
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { DataTable as Table, TableText } from './data-table'
@@ -109,14 +112,15 @@ import { RepositoryHistoryFilters, RepositoryWorkspaceHeader } from './repositor
 import { getRepositoryView } from './repository-workspace-view'
 import { ProjectRuntimePanel } from './project-runtime-panel'
 import { ProjectOperationsPanel, type OperationsView } from './project-operations-panel'
+import { ServiceHealthControls } from './service-health-controls'
+import { domainHealth } from './project-operations-view'
+import { domainHealthStaleMs, isOperationsStale } from '../../shared/project-operations'
 import { GLOBAL_DIRECTORY, TOOL_DIRECTORY, SETTINGS_DIRECTORY, findDirectory, globalPage, legacyRoute, projectPage, routeLabel, workspaceLayoutKey, type AppRoute, type ProjectRoute } from './workspace-navigation'
 import type {
   AppRuntimeInfo,
   AiProjectResourceLink,
   AiSettingsView,
   AiRuntimeStatus,
-  CodexAccountRegistryView,
-  CodexApiServiceView,
   AiConflictSuggestion,
   CliEnvironmentIssue,
   CliEnvironmentRepairResult,
@@ -321,12 +325,9 @@ import {
   gitLogRefreshPreferenceChangedEvent,
   gitLogRefreshPreferenceStorageKey,
   gitLogScrollPrefetchCommitCount,
-  getGraphCellBottomLaneIndexes,
   getWorkspaceFileChangeStatus,
   getCommitAuthorDisplay,
   getCommitAuthorFilterValue,
-  getGitGraphLayout,
-  getGraphLaneColor,
   isWorkingTreeCommit,
   mergeGitLogCommitWindow,
   normalizeGitLogRefreshPreferences,
@@ -335,7 +336,6 @@ import {
   groupCommitRefs,
   getRepositoryDefaultPushTarget,
   prependWorkingTreeCommit,
-  gitGraphLaneWidth,
   workingTreeCommitHash,
   type BranchColoredGitGraphRow,
   type GitLogRefreshPreferences
@@ -1619,10 +1619,6 @@ function getProjectRemoteAlignmentStats(repositories: Repository[]): {
   )
 }
 
-const graphRowHeight = 46
-const graphRowMiddle = graphRowHeight / 2
-const graphLineOverflow = 2
-const graphCurveOffset = 12
 type RepositoryLogCommit = GitCommit & {
   isWorkingTreeCommit?: boolean
   worktreeFiles?: GitCommitFileChange[]
@@ -1634,101 +1630,6 @@ const commitLifecycleStatusMeta: Record<CommitLifecycleStatus, { label: string; 
   'test-passed': { label: '测试通过', color: 'success' },
   'test-failed': { label: '测试不通过', color: 'error' },
   online: { label: '已上线', color: 'purple' }
-}
-
-function createGraphParentPath({
-  fromX,
-  toX
-}: {
-  fromX: number
-  toX: number
-}): string {
-  if (fromX === toX) {
-    return `M ${fromX} ${graphRowMiddle} L ${toX} ${graphRowHeight + graphLineOverflow}`
-  }
-
-  return [
-    `M ${fromX} ${graphRowMiddle}`,
-    `C ${fromX} ${graphRowMiddle + graphCurveOffset}`,
-    `${toX} ${graphRowHeight - graphCurveOffset}`,
-    `${toX} ${graphRowHeight + graphLineOverflow}`
-  ].join(' ')
-}
-
-function CommitGraphCell({ commit, columnWidth, laneOffset }: { commit: BranchColoredGitGraphRow<RepositoryLogCommit>; columnWidth: number; laneOffset: number }): JSX.Element {
-  const isMerge = commit.parentHashes.length > 1
-  const isWorkingTree = isWorkingTreeCommit(commit)
-  const graphCellBottomLaneIndexes = getGraphCellBottomLaneIndexes(commit)
-  const graphCellBottomLaneIndexSet = new Set(graphCellBottomLaneIndexes)
-  const graphCellSideContinuationLaneIndexes = commit.graphBottomLaneIndexes.filter((laneIndex) => !graphCellBottomLaneIndexSet.has(laneIndex))
-  const xForLane = (index: number): number => laneOffset + index * gitGraphLaneWidth
-  const parentEdges = commit.graphParentEdges.filter((edge) => edge.fromLaneIndex !== edge.toLaneIndex)
-  const getLaneColor = (laneIndex: number): string => (isWorkingTree ? '#98a2b3' : commit.graphLaneColors[laneIndex] ?? getGraphLaneColor(laneIndex))
-
-  return (
-    <div className={isWorkingTree ? 'commit-graph-cell is-working-tree' : 'commit-graph-cell'}>
-      <svg
-        aria-hidden="true"
-        className="commit-graph-svg"
-        focusable="false"
-        height="100%"
-        width={columnWidth}
-      >
-        {commit.graphTopLaneIndexes.map((laneIndex) => (
-          <line
-            key={`top-${laneIndex}`}
-            className={laneIndex === commit.graphLaneIndex ? 'commit-graph-line is-active' : 'commit-graph-line'}
-            stroke={getLaneColor(laneIndex)}
-            x1={xForLane(laneIndex)}
-            x2={xForLane(laneIndex)}
-            y1={-graphLineOverflow}
-            y2={graphRowMiddle}
-          />
-        ))}
-        {graphCellBottomLaneIndexes.map((laneIndex) => (
-          <line
-            key={`bottom-${laneIndex}`}
-            className={laneIndex === commit.graphLaneIndex ? 'commit-graph-line is-active' : 'commit-graph-line'}
-            stroke={getLaneColor(laneIndex)}
-            x1={xForLane(laneIndex)}
-            x2={xForLane(laneIndex)}
-            y1={graphRowMiddle}
-            y2="100%"
-          />
-        ))}
-        {graphCellSideContinuationLaneIndexes.map((laneIndex) => (
-          <line
-            key={`side-continuation-${laneIndex}`}
-            className={laneIndex === commit.graphLaneIndex ? 'commit-graph-line is-active' : 'commit-graph-line'}
-            stroke={getLaneColor(laneIndex)}
-            x1={xForLane(laneIndex)}
-            x2={xForLane(laneIndex)}
-            y1={graphRowHeight - graphLineOverflow}
-            y2="100%"
-          />
-        ))}
-        {parentEdges.map((edge) => (
-          <path
-            key={`parent-edge-${edge.fromLaneIndex}-${edge.toLaneIndex}`}
-            className="commit-graph-parent-edge"
-            d={createGraphParentPath({
-              fromX: xForLane(edge.fromLaneIndex),
-              toX: xForLane(edge.toLaneIndex)
-            })}
-            stroke={getLaneColor(edge.toLaneIndex)}
-          />
-        ))}
-        <circle
-          className={isMerge ? 'commit-graph-dot merge' : 'commit-graph-dot'}
-          cx={xForLane(commit.graphLaneIndex)}
-          cy={graphRowMiddle}
-          fill={getLaneColor(commit.graphLaneIndex)}
-          r={isMerge ? 4.5 : 3.8}
-          stroke="#ffffff"
-        />
-      </svg>
-    </div>
-  )
 }
 
 function CommitAuthorCell({ commit }: { commit: RepositoryLogCommit }): JSX.Element {
@@ -2274,15 +2175,6 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
   const [openRouterModels, setOpenRouterModels] = useState<OpenRouterModel[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelLoadError, setModelLoadError] = useState('')
-  const [codexApiService, setCodexApiService] = useState<CodexApiServiceView | null>(null)
-  const [loadingCodexApiService, setLoadingCodexApiService] = useState(false)
-  const [codexApiAction, setCodexApiAction] = useState<'start' | 'stop' | 'rotate' | ''>('')
-  const [codexAccounts, setCodexAccounts] = useState<CodexAccountRegistryView | null>(null)
-  const [loadingCodexAccounts, setLoadingCodexAccounts] = useState(false)
-  const [codexAccountAction, setCodexAccountAction] = useState('')
-  const [importAccountOpen, setImportAccountOpen] = useState(false)
-  const [importAccountName, setImportAccountName] = useState('')
-  const [importAccountPath, setImportAccountPath] = useState('')
   const localProvider = provider === 'codex-cli' || provider === 'cursor-cli'
   const verified = status?.provider === provider && status.usable === true
   const statusFailed = status?.provider === provider && (status.available === false || status.usable === false)
@@ -2314,190 +2206,6 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
       void refreshOpenRouterModels(false)
     }
   }, [provider])
-
-  async function refreshCodexApiService(): Promise<void> {
-    if (!window.forgeDesk) return
-    setLoadingCodexApiService(true)
-    try {
-      setCodexApiService(await window.forgeDesk.getCodexApiService())
-    } catch (error) {
-      message.warning(`读取 Codex 账号/API 服务失败：${getErrorMessage(error)}`)
-    } finally {
-      setLoadingCodexApiService(false)
-    }
-  }
-
-  async function refreshCodexAccounts(): Promise<void> {
-    if (!window.forgeDesk) return
-    setLoadingCodexAccounts(true)
-    try {
-      setCodexAccounts(await window.forgeDesk.listCodexAccounts())
-    } catch (error) {
-      message.warning(`读取 Codex 账户失败：${getErrorMessage(error)}`)
-    } finally {
-      setLoadingCodexAccounts(false)
-    }
-  }
-
-  useEffect(() => {
-    void refreshCodexApiService()
-    void refreshCodexAccounts()
-  }, [])
-
-  async function chooseCodexAccountFile(): Promise<void> {
-    if (!window.forgeDesk) return
-    const selectedPath = await window.forgeDesk.selectFile()
-    if (selectedPath) setImportAccountPath(selectedPath)
-  }
-
-  async function importAccount(): Promise<void> {
-    if (!window.forgeDesk) return
-    if (!importAccountPath.trim()) {
-      message.warning('请选择 Codex 认证文件或 profile 目录')
-      return
-    }
-    setCodexAccountAction('import')
-    try {
-      setCodexAccounts(await window.forgeDesk.importCodexAccount({ name: importAccountName.trim() || undefined, sourcePath: importAccountPath.trim() }))
-      setImportAccountOpen(false)
-      setImportAccountName('')
-      setImportAccountPath('')
-      message.success('Codex 账户已安全导入')
-    } catch (error) {
-      message.error(`导入 Codex 账户失败：${getErrorMessage(error)}`)
-    } finally {
-      setCodexAccountAction('')
-    }
-  }
-
-  async function activateAccount(accountId: string): Promise<void> {
-    if (!window.forgeDesk) return
-    setCodexAccountAction(`activate:${accountId}`)
-    try {
-      setCodexAccounts(await window.forgeDesk.activateCodexAccount(accountId))
-      await refreshCodexApiService()
-      message.success('Codex 当前账户已切换，后续 AI 调用会使用该账户')
-    } catch (error) {
-      message.error(`切换 Codex 账户失败：${getErrorMessage(error)}`)
-    } finally {
-      setCodexAccountAction('')
-    }
-  }
-
-  async function verifyAccount(accountId: string, accountName: string): Promise<void> {
-    if (!window.forgeDesk) return
-    setCodexAccountAction(`verify:${accountId}`)
-    try {
-      const status = await window.forgeDesk.verifyCodexAccount(accountId)
-      if (status.usable) message.success(`${accountName} 可用，Codex CLI 已成功返回`)
-      else message.error(`${accountName} 不可用：${status.message}`)
-      await refreshCodexAccounts()
-    } catch (error) {
-      message.error(`检测 Codex 账户失败：${getErrorMessage(error)}`)
-    } finally {
-      setCodexAccountAction('')
-    }
-  }
-
-  async function removeAccount(accountId: string): Promise<void> {
-    if (!window.forgeDesk) return
-    setCodexAccountAction(`remove:${accountId}`)
-    try {
-      setCodexAccounts(await window.forgeDesk.removeCodexAccount(accountId))
-      await refreshCodexApiService()
-      message.success('Codex 账户已从 ForgeDesk 移除')
-    } catch (error) {
-      message.error(`移除 Codex 账户失败：${getErrorMessage(error)}`)
-    } finally {
-      setCodexAccountAction('')
-    }
-  }
-
-  async function createAndLoginAccount(): Promise<void> {
-    if (!window.forgeDesk) return
-    setCodexAccountAction('create')
-    try {
-      const previousIds = new Set(codexAccounts?.accounts.map((item) => item.id) ?? [])
-      const registry = await window.forgeDesk.createCodexAccount()
-      const account = registry.accounts.find((item) => !previousIds.has(item.id))
-      setCodexAccounts(registry)
-      if (!account) throw new Error('新 Codex 账户 profile 创建失败')
-      await window.forgeDesk.openCodexAccountLogin(account.id)
-      message.success(`已为「${account.name}」打开 Codex 登录终端，请完成登录后点击“刷新账户”`)
-    } catch (error) {
-      message.error(`创建 Codex 登录 profile 失败：${getErrorMessage(error)}`)
-    } finally {
-      setCodexAccountAction('')
-    }
-  }
-
-  async function openAccountLogin(accountId: string, accountName: string): Promise<void> {
-    if (!window.forgeDesk) return
-    setCodexAccountAction(`login:${accountId}`)
-    try {
-      await window.forgeDesk.openCodexAccountLogin(accountId)
-      message.success(`已为「${accountName}」打开 Codex 登录终端，请完成登录后点击“刷新账户”`)
-    } catch (error) {
-      message.error(`打开 Codex 登录终端失败：${getErrorMessage(error)}`)
-    } finally {
-      setCodexAccountAction('')
-    }
-  }
-
-  async function connectCodexApiService(): Promise<void> {
-    if (!window.forgeDesk) return
-    setCodexApiAction('start')
-    try {
-      const service = await window.forgeDesk.startCodexApiService()
-      setCodexApiService(service)
-      form.setFieldsValue({
-        enabled: true,
-        provider: 'codex-local-api',
-        baseUrl: service.baseUrl,
-        model: service.model,
-        temperature: form.getFieldValue('temperature') ?? 0.2
-      })
-      await window.forgeDesk.connectCodexApiServiceToAi()
-      await onRefresh()
-      message.success('Codex API 服务已创建，并已接入 ForgeDesk AI')
-    } catch (error) {
-      message.error(`创建 Codex API 服务失败：${getErrorMessage(error)}`)
-    } finally {
-      setCodexApiAction('')
-    }
-  }
-
-  async function stopCodexApiService(): Promise<void> {
-    if (!window.forgeDesk) return
-    setCodexApiAction('stop')
-    try {
-      setCodexApiService(await window.forgeDesk.stopCodexApiService())
-      message.success('Codex API 服务已停止')
-    } catch (error) {
-      message.error(`停止 Codex API 服务失败：${getErrorMessage(error)}`)
-    } finally {
-      setCodexApiAction('')
-    }
-  }
-
-  async function rotateCodexApiKey(): Promise<void> {
-    if (!window.forgeDesk) return
-    setCodexApiAction('rotate')
-    try {
-      const service = await window.forgeDesk.rotateCodexApiKey()
-      setCodexApiService(service)
-      if (provider === 'codex-local-api') {
-        form.setFieldsValue({ baseUrl: service.baseUrl, model: service.model })
-        await window.forgeDesk.syncCodexApiServiceToAi()
-        await onRefresh()
-      }
-      message.success('Codex API Key 已重置')
-    } catch (error) {
-      message.error(`重置 Codex API Key 失败：${getErrorMessage(error)}`)
-    } finally {
-      setCodexApiAction('')
-    }
-  }
 
   const modelOptions = useMemo(() => {
     if (provider !== 'openrouter') {
@@ -2535,6 +2243,8 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
           {onCheck && <Button loading={checking} onClick={onCheck}>检测可用性</Button>}
         </Space>
       </div>
+      <Tabs items={[
+        { key: 'provider', label: '模型提供商', children: <>
       <Alert
         className="settings-module-alert"
         type={verified ? 'success' : statusFailed ? 'error' : aiReady ? 'warning' : 'info'}
@@ -2637,109 +2347,9 @@ function AiSettingsSection({ form, settings, loading, saving, status, checking, 
           保存 AI 设置
         </Button>
       </Form>
-      <div className="codex-api-service-card">
-        <div className="codex-api-service-header">
-          <Space direction="vertical" size={2}>
-            <Typography.Title level={4}>Codex 账号与本地 API 服务</Typography.Title>
-            <Typography.Text type="secondary">读取本机 ~/.codex/auth.json 的安全元数据，并创建供 ForgeDesk 或其他本机客户端使用的 OpenAI-compatible 接口。</Typography.Text>
-          </Space>
-          <Button icon={<ReloadOutlined />} loading={loadingCodexApiService} onClick={() => void refreshCodexApiService()}>
-            刷新
-          </Button>
-        </div>
-        <Descriptions size="small" column={2} bordered>
-          <Descriptions.Item label="Codex 账号">{codexApiService?.account.email || '未读取到邮箱'}</Descriptions.Item>
-          <Descriptions.Item label="套餐">{codexApiService?.account.planType || '未识别'}</Descriptions.Item>
-          <Descriptions.Item label="登录方式">{codexApiService?.account.authMode || '未登录'}</Descriptions.Item>
-          <Descriptions.Item label="账号 ID">{codexApiService?.account.accountIdSuffix || '未识别'}</Descriptions.Item>
-          <Descriptions.Item label="API 状态">{codexApiService?.running ? '运行中' : codexApiService?.enabled ? '已配置，未运行' : '未启用'}</Descriptions.Item>
-          <Descriptions.Item label="访问地址">{codexApiService?.baseUrl || '—'}</Descriptions.Item>
-        </Descriptions>
-        {codexApiService?.apiKeyConfigured ? (
-          <div className="codex-api-service-credentials">
-            <Typography.Text type="secondary">客户端 API Key</Typography.Text>
-            <Typography.Text code>{codexApiService.apiKeyMasked}</Typography.Text>
-          </div>
-        ) : null}
-        {!codexApiService?.account.available ? <Alert type="warning" showIcon message="尚未检测到可用的 Codex 登录态" description={codexApiService?.account.message || '请先在 Codex CLI 或 ChatGPT Codex 中完成登录。'} /> : null}
-        <Space wrap>
-          <Button type="primary" icon={<LinkOutlined />} loading={codexApiAction === 'start'} onClick={() => void connectCodexApiService()}>
-            创建并接入 ForgeDesk
-          </Button>
-          {codexApiService?.running ? <Button icon={<StopOutlined />} loading={codexApiAction === 'stop'} onClick={() => void stopCodexApiService()}>停止服务</Button> : null}
-          {codexApiService?.apiKeyConfigured ? <Button icon={<KeyOutlined />} loading={codexApiAction === 'rotate'} onClick={() => void rotateCodexApiKey()}>重置 API Key</Button> : null}
-        </Space>
-        <Typography.Text type="secondary">服务只监听 127.0.0.1，不会把 Codex access token/refresh token 提供给前端或 API 客户端。</Typography.Text>
-      </div>
-      <div className="codex-account-manager-card">
-        <div className="codex-api-service-header">
-          <Space direction="vertical" size={2}>
-            <Typography.Title level={4}>Codex 账户管理</Typography.Title>
-            <Typography.Text type="secondary">导入多个本机 Codex profile，在 ForgeDesk 内切换当前账户并直接验证调用。账户凭据只留在主进程和 profile 文件中。</Typography.Text>
-          </Space>
-          <Space wrap>
-            <Button icon={<ReloadOutlined />} loading={loadingCodexAccounts} onClick={() => void refreshCodexAccounts()}>刷新账户</Button>
-            <Button icon={<PlusOutlined />} loading={codexAccountAction === 'create'} onClick={() => void createAndLoginAccount()}>新建并登录</Button>
-            <Button type="primary" icon={<UserAddOutlined />} onClick={() => setImportAccountOpen(true)}>导入账户</Button>
-          </Space>
-        </div>
-        {codexAccounts?.accounts.length ? (
-          <div className="codex-account-list">
-            {codexAccounts.accounts.map((account) => (
-              <div className={`codex-account-row${account.active ? ' is-active' : ''}`} key={account.id}>
-                <div className="codex-account-row-heading">
-                  <Space size="small" wrap>
-                    <Typography.Text strong>{account.name}</Typography.Text>
-                    {account.active ? <Tag color="blue">当前账户</Tag> : null}
-                    {account.source === 'local' ? <Tag>本机 profile</Tag> : <Tag color="purple">已导入</Tag>}
-                  </Space>
-                  <Space size="small">
-                    <Button size="small" loading={codexAccountAction === `verify:${account.id}`} onClick={() => void verifyAccount(account.id, account.name)}>检测调用</Button>
-                    {!account.available ? <Button size="small" loading={codexAccountAction === `login:${account.id}`} onClick={() => void openAccountLogin(account.id, account.name)}>打开登录终端</Button> : null}
-                    {!account.active ? <Button size="small" type="primary" loading={codexAccountAction === `activate:${account.id}`} onClick={() => void activateAccount(account.id)}>设为当前</Button> : null}
-                    {account.source === 'imported' ? (
-                      <Popconfirm title="移除这个 Codex 账户？" description="只会移除 ForgeDesk 保存的 profile 副本，不会修改来源文件。" okText="移除" cancelText="取消" onConfirm={() => void removeAccount(account.id)}>
-                        <Button size="small" danger loading={codexAccountAction === `remove:${account.id}`} icon={<DeleteOutlined />}>移除</Button>
-                      </Popconfirm>
-                    ) : null}
-                  </Space>
-                </div>
-                <div className="codex-account-row-meta">
-                  <span>{account.email || '未读取到邮箱'}</span>
-                  <span>{account.planType || '套餐未识别'}</span>
-                  <span>{account.authMode || '未登录'}</span>
-                  <Typography.Text code>{account.accountIdSuffix || '账号 ID 未识别'}</Typography.Text>
-                </div>
-                <Typography.Text type="secondary" ellipsis={{ tooltip: account.authFilePath }}>{account.authFilePath}</Typography.Text>
-                {!account.available ? <Alert type="warning" showIcon message="没有检测到可用登录态" description={account.message} /> : null}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未读取 Codex 账户" />
-        )}
-        <Typography.Text type="secondary">当前账户会同时用于 ForgeDesk 的 Codex 对话、项目任务、AI 辅助功能和本地 API 服务；切换后新发起的调用立即生效。</Typography.Text>
-      </div>
-      <Modal
-        title="导入 Codex 账户"
-        open={importAccountOpen}
-        okText="导入"
-        cancelText="取消"
-        confirmLoading={codexAccountAction === 'import'}
-        onCancel={() => setImportAccountOpen(false)}
-        onOk={() => void importAccount()}
-      >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Input placeholder="账户名称（可选，例如：个人 Pro）" value={importAccountName} onChange={(event) => setImportAccountName(event.target.value)} />
-          <Input
-            readOnly
-            placeholder="选择 Codex 认证 JSON 或 profile 目录"
-            value={importAccountPath}
-            addonAfter={<Button type="link" onClick={() => void chooseCodexAccountFile()}>选择文件</Button>}
-          />
-          <Typography.Text type="secondary">ForgeDesk 会按 JSON 内容识别单个 Codex 账户，并转换后保存到自己的受保护 profile 目录；不会把 token 返回给页面或第三方客户端。</Typography.Text>
-        </Space>
-      </Modal>
+        </> },
+        { key: 'codex', label: 'Codex 账号与 API', children: <AiToolsPanel embedded view="accounts" projectId={null} projectPath="" onAiSettingsChanged={onRefresh} /> }
+      ]} />
     </div>
   )
 }
@@ -3709,6 +3319,7 @@ function OaDocsPanel({ onOpenSettings }: OaDocsPanelProps): JSX.Element {
 }
 
 function SettingsPanel({
+  embedded = false,
   activeModule,
   onActiveModuleChange,
   onBack,
@@ -3721,6 +3332,7 @@ function SettingsPanel({
   onDeploymentRefreshActiveChange,
   onOpenSystemLog
 }: {
+  embedded?: boolean
   activeModule: SettingsModuleKey
   onActiveModuleChange: (module: SettingsModuleKey) => void
   onBack: () => void
@@ -6365,7 +5977,7 @@ function SettingsPanel({
 
   return (
     <section className="workspace-section settings-workspace">
-      <div className="section-heading">
+      {!embedded ? <div className="section-heading">
         <div>
           <div className="settings-page-back">
             <ModuleBackButton label="返回" onClick={onBack} />
@@ -6378,8 +5990,7 @@ function SettingsPanel({
             刷新设置状态
           </Button>
         </Space>
-      </div>
-
+      </div> : null}
       <div className="settings-layout">
         <main className="settings-main">{renderActiveSettingsModule()}</main>
       </div>
@@ -8060,7 +7671,7 @@ function ServiceDetailDrawer({
   open: boolean
   initialTab?: string
   onClose: () => void
-  onServiceChange: (service: ProjectService) => void
+  onServiceChange: (service: ProjectService, options?: { healthOnly?: boolean }) => void
   onEdit: (service: ProjectService) => void
 }): JSX.Element {
   const [liveService, setLiveService] = useState<ProjectService | null>(null)
@@ -8092,9 +7703,9 @@ function ServiceDetailDrawer({
   const [envForm] = Form.useForm<VercelEnvVarForm>()
   const [domainForm] = Form.useForm<VercelDomainForm>()
 
-  function applyServiceUpdate(nextService: ProjectService): void {
+  function applyServiceUpdate(nextService: ProjectService, healthOnly = false): void {
     setLiveService(nextService)
-    onServiceChange(nextService)
+    onServiceChange(nextService, { healthOnly })
   }
 
   useEffect(() => {
@@ -8117,6 +7728,20 @@ function ServiceDetailDrawer({
     setDomainModalOpen(false)
     setDomainConfig(null)
   }, [service?.id, open, initialTab])
+
+  useEffect(() => {
+    if (!open || !service?.projectId) return
+    let disposed = false
+    const projectId = service.projectId
+    const unsubscribe = window.forgeDesk.onProjectOperationsUpdated(id => {
+      if (id !== projectId) return
+      void window.forgeDesk.listProjectServices(projectId).then(services => {
+        const updated = services.find(item => item.id === service.id)
+        if (!disposed && updated) setLiveService(updated)
+      }).catch(() => undefined)
+    })
+    return () => { disposed = true; unsubscribe() }
+  }, [service?.id, service?.projectId, open])
 
   async function loadDeployments(): Promise<void> {
     if (!activeService || !window.forgeDesk || !getServiceProviderCapabilities(activeService.provider).canListDeployments) {
@@ -8429,7 +8054,7 @@ function ServiceDetailDrawer({
     }
   }
 
-  const summary = activeService ? createServiceDetailSummary(activeService) : null
+  const summary = activeService ? createServiceDetailSummary({ ...activeService, domains: activeService.domains.map(domain => isOperationsStale(domain.lastCheckedAt, Date.now(), domainHealthStaleMs) ? { ...domain, lastStatus: 'unknown' } : domain) }) : null
   const monitorableDomains = activeService ? getMonitorableServiceDomains(activeService) : []
   const serviceCapabilities = activeService ? getServiceProviderCapabilities(activeService.provider) : null
   const isVercel = activeService?.provider === 'vercel'
@@ -8747,13 +8372,13 @@ function ServiceDetailDrawer({
       key: 'status',
       width: 130,
       render: (_, domain) => {
-        const meta = getServiceMonitorStatusMeta(domain.lastStatus)
-        return <Badge status={meta.badgeStatus} text={meta.label} />
+        const health = domainHealth(domain)
+        return <Tag color={health.color}>{health.label}</Tag>
       }
     },
     { title: 'HTTP', key: 'statusCode', width: 90, render: (_, domain) => domain.lastStatusCode || '-' },
     { title: '响应时间', key: 'responseMs', width: 110, render: (_, domain) => (domain.lastResponseMs ? `${domain.lastResponseMs} ms` : '-') },
-    { title: '最后检查', key: 'lastCheckedAt', width: 180, render: (_, domain) => formatDateTime(domain.lastCheckedAt) },
+    { title: '最后检查', key: 'lastCheckedAt', width: 180, render: (_, domain) => domain.lastCheckedAt ? formatDateTime(domain.lastCheckedAt) : '尚未检查' },
     {
       title: '错误',
       key: 'lastError',
@@ -8794,7 +8419,8 @@ function ServiceDetailDrawer({
     <Drawer
       title={activeService ? `${activeService.name} 详情` : '服务详情'}
       open={open}
-      width={980}
+      rootClassName="service-detail-drawer-root"
+      width="min(980px, 100vw)"
       onClose={onClose}
       extra={activeService ? (
         <Button icon={<EditOutlined />} onClick={() => onEdit(activeService)}>
@@ -8822,6 +8448,7 @@ function ServiceDetailDrawer({
               {summary.generatedDomainCount > 0 ? `${summary.generatedDomainCount} 个${activeService.provider === 'railway' ? '可监控' : '已隐藏'}` : '-'}
             </Descriptions.Item>
           </Descriptions>
+          <ServiceHealthControls services={[activeService]} scope={{ serviceId: activeService.id, projectId: activeService.projectId || undefined }} onChecked={services => { const next = services.find(item => item.id === activeService.id); if (next) applyServiceUpdate(next, true) }} onConfigure={() => onEdit(activeService)} />
           <Tabs
             activeKey={activeTab}
             onChange={(key) => {
@@ -8836,7 +8463,7 @@ function ServiceDetailDrawer({
                 key: 'environments',
                 label: '环境部署',
                 children: (
-                  <Space direction="vertical" size={12} className="service-detail-tab">
+                  <Space direction="vertical" size={16} className="service-detail-tab">
                     <Table
                       rowKey="id"
                       size="small"
@@ -8892,7 +8519,7 @@ function ServiceDetailDrawer({
                 key: 'env',
                 label: '环境变量',
                 children: serviceCapabilities?.canReadEnvVars ? (
-                  <Space direction="vertical" size={12} className="service-detail-tab">
+                  <Space direction="vertical" size={16} className="service-detail-tab">
                     <div className="service-detail-toolbar">
                       <Typography.Title level={5}>环境变量</Typography.Title>
                       <Space>
@@ -8931,7 +8558,7 @@ function ServiceDetailDrawer({
                 key: 'domains',
                 label: '域名监控',
                 children: (
-                  <Space direction="vertical" size={12} className="service-detail-tab">
+                  <Space direction="vertical" size={16} className="service-detail-tab">
                     {serviceCapabilities?.canManageDomains ? (
                       <div className="service-detail-toolbar">
                         <Typography.Title level={5}>项目域名</Typography.Title>
@@ -13903,6 +13530,7 @@ function ProjectCloudflareSettings({ project, view, onConfigure }: { project: Pr
         showIcon
         message={testResult?.message ?? (settingsReady ? `Cloudflare 已配置：${settings?.domain}` : '请先保存当前项目的 Cloudflare 配置')}
         description={settingsReady ? 'API Token 已保存在本机，界面不会回显明文。' : '每个项目使用自己的 Zone ID 和 API Token。'}
+        action={!settingsReady && view === 'operations' ? <Button onClick={() => openConfiguration('cloudflare', { projectId: project.id })}>配置 Cloudflare</Button> : undefined}
       />
 
       {view!=='operations'?<Form form={settingsForm} layout="vertical" className="project-settings-form">
@@ -14199,6 +13827,7 @@ function ProjectPlaneSettings({ project }: { project: Project }): JSX.Element {
         type={isPlaneSettingsReady(settings) ? 'info' : 'warning'}
         showIcon
         message={isPlaneSettingsReady(settings) ? '选择 workspace 和 Plane 项目后保存绑定' : '请先在全局设置里配置 Plane API Token'}
+        action={!isPlaneSettingsReady(settings) ? <Button onClick={() => openConfiguration('plane')}>配置 Plane 连接</Button> : undefined}
         description={
           binding
             ? `当前绑定：${binding.workspaceSlug} / ${binding.planeProjectIdentifier ? `${binding.planeProjectIdentifier} · ` : ''}${binding.planeProjectName || binding.planeProjectId}`
@@ -14592,7 +14221,7 @@ function ProjectOperationsWorkspace({ project, repositories, view, route, visibl
     {view === 'environments' || view === 'monitoring' ? <ProjectRuntimePanel projectId={project.id} visible={visible} onConfigure={configure} compactEmpty /> : null}
     {view === 'domains' ? <Collapse items={[{ key: 'cloudflare', label: 'Cloudflare DNS 管理', children: <ProjectCloudflareSettings project={project} view="operations" onConfigure={configure} /> }]} /> : null}
     <Drawer title="新建部署 · 发布目标与任务" width="min(1100px, 100vw)" open={wizardOpen} onClose={() => setWizardOpen(false)}>{wizardOpen ? <ProjectDeploymentPanel project={project} repositories={repositories} open={visible && wizardOpen} onConfigureConnection={configure} /> : null}</Drawer>
-    <ServiceDetailDrawer service={detail?.service ?? null} open={Boolean(detail)} initialTab={detail?.tab} onClose={() => setDetail(null)} onEdit={configure} onServiceChange={service => { setDetail(current => current ? { ...current, service } : null); window.dispatchEvent(new CustomEvent('project-services-changed', { detail: project.id })) }} />
+    <ServiceDetailDrawer service={detail?.service ?? null} open={Boolean(detail)} initialTab={detail?.tab} onClose={() => setDetail(null)} onEdit={configure} onServiceChange={(service, options) => { setDetail(current => current ? { ...current, service } : null); if (!options?.healthOnly) window.dispatchEvent(new CustomEvent('project-services-changed', { detail: project.id })) }} />
   </>
 }
 
@@ -17416,7 +17045,7 @@ function ProjectOverview({
                 repository={selectedProjectGitRepository}
                 repositories={projectRepositories}
                 view={workspaceRepositoryView}
-                onBack={() => onWorkspaceNavigate?.(projectPage(selectedProject.id, 'repositories'))}
+                onBack={() => onWorkspaceNavigate?.({ ...projectPage(selectedProject.id, 'repositories'), view: 'directory' })}
                 onSelect={repositoryId => onWorkspaceNavigate?.({ ...workspaceRoute, repositoryId })}
                 onViewChange={view => onWorkspaceNavigate?.({ ...workspaceRoute, view })}
                 branchControl={<RepositoryBranchControl repository={selectedProjectGitRepository} repositories={projectRepositories} showRepositorySelector={false} switching={switchingProjectRepositoryId===selectedProjectGitRepository.id} onSwitchBranch={switchProjectRepositoryBranch} />}
@@ -17476,6 +17105,8 @@ function ProjectOverview({
                   {workspaceRoute.page === 'overview' ? <><ProgressOverview project={selectedProject} onNavigate={onWorkspaceNavigate!} /><Space wrap><Button onClick={() => onOpenProjectWindow(selectedProject.id)}>独立窗口</Button><Button onClick={() => void toggleProjectFavorite(selectedProject)}>{selectedProject.isFavorite ? '取消收藏' : '收藏项目'}</Button><Button onClick={() => void setProjectArchived({id:selectedProject.id, archived:!selectedProject.archivedAt}).catch(error=>message.error(getErrorMessage(error)))}>{selectedProject.archivedAt ? '恢复项目' : '归档项目'}</Button></Space></> : null}
                   {workspaceRoute.page === 'tasks' && workspaceVisible ? <ProjectTasksPanel key={selectedProject.id}
                     projectId={selectedProject.id} entityId={workspaceRoute.entityId}
+                    summaryFilter={workspaceRoute.taskSummaryFilter}
+                    onSummaryFilterChange={taskSummaryFilter => onWorkspaceNavigate?.({ ...workspaceRoute, taskSummaryFilter, entityId: undefined })}
                     onSelect={entityId => onWorkspaceNavigate?.({ ...workspaceRoute, entityId })}
                     onOpenProject={id => onWorkspaceNavigate?.(projectPage(id, 'tasks'))} /> : null}
                   {workspaceRoute.page === 'repositories' ? !workspaceRoute.repositoryId ? <>
@@ -19385,12 +19016,16 @@ function RepositoryLogTree({
   const [branchSearchQuery, setBranchSearchQuery] = useState('')
   const [locatingBranchName, setLocatingBranchName] = useState('')
   const [locatedCommitHash, setLocatedCommitHash] = useState('')
+  const [relationHash, setRelationHash] = useState('')
+  const [hoveredGraphHash, setHoveredGraphHash] = useState('')
+  const dismissGraphRelations = useCallback(() => setRelationHash(''), [])
   const [branchTags, setBranchTags] = useState<ProjectBranchTag[]>([])
   const [tagSyncSnapshot, setTagSyncSnapshot] = useState<RepositoryTagSyncSnapshot | null>(null)
   const [tagSyncDrawerOpen, setTagSyncDrawerOpen] = useState(false)
   const [tagSyncLoading, setTagSyncLoading] = useState(false)
   const [pushingTagKey, setPushingTagKey] = useState('')
   const [pushingMissingTags, setPushingMissingTags] = useState(false)
+  const graphBrowserRef = useRef<HTMLDivElement | null>(null)
   const commitLoadPreviousRef = useRef<HTMLDivElement | null>(null)
   const commitLoadMoreRef = useRef<HTMLDivElement | null>(null)
   const repositoryRefreshInFlightRef = useRef(false)
@@ -19456,8 +19091,23 @@ function RepositoryLogTree({
   const graphRows = useMemo(() => createGraphRows(graphCommits), [graphCommits])
   const coloredGraphRows = useMemo(() => applyBranchColorsToGraphRows(graphRows, branchTags, activeBranchName, remoteNames), [activeBranchName, branchTags, graphRows, remoteNames])
   const visibleGraphRows = coloredGraphRows
-  const graphLayout = useMemo(() => getGitGraphLayout(visibleGraphRows), [visibleGraphRows])
+  const graphContext = JSON.stringify([repository?.id, commitBranch, commitAuthor, commitRange.startDate, commitRange.endDate])
+  const graphView = useGitGraphLayout(visibleGraphRows, graphContext, repository?.id ?? '')
+  const graphLayout = graphView.layout
   const graphColumnWidth = graphLayout.columnWidth
+  const graphMinimumTableWidth = graphColumnWidth + 360 + (graphView.focused ? 0 : compact ? 486 : 604)
+  const graphHighlightHash = hoveredGraphHash || relationHash
+  const highlightedCommit = visibleGraphRows.find(commit => commit.hash === graphHighlightHash)
+  const relatedHashes = new Set([graphHighlightHash, ...(highlightedCommit?.parentHashes ?? [])])
+  const clearGraphFilters = () => {
+    const range = { startDate: '', endDate: '' }
+    setRelationHash(''); setCommitAuthor(''); setCommitBranch(''); setCommitRange(range); setLocatedCommitHash('')
+    void refreshCommits(range, '')
+  }
+  const locateVisibleParent = (hash: string) => {
+    setRelationHash(''); setLocatedCommitHash(hash)
+  }
+  useEffect(() => { setRelationHash(''); setHoveredGraphHash('') }, [graphContext])
   const hasNewerCommits = commitWindowStart > 0
   const isEmptyRepositoryHistory = activeRepositoryForLog?.latestCommit.trim() === 'No commits yet' && commits.length === 0 && (workspaceStatus?.files.length ?? 0) === 0
   const authorOptions = useMemo(
@@ -19729,10 +19379,12 @@ function RepositoryLogTree({
   }
 
   function captureCommitScrollAnchor(): { id: string; top: number } | null {
-    const rows = Array.from(document.querySelectorAll<HTMLElement>('.source-tree-table .ant-table-row[data-row-key]'))
+    const container = graphBrowserRef.current?.closest('.workspace-content')
+    const bounds = container?.getBoundingClientRect()
+    const rows = Array.from(graphBrowserRef.current?.querySelectorAll<HTMLElement>('.source-tree-table .ant-table-row[data-row-key]') ?? [])
     const row = rows.find((item) => {
       const rect = item.getBoundingClientRect()
-      return rect.bottom >= 0 && rect.top <= window.innerHeight
+      return rect.bottom >= (bounds?.top ?? 0) && rect.top <= (bounds?.bottom ?? window.innerHeight)
     })
 
     return row?.dataset.rowKey ? { id: row.dataset.rowKey, top: row.getBoundingClientRect().top } : null
@@ -19744,10 +19396,13 @@ function RepositoryLogTree({
     }
 
     window.requestAnimationFrame(() => {
-      const row = Array.from(document.querySelectorAll<HTMLElement>('.source-tree-table .ant-table-row[data-row-key]')).find((item) => item.dataset.rowKey === anchor.id)
+      const row = Array.from(graphBrowserRef.current?.querySelectorAll<HTMLElement>('.source-tree-table .ant-table-row[data-row-key]') ?? []).find((item) => item.dataset.rowKey === anchor.id)
 
       if (row) {
-        window.scrollBy({ top: row.getBoundingClientRect().top - anchor.top })
+        const delta = row.getBoundingClientRect().top - anchor.top
+        const container = graphBrowserRef.current?.closest('.workspace-content')
+        if (container) container.scrollTop += delta
+        else window.scrollBy({ top: delta })
       }
     })
   }
@@ -20283,7 +19938,7 @@ function RepositoryLogTree({
       ) : view === 'alignment' ? (
         <RemoteAlignmentPanel alignment={activeRepository.remoteAlignment} currentBranch={activeRepository.currentBranch} />
       ) : (
-        <div className={`git-browser${compact ? ' is-compact' : ''}`}>
+        <div ref={graphBrowserRef} className={`git-browser${compact ? ' is-compact' : ''}`}>
           <div className="source-tree-toolbar">
             <div className="source-tree-toolbar-heading">
               {!compact ? <Typography.Title level={4}>提交图谱</Typography.Title> : null}
@@ -20301,6 +19956,8 @@ function RepositoryLogTree({
                       刷新
                     </Button>
                   </Tooltip>
+                  <Button aria-pressed={graphView.focused} onClick={() => { dismissGraphRelations(); graphView.setFocused(!graphView.focused) }}>{graphView.focused ? '退出图谱专注' : '图谱专注'}</Button>
+                  <Button onClick={() => graphView.saveWidth(null)}>自动列宽</Button>
                   <Button icon={<BranchesOutlined />} onClick={() => { setBranchSearchQuery(''); setBranchDrawerOpen(true) }}>
                     分支
                   </Button>
@@ -20358,8 +20015,11 @@ function RepositoryLogTree({
               </div>
             </div>
           </div>
+          <div className="git-graph-filter-context" aria-label="当前提交范围"><span>{commitBranch ? `分支：${commitBranch}` : '全部引用'}{commitAuthor ? ` · 作者：${commitAuthor}` : ''}{commitRange.startDate || commitRange.endDate ? ` · 日期：${commitRange.startDate || '不限'} — ${commitRange.endDate || '不限'}` : ''} · 菱形为合并提交 · 虚线表示父提交在范围外</span>{commitBranch || commitAuthor || commitRange.startDate || commitRange.endDate ? <Button type="link" size="small" onClick={clearGraphFilters}>清除筛选</Button> : null}</div>
           {hasNewerCommits && <div ref={commitLoadPreviousRef} className="commit-load-more commit-load-previous"><Typography.Text type="secondary">{loadingMoreCommits ? '正在加载较新提交…' : '继续向上滚动以加载较新提交'}</Typography.Text></div>}
+          <GitGraphScroll width={graphMinimumTableWidth}>
           <Table
+            components={{ header: { cell: GitGraphHeader } }}
             rowKey="id"
             loading={loadingDetail}
             size="small"
@@ -20368,7 +20028,8 @@ function RepositoryLogTree({
               [
                 isWorkingTreeCommit(commit) ? 'working-tree-row' : '',
                 commit.hash === selectedCommit?.hash ? 'selected-row' : '',
-                commit.hash === locatedCommitHash ? 'branch-locator-highlight' : ''
+                commit.hash === locatedCommitHash ? 'branch-locator-highlight' : '',
+                relatedHashes.has(commit.hash) ? 'git-graph-related-row' : ''
               ]
                 .filter(Boolean)
                 .join(' ')
@@ -20381,16 +20042,17 @@ function RepositoryLogTree({
                 width: graphColumnWidth,
                 className: 'commit-graph-column',
                 onCell: () => ({ style: { width: graphColumnWidth, minWidth: graphColumnWidth } }),
-                onHeaderCell: () => ({ style: { width: graphColumnWidth, minWidth: graphColumnWidth } }),
-                render: (_, commit) => <CommitGraphCell commit={commit} columnWidth={graphColumnWidth} laneOffset={graphLayout.laneOffset} />
+                onHeaderCell: () => ({ style: { width: graphColumnWidth, minWidth: graphColumnWidth }, graphLayout, onGraphResize: graphView.saveWidth, graphWidthPreference: graphView.preferredWidth }),
+                render: (_, commit) => <CommitGraphCell commit={commit} layout={graphLayout} active={relatedHashes.has(commit.hash)} origin={commit.hash === graphHighlightHash} inspected={relationHash === commit.hash} onInspect={setRelationHash} onDismiss={dismissGraphRelations} onHighlight={setHoveredGraphHash} relationContent={relationHash === commit.hash ? <GitParentRelations commit={commit} rows={visibleGraphRows} onLocate={locateVisibleParent} onClear={clearGraphFilters} onOlder={() => { setRelationHash(''); void shiftCommitWindow('older') }} canClear={!!(commitBranch || commitAuthor || commitRange.startDate || commitRange.endDate)} canLoadOlder={hasOlderCommits && !loadingMoreCommits} /> : null} />
               },
               {
                 title: '提交',
                 dataIndex: 'message',
                 key: 'message',
+                onCell: () => ({ style: { minWidth: 360 } }),
                 render: (_, commit) => <CommitMessageCell commit={commit} branchTags={branchTags} currentBranch={activeBranchName} remoteNames={remoteNames} tagSyncSnapshot={tagSyncSnapshot} onOpenTagSync={openTagSync} />
               },
-              {
+              ...(!graphView.focused ? [{
                 title: '状态',
                 key: 'lifecycle',
                 width: compact ? 104 : 138,
@@ -20409,7 +20071,7 @@ function RepositoryLogTree({
                 key: 'lines',
                 width: compact ? 72 : 96,
                 render: (_, commit) => (isWorkingTreeCommit(commit) ? `${formatNumber(commit.filesChanged)} 文件` : `${formatNumber(commit.additions)} / ${formatNumber(commit.deletions)}`)
-              }
+              }] satisfies ColumnsType<BranchColoredGitGraphRow<RepositoryLogCommit>> : [])
             ]}
             dataSource={visibleGraphRows}
             tableLayout="fixed"
@@ -20417,6 +20079,8 @@ function RepositoryLogTree({
               expandedRowKeys: selectedCommit ? [selectedCommit.id] : [],
               expandedRowRender: (commit) =>
                 commit.hash === selectedCommit?.hash ? (
+                  <>
+                  {graphView.focused ? <div className="git-focus-commit-meta"><Typography.Text code copyable={!isWorkingTreeCommit(commit)}>{isWorkingTreeCommit(commit) ? '未提交工作区' : commit.hash}</Typography.Text><CommitAuthorCell commit={commit} /><span>{isWorkingTreeCommit(commit) ? '未提交' : new Date(commit.committedAt).toLocaleString()}</span><CommitLifecycleCell commit={commit} onSave={saveCommitTestStatus} /><span>{formatNumber(commit.additions)} / {formatNumber(commit.deletions)}</span></div> : null}
                   <CommitInlineDetail
                     files={commitFiles}
                     selectedFile={selectedFile}
@@ -20425,12 +20089,12 @@ function RepositoryLogTree({
                     onSelectFile={(file) => {
                       selectCommitFile(file)
                     }}
-                  />
+                  /></>
                 ) : null,
               showExpandColumn: false
             }}
             pagination={false}
-            scroll={{ x: graphColumnWidth + (compact ? 780 : 1002) }}
+            scroll={{ x: graphMinimumTableWidth }}
             locale={{
               emptyText: isEmptyRepositoryHistory ? (
                 <div className="empty-git-history">
@@ -20444,11 +20108,11 @@ function RepositoryLogTree({
                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前范围没有提交" />
               )
             }}
-          />
+          /></GitGraphScroll>
           {graphRows.length > 0 && (
             <div ref={commitLoadMoreRef} className="commit-load-more">
               <Typography.Text type="secondary">
-                已加载第 {formatNumber(commitWindowStart + 1)}–{formatNumber(commitWindowStart + commits.length)} 条 · 窗口上限 100 条
+                已加载第 {formatNumber(commitWindowStart + 1)}–{formatNumber(commitWindowStart + commits.length)} 条 · 窗口上限 {formatNumber(gitLogRefreshPreferences.maxLoadedCommits)} 条
                 {loadingMoreCommits ? ' · 正在加载…' : hasOlderCommits ? ' · 继续向下滚动加载较早提交' : ' · 已到最早提交'}
               </Typography.Text>
             </div>
@@ -20833,7 +20497,7 @@ function RepositoryTable({ repositories, branchTagRefreshToken = 0 }: { reposito
         fixed: 'right',
         render: (_, repository) => (
           <Space>
-            <Button size="small" onClick={() => openRepositoryDetail(repository)}>详情</Button>
+            <Button size="small" icon={<BranchesOutlined />} onClick={() => openRepositoryDetail(repository)}>提交树</Button>
             <Button size="small" icon={<EditOutlined />} onClick={() => setSelectedRepository(repository)}>
               身份
             </Button>
@@ -20857,7 +20521,7 @@ function RepositoryTable({ repositories, branchTagRefreshToken = 0 }: { reposito
         locale={{ emptyText: <Empty description="这个项目下还没有仓库" /> }}
       />
       <Drawer
-        title={detailRepository ? `仓库详情：${detailRepository.name}` : '仓库详情'}
+        title={detailRepository ? `提交树：${detailRepository.name}` : '提交树'}
         open={Boolean(detailRepository)}
         width={1280}
         onClose={() => setDetailRepository(null)}
@@ -23008,11 +22672,21 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   const { loadingWorkspace, loadWorkspace, selectedProjectId, projects, setSelectedProjectId } = useForgeDeskStore(useShallow(state => ({ loadingWorkspace: state.loadingWorkspace, loadWorkspace: state.loadWorkspace, selectedProjectId: state.selectedProjectId, projects: state.projects, setSelectedProjectId: state.setSelectedProjectId })))
   const [appMode, setAppMode] = useState<AppMode>(() => projectWindowId ? 'full' : readStoredAppMode())
   const [chromePreferences, setChromePreferences] = useState<AppChromePreferences>(() => readStoredAppChromePreferences())
-  const [activeKey, setLegacyActiveKey] = useState<AppActiveKey>(() => projectWindowId ? 'projects' : readStoredAppMode() === 'simple' ? 'projects' : 'overview')
+  const [activeKey, setLegacyActiveKey] = useState<AppActiveKey>('projects')
   const [modernLayout, setModernLayout] = useState(() => {try{return localStorage.getItem(workspaceLayoutKey) !== 'legacy'}catch{return true}})
   const navigation = useWorkspaceNavigation(projectWindowId)
   useEffect(() => window.forgeDesk?.onTaskFocus?.(entityId => { setModernLayout(true); navigation.go({ ...globalPage('tasks'), taskScope: 'all', entityId }) }), [navigation.go])
   const route = navigation.route
+  const [configurationRequest, setConfigurationRequest] = useState<ConfigurationRequest | null>(null)
+  const configurationContext = useRef<{ projectId?: string; repositoryId?: string }>({})
+  configurationContext.current = {
+    projectId: configurationRequest?.projectId ?? (modernLayout ? (route.scope === 'project' ? route.projectId : undefined) : activeKey === 'projects' ? selectedProjectId || undefined : undefined),
+    repositoryId: configurationRequest?.repositoryId ?? (modernLayout && route.scope === 'project' ? route.repositoryId : undefined)
+  }
+  useEffect(() => registerConfigurationNavigator({
+    context: () => configurationContext.current,
+    open: request => setConfigurationRequest(current => current?.target === request.target && current.projectId === request.projectId && current.repositoryId === request.repositoryId ? current : request)
+  }), [])
   const [terminalVisible, setTerminalVisible] = useState(false)
   const [aiToolFilter, setAiToolFilter] = useState('')
   const [aiShowArchivedProjects, setAiShowArchivedProjects] = useState(false)
@@ -23023,7 +22697,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
   if (route.scope === 'project') lastProjectRoute.current = route
   if (route.scope === 'global' && route.area === 'ai') lastAiRoute.current = route
   function setActiveKey(key: AppActiveKey): void {
-    setLegacyActiveKey(key)
+    setLegacyActiveKey(key === 'overview' ? 'projects' : key)
     if (modernLayout) {
       if (key === 'terminal') { setTerminalVisible(true); setTerminalVisited(true) }
       else navigation.go(legacyRoute(key))
@@ -23760,6 +23434,33 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       onOpenForgeProject={openForgeProjectFromCodex}
     />
   )
+  const closeConfiguration = () => {
+    const projectId = configurationRequest?.projectId
+    setConfigurationRequest(null)
+    window.dispatchEvent(new CustomEvent('configuration-updated', { detail: projectId }))
+    if (projectId) window.dispatchEvent(new CustomEvent('project-services-changed', { detail: projectId }))
+  }
+  const configurationTarget = configurationRequest ? configurationTargets[configurationRequest.target] : null
+  const configurationProject = projects.find(project => project.id === configurationRequest?.projectId)
+  const configurationDrawer = configurationRequest && configurationTarget ? <Drawer
+    title={configurationProject && configurationTarget.scope === 'project' ? `${configurationProject.name} · ${configurationTarget.title}` : configurationTarget.title}
+    className="configuration-drawer" rootClassName="configuration-drawer-root" open width="min(1080px, 100vw)" onClose={closeConfiguration}
+    extra={<Button onClick={closeConfiguration}>返回刚才的操作</Button>}
+  >
+    <Alert type="info" showIcon message="当前操作已保留" description="完成配置后，点击“返回刚才的操作”继续，无需重新填写。" style={{ marginBottom: 16 }} />
+    {configurationTarget.scope === 'project' ? configurationProject ? <ProjectSettingsPanel
+      key={`${configurationRequest.target}:${configurationProject.id}`} project={configurationProject}
+      repositories={useForgeDeskStore.getState().repositories.filter(repository => repository.projectId === configurationProject.id && (configurationRequest.target !== 'repositories' || !configurationRequest.repositoryId || repository.id === configurationRequest.repositoryId))} contributors={[]}
+      initialModule={configurationTarget.module as ProjectSettingsModuleKey} allowedModules={[configurationTarget.module as ProjectSettingsModuleKey]}
+      initialGitTab={configurationRequest.target === 'repositories' ? 'remotes' : undefined}
+      onSummaryChanged={() => loadWorkspace()} onBranchTagsChanged={() => undefined}
+    /> : <Space direction="vertical" style={{ width: '100%' }}><Typography.Text>选择需要配置的项目</Typography.Text><Select aria-label="选择需要配置的项目" placeholder="选择项目" style={{ width: '100%' }} options={projects.filter(project => !project.archivedAt).map(project => ({ value: project.id, label: project.name }))} onChange={projectId => setConfigurationRequest(current => current ? { ...current, projectId } : null)} /></Space>
+    : configurationRequest.target === 'ai-accounts' ? <AiToolsPanel view="accounts" projectId={null} projectPath="" onOpenTerminal={() => setActiveKey('terminal')} />
+    : <SettingsPanel embedded activeModule={configurationTarget.module as SettingsModuleKey}
+      onActiveModuleChange={module => { if (Object.hasOwn(configurationTargets, module)) setConfigurationRequest({ target: module as ConfigurationRequest['target'] }) }}
+      onBack={closeConfiguration} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemePreferenceChange={onThemePreferenceChange}
+      chromePreferences={chromePreferences} onChromePreferencesChange={handleChromePreferencesChange} />}
+  </Drawer> : null
   const quickBuildDrawer = <QuickBuildPanel open={quickBuildDetailsOpen} task={quickBuildState} onClose={() => setQuickBuildDetailsOpen(false)} onForce={() => void startQuickBuild(true).catch(error => message.error(getErrorMessage(error)))} onCancel={() => void window.forgeDesk.cancelQuickBuild().catch(error => message.error(getErrorMessage(error)))} onRestart={() => void restartQuickBuildApp(quickBuildState.cwd, quickBuildState.taskId).catch(() => undefined)} />
   const appUpdateBanner = (
     <AppUpdateBanner
@@ -23772,13 +23473,13 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
 
   if (!initializationLoading && initialization?.requiresProject) {
     return (
-      <InitializationWizard
+      <><InitializationWizard
         onComplete={(projectId) => {
           setInitialization((current) => current ? { ...current, requiresProject: false, currentProject: current.currentProject } : current)
           setActiveKey('projects')
           useForgeDeskStore.getState().setSelectedProjectId(projectId)
         }}
-      />
+      />{configurationDrawer}</>
     )
   }
 
@@ -23842,7 +23543,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
         {chromePreferences.appModeSwitcher === 'top' ? <AppModeSwitcher mode={appMode} onChange={handleAppModeChange} compact /> : null}
       </>}>
         {loadingWorkspace ? <Spin/> : <>
-          <div hidden={!isProjects}><ProjectDirectory visible={isProjects} archived={directoryArchived.current} mode={appMode} onCreate={createDirectoryProject} onOpen={navigation.openProject} onArchiveList={openArchiveDirectory} onLogs={openDirectoryLogs} onAction={directoryAction} /></div>
+          <div hidden={!isProjects}><ProjectDirectory visible={isProjects} archived={directoryArchived.current} mode={appMode} onNavigate={navigation.go} onCreate={createDirectoryProject} onOpen={navigation.openProject} onArchiveList={openArchiveDirectory} onLogs={openDirectoryLogs} onAction={directoryAction} /></div>
           <div hidden={!projectVisible}><WorkspaceVisibilityProvider value={projectVisible}><ProjectOverview directoryControllerRef={directoryControllerRef} mode={appMode} projectWindow={!!projectWindowId} focusProjectId={currentProjectRoute?.projectId??null} onCreateProject={()=>setCreatingProject(true)} onOpenSettings={()=>openSettingsModule('services')} onOpenAiTools={()=>navigation.go({...globalPage('ai'),projectFilter:currentProjectRoute?.projectId})} onOpenTerminalRequest={openTerminalRequest} resolvedTheme={resolvedTheme} onOpenProjectGitTasks={()=>setProjectGitTaskDrawerOpen(true)} onRefreshProjectGitTasks={refreshProjectGitTaskLogs} onOpenProjectWindow={openProjectWindow} onTitlebarProjectLocationChange={handleTitlebarProjectLocationChange} workspaceNavigation workspaceRoute={currentProjectRoute} workspaceArchived={directoryArchived.current} workspaceVisible={projectVisible} onWorkspaceNavigate={navigation.go} onWorkspaceOpenProject={navigation.openProject} onOpenCodexSession={openManagedTaskCodexConversation} /></WorkspaceVisibilityProvider></div>
           {renderGlobalPage()}
           {aiVisited || aiVisible ? <div hidden={!aiVisible}><div className="workspace-page-heading"><Typography.Title level={2}>AI 工作台</Typography.Title><Space wrap><Select aria-label="筛选 AI 项目" allowClear placeholder="全部项目" value={aiRoute.projectFilter} style={{minWidth:180}} options={projects.filter(project=>aiShowArchivedProjects||!project.archivedAt).map(project=>({value:project.id,label:project.archivedAt?`${project.name}（已归档）`:project.name}))} onChange={projectFilter=>navigation.go({...aiRoute,projectFilter,entityId:undefined})} /><Checkbox checked={aiShowArchivedProjects} onChange={event=>setAiShowArchivedProjects(event.target.checked)}>显示已归档项目</Checkbox><Select aria-label="筛选 AI 工具" value={aiToolFilter} onChange={setAiToolFilter} options={[{value:'',label:'全部工具'},{value:'codex',label:'Codex'},{value:'cursor',label:'Cursor'}]} /><Button onClick={()=>navigation.go(globalPage('settings','ai-accounts'))}>账号与额度</Button><Button onClick={()=>navigation.go(globalPage('ai','assistant'))}>AI 助手</Button>{navigation.origin?<Button onClick={navigation.returnToOrigin}>返回来源</Button>:null}</Space></div>
@@ -23853,7 +23554,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
       </WorkspaceShell>
       <CreateProjectModal open={creatingProject} onClose={()=>setCreatingProject(false)} onCreated={()=>{const id=useForgeDeskStore.getState().selectedProjectId;if(id)navigation.openProject(id);else navigation.go(globalPage('projects'))}} />
       <Drawer title="远程终端" open={terminalRemoteDrawerOpen} onClose={()=>setTerminalRemoteDrawerOpen(false)} width={380}><TerminalRemoteShortcuts onOpenTerminalRequest={request=>{setTerminalRemoteDrawerOpen(false);openTerminalRequest(request)}} /></Drawer>
-      {quickBuildDrawer}{systemLogDrawer}{projectGitTaskDrawer}{appStatusBar}<ReleasePublishTaskDock />
+      {configurationDrawer}{quickBuildDrawer}{systemLogDrawer}{projectGitTaskDrawer}{appStatusBar}<ReleasePublishTaskDock />
     </div>
   }
 
@@ -23869,7 +23570,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           onOpenAiSettings={() => openSettingsModule('ai')}
         />
         {systemLogDrawer}
-        {quickBuildDrawer}
+        {configurationDrawer}{quickBuildDrawer}
         {projectGitTaskDrawer}
         {appStatusBar}
       </>
@@ -23922,7 +23623,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           />
         </Drawer>
         {systemLogDrawer}
-        {quickBuildDrawer}
+        {configurationDrawer}{quickBuildDrawer}
         {projectGitTaskDrawer}
         {appStatusBar}
       </>
@@ -24103,7 +23804,7 @@ function App({ themePreference, resolvedTheme, onThemePreferenceChange }: AppPro
           </Layout.Content>
         </Layout>
         {systemLogDrawer}
-        {quickBuildDrawer}
+        {configurationDrawer}{quickBuildDrawer}
         {projectGitTaskDrawer}
         {appStatusBar}
         <ReleasePublishTaskDock />

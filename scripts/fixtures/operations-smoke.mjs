@@ -7,11 +7,17 @@ import { writeFile } from 'node:fs/promises'
 // The application, SQLite database, preload bridge and renderer are the real build.
 export function installOperationsFixtures() {
   const requests = []
+  let healthStatus = 200
+  requests.setHealthStatus = status => { healthStatus = status }
   globalThis.fetch = async (input, init = {}) => {
     const url = new URL(String(input))
     requests.push({ url: url.href, method: init.method || 'GET' })
     if (!['GET', 'HEAD'].includes(init.method || 'GET')) throw new Error('QA blocks remote mutations')
-    if (url.hostname === 'app.operations.test') return new Response('healthy', { status: 200 })
+    if (url.hostname === 'app.operations.test') {
+      await new Promise(resolve => setTimeout(resolve, 300))
+      if (healthStatus === 'offline') throw new Error('QA simulated network timeout')
+      return new Response('health fixture', { status: healthStatus })
+    }
     if (url.hostname !== 'api.vercel.com') throw new Error('QA has no external network access')
     const now = Date.now()
     const active = { id: 'dpl-production-active', target: 'production', readyState: 'READY', url: 'production.operations.test', meta: { githubCommitSha: '7b53731-production', githubCommitRef: 'main' }, createdAt: now - 600_000 }
@@ -105,9 +111,46 @@ export async function verifyOperations(initialWindow, directory, requests, ipcCa
   await click(window, '[role="menuitem"]', '域名')
   await until(window, `!!document.querySelector('.operations-domains .ant-table-tbody')`, 'domain view')
   assert.ok(await execute(window, `document.querySelector('.operations-domains').textContent.includes('app.operations.test')`))
+  await until(window, `document.querySelector('.operations-domains .service-health-controls').textContent.includes('自动检查：每 5 分钟')`, 'health frequency on domain page')
+  assert.ok(await execute(window, `document.querySelector('.operations-domains .service-health-controls').textContent.includes('上次检查：')`))
+  const healthRequestsBefore = ipcCalls.filter(call => call.channel === 'service:monitor:check-scoped').length
+  await execute(initialWindow, `window.__healthUpdateEvents=0;void window.forgeDesk.onProjectOperationsUpdated(id=>{if(id===${JSON.stringify(project.id)})window.__healthUpdateEvents++})`)
+  requests.setHealthStatus(503)
+  await click(window, '.operations-domains .service-health-controls button', '立即检查')
+  await until(window, `document.querySelector('.operations-domains .service-health-controls').textContent.includes('检查中')`, 'domain check loading feedback')
+  await until(window, `document.querySelector('.operations-domains .service-health-controls').textContent.includes('检查完成') && document.querySelector('.operations-domains .ant-table-tbody').textContent.includes('503')`, 'domain page health result')
+  assert.equal(ipcCalls.filter(call => call.channel === 'service:monitor:check-scoped').length, healthRequestsBefore + 1)
+  assert.ok(await execute(initialWindow, `window.__healthUpdateEvents>0`), 'Other windows receive health updates')
+  await capture(window, 'operations-domain-manual-check.png')
   await click(window, '.operations-domains button', '验证与配置')
   await until(window, `!!document.querySelector('.ant-drawer-open .ant-tabs-tab-active') && document.querySelector('.ant-drawer-open .ant-tabs-tab-active').textContent.includes('域名监控')`, 'domain detail tab')
+  assert.ok(await execute(window, `document.querySelector('.ant-drawer-open .service-health-controls').textContent.includes('自动检查：每 5 分钟')`))
+  const platformsBefore = requests.filter(request => request.url.includes('api.vercel.com')).length
+  const previousCheck = (await invoke(window, 'listProjectServices', project.id))[0].domains[0].lastCheckedAt
+  requests.setHealthStatus('offline')
+  await click(window, '.ant-drawer-open .service-health-controls button', '立即检查')
+  await until(window, `document.querySelector('.ant-drawer-open .service-health-controls').textContent.includes('检查完成') && document.querySelector('.ant-drawer-open .ant-tabs-tabpane-active .ant-table-tbody').textContent.includes('QA simulated network timeout')`, 'service drawer network failure result')
+  const lastScope = ipcCalls.filter(call => call.channel === 'service:monitor:check-scoped').at(-1).scope
+  assert.equal(lastScope.serviceId, serviceId)
+  assert.equal(lastScope.projectId, project.id)
+  const checked = (await invoke(window, 'listProjectServices', project.id))[0].domains[0]
+  assert.ok(Date.parse(checked.lastCheckedAt) > Date.parse(previousCheck), 'Last check time updated')
+  assert.equal(checked.lastStatus, 'offline')
+  assert.equal(requests.filter(request => request.url.includes('api.vercel.com')).length, platformsBefore, 'Health checks do not refresh platform data or perform DNS actions')
+  await capture(window, 'operations-service-manual-check.png')
+  window.setSize(720, 700)
+  await new Promise(resolve => setTimeout(resolve, 400))
+  const detailLayout = await execute(window, `(()=>{
+    const root=document.querySelector('.service-detail-drawer-root'),body=root.querySelector('.ant-drawer-body');body.scrollTop=body.scrollHeight;
+    const row=root.querySelector('.ant-tabs-tabpane-active .ant-table-tbody tr[data-row-key]');
+    return {bottom:root.getBoundingClientRect().bottom,statusTop:document.querySelector('.app-status-bar').getBoundingClientRect().top,rowBottom:row.getBoundingClientRect().bottom,bodyBottom:body.getBoundingClientRect().bottom};
+  })()`)
+  assert.ok(detailLayout.bottom <= detailLayout.statusTop + 1, 'Service detail ends above status bar')
+  assert.ok(detailLayout.rowBottom <= detailLayout.bodyBottom - 8, 'Domain check results remain reachable in a short window')
+  await capture(window, 'operations-service-manual-check-narrow.png')
+  window.setSize(1440, 1040)
   await execute(window, `document.querySelector('.ant-drawer-open .ant-drawer-close').click()`)
+  await until(window, `document.querySelector('.operations-domains .ant-table-tbody').textContent.includes('QA simulated network timeout')`, 'parent domain page updated after drawer check')
   await execute(window, `localStorage.setItem('forgedesk:theme-preference:v1','dark');window.dispatchEvent(new Event('forgedesk:theme-preference-changed'))`)
   await until(window, `document.documentElement.dataset.theme==='dark'`, 'dark theme')
   await until(window, `!document.querySelector('.ant-drawer-open')`, 'drawers closed')
@@ -118,5 +161,5 @@ export async function verifyOperations(initialWindow, directory, requests, ipcCa
   assert.ok(layout.scroll <= layout.width + 1, `Page overflow ${JSON.stringify(layout)}`)
   await capture(window, 'operations-domains-narrow.png')
   assert.ok(requests.filter(request => request.url.includes('api.vercel.com')).every(request => request.method === 'GET' && !/\/projects\?/.test(request.url)))
-  console.log('OPERATIONS_QA_REPORT ' + JSON.stringify({ projectId: project.id, realIPC: true, productionSeparateFromLatest: true, healthyOverviewVisible: true, hiddenPausesRefresh: true, reenterRefreshes: true, environmentOrder: true, deploymentWizard: true, buildAndRuntimeLogs: true, domainDetail: true, darkTheme: true, narrowWindow: layout, platformMutations: 0, screenshots: directory }))
+  console.log('OPERATIONS_QA_REPORT ' + JSON.stringify({ projectId: project.id, realIPC: true, productionSeparateFromLatest: true, healthyOverviewVisible: true, hiddenPausesRefresh: true, reenterRefreshes: true, environmentOrder: true, deploymentWizard: true, buildAndRuntimeLogs: true, domainDetail: true, domainManualCheck: true, serviceManualCheck: true, frequencyAndLastCheck: true, crossWindowHealthUpdate: true, offlineResultRecorded: true, healthDoesNotSyncPlatform: true, detailLayout, darkTheme: true, narrowWindow: layout, platformMutations: 0, screenshots: directory }))
 }

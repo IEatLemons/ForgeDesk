@@ -21,7 +21,7 @@ export async function measureProjectList(window, directory, ipcCalls) {
     }
   }
   await js(`(async()=>{const snapshot=await window.forgeDesk.listProjects();for(let i=0;i<206;i++)await window.forgeDesk.saveProjectGitTask({id:'perf-log-'+i,projectId:snapshot.projects[i%19].id,projectName:snapshot.projects[i%19].name,action:'fetch',status:'success',startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),summary:'隔离历史记录',repositoryResults:[]})})()`)
-  await js(`localStorage.setItem('forgedesk:app-mode:v1','full');localStorage.setItem('forgedesk:workspace-layout:v2','hierarchical')`)
+  await js(`localStorage.setItem('forgedesk:project-directory-view:v1','list');localStorage.setItem('forgedesk:app-mode:v1','full');localStorage.setItem('forgedesk:workspace-layout:v2','hierarchical')`)
   window.setSize(1360, 900)
   window.show(); window.focus(); app.focus({ steal: true })
   await window.webContents.debugger.attach('1.3')
@@ -36,7 +36,7 @@ export async function measureProjectList(window, directory, ipcCalls) {
   const samples = []
   for (let index = 0; index < 20; index++) {
     window.focus()
-    await js(`document.querySelector('[aria-label="主导航"] [data-menu-id$="workbench"]')?.click()`)
+    await js(`document.querySelector('[aria-label="主导航"] [data-menu-id$="ai"]')?.click()`)
     await new Promise(resolve => setTimeout(resolve, 100))
     const start = ipcCalls.length
     const sample = await js(`(async()=>{
@@ -93,9 +93,19 @@ async function verifyInteractions(window, directory, ipcCalls) {
   // Open the code category explicitly (progress may be the first collapsed group).
   await click('[aria-label="项目目录"] .ant-menu-submenu-title', '代码管理')
   await click('[aria-label="项目目录"] [role="menuitem"]', '仓库')
-  await wait(`document.querySelector('.repository-directory-list')`)
+  await wait(`document.querySelector('.project-log-tree')`)
+  if(await js(`!!document.querySelector('.repository-directory-list')?.getClientRects().length`))throw Error('Single repository opened a directory instead of its commit tree')
+  await js(`document.querySelector('[aria-label="返回仓库列表"]').click()`)
+  await wait(`document.querySelector('.repository-directory-list')?.getClientRects().length`)
+  await new Promise(resolve=>setTimeout(resolve,300))
+  if(!await js(`!!document.querySelector('.repository-directory-list')?.getClientRects().length`))throw Error('Explicit directory return redirected back to the only repository')
   await click('.repository-directory-shortcuts button', '提交树')
   await wait(`document.querySelector('.project-log-tree')`)
+  await js(`document.querySelector('[aria-label="后退"]').click()`)
+  await wait(`document.querySelector('.repository-directory-list')?.getClientRects().length`)
+  await js(`document.querySelector('[aria-label="前进"]').click()`)
+  await wait(`document.querySelector('.project-log-tree')`)
+  await writeFile(join(directory,'single-repository-direct.png'),(await window.capturePage()).toPNG())
   await new Promise(resolve => setTimeout(resolve, 1000))
   const beforeReturn = ipcCalls.length
   const returned = await js(`(async()=>{const started=performance.now();[...document.querySelectorAll('.workspace-project-switch button')].find(e=>e.textContent.trim()==='项目列表').click();while(!document.querySelector('.project-list-table')?.getClientRects().length)await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);return {ms:performance.now()-started,query:document.querySelector('[aria-label="查找项目"]').value,selected:document.querySelector('.project-list-table tr[data-row-key] .ant-checkbox-input').checked}})()`)

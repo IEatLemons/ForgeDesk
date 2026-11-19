@@ -57,9 +57,10 @@ describe('global settings layout', () => {
   it('styles settings as a stable navigation and row layout', () => {
     const styles = readRendererSource('styles.css')
 
-    assert.match(styles, /\.settings-layout \{[\s\S]*height: calc\(100vh - var\(--app-status-bar-height\) - 150px\)/)
+    // Scroll reachability is verified with real wheel input by
+    // scripts/fixtures/settings-layout-smoke.mjs, rather than prescribing a
+    // viewport-sized nested scroller that can hide the last settings actions.
     assert.match(styles, /\.settings-sidebar-navigation \{[\s\S]*height: 100%;[\s\S]*overflow-y: auto;/)
-    assert.match(styles, /\.settings-main \{[\s\S]*height: 100%;[\s\S]*overflow-y: auto;/)
     assert.match(styles, /\.settings-entry-row \{[\s\S]*grid-template-columns: 32px minmax\(0, 1fr\) auto 14px;/)
     assert.match(styles, /\.settings-sidebar-entry \{[\s\S]*grid-template-columns: 32px minmax\(0, 1fr\) 14px;/)
     assert.doesNotMatch(styles, /\.settings-navigation/)

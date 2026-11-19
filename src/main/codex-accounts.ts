@@ -1,7 +1,8 @@
-import { chmod, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
+import type { CockpitAccountMetadata } from '../shared/cockpit-import'
 
 type JsonObject = Record<string, unknown>
 
@@ -28,6 +29,7 @@ export type CodexManagedAccount = CodexAccountInfo & {
   createdAt: string
   lastUsedAt: string
   subscriptionRenewsAt: string
+  cockpit?: CockpitAccountMetadata
 }
 
 export type CodexAccountRegistryView = {
@@ -57,6 +59,7 @@ type CodexAccountRecord = {
   createdAt: string
   lastUsedAt: string
   subscriptionRenewsAt: string
+  cockpit?: CockpitAccountMetadata
 }
 
 type CodexAccountRegistry = {
@@ -200,7 +203,8 @@ function normalizeRecord(value: unknown): CodexAccountRecord | null {
     lastUsedAt: asString(object.lastUsedAt),
     name: asString(object.name) || 'Codex 账户',
     source: object.source === 'imported' ? 'imported' : 'local',
-    subscriptionRenewsAt: normalizeRenewalDate(object.subscriptionRenewsAt)
+    subscriptionRenewsAt: normalizeRenewalDate(object.subscriptionRenewsAt),
+    cockpit: object.cockpit as CockpitAccountMetadata | undefined
   }
 }
 
@@ -238,7 +242,11 @@ async function readRegistry(userDataPath: string, homeDirectory = homedir()): Pr
 
 async function writeRegistry(userDataPath: string, registry: CodexAccountRegistry): Promise<void> {
   await mkdir(userDataPath, { recursive: true, mode: 0o700 })
-  await writeFile(registryPath(userDataPath), `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o600 })
+  const temporaryPath = `${registryPath(userDataPath)}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o600 })
+    await rename(temporaryPath, registryPath(userDataPath))
+  } finally { await unlink(temporaryPath).catch(() => undefined) }
 }
 
 function accountView(record: CodexAccountRecord, info: CodexAccountInfo, activeAccountId: string): CodexManagedAccount {
@@ -251,7 +259,8 @@ function accountView(record: CodexAccountRecord, info: CodexAccountInfo, activeA
     lastUsedAt: record.lastUsedAt,
     name: record.name,
     source: record.source,
-    subscriptionRenewsAt: record.subscriptionRenewsAt
+    subscriptionRenewsAt: record.subscriptionRenewsAt,
+    cockpit: record.cockpit
   }
 }
 
@@ -360,6 +369,12 @@ export async function importCodexAccount(userDataPath: string, input: CodexAccou
     throw new Error('选择的 profile 中没有 auth.json，或所选文件不存在')
   }
   const normalizedAuth = await readImportedAuth(sourceAuthPath)
+  return importCodexAccountObject(userDataPath, normalizedAuth, input.name, undefined, homeDirectory)
+}
+
+/** Internal importer: receives an allowlisted auth object, never an IPC payload. */
+export async function importCodexAccountObject(userDataPath: string, auth: JsonObject, name?: string, cockpit?: CockpitAccountMetadata, homeDirectory = homedir()): Promise<CodexAccountRegistryView> {
+  const normalizedAuth = normalizeImportedAuth(auth)
 
   const registry = await readRegistry(userDataPath, homeDirectory)
   const id = `account-${randomUUID()}`
@@ -374,9 +389,10 @@ export async function importCodexAccount(userDataPath: string, input: CodexAccou
     createdAt: now,
     id,
     lastUsedAt: '',
-    name: input.name?.trim() || `导入账户 ${registry.accounts.length + 1}`,
+    name: name?.trim() || `导入账户 ${registry.accounts.length + 1}`,
     source: 'imported',
-    subscriptionRenewsAt: ''
+    subscriptionRenewsAt: '',
+    cockpit
   })
   await writeRegistry(userDataPath, registry)
   return listCodexAccounts(userDataPath, homeDirectory)

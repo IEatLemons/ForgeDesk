@@ -1,4 +1,5 @@
-import { Alert, Button, Empty, Progress, Space, Spin, Statistic, Tag, Typography, message } from 'antd'
+import { message } from './app-message'
+import { Alert, Button, Empty, Progress, Space, Spin, Statistic, Tag, Typography } from 'antd'
 import { ArrowRightOutlined, CheckCircleOutlined, ClockCircleOutlined, DesktopOutlined, FolderOpenOutlined, GlobalOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SystemMonitorSnapshot } from './data'

@@ -1,5 +1,6 @@
+import { message } from './app-message'
 import { memo, useDeferredValue, useEffect, useRef, useState } from 'react'
-import { Alert, Button, Descriptions, Drawer, Segmented, Space, Switch, Table, Tag, Typography, message } from 'antd'
+import { Alert, Button, Descriptions, Drawer, Segmented, Space, Switch, Table, Tag, Typography } from 'antd'
 import type { QuickBuildStage } from '../../shared/quick-build'
 import { createQuickBuildLogDownload, getQuickBuildLogOutput } from './quick-build-view'
 import type { QuickBuildLogChannel, QuickBuildLogTask } from './quick-build-view'

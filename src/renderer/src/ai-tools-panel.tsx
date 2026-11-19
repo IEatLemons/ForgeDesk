@@ -1,3 +1,4 @@
+import { message } from './app-message'
 import {
   Alert,
   Button,
@@ -10,30 +11,29 @@ import {
   Modal,
   Popconfirm,
   Progress,
+  Select,
   Space,
   Spin,
   Tag,
-  Typography,
-  message
+  Typography
 } from 'antd'
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
   DeleteOutlined,
   DownloadOutlined,
-  KeyOutlined,
   LinkOutlined,
-  LockOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
-  StopOutlined,
   SwapOutlined,
   UserAddOutlined
 } from '@ant-design/icons'
 import { useEffect, useMemo, useState } from 'react'
 import type { CodexUncommittedAlert } from './data'
+import { CockpitImportDialog } from './cockpit-import-dialog'
+import { CodexApiSettingsCard } from './codex-api-settings-card'
 import { CodexSessionManagerPanel } from './codex-session-manager-panel'
 import { getErrorMessage } from './error-messages'
 
@@ -46,6 +46,8 @@ export type CodexWorkspaceTarget = {
 
 type AiToolsPanelProps = {
   view?: 'accounts'
+  embedded?: boolean
+  onAiSettingsChanged?: () => void | Promise<unknown>
   projectId: string | null
   projectPath: string
   onOpenTerminal?: () => void
@@ -61,6 +63,10 @@ function formatDate(value: string): string {
 
 function formatRenewalDate(value: string): string {
   return value ? value.replaceAll('-', '/') : '未设置'
+}
+
+function formatPlan(value: string | undefined): string {
+  return value ? value.replaceAll('_', ' ').toUpperCase() : '未知'
 }
 
 function windowLabel(window: QuotaWindow): string {
@@ -151,7 +157,7 @@ function AccountUsageSummary({ quota, compact = false }: { quota: QuotaSnapshot 
   )
 }
 
-export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWorkspaceTarget, onCodexWorkspaceTargetHandled, view }: AiToolsPanelProps): JSX.Element {
+export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWorkspaceTarget, onCodexWorkspaceTargetHandled, view, embedded, onAiSettingsChanged }: AiToolsPanelProps): JSX.Element {
   const [provider, setProvider] = useState<AiProviderRuntimeSnapshot | null>(null)
   const [accounts, setAccounts] = useState<CodexAccountRegistryView | null>(null)
   const [apiService, setApiService] = useState<CodexApiServiceView | null>(null)
@@ -161,10 +167,12 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWork
   const [refreshing, setRefreshing] = useState(false)
   const [providerAction, setProviderAction] = useState(false)
   const [accountAction, setAccountAction] = useState('')
-  const [apiAction, setApiAction] = useState<'start' | 'stop' | 'rotate' | 'health' | ''>('')
   const [accountDrawer, setAccountDrawer] = useState<CodexManagedAccount | null>(null)
   const [renewalDateInput, setRenewalDateInput] = useState('')
   const [importOpen, setImportOpen] = useState(false)
+  const [cockpitImportOpen, setCockpitImportOpen] = useState(false)
+  const [accountSearch, setAccountSearch] = useState('')
+  const [planFilter, setPlanFilter] = useState('all')
   const [importName, setImportName] = useState('')
   const [importPath, setImportPath] = useState('')
   const [codexDetailsOpen, setCodexDetailsOpen] = useState(false)
@@ -182,10 +190,11 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWork
     setProvider(providers.find((item) => item.id === 'codex') ?? null)
   }
 
-  async function refreshAccounts(forceRefresh = false): Promise<void> {
+  async function refreshAccounts(forceRefresh = false, includeLive = true): Promise<void> {
     if (!window.forgeDesk) return
     const registry = await window.forgeDesk.listCodexAccounts()
     setAccounts(registry)
+    if (!includeLive) return
     const snapshots = await window.forgeDesk.listAiProviderAccountSnapshots({ providerId: 'codex', refresh: forceRefresh })
     const liveByAccountId = new Map(snapshots.map((snapshot) => [snapshot.account.id, snapshot.live]))
     setAccounts((current) => current ? {
@@ -238,6 +247,10 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWork
   useEffect(() => {
     void refreshAll()
   }, [projectId])
+
+  useEffect(() => window.forgeDesk?.onCodexConfigurationChanged(() => {
+    void Promise.allSettled([refreshAccounts(false, false), refreshApiService()])
+  }), [])
 
   useEffect(() => {
     if (!codexWorkspaceTarget) return
@@ -413,38 +426,6 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWork
     }
   }
 
-  async function apiActionRun(action: 'start' | 'stop' | 'rotate'): Promise<void> {
-    if (!window.forgeDesk) return
-    setApiAction(action)
-    try {
-      const next = action === 'start'
-        ? await window.forgeDesk.startCodexApiService()
-        : action === 'stop'
-          ? await window.forgeDesk.stopCodexApiService()
-          : await window.forgeDesk.rotateCodexApiKey()
-      setApiService(next)
-      message.success(action === 'start' ? '本机 Codex API 服务已启动，ForgeDesk 内部 AI 已默认接入' : action === 'stop' ? '本机 Codex API 服务已停止' : 'API Key 已轮换')
-    } catch (error) {
-      message.error(`API 服务操作失败：${getErrorMessage(error)}`)
-    } finally {
-      setApiAction('')
-    }
-  }
-
-  async function healthCheck(): Promise<void> {
-    if (!window.forgeDesk) return
-    setApiAction('health')
-    try {
-      const result = await window.forgeDesk.checkCodexApiService()
-      if (result.ok) message.success(result.message)
-      else message.warning(result.message)
-    } catch (error) {
-      message.warning(`API 健康检查失败：${getErrorMessage(error)}`)
-    } finally {
-      setApiAction('')
-    }
-  }
-
   if (loading) {
     return <div className="loading-panel"><Spin /></div>
   }
@@ -524,7 +505,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWork
 
   return (
     <section className="workspace-section ai-tools-shell">
-      <div className="workspace-section-header">
+      {!embedded ? <div className="workspace-section-header">
         <div>
           {!view ? <Button type="link" icon={<ArrowLeftOutlined />} onClick={() => setCodexDetailsOpen(false)}>返回 AI 工具</Button> : null}
           <Typography.Title level={2}>Codex</Typography.Title>
@@ -532,9 +513,9 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWork
           {!view ? <div className="ai-codex-tabs">{renderCodexTabs()}</div> : null}
         </div>
         <Button icon={<ReloadOutlined />} loading={refreshing} onClick={() => void refreshAll(true)}>刷新状态</Button>
-      </div>
+      </div> : null}
 
-      <Card
+      {!embedded ? <Card
         title="Codex 软件信息"
         className="ai-software-card"
         extra={
@@ -560,86 +541,95 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWork
             <div><span>启动方式</span><strong>{provider?.command || '自动识别'}</strong></div>
           </div>
         </div>
-      </Card>
+      </Card> : null}
+
+      <CodexApiSettingsCard service={apiService} onRefresh={refreshApiService} onConnected={onAiSettingsChanged} />
+      <CockpitImportDialog open={cockpitImportOpen} onClose={() => setCockpitImportOpen(false)} onImported={async () => { await refreshAccounts(false, false); await refreshApiService() }} />
 
       <Card
         id="codex-account-management"
         title="Codex 账户管理"
         extra={
           <Space wrap>
+            <Button onClick={() => setCockpitImportOpen(true)}>从 Cockpit 导入</Button>
             <Button icon={<DownloadOutlined />} onClick={() => setImportOpen(true)}>导入账户</Button>
             <Button icon={<UserAddOutlined />} loading={accountAction === 'create'} onClick={() => void createAccount()}>创建并登录</Button>
             <Button icon={<ReloadOutlined />} onClick={() => void refreshAccounts(true)}>刷新账户</Button>
           </Space>
         }
       >
+        <Space wrap className="codex-account-filters">
+          <Input.Search aria-label="搜索 Codex 账号" placeholder="搜索邮箱、团队、备注或标签" allowClear value={accountSearch} onChange={event => setAccountSearch(event.target.value)} />
+          <Select aria-label="Codex 套餐筛选" value={planFilter} onChange={setPlanFilter} options={[{ value: 'all', label: '全部套餐' }, ...[...new Set(accounts?.accounts.map(account => account.cockpit?.planType || quotaByAccountId[account.id]?.planType || account.planType || '未知'))].map(value => ({ value, label: value }))]} />
+        </Space>
         {accounts?.accounts.length ? (
           <List
             className="ai-account-list"
-            dataSource={accounts.accounts}
+            dataSource={accounts.accounts.filter(account => (planFilter === 'all' || (account.cockpit?.planType || quotaByAccountId[account.id]?.planType || account.planType || '未知') === planFilter) && [account.name, account.email, account.cockpit?.teamName, account.cockpit?.note, ...(account.cockpit?.tags || [])].join(' ').toLowerCase().includes(accountSearch.toLowerCase())).sort((a, b) => Number(b.active) - Number(a.active))}
             renderItem={(account) => {
               const quota = quotaByAccountId[account.id]
+              const snapshotOnly = Boolean(account.cockpit?.quota && !quota?.primary && !quota?.secondary)
               const additionalBuckets = quota?.limitBuckets?.filter((bucket) => bucket.id !== 'codex') || []
               return (
               <List.Item>
-                <Card className={`ai-account-card${account.active ? ' active' : ''}`} size="small">
+                <Card className={`ai-account-card ai-account-card-unified${account.active ? ' active' : ''}`} size="small">
                   <div className="ai-account-card-layout">
                     <div className="ai-account-card-identity">
                       <div className="ai-account-card-heading">
                       <Space wrap>
                         <Typography.Text strong>{account.name}</Typography.Text>
                         {account.active ? <Tag color="blue">当前</Tag> : null}
-                        <Tag color={account.available ? 'green' : 'default'}>{account.available ? '可用' : '待验证'}</Tag>
+                        <Tag color={account.available ? 'green' : 'default'}>{account.available ? '有登录凭据' : '待登录'}</Tag>
                       </Space>
                       </div>
                       <Typography.Text type="secondary">{account.email || account.accountIdSuffix || '未读取邮箱'}</Typography.Text>
                       <div className="ai-account-card-facts">
-                        <div><span>账户等级</span><strong>{quota?.planType || account.planType || '未知'}</strong></div>
+                        <div><span>账户等级</span><strong>{formatPlan(quota?.planType || account.cockpit?.planType || account.planType)}</strong></div>
                         <div><span>最近使用</span><strong>{formatDate(account.lastUsedAt)}</strong></div>
                         <div><span>续费日期</span><strong>{formatRenewalDate(account.subscriptionRenewsAt)}</strong></div>
                       </div>
+                      {account.cockpit ? <Space direction="vertical" size={4}>
+                        <Tag color="purple">Cockpit 导入</Tag>
+                        {account.cockpit.teamName ? <Typography.Text>团队：{account.cockpit.teamName}</Typography.Text> : null}
+                        {account.cockpit.subscriptionExpiresAt ? <Typography.Text>订阅到期（Cockpit）：{formatDate(account.cockpit.subscriptionExpiresAt)}</Typography.Text> : null}
+                        {account.cockpit.note ? <Typography.Text type="secondary">备注：{account.cockpit.note}</Typography.Text> : null}
+                        <Space wrap>{account.cockpit.tags.map(tag => <Tag key={tag}>{tag}</Tag>)}</Space>
+                      </Space> : null}
                       <Space wrap className="ai-account-card-actions">
                         <Button size="small" onClick={() => { setAccountDrawer(account); setRenewalDateInput(account.subscriptionRenewsAt) }}>详情</Button>
                         {!account.active ? <Button size="small" icon={<SwapOutlined />} loading={accountAction === `activate:${account.id}`} onClick={() => void activateAccount(account)}>切换</Button> : null}
                         <Button size="small" icon={<LinkOutlined />} loading={accountAction === `login:${account.id}`} onClick={() => void accountLogin(account)}>登录</Button>
                         <Button size="small" icon={<CheckCircleOutlined />} loading={accountAction === `verify:${account.id}`} onClick={() => void verifyAccount(account)}>验证</Button>
-                        <Popconfirm title="从 ForgeDesk 移除这个账户？" onConfirm={() => void removeAccount(account)}>
+                        {account.source !== 'local' ? <Popconfirm title="从 ForgeDesk 移除这个账户？" onConfirm={() => void removeAccount(account)}>
                           <Button size="small" danger icon={<DeleteOutlined />} loading={accountAction === `remove:${account.id}`}>移除</Button>
-                        </Popconfirm>
+                        </Popconfirm> : null}
                       </Space>
                     </div>
                     <div className="ai-account-quota">
                       <div className="ai-account-quota-heading">
                         <span>剩余配额</span>
                         <Space size={6} wrap>
-                          <Tag color={quotaSourceColor(quota)}>{quotaSourceLabel(quota)}</Tag>
-                          <Typography.Text type="secondary">{quota?.checkedAt ? `更新于 ${formatDate(quota.checkedAt)}` : '尚未读取'}</Typography.Text>
+                          <Tag color={snapshotOnly ? 'default' : quotaSourceColor(quota)}>{snapshotOnly ? 'Cockpit 快照 · 非实时' : quotaSourceLabel(quota)}</Tag>
+                          {!snapshotOnly ? <Typography.Text type="secondary">{quota?.checkedAt ? `更新于 ${formatDate(quota.checkedAt)}` : '尚未读取'}</Typography.Text> : null}
                         </Space>
                       </div>
-                      <AccountUsageSummary quota={quota} />
+                      {!snapshotOnly ? <AccountUsageSummary quota={quota} /> : null}
+                      {account.cockpit?.quota ? <div className="cockpit-imported-quota">
+                        <Space wrap><Tag>来源：Cockpit 快照</Tag><Typography.Text type="secondary">{account.cockpit.quota.checkedAt ? formatDate(account.cockpit.quota.checkedAt) : '同步时间未知'} · 仅供参考</Typography.Text></Space>
+                        {[['Hourly', account.cockpit.quota.hourlyRemaining, account.cockpit.quota.hourlyResetAt], ['Weekly', account.cockpit.quota.weeklyRemaining, account.cockpit.quota.weeklyResetAt]].map(([label, remaining, resetAt]) => <div key={String(label)}>
+                          <Typography.Text>{label} 剩余：{remaining === null ? '未提供' : `${remaining}%`}</Typography.Text>
+                          {typeof remaining === 'number' ? <Progress percent={remaining} size="small" strokeColor={quotaProgressColor(remaining)} /> : null}
+                          <Typography.Text type="secondary">重置：{resetAt ? formatDate(String(resetAt)) : '未提供'}</Typography.Text>
+                        </div>)}
+                        <Typography.Text>可用重置：{account.cockpit.quota.resetCredits ?? '未提供'}{account.cockpit.quota.resetCreditsExpireAt ? ` · 最近到期 ${formatDate(account.cockpit.quota.resetCreditsExpireAt)}` : ''}</Typography.Text>
+                      </div> : null}
                       {quota?.credits ? <Typography.Text type="secondary">Credits：{quota.credits.balance || (quota.credits.unlimited ? '无限' : quota.credits.hasCredits === false ? '无' : '未知')}{quota.credits.availableCount !== null ? ` · 可用重置 ${quota.credits.availableCount}` : ''}</Typography.Text> : null}
                       {quota?.usage?.summary ? <div className="ai-account-usage-stats"><span>累计 Token <strong>{formatTokenCount(quota.usage.summary.lifetimeTokens)}</strong></span><span>连续使用 <strong>{quota.usage.summary.currentStreakDays || '未知'} 天</strong></span></div> : null}
                       {additionalBuckets.length ? <div className="ai-account-additional-limits">{additionalBuckets.map((bucket) => <div key={bucket.id}><span>{bucket.name || bucket.id}</span>{bucket.primary ? <QuotaWindowProgress window={bucket.primary} compact /> : <Typography.Text type="secondary">官方未提供窗口</Typography.Text>}</div>)}</div> : null}
-                      <Typography.Text type="secondary">{quota?.message || '等待 Codex 返回真实配额数据。'}</Typography.Text>
+                      <Typography.Text type="secondary">{quota?.message || (snapshotOnly ? '点击“刷新账户”读取当前额度；以上为导入时的历史数据。' : '等待 Codex 返回真实配额数据。')}</Typography.Text>
                       {quota?.status === 'reauth-required' ? <Button size="small" icon={<LinkOutlined />} loading={accountAction === `login:${account.id}`} onClick={() => void accountLogin(account)}>重新登录并刷新</Button> : null}
                     </div>
-                    <Card size="small" className="ai-account-api-card" title="本机 Codex API 服务" extra={<Tag color={account.active && apiService?.running ? 'green' : 'default'}>{account.active && apiService?.running ? '运行中' : account.active ? '未运行' : '切换后管理'}</Tag>}>
-                      {account.active ? (
-                        <>
-                          <Descriptions size="small" column={1} bordered>
-                            <Descriptions.Item label="Base URL">{apiService?.baseUrl || '未设置'}</Descriptions.Item>
-                            <Descriptions.Item label="模型">{apiService?.model || '未设置'}</Descriptions.Item>
-                            <Descriptions.Item label="API Key"><Space><LockOutlined />{apiService?.apiKeyMasked || '未设置'}</Space></Descriptions.Item>
-                          </Descriptions>
-                          <Space wrap className="ai-api-actions">
-                            {apiService?.running ? <Button size="small" icon={<StopOutlined />} loading={apiAction === 'stop'} onClick={() => void apiActionRun('stop')}>停止</Button> : <Button size="small" type="primary" icon={<PlayCircleOutlined />} loading={apiAction === 'start'} onClick={() => void apiActionRun('start')}>启动并接入</Button>}
-                            <Button size="small" icon={<KeyOutlined />} loading={apiAction === 'rotate'} onClick={() => void apiActionRun('rotate')}>轮换 Key</Button>
-                            <Button size="small" icon={<CheckCircleOutlined />} loading={apiAction === 'health'} onClick={() => void healthCheck()}>健康检查</Button>
-                          </Space>
-                          <Typography.Text type="secondary">{apiService?.message || 'API Key 只显示脱敏结果，完整 Key 不会返回渲染层。'}</Typography.Text>
-                        </>
-                      ) : <Typography.Text type="secondary">本机 API 服务跟随当前账号运行。切换到此账户后即可启动、停止或检查服务。</Typography.Text>}
-                    </Card>
+
                   </div>
                 </Card>
               </List.Item>
@@ -651,7 +641,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWork
         )}
       </Card>
 
-      <Card title="Codex 项目" extra={bindings.length ? <Tag color="green">已绑定 {bindings.length}</Tag> : <Tag>未绑定</Tag>}>
+      {projectId ? <Card title="Codex 项目" extra={bindings.length ? <Tag color="green">已绑定 {bindings.length}</Tag> : <Tag>未绑定</Tag>}>
         {projectId ? (
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
             <Typography.Text>{projectPath || '当前项目目录未设置'}</Typography.Text>
@@ -661,7 +651,7 @@ export function AiToolsPanel({ projectId, projectPath, onOpenTerminal, codexWork
             </Button>
           </Space>
         ) : <Alert type="info" showIcon message="请先在项目模块选择一个项目" />}
-      </Card>
+      </Card> : null}
 
       <Drawer title={accountDrawer ? `账户详情 · ${accountDrawer.name}` : '账户详情'} width={420} open={Boolean(accountDrawer)} onClose={() => setAccountDrawer(null)}>
         {accountDrawer ? (

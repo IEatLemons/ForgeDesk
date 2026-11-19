@@ -1,8 +1,9 @@
+import { taskSummaryFilters, type TaskSummaryFilter } from '../../shared/project-directory.js'
 import type { AppNavigationKey } from './app-navigation'
 
 export type WorkspaceArea = 'workbench' | 'projects' | 'tasks' | 'ai' | 'resources' | 'toolbox' | 'settings'
 export type ProjectPage = 'overview' | 'goals' | 'tasks' | 'milestones' | 'versions' | 'repositories' | 'contributions' | 'environments' | 'deployments' | 'monitoring' | 'domains' | 'settings-general' | 'settings-repositories' | 'settings-runtime' | 'settings-integrations'
-type DetailLocation = { taskScope?: string }
+type DetailLocation = { taskScope?: string; taskSummaryFilter?: TaskSummaryFilter }
 export type AppRoute = DetailLocation & (
   | { scope: 'global'; area: WorkspaceArea; page: string; entityId?: string; projectFilter?: string; view?: string }
   | { scope: 'project'; projectId: string; page: ProjectPage; repositoryId?: string; entityId?: string; view?: string; serviceId?: string; environmentName?: string })
@@ -65,7 +66,7 @@ export function legacyRoute(key: AppNavigationKey, projectId?: string | null): A
   return key === 'projects' && projectId ? projectPage(projectId) : routes[key]
 }
 export type WorkspaceHistory = { entries: AppRoute[]; index: number; locations: Record<string, ProjectRoute> }
-export function createWorkspaceHistory(initial: AppRoute = globalPage('workbench')): WorkspaceHistory { return { entries: [initial], index: 0, locations: initial.scope === 'project' ? { [initial.projectId]: initial } : {} } }
+export function createWorkspaceHistory(initial: AppRoute = globalPage('projects')): WorkspaceHistory { return { entries: [initial], index: 0, locations: initial.scope === 'project' ? { [initial.projectId]: initial } : {} } }
 export function visitRoute(state: WorkspaceHistory, route: AppRoute): WorkspaceHistory {
   if (routeKey(state.entries[state.index]) === routeKey(route)) return state
   return { entries: [...state.entries.slice(0, state.index + 1), route], index: state.index + 1, locations: route.scope === 'project' ? { ...state.locations, [route.projectId]: route } : state.locations }
@@ -79,6 +80,7 @@ export function validRoute(value: unknown): value is AppRoute {
   if (!value || typeof value !== 'object') return false
   const route = value as AppRoute
   if (route.taskScope !== undefined && typeof route.taskScope !== 'string') return false
+  if (route.taskSummaryFilter !== undefined && !taskSummaryFilters.includes(route.taskSummaryFilter)) return false
   if (route.entityId !== undefined && typeof route.entityId !== 'string') return false
   if (route.view !== undefined && typeof route.view !== 'string') return false
   if (route.scope === 'project' && route.repositoryId !== undefined && typeof route.repositoryId !== 'string') return false

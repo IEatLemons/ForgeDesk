@@ -4,6 +4,7 @@ export type GraphCommitInput = {
 }
 
 export type GitGraphRow<TCommit extends GraphCommitInput = GraphCommitInput> = TCommit & {
+  graphHiddenParentHashes: string[]
   graphLanes: string[]
   graphLaneIndex: number
   graphParentLaneIndexes: number[]
@@ -17,8 +18,8 @@ export type GraphParentEdge = {
   toLaneIndex: number
 }
 
-export const gitGraphLaneWidth = 16
-export const gitGraphColumnMinWidth = 64
+export const gitGraphLaneWidth = 24
+export const gitGraphColumnMinWidth = 160
 export const workingTreeCommitHash = '__FORGEDESK_WORKING_TREE__'
 export const gitLogRefreshPreferenceStorageKey = 'forgedesk.gitLogRefreshPreferences'
 export const gitLogRefreshPreferenceChangedEvent = 'forgedesk:git-log-refresh-preferences-changed'
@@ -355,12 +356,18 @@ export function getGraphLaneColor(index: number): string {
   return `hsl(${hue} ${saturation}% ${lightness}%)`
 }
 
-export function getGitGraphLayout(rows: GitGraphRow[]): { columnWidth: number; laneOffset: number } {
+export type GitGraphLayout = { columnWidth: number; minimumWidth: number; maximumWidth: number; laneOffset: number; laneWidth: number; laneCount: number }
+export function getGitGraphLayout(rows: GitGraphRow[], options: { preferredWidth?: number | null; minimumWidth?: number } = {}): GitGraphLayout {
   const laneCount = rows.reduce((max, row) => Math.max(max, getGraphLaneCount(row)), 1)
-  const columnWidth = Math.max(gitGraphColumnMinWidth, laneCount * gitGraphLaneWidth + gitGraphColumnPadding)
-  // Every row shares this offset: centering each row separately would break passing lanes.
-  const laneOffset = (columnWidth - laneCount * gitGraphLaneWidth) / 2 + gitGraphLaneWidth / 2
-  return { columnWidth, laneOffset }
+  const minimumWidth = Math.max(gitGraphColumnMinWidth, laneCount * gitGraphLaneWidth + gitGraphColumnPadding)
+  const maximumWidth = Math.max(640, minimumWidth)
+  const preferred = Number.isFinite(options.preferredWidth) ? Math.min(maximumWidth, options.preferredWidth!) : 0
+  const floor = Number.isFinite(options.minimumWidth) ? options.minimumWidth! : 0
+  const columnWidth = Math.max(minimumWidth, preferred, floor)
+  const laneWidth = laneCount > 1 ? Math.min(40, Math.max(gitGraphLaneWidth, (columnWidth - 48) / (laneCount - 1))) : gitGraphLaneWidth
+  // Every row shares the same coordinates, including lanes passing through it.
+  const laneOffset = (columnWidth - (laneCount - 1) * laneWidth) / 2
+  return { columnWidth, minimumWidth, maximumWidth, laneOffset, laneWidth, laneCount }
 }
 
 export function getGitGraphColumnWidth(rows: GitGraphRow[]): number {
@@ -490,6 +497,7 @@ export function createGraphRows<TCommit extends GraphCommitInput>(commits: TComm
 
     rows.push({
       ...commit,
+      graphHiddenParentHashes: commit.parentHashes.filter(hash => !visibleCommitHashes.has(hash)),
       graphLanes,
       graphLaneIndex: laneIndex,
       graphParentLaneIndexes: uniqueSortedIndexes(parentLaneIndexes),

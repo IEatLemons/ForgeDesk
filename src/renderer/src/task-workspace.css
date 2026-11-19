@@ -14,6 +14,7 @@
 .tw-navigation-embedded .tw-nav-section{margin-top:10px;padding-top:8px}
 .tw-navigation-embedded .tw-nav-section-title{padding-bottom:5px}
 .tw-nav-section-toggle{width:100%}
+.tw-list-root-drop{padding:8px;border:1px dashed var(--tw-muted);border-radius:6px;color:var(--tw-muted);text-align:center}
 .tw-nav-section-toggle:focus-visible{outline:2px solid var(--tw-blue);outline-offset:3px;border-radius:4px}
 .tw-navigation-embedded .tw-nav-bottom{padding-top:12px}
 .workspace-content:has(>.tw-workspace){padding:0;scrollbar-gutter:auto}.workspace-content>.tw-workspace{margin:0;min-height:100%}

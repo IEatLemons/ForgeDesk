@@ -1,4 +1,6 @@
 import type { RailwayOAuthLoginInput } from '../shared/railway-oauth'
+import type { CockpitImportInput } from '../shared/cockpit-import'
+import type { ServiceHealthCheckScope } from '../shared/service-health'
 import { contextBridge, ipcRenderer } from 'electron'
 import { parseGitIpcPayload } from './git-ipc'
 import type { TaskCommand, TaskHistoryQuery } from '../shared/task-workspace'
@@ -8,6 +10,7 @@ function invokeGitIpc<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 contextBridge.exposeInMainWorld('forgeDesk', {
+  readProjectDirectorySummaries: (input: { projectIds: string[] }) => ipcRenderer.invoke('project:directory:summaries', input),
   readProjectOperations: (projectId: string) => ipcRenderer.invoke('project:operations:read', projectId),
   refreshProjectOperations: (input: { projectId: string; force?: boolean }) => ipcRenderer.invoke('project:operations:refresh', input),
   onProjectOperationsUpdated: (listener: (projectId: string) => void) => {
@@ -189,6 +192,7 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   bindProjectService: (input: { projectId: string; serviceId: string; repositoryId?: string }) => ipcRenderer.invoke('project:service:bind', input),
   syncProjectServices: (connectionId?: string, projectId?: string) => ipcRenderer.invoke('project:services:sync', connectionId, projectId),
   checkProjectServices: (projectId?: string) => ipcRenderer.invoke('service:monitor:check', projectId),
+  checkServiceHealth: (scope: ServiceHealthCheckScope) => ipcRenderer.invoke('service:monitor:check-scoped', scope),
   listLatestServiceMonitorChecks: (projectId: string) => ipcRenderer.invoke('service:monitor:latest', projectId),
   listServiceMonitorHistory: (projectId: string) => ipcRenderer.invoke('service:monitor:history', projectId),
   listAllServiceMonitorHistory: () => ipcRenderer.invoke('service:monitor:history:all'),
@@ -278,6 +282,15 @@ contextBridge.exposeInMainWorld('forgeDesk', {
   verifyCodexAccount: (accountId: string) => ipcRenderer.invoke('codex:accounts:verify', accountId),
   openCodexAccountLogin: (accountId: string) => ipcRenderer.invoke('codex:accounts:login-terminal', accountId),
   getCodexApiService: () => ipcRenderer.invoke('codex:api-service:get'),
+  onCodexConfigurationChanged: (listener: () => void) => {
+    const wrapped = (): void => listener()
+    ipcRenderer.on('codex:configuration:updated', wrapped)
+    return () => ipcRenderer.removeListener('codex:configuration:updated', wrapped)
+  },
+  previewCockpitImport: (sourcePath?: string) => ipcRenderer.invoke('codex:cockpit:preview', sourcePath),
+  importCockpitData: (input: CockpitImportInput) => ipcRenderer.invoke('codex:cockpit:import', input),
+  saveCodexApiServiceSettings: (input: { port: number; model: string }) => ipcRenderer.invoke('codex:api-service:save', input),
+  copyCodexApiKey: () => ipcRenderer.invoke('codex:api-service:copy-key'),
   startCodexApiService: (input?: { port?: number; model?: string }) => ipcRenderer.invoke('codex:api-service:start', input),
   stopCodexApiService: () => ipcRenderer.invoke('codex:api-service:stop'),
   rotateCodexApiKey: () => ipcRenderer.invoke('codex:api-service:rotate-key'),

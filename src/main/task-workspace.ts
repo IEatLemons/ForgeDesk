@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import type { TaskBase, TaskCommand, TaskCommandResult, TaskWorkspaceSnapshot, WorkspaceTask, TaskList, TaskField, TaskEvent, TaskHistoryQuery, TaskAttachment, TaskDashboard, TaskWidget, TaskTemplate, TaskProject } from '../shared/task-workspace.js'
-import { makeDefaultTaskDashboard, taskWidgetKinds } from '../shared/task-workspace.js'
+import { defaultTaskGroupTitle, makeDefaultTaskDashboard, taskWidgetKinds } from '../shared/task-workspace.js'
 import { nextTaskOccurrence, shiftTaskStart } from './task-recurrence.js'
+import { directoryTaskSummary, type DirectoryTaskSummary } from '../shared/project-directory.js'
 
 const kinds = ['task', 'list', 'folder', 'group', 'field', 'person', 'view', 'dashboard', 'template', 'attachment', 'event'] as const
 type Kind = typeof kinds[number]
@@ -56,6 +57,12 @@ export class TaskWorkspaceService {
     if (!this.ready()) throw new Error('任务工作区正在初始化，请稍后重试')
     return { tasks: this.all('task'), projects: this.listProjects(), lists: this.all('list'), folders: this.all('folder'), groups: this.all('group'), fields: this.all('field'), people: this.all('person'), views: this.all('view'), dashboards: this.all('dashboard'), templates: this.all('template'), attachments: this.all('attachment'), selfId: 'self' }
   }
+  readDirectorySummaries(projectIds: string[]): Record<string, DirectoryTaskSummary> {
+    const tasks = this.all<WorkspaceTask>('task')
+    const asOf = this.stamp()
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    return Object.fromEntries(projectIds.map(id => [id, directoryTaskSummary(tasks.filter(task => task.projectIds.includes(id)), this.ready(), asOf, timezone, tasks)]))
+  }
   detachProject(projectId: string): void {
     // Run inside the project deletion transaction, before notifying other windows.
     const rows = this.db.prepare(`
@@ -97,7 +104,7 @@ export class TaskWorkspaceService {
   }
   private defaults(kind: Kind): Record<string, unknown> {
     if (kind === 'task') return this.taskDefaults()
-    if (kind === 'list') return { title: '', folderId: null, order: this.all('list').length, pinned: false, archived: false, fieldIds: [], ownerId: 'self' }
+    if (kind === 'list') return { title: '', defaultGroupTitle: defaultTaskGroupTitle, folderId: null, order: this.all('list').length, pinned: false, archived: false, fieldIds: [], ownerId: 'self' }
     if (kind === 'folder') return { title: '', order: this.all('folder').length }
     if (kind === 'group') return { title: '', scope: 'personal', order: this.all('group').length }
     if (kind === 'field') return { title: '', type: 'text', options: [] }
@@ -124,7 +131,13 @@ export class TaskWorkspaceService {
   private validate(kind: Kind, record: JsonRecord, before: JsonRecord | null): void {
     if (['task', 'list', 'folder', 'group', 'field', 'dashboard'].includes(kind)) { if (typeof record.title !== 'string' || !record.title.trim()) throw new Error('请输入名称'); record.title = record.title.trim() }
     if (kind === 'person') { if (!record.name?.trim()) throw new Error('请输入姓名'); if (!/^#[0-9a-f]{6}$/i.test(record.color)) throw new Error('请选择有效颜色'); if (record.avatar && !/^data:image\/(png|jpeg|webp);base64,/.test(record.avatar)) throw new Error('头像必须是本地图片'); if (record.avatar.length > 2_000_000) throw new Error('头像过大') }
-    if (kind === 'list') { if (record.folderId) this.get('folder', record.folderId); for (const id of record.fieldIds) this.get('field', id); this.get('person', record.ownerId) }
+    if (kind === 'list') {
+      if (typeof record.defaultGroupTitle !== 'string' || !record.defaultGroupTitle.trim()) throw new Error('请输入默认分组名称')
+      record.defaultGroupTitle = record.defaultGroupTitle.trim()
+      if (record.folderId) this.get('folder', record.folderId)
+      for (const id of record.fieldIds) this.get('field', id)
+      this.get('person', record.ownerId)
+    }
     if (kind === 'group' && record.scope !== 'personal') this.get('list', record.scope)
     if (kind === 'field') {
       if (!['single', 'multi', 'person', 'number', 'date', 'text'].includes(record.type)) throw new Error('不支持的字段类型')
@@ -234,16 +247,16 @@ export class TaskWorkspaceService {
       const list = this.get<TaskList>('list', command.listId)
       const groups = this.all('group').filter(group => group.scope === list.id)
       const tasks = this.all<WorkspaceTask>('task').filter(task => task.links.some(link => link.listId === list.id))
-      const template: TaskTemplate = { ...this.base(), title: command.title.trim() || list.title, groups: groups.map(group => group.title), fieldIds: list.fieldIds,
+      const template: TaskTemplate = { ...this.base(), title: command.title.trim() || list.title, defaultGroupTitle: list.defaultGroupTitle, groups: groups.map(group => group.title), fieldIds: list.fieldIds,
         tasks: tasks.map(task => ({ title: task.title, description: task.description, priority: task.priority, values: task.values,
           groupTitle: groups.find(group => group.id === task.links.find(link => link.listId === list.id)?.groupId)?.title,
           parentIndex: tasks.findIndex(item => item.id === task.parentId), dependencyIndexes: task.dependencyIds.map(id => tasks.findIndex(item => item.id === id)).filter(index => index >= 0) })) }
       this.put('template', template); return { entityId: template.id }
     }
     if (command.type === 'apply-template') {
-      const template: Pick<TaskTemplate, 'groups' | 'tasks' | 'fieldIds'> = command.templateId === 'builtin-week' ? { groups: ['本周', '下周'], tasks: [{ title: '整理本周计划', description: '', priority: 'medium', values: {} }], fieldIds: [] } : command.templateId === 'builtin-project' ? { groups: ['待定', '计划', '执行'], tasks: [], fieldIds: [] } : this.get('template', command.templateId)
+      const template: Pick<TaskTemplate, 'groups' | 'tasks' | 'fieldIds' | 'defaultGroupTitle'> = command.templateId === 'builtin-week' ? { groups: ['本周', '下周'], tasks: [{ title: '整理本周计划', description: '', priority: 'medium', values: {} }], fieldIds: [] } : command.templateId === 'builtin-project' ? { groups: ['待定', '计划', '执行'], tasks: [], fieldIds: [] } : this.get('template', command.templateId)
       const fieldIds = template.fieldIds.filter(id => this.all('field').some(field => field.id === id))
-      const listId = this.save('list', { title: command.title, folderId: command.folderId ?? null, fieldIds })
+      const listId = this.save('list', { title: command.title, defaultGroupTitle: template.defaultGroupTitle ?? defaultTaskGroupTitle, folderId: command.folderId ?? null, fieldIds })
       const groupIds = template.groups.map(title => this.save('group', { title, scope: listId }))
       const taskIds = template.tasks.map(item => {
         const id = this.save('task', { title: item.title, description: item.description, priority: item.priority,

@@ -1,3 +1,4 @@
+import { message } from './app-message'
 import {
   Alert,
   Button,
@@ -17,8 +18,7 @@ import {
   Switch,
   Steps,
   Tag,
-  Typography,
-  message
+  Typography
 } from 'antd'
 import { CheckCircleOutlined, DeleteOutlined, DeploymentUnitOutlined, RobotOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { useEffect, useMemo, useState } from 'react'
@@ -36,6 +36,9 @@ import type {
   Repository
 } from './data'
 import { getErrorMessage } from './error-messages'
+import { ConfigurationNotice } from './configuration-notice'
+import { isDeploymentAiReady } from './configuration-guidance'
+import { openConfiguration } from './configuration-navigation'
 
 type Props = {
   project: Project
@@ -119,6 +122,7 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
   const [saving, setSaving] = useState(false)
   const [starting, setStarting] = useState(false)
   const [step, setStep] = useState(0)
+  const [aiError, setAiError] = useState('')
 
   const selectedRepository = repositories.find((item) => item.id === repositoryId) ?? repositories[0]
   const selectedTarget = targets.find((item) => item.id === targetId) ?? null
@@ -156,9 +160,6 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
   useEffect(() => {
     if (!open) return
     setRepositoryId((current) => repositories.some((item) => item.id === current) ? current : repositories[0]?.id ?? '')
-    setStep(0)
-    setSuggestion(null)
-    setPreparation(null)
     load().catch((error) => message.error(getErrorMessage(error)))
   }, [open, project.id, repositories.map(repository=>repository.id).join('|')])
 
@@ -171,7 +172,7 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
   }, [project.id, open])
 
   useEffect(() => {
-    if (!open || !repositoryId) return
+    if (!repositoryId) return
     const nextTarget = targets.find((target) => target.id === targetId && target.provider === provider)
     setServiceId(nextTarget?.serviceId ?? '')
     setConnectionId(nextTarget?.connectionId ?? '')
@@ -179,7 +180,21 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
     setConfig(nextTarget?.config ?? createEmptyConfig(repositoryId, provider, sourceMode))
     setSuggestion(null)
     setPreparation(null)
-  }, [open, repositoryId, provider, sourceMode, targetId])
+  }, [repositoryId, provider, sourceMode, targetId])
+
+  useEffect(() => {
+    if (!open || step !== 1) return
+    let disposed = false
+    const read = async () => {
+      try {
+        const settings = await window.forgeDesk.getAiSettings()
+        if (!disposed) setAiError(isDeploymentAiReady(settings) ? '' : '请先启用并配置 AI 设置')
+      } catch (error) { if (!disposed) setAiError(getErrorMessage(error)) }
+    }
+    void read()
+    window.addEventListener('configuration-updated', read)
+    return () => { disposed = true; window.removeEventListener('configuration-updated', read) }
+  }, [open, step])
 
   useEffect(() => {
     if (!open || !runningTask || !window.forgeDesk) return
@@ -214,13 +229,18 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
   async function useAi(): Promise<void> {
     if (!window.forgeDesk || !repositoryId) return
     setAnalyzing(true)
+    setAiError('')
     try {
+      if (!isDeploymentAiReady(await window.forgeDesk.getAiSettings())) {
+        setAiError('请先启用并配置 AI 设置')
+        return
+      }
       const result = await window.forgeDesk.suggestProjectDeploymentConfig(repositoryId, { provider, sourceMode })
       setSuggestion(result)
       setConfig(result.config)
       message.success('AI 已生成发布配置草稿，请检查后继续')
     } catch (error) {
-      message.error(getErrorMessage(error))
+      setAiError(getErrorMessage(error))
     } finally {
       setAnalyzing(false)
     }
@@ -415,6 +435,7 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
             <Typography.Title level={4}>选择发布方式</Typography.Title>
             <Typography.Text type="secondary">先选择平台或服务器类型，后面的字段会根据方式自动变化。</Typography.Text>
           </div>
+          {!repositories.length ? <ConfigurationNotice error="当前项目尚未配置仓库，请先配置仓库" projectId={project.id} /> : null}
           {targets.length > 0 ? (
             <Card size="small" title="快速发布" extra={<Tag color="blue">使用已保存配置</Tag>}>
               <Space direction="vertical" size={10} style={{ width: '100%' }}>
@@ -469,11 +490,7 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
                   <Space wrap>
                     <Typography.Text strong>项目平台连接</Typography.Text>
                     <Button size="small" type="link" onClick={() => {
-                      if (onConfigureConnection) onConfigureConnection()
-                      else {
-                        window.dispatchEvent(new CustomEvent('project-platform-configure', { detail: project.id }))
-                        window.requestAnimationFrame(() => document.getElementById('project-service-settings')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
-                      }
+                      openConfiguration('services', { projectId: project.id })
                     }}>配置 Token / 连接</Button>
                   </Space>
                   <Select
@@ -502,7 +519,7 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
           ) : null}
           {(provider === 'vercel' || provider === 'railway') ? (
             <>
-              <Typography.Text type="secondary">目标层级：项目平台连接 → 已同步服务 → 环境。请在本页“平台连接与凭据”中配置 Token 并同步服务。</Typography.Text>
+              <Space wrap><Typography.Text type="secondary">目标层级：项目平台连接 → 已同步服务 → 环境。</Typography.Text><Button type="link" onClick={() => openConfiguration('services', { projectId: project.id })}>管理平台连接与服务</Button></Space>
             </>
           ) : null}
           {serviceId && environments.length > 0 ? (
@@ -518,6 +535,7 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
       {step === 1 ? (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Alert type="info" showIcon message="AI 只会生成配置草稿" description="ForgeDesk 会读取构建相关文件和有限源码片段，自动过滤密钥、Token、证书和环境变量值。AI 不会自动保存或发布。" />
+          {aiError ? <ConfigurationNotice error={aiError} projectId={project.id} /> : null}
           <Button type="primary" icon={<RobotOutlined />} loading={analyzing} onClick={useAi}>扫描项目并填写配置</Button>
           {suggestion ? (
             <>
@@ -530,7 +548,7 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
               <Button type="primary" onClick={() => setStep(2)}>查看并修改配置</Button>
             </>
           ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="点击上面的按钮，让 AI 根据项目资料生成发布配置" />}
-          <Button onClick={() => setStep(0)}>返回选择目标</Button>
+          <Space wrap><Button onClick={() => setStep(0)}>返回选择目标</Button><Button onClick={() => setStep(2)}>手动配置（无需 AI）</Button></Space>
         </Space>
       ) : null}
       {step === 2 ? (
@@ -564,7 +582,7 @@ export function ProjectDeploymentPanel({ project, repositories, open, configurat
             <Button icon={<SaveOutlined />} loading={saving} onClick={saveTarget}>保存目标</Button>
             {!configurationOnly ? <Button type="primary" icon={<ThunderboltOutlined />} loading={starting} onClick={startDeployment}>确认并发布</Button> : null}
           </Space>
-          {currentIssues.length > 0 ? <Alert type="error" showIcon message="预检未通过" description={currentIssues.join('；')} /> : null}
+          {currentIssues.map((issue, index) => <ConfigurationNotice key={index} title="预检未通过" error={issue} projectId={project.id} repositoryId={repositoryId} />)}
           {currentWarnings.length > 0 ? <Alert type="warning" showIcon message="发布前提醒" description={currentWarnings.join('；')} /> : null}
           {preparation ? <Descriptions size="small" bordered column={2}><Descriptions.Item label="执行预览" span={2}>{preparation.previewCommand}</Descriptions.Item><Descriptions.Item label="目标能力">{preparation.capabilities.configFields.join('、')}</Descriptions.Item><Descriptions.Item label="平台">{preparation.capabilities.label}</Descriptions.Item></Descriptions> : null}
         </Space>

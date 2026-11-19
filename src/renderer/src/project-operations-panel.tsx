@@ -10,6 +10,8 @@ import { useProjectOperations } from './use-project-operations'
 import { projectPage, type AppRoute, type ProjectPage } from './workspace-navigation'
 import { getErrorMessage } from './error-messages'
 import { OperationsHealthHistory } from './operations-health-history'
+import { openConfiguration } from './configuration-navigation'
+import { ServiceHealthControls } from './service-health-controls'
 import './project-operations.css'
 
 export type OperationsView = 'summary' | 'environments' | 'deployments' | 'monitoring' | 'domains'
@@ -39,7 +41,7 @@ function Freshness({ source }: { source: OperationsSourceState }): JSX.Element {
 }
 
 export function ProjectOperationsPanel({ projectId, view, serviceId, environmentName, onNavigate, onInspect, onNewDeployment }: Props): JSX.Element {
-  const { data, loading, refreshing, error, refresh } = useProjectOperations(projectId)
+  const { data, loading, refreshing, error, refresh, reload } = useProjectOperations(projectId)
   const [serviceFilter, setServiceFilter] = useState(serviceId || '')
   const [environmentFilter, setEnvironmentFilter] = useState(environmentName || '')
   const [statusFilter, setStatusFilter] = useState('')
@@ -98,7 +100,7 @@ export function ProjectOperationsPanel({ projectId, view, serviceId, environment
     return <Card key={service.id} size="small" className="operations-service-card" title={<Space wrap><Tag>{service.provider === 'vercel' ? '▲ Vercel' : 'Railway'}</Tag><span>{service.externalProjectAlias || service.name}</span>{!service.enabled ? <Tag>已停用</Tag> : null}</Space>} extra={<Button type="link" onClick={() => navigate('environments', service)}>服务详情</Button>}>
       <div className="operations-production">
         <div><Typography.Text type="secondary">当前生产版本</Typography.Text><div className="operations-production-state">{production ? <><DeploymentState state={production.state} />{state.sources.production.error || isOperationsStale(state.sources.production.updatedAt) ? <Tag color="warning">上次确认</Tag> : null}</> : <Tag>未确认</Tag>}{production?.commitSha ? <Typography.Text code copyable>{production.commitSha.slice(0, 7)}</Typography.Text> : null}</div><Freshness source={state.sources.production} /></div>
-        <div className="operations-production-address"><SiteLink url={productionUrl} /><Typography.Text type="secondary">{service.domains.some(domain => domain.enabled) ? `域名健康：${healthy} / ${service.domains.filter(domain => domain.enabled).length} 在线` : '尚未配置域名健康检查'}</Typography.Text></div>
+        <div className="operations-production-address"><SiteLink url={productionUrl} /><Typography.Text type="secondary">{service.domains.some(domain => domain.enabled) ? `域名健康：${healthy} / ${service.domains.filter(domain => domain.enabled).length} 在线` : '尚未配置域名健康检查'}</Typography.Text>{!service.domains.some(domain => domain.enabled) ? <Button type="link" size="small" onClick={() => openConfiguration('services', { projectId })}>配置健康检查</Button> : null}</div>
         <Space wrap><Button onClick={() => navigate('deployments', service, 'production')}>部署详情</Button><Button icon={<FileTextOutlined />} onClick={() => navigate('monitoring', service, 'production')}>日志</Button></Space>
       </div>
       <div className="operations-latest"><Typography.Text type="secondary">最近一次部署</Typography.Text>{latest ? <><Tag>{latest.target}</Tag><DeploymentState state={latest.state} /><Typography.Text code>{latest.commitSha.slice(0, 7) || '无提交信息'}</Typography.Text><Typography.Text type="secondary">{time(latest.createdAt)}</Typography.Text>{production && production.id !== latest.id ? <Typography.Text type="secondary">与当前生产版本不同</Typography.Text> : null}</> : cachedEnvironment ? <><Tag>production · 环境缓存</Tag><DeploymentState state={cachedEnvironment.deploymentStatus} /><Typography.Text code>{cachedEnvironment.latestCommit.slice(0, 7) || '无提交信息'}</Typography.Text></> : <Typography.Text type="secondary">暂无部署记录</Typography.Text>}<Freshness source={state.sources.deployments} /></div>
@@ -129,7 +131,7 @@ export function ProjectOperationsPanel({ projectId, view, serviceId, environment
   return <section className={`project-operations operations-${view}`} aria-label={titles[view]}>
     <div className="operations-heading"><div><Typography.Title level={view === 'summary' ? 4 : 2}>{titles[view]}</Typography.Title><Typography.Text type="secondary">{view === 'summary' ? '生产指向、最近部署与域名健康' : '平台部署与服务可用性分别展示，状态以最近同步时间为准'}</Typography.Text></div><Space wrap><Button onClick={configure}>运行配置</Button>{onNewDeployment ? <Button type="primary" onClick={onNewDeployment}>新建部署</Button> : null}<Button icon={<ReloadOutlined />} loading={refreshing} onClick={() => void refresh(true)}>立即刷新</Button></Space></div>
     {error ? <Alert type="error" showIcon message="运行数据读取失败" description={error} action={<Button onClick={() => void refresh(true)}>重试</Button>} /> : null}
-    <Spin spinning={loading && !data}>
+    <Spin wrapperClassName="operations-content" spinning={loading && !data}>
       {!services.length && !loading ? <Card size="small"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未绑定平台服务"><Button onClick={configure}>绑定 Vercel 或其他服务</Button></Empty></Card> : null}
       {filters}
       {view === 'summary' || view === 'deployments' ? <div className="operations-service-list">{visibleServices.map(serviceSummary)}</div> : null}
@@ -150,7 +152,7 @@ export function ProjectOperationsPanel({ projectId, view, serviceId, environment
         </> }))} />
       </> : null}
       {view === 'deployments' ? <Card title="近期部署历史"><Table rowKey={row => `${row.service.id}:${row.id}`} size="small" dataSource={deployments} columns={deploymentColumns} scroll={{ x: 960 }} pagination={{ pageSize: 10, showSizeChanger: false }} locale={{ emptyText: '没有符合条件的部署记录' }} />{visibleServices.map(service => <div key={service.id} className="operations-section-heading"><Typography.Text type="secondary">{service.name} · 部署历史同步</Typography.Text><Freshness source={stateFor(service).sources.deployments} /></div>)}</Card> : null}
-      {view === 'domains' || view === 'monitoring' ? <Card title="域名健康检查" extra={view === 'monitoring' ? <Button onClick={() => navigate('domains')}>管理域名</Button> : null}><Typography.Paragraph type="secondary">由现有后台巡检更新；部署就绪与域名在线分别统计。</Typography.Paragraph>{view === 'domains' ? visibleServices.map(service => <div key={service.id}>{sourceErrors(service)}<div className="operations-section-heading"><Typography.Text type="secondary">{service.name} · 域名同步</Typography.Text><Freshness source={stateFor(service).sources.domains} /></div></div>) : null}<Table rowKey={domain => `${domain.service.id}:${domain.id}`} columns={domainColumns} dataSource={domains} size="small" pagination={false} scroll={{ x: 900 }} locale={{ emptyText: '尚无平台域名，可在服务详情中绑定' }} /></Card> : null}
+      {view === 'domains' || view === 'monitoring' ? <Card className="operations-health-card" title="域名健康检查" extra={view === 'monitoring' ? <Button onClick={() => navigate('domains')}>管理域名</Button> : null}><ServiceHealthControls services={visibleServices} scope={{ projectId, serviceId: serviceFilter || undefined, environmentName: environmentFilter || undefined }} onChecked={reload} onConfigure={configure} />{view === 'domains' ? visibleServices.map(service => <div key={service.id}>{sourceErrors(service)}<div className="operations-section-heading"><Typography.Text type="secondary">{service.name} · 域名同步</Typography.Text><Freshness source={stateFor(service).sources.domains} /></div></div>) : null}<Table rowKey={domain => `${domain.service.id}:${domain.id}`} columns={domainColumns} dataSource={domains} size="small" pagination={false} scroll={{ x: 900 }} locale={{ emptyText: '尚无平台域名，可在服务详情中绑定' }} /></Card> : null}
       {view === 'monitoring' ? <OperationsHealthHistory projectId={projectId} domainIds={domains.filter(domain => domain.enabled).map(domain => domain.id)} /> : null}
     </Spin>
     {view !== 'summary' ? <div className="operations-other-platforms"><Typography.Text type="secondary">添加运行平台</Typography.Text>{!services.some(service => service.provider === 'vercel') ? <Button size="small" onClick={configure}>绑定 Vercel</Button> : null}{!services.some(service => service.provider === 'railway') ? <Button size="small" onClick={configure}>绑定 Railway</Button> : null}</div> : null}

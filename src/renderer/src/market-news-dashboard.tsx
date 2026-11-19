@@ -1,3 +1,4 @@
+import { message } from './app-message'
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -10,7 +11,7 @@ import {
   StockOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
-import { Alert, Button, Card, Empty, Segmented, Select, Space, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Empty, Segmented, Select, Space, Tag, Tooltip, Typography } from 'antd'
 import ReactECharts from 'echarts-for-react'
 import { useEffect, useMemo, useState } from 'react'
 

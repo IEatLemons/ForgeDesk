@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Alert, Button, Card, Checkbox, Input, List, Modal, Select, Space, Spin, Tag, Typography } from 'antd'
 import { LinkOutlined, PlusOutlined } from '@ant-design/icons'
 import { taskOverdue } from '../../shared/task-workspace'
+import { summaryTaskSelection, taskSummaryLabels, type TaskSummaryFilter } from '../../shared/project-directory'
 import { TaskPersonBadge, taskDateLabel } from './task-workspace-controls'
 import { TaskWorkspaceDetail, toggleWorkspaceTask } from './task-workspace-detail'
 import { useTaskWorkspace } from './use-task-workspace'
@@ -11,9 +12,11 @@ type Props = {
   entityId?: string
   onSelect: (id?: string) => void
   onOpenProject: (id: string) => void
+  summaryFilter?: TaskSummaryFilter
+  onSummaryFilterChange: (filter?: TaskSummaryFilter) => void
 }
 
-export function ProjectTasksPanel({ projectId, entityId, onSelect, onOpenProject }: Props) {
+export function ProjectTasksPanel({ projectId, entityId, onSelect, onOpenProject, summaryFilter, onSummaryFilterChange }: Props) {
   const { snapshot, error, loading, refresh, send } = useTaskWorkspace()
   const [query, setQuery] = useState('')
   const [title, setTitle] = useState<string | null>(null)
@@ -25,7 +28,7 @@ export function ProjectTasksPanel({ projectId, entityId, onSelect, onOpenProject
     : loading ? <Spin /> : null
 
   const linked = snapshot.tasks.filter(task => task.projectIds.includes(projectId))
-  const visible = linked.filter(task => task.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+  const visible = summaryTaskSelection(linked, summaryFilter, new Date(), snapshot.tasks).filter(task => task.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
   const candidates = snapshot.tasks.filter(task => !task.projectIds.includes(projectId))
   const selected = snapshot.tasks.find(task => task.id === entityId) ?? null
 
@@ -65,7 +68,7 @@ export function ProjectTasksPanel({ projectId, entityId, onSelect, onOpenProject
     }
   }
 
-  return <section>
+  return <section aria-label="项目任务列表">
     <div className="workspace-page-heading">
       <Typography.Title level={2}>关联任务</Typography.Title>
       <Space wrap>
@@ -74,6 +77,7 @@ export function ProjectTasksPanel({ projectId, entityId, onSelect, onOpenProject
       </Space>
     </div>
     {error ? <Alert type="error" message={error} /> : null}
+    {summaryFilter ? <Space><Tag>{taskSummaryLabels[summaryFilter]}</Tag><Button type="link" onClick={() => onSummaryFilterChange()}>全部关联任务</Button></Space> : null}
     <Card>
       <Input.Search aria-label="搜索项目任务" placeholder="搜索任务" allowClear value={query}
         onChange={event => setQuery(event.target.value)} style={{ width: 280, maxWidth: '100%' }} />

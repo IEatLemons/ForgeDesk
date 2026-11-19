@@ -1,3 +1,4 @@
+import { message } from './app-message'
 import {
   Alert,
   Button,
@@ -17,8 +18,7 @@ import {
   Spin,
   Tabs,
   Tag,
-  Typography,
-  message
+  Typography
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { DataTable as Table } from './data-table'

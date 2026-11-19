@@ -14,6 +14,15 @@ describe('production workspace navigation', () => {
     assert.ok(validRoute({ ...projectPage('p', 'tasks'), entityId: 'task-1' }))
     for (const page of ['password','rsa','excel','env-diff','cli-environment','docs','news','system-monitor','system-info']) assert.ok(validRoute(globalPage('toolbox',page)))
   })
+  it('defaults to projects and preserves overview and task links',()=>{
+    assert.deepEqual(createWorkspaceHistory().entries,[globalPage('projects')])
+    assert.equal(globalPage('workbench').area,'workbench')
+    assert.deepEqual(legacyRoute('overview'),globalPage('workbench'))
+    const old={scope:'global' as const,area:'workbench' as const,page:'home'}
+    assert.deepEqual(visitRoute(createWorkspaceHistory(),old).entries,[globalPage('projects'),old])
+    assert.ok(validRoute({...projectPage('p','tasks'),taskSummaryFilter:'urgent'}))
+    assert.equal(validRoute({...projectPage('p','tasks'),taskSummaryFilter:'unknown'}),false)
+  })
   it('preserves object positioning, per-project locations, back/forward and truncates forward history', () => {
     let history = createWorkspaceHistory()
     const task = {...projectPage('p','repositories'), entityId:'repository-1',view:'history'}

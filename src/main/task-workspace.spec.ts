@@ -22,6 +22,24 @@ function fixture(now = '2026-11-10T08:00:00Z') {
   return { db, service, command, create, task, update, setTime: (value: string) => { time = new Date(value) }, changes: () => changes }
 }
 describe('independent task workspace', () => {
+  it('summarizes linked tasks and dependencies across projects for directory cards', () => {
+    const { db, service, create, update } = fixture()
+    db.exec("CREATE TABLE projects (id TEXT PRIMARY KEY, archived_at TEXT); INSERT INTO projects (id) VALUES ('p1'), ('p2');")
+    const dependency = create('前置任务', { projectIds: ['p2'] })
+    create('阻塞任务', { projectIds: ['p1'], dependencyIds: [dependency], priority: 'high', dueDate: '2026-11-09' })
+    const first = service.readDirectorySummaries(['p1', 'p2'])
+    assert.equal(first.p1.counts?.todo, 1)
+    assert.equal(first.p1.counts?.blocked, 1)
+    assert.equal(first.p1.counts?.urgent, 1)
+    assert.equal(first.p1.counts?.overdue, 1)
+    assert.equal(first.p2.counts?.todo, 1)
+    update(dependency, { done: true })
+    const refreshed = service.readDirectorySummaries(['p1', 'p2'])
+    assert.equal(refreshed.p1.counts?.blocked, 0)
+    assert.equal(refreshed.p2.counts?.done, 1)
+    db.close()
+  })
+
   it('shares tasks across projects and removes only the deleted project association', () => {
     const { db, service, create, command, task } = fixture()
     db.exec("CREATE TABLE projects (id TEXT PRIMARY KEY, archived_at TEXT); INSERT INTO projects (id) VALUES ('p1'), ('p2');")
@@ -138,15 +156,23 @@ describe('independent task workspace', () => {
     assert.equal(service.snapshot().tasks.length, 1)
     db.close()
   })
-  it('preserves groups, hierarchy, dependencies and field reuse in local templates', () => {
+  it('preserves default group names, hierarchy, dependencies and field reuse in local templates', () => {
     const { db, service, command, create, update } = fixture()
     const list = command({ type: 'save-list', input: { title: '模板源' } })
+    db.prepare("UPDATE task_workspace_list SET data_json=json_remove(data_json,'$.defaultGroupTitle') WHERE id=?").run(list)
+    const inbox = create('默认分组任务', { links: [{ listId: list, groupId: null, order: 0 }] })
+    command({ type: 'save-list', input: { id: list, defaultGroupTitle: '  待安排  ' }, expectedVersion: 1 })
+    assert.equal(service.snapshot().lists.find(item => item.id === list)?.defaultGroupTitle, '待安排')
+    assert.equal(service.snapshot().tasks.find(item => item.id === inbox)?.links[0].groupId, null)
+    assert.throws(() => command({ type: 'save-list', input: { id: list, defaultGroupTitle: ' ' }, expectedVersion: 2 }), /默认分组名称/)
     const group = command({ type: 'save-group', input: { title: '阶段一', scope: list } })
     const links = [{ listId: list, groupId: group, order: 0 }]
     const parent = create('模板父任务', { links }), child = create('模板子任务', { links, parentId: parent, dependencyIds: [parent] })
     const template = command({ type: 'save-template', listId: list, title: '测试模板' })
     const nextList = command({ type: 'apply-template', templateId: template, title: '新的清单' })
+    assert.equal(service.snapshot().lists.find(item => item.id === nextList)?.defaultGroupTitle, '待安排')
     const copies = service.snapshot().tasks.filter(task => task.links.some(link => link.listId === nextList))
+    assert.equal(copies.find(task => task.title === '默认分组任务')?.links[0].groupId, null)
     const copiedParent = copies.find(task => task.title === '模板父任务')!, copiedChild = copies.find(task => task.title === '模板子任务')!
     assert.equal(copiedChild.parentId, copiedParent.id); assert.deepEqual(copiedChild.dependencyIds, [copiedParent.id])
     assert.equal(copiedParent.source, 'template'); assert.notEqual(copiedParent.links[0].groupId, group)

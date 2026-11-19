@@ -1,5 +1,6 @@
+import { message } from './app-message'
 import { DeleteOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Alert, Button, Card, Checkbox, Empty, Input, List, Popconfirm, Select, Space, Spin, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Empty, Input, List, Popconfirm, Select, Space, Spin, Tag, Typography } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { AiProjectResourceLink, CodexProjectMonitorSnapshot, Project } from './data'
 import { getCodexBindingRecommendations } from './codex-project-binding-recommendation'

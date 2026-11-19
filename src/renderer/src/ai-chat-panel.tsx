@@ -1,3 +1,4 @@
+import { message } from './app-message'
 import {
   BranchesOutlined,
   CheckCircleOutlined,
@@ -14,7 +15,7 @@ import {
   SettingOutlined,
   StopOutlined
 } from '@ant-design/icons'
-import { Badge, Button, Dropdown, Empty, Input, Layout, Modal, Popconfirm, Select, Space, Spin, Tag, Tooltip, Typography, message } from 'antd'
+import { Badge, Button, Dropdown, Empty, Input, Layout, Modal, Popconfirm, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { AiRuntimeStatus, CodexTaskRecord } from './data'
 import { getErrorMessage } from './error-messages'

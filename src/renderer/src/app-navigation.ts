@@ -68,7 +68,7 @@ export function getNavigationItemsForMode(mode: AppMode): AppNavigationItem[] {
     ))
   }
 
-  return APP_NAVIGATION_ITEMS
+  return APP_NAVIGATION_ITEMS.filter(item => item.key !== 'overview')
 }
 
 export function getNavigationSectionsForMode(mode: AppMode): AppNavigationSection[] {

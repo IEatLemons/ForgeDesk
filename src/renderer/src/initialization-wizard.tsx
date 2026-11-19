@@ -1,3 +1,4 @@
+import { message } from './app-message'
 import {
   Alert,
   Button,
@@ -11,8 +12,7 @@ import {
   Spin,
   Steps,
   Tag,
-  Typography,
-  message
+  Typography
 } from 'antd'
 import {
   CheckCircleOutlined,

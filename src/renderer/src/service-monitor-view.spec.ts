@@ -12,6 +12,7 @@ import {
   getProjectServiceStats
 } from './service-monitor-view.js'
 import type { ProjectService, ServiceConnection } from './data.js'
+import { getHealthCheckSummary } from './service-health-view.js'
 
 const service: ProjectService = {
   id: 'service-1',
@@ -101,6 +102,13 @@ const service: ProjectService = {
 }
 
 describe('service monitor view helpers', () => {
+  it('summarizes check coverage and the latest valid check time within the selected environment', () => {
+    const preview = { ...service.domains[0], id: 'preview', environmentName: 'preview', lastCheckedAt: 'invalid' }
+    const next = { ...service, domains: [...service.domains, preview] }
+    assert.deepEqual(getHealthCheckSummary([next]), { checkableCount: 2, checkedCount: 1, lastCheckedAt: service.domains[0].lastCheckedAt })
+    assert.deepEqual(getHealthCheckSummary([next], 'preview'), { checkableCount: 1, checkedCount: 0, lastCheckedAt: '' })
+    assert.deepEqual(getHealthCheckSummary([{ ...next, enabled: false }]), { checkableCount: 0, checkedCount: 0, lastCheckedAt: service.domains[0].lastCheckedAt })
+  })
   it('summarizes only monitorable domains for service detail views', () => {
     assert.deepEqual(getMonitorableServiceDomains(service).map((domain) => domain.domain), ['www.cardpie.pro'])
     assert.deepEqual(getProjectServiceStats([service]), {

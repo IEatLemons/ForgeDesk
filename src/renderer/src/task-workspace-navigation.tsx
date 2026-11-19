@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { Button, Dropdown, Empty, Input, Modal, Select, Space, Spin } from 'antd'
+import { Button, Dropdown, Input, Modal, Select, Space, Spin } from 'antd'
 import { BookOutlined, CheckSquareOutlined, ClockCircleOutlined, DownOutlined, FolderOutlined, MoreOutlined, PlusOutlined, PushpinFilled, StarOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
 import type { TaskFolder, TaskList } from '../../shared/task-workspace'
 import { useTaskWorkspace } from './use-task-workspace'
@@ -30,7 +30,7 @@ export function TaskWorkspaceNavigation({ scope = 'mine', onChange, embedded = f
     void send({ type: 'save-list', input: { id: listId, folderId, order: (previous + next) / 2 }, expectedVersion: record.rowVersion })
     setDrag(null)
   }
-  const listNode = (list: TaskList) => <div className="tw-nav-list" key={list.id} draggable onDragStart={event => { event.stopPropagation(); setDrag({ kind: 'list', id: list.id }) }} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); event.stopPropagation(); if (drag?.kind === 'list') dropList(drag.id, list.folderId, list) }}>
+  const listNode = (list: TaskList) => <div className="tw-nav-list" key={list.id} draggable onDragStart={event => { event.stopPropagation(); setDrag({ kind: 'list', id: list.id }) }} onDragEnd={() => setDrag(null)} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); event.stopPropagation(); if (drag?.kind === 'list') dropList(drag.id, list.folderId, list) }}>
     <button className={`tw-nav-item ${scope === list.id ? 'is-active' : ''}`} onClick={() => onChange(list.id)}><CheckSquareOutlined /><span>{list.title}</span>{list.pinned ? <PushpinFilled className="tw-pin" /> : null}</button>
     <Dropdown menu={{ items: [{ key: 'pin', label: list.pinned ? '取消置顶' : '置顶' }, { key: 'rename', label: '重命名' }, { key: 'template', label: '保存为模板' }, { key: 'archive', label: list.archived ? '恢复清单' : '归档' }, { key: 'delete', label: '删除', danger: true }], onClick: ({ key }) => {
       if (key === 'rename') open('list', list)
@@ -55,15 +55,35 @@ export function TaskWorkspaceNavigation({ scope = 'mine', onChange, embedded = f
         {['all', 'created', 'assigned', 'done'].map(id => nav(id))}
       </div>
     </div>
-    <div className="tw-nav-section"><div className="tw-nav-section-title"><button className="tw-plain" onClick={() => onChange('lists')}><CheckSquareOutlined /> 任务清单</button><Dropdown trigger={['click']} menu={{ items: [{ key: 'list', label: '＋ 空白清单' }, { key: 'template', label: '使用模板' }, { key: 'folder', label: '清单分组' }], onClick: ({ key }) => { open(key === 'folder' ? 'folder' : 'list'); if (key === 'template') setTemplate('builtin-week') } }}><Button type="text" size="small" aria-label="新建任务清单" icon={<PlusOutlined />} /></Dropdown></div>
+    <div className="tw-nav-section">
+      <div className="tw-nav-section-title">
+        <button className="tw-plain" onClick={() => onChange('lists')}><CheckSquareOutlined /> 任务清单</button>
+        <Dropdown trigger={['click']} menu={{
+          items: [
+            { key: 'list', label: '新建清单' },
+            { key: 'template', label: '使用模板' },
+            { key: 'folder', label: '新建清单分组' }
+          ],
+          onClick: ({ key }) => {
+            open(key === 'folder' ? 'folder' : 'list')
+            if (key === 'template') setTemplate('builtin-week')
+          }
+        }}>
+          <Button type="text" size="small" aria-label="新建清单或分组" icon={<PlusOutlined />} />
+        </Dropdown>
+      </div>
       {loading && !snapshot ? <Spin size="small" /> : null}
       {activeLists.filter(list => list.pinned).sort((a, b) => a.order - b.order).map(listNode)}
       {folders.map(folder => <div className="tw-folder" key={folder.id} draggable onDragStart={() => setDrag({ kind: 'folder', id: folder.id })} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (drag?.kind === 'list') dropList(drag.id, folder.id); else if (drag?.kind === 'folder') { const moved = folders.find(item => item.id === drag.id)!; void send({ type: 'save-folder', input: { id: moved.id, order: folder.order - 0.5 }, expectedVersion: moved.rowVersion }); setDrag(null) } }}>
         <div className="tw-folder-heading"><button className="tw-plain" onClick={() => setCollapsed(values => values.includes(folder.id) ? values.filter(id => id !== folder.id) : [...values, folder.id])}><DownOutlined rotate={collapsed.includes(folder.id) ? -90 : 0} /> {folder.title}</button><Dropdown menu={{ items: [{ key: 'add', label: '新建清单' }, { key: 'rename', label: '重命名分组' }, { key: 'delete', label: '删除分组', danger: true }], onClick: ({ key }) => key === 'add' ? open('list', undefined, folder.id) : key === 'rename' ? open('folder', folder) : void send({ type: 'delete', kind: 'folder', id: folder.id, expectedVersion: folder.rowVersion }) }}><Button type="text" size="small" aria-label={`${folder.title}的更多操作`} icon={<MoreOutlined />} /></Dropdown></div>
         {!collapsed.includes(folder.id) ? activeLists.filter(list => list.folderId === folder.id && !list.pinned).sort((a, b) => a.order - b.order).map(listNode) : null}
       </div>)}
-      <div onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (drag?.kind === 'list') dropList(drag.id, null) }}>{activeLists.filter(list => !list.folderId && !list.pinned).sort((a, b) => a.order - b.order).map(listNode)}<button className="tw-nav-item tw-muted" onClick={() => open('list')}><PlusOutlined /> 新建清单</button></div>
-      <button className="tw-nav-item tw-muted" onClick={() => open('folder')}><PlusOutlined /> 新建分组</button>
+      <div onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (drag?.kind === 'list') dropList(drag.id, null) }}>
+        {activeLists.filter(list => !list.folderId && !list.pinned).sort((a, b) => a.order - b.order).map(listNode)}
+        {drag?.kind === 'list' && activeLists.some(list => list.id === drag.id && list.folderId)
+          ? <div className="tw-list-root-drop">拖到此处移出分组</div>
+          : null}
+      </div>
     </div><div className="tw-nav-bottom">{nav('people', <TeamOutlined />)}{nav('archived', <BookOutlined />)}</div>
     <Modal zIndex={1200} title={edit?.record ? '重命名' : edit?.kind === 'folder' ? '新建清单分组' : '新建任务清单'} open={!!edit} onCancel={() => setEdit(null)} onOk={() => void save()} okButtonProps={{ disabled: !title.trim() }}><Space direction="vertical" style={{ width: '100%', paddingBlock: 16 }}><Input autoFocus aria-label="名称" placeholder="输入名称" value={title} onChange={event => setTitle(event.target.value)} onPressEnter={() => void save()} />{edit?.kind === 'list' && !edit.record ? <Select aria-label="清单模板" value={template} onChange={setTemplate} style={{ width: '100%' }} options={[{ value: '', label: '空白清单' }, { value: 'builtin-week', label: '每周计划' }, { value: 'builtin-project', label: '项目执行清单' }, ...(snapshot?.templates ?? []).map(item => ({ value: item.id, label: item.title }))]} /> : null}</Space></Modal>
   </div>
